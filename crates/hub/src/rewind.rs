@@ -76,6 +76,10 @@ pub(crate) fn reach(
     from: &SessionId,
     next: &SessionId,
 ) -> Result<UnixStream, crate::connection::Refused> {
+    // Admission first: a rewind admitted before the store reaches its
+    // bind or refuses, and one after is refused at once. The guard
+    // spans the whole reach.
+    let _admitted = hub.admit()?;
     let guard = guard_for(hub, next);
     let held = lock(&guard);
     let socket = hub.home.join("run").join(&next.0);
@@ -87,6 +91,12 @@ pub(crate) fn reach(
         return match crate::resume::resume(hub, next, None) {
             Ok(stream) => Ok(stream),
             Err(refused) => {
+                // A stopping refusal passes through unchanged: the
+                // session is not resumed because the hub is stopping,
+                // not because the resume failed.
+                if refused == crate::connection::stopping() {
+                    return Err(refused);
+                }
                 hub.diag.line(
                     Severity::Warn,
                     Some(next),
@@ -180,6 +190,10 @@ pub(crate) fn reach(
                     message: "The new session could not start.".to_owned(),
                 },
             })
+        }
+        Bind::Stopping => {
+            started.kill();
+            Err(crate::connection::stopping())
         }
         Bind::TimedOut | Bind::Failed(_) => {
             hub.diag.line(

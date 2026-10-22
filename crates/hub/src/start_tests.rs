@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -153,6 +154,47 @@ const OLD: &str = "s_aaaaaaaaaaaaaaaa";
 /// A session id that is never the old session, for the self-naming check.
 fn other() -> SessionId {
     SessionId("s_bbbbbbbbbbbbbbbb".to_owned())
+}
+
+#[test]
+fn a_start_admitted_before_the_store_binds_then_the_next_is_refused() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let workspace = temp.workspace();
+    let Outcome::Accepted { session_id, .. } = run(
+        &hub,
+        &CommandId("c_first".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start admitted before the store binds");
+    };
+    assert!(
+        temp.dir.join("run").join(&session_id.0).exists(),
+        "the admitted start bound its socket"
+    );
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    let Outcome::Rejected(refused) = run(
+        &hub,
+        &CommandId("c_second".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start after the store is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    // Only the admitted start ran a process.
+    assert_eq!(starter.started_continues().len(), 1);
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
 }
 
 #[test]

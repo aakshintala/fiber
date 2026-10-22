@@ -24,6 +24,7 @@
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::PoisonError;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use contract::diag::Op;
@@ -170,8 +171,12 @@ fn reach(
     credential: Option<&str>,
     trusted: bool,
 ) -> Result<UnixStream, Refused> {
-    // Declared before the gate: the guard's drop writes after the gate
-    // releases, and every attempt shares this one guard.
+    // Admission first: the guard spans the whole reach, so a sessions
+    // stop stored before this refuses it, and one stored after waits
+    // for this bind in its zero-wait. Declared before the gate: the
+    // guard's drop writes after the gate releases, and every attempt
+    // shares this one guard.
+    let _admitted = hub.admit()?;
     let _timer = log::diag::timed(&hub.diag, Op::HubResume, None, None);
     let socket = hub.home.join("run").join(&session.0);
     let _gate = hub
@@ -182,6 +187,11 @@ fn reach(
     let mut trusted = trusted;
     let mut held = None;
     loop {
+        // Re-checked each pass: a waiter queued behind the resume gate
+        // leaves within one pass after the store.
+        if hub.sessions_stopping.load(Ordering::SeqCst) {
+            return Err(crate::connection::stopping());
+        }
         match attempt(hub, session, &socket, credential, trusted) {
             Step::Done(result) => return result,
             Step::Wait(message) => held = message.or(held),
@@ -344,6 +354,10 @@ fn attempt(
         }
         Bind::TimedOut => Err(io_failed(hub, session, "it did not bind its socket.")),
         Bind::Failed(detail) => Err(io_failed(hub, session, &detail)),
+        Bind::Stopping => {
+            started.kill();
+            Err(crate::connection::stopping())
+        }
     })
 }
 

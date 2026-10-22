@@ -70,6 +70,12 @@ pub(crate) struct Hub {
     /// killed. The sessions stop waits for zero before each scan, so no
     /// session admitted before the store escapes it.
     pub(crate) inflight_binds: AtomicUsize,
+    /// `stop` commands with `sessions` now answering: incremented on
+    /// entry, before `sessions_stopping` is stored, decremented only
+    /// after the answer is written and, on a websocket, its drain
+    /// barrier ends. The Signal arm aborts the sessions stop only while
+    /// this is above 0, and waits only for its flush.
+    pub(crate) sessions_answering: AtomicUsize,
     /// Set by a local `stop`: the idle wait ends the hub as SIGTERM does.
     stop: AtomicBool,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
@@ -212,6 +218,7 @@ impl Hub {
             stop: AtomicBool::new(false),
             sessions_stopping: AtomicBool::new(false),
             inflight_binds: AtomicUsize::new(0),
+            sessions_answering: AtomicUsize::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
                 zero_since,
@@ -446,6 +453,25 @@ impl Hub {
         self.stop.load(Ordering::SeqCst)
     }
 
+    /// Admits one bind: the increment always precedes the
+    /// `sessions_stopping` load, so a sessions stop stored before this
+    /// call refuses it, and one stored after waits for it in its
+    /// zero-wait. The guard drops only after the bind lands or the
+    /// starter is killed.
+    pub(crate) fn admit(&self) -> Result<Admitted<'_>, Refused> {
+        self.inflight_binds.fetch_add(1, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some(step) = lock(&self.between_admit_steps).take() {
+            step();
+        }
+        if self.sessions_stopping.load(Ordering::SeqCst) {
+            self.inflight_binds.fetch_sub(1, Ordering::SeqCst);
+            self.tick.wake();
+            return Err(stopping());
+        }
+        Ok(Admitted { hub: self })
+    }
+
     /// Records a local `stop`: under the tick hold, so a waiter that has
     /// checked and not yet parked blocks until the store lands instead of
     /// missing it. Returns unwoken: the `stop` arm wakes after writing the
@@ -640,6 +666,7 @@ fn serve_from(
                     &relays,
                     &who,
                     &mut remote,
+                    web.as_ref(),
                 );
             }
         }
@@ -706,6 +733,7 @@ fn on_command(
     relays: &Arc<Mutex<Relays>>,
     who: &crate::pairing::Who,
     remote: &mut Remote,
+    web: Option<&Arc<crate::port::Web>>,
 ) {
     if who.revoked() {
         return;
@@ -783,9 +811,7 @@ fn on_command(
             &line.id,
             crate::environment::refresh(hub, &line.args),
         ),
-        "stop" if matches!(who, crate::pairing::Who::Local) => {
-            on_stop(&line.id, &line.args, hub, writer)
-        }
+        "stop" => on_stop(&line.id, &line.args, hub, writer, web),
         "prompt_history" => answer(
             writer,
             hub,
@@ -1000,33 +1026,195 @@ fn on_status(
     );
 }
 
-/// Ends the hub as SIGTERM does (`docs/invocation.md`, "What the hub
-/// speaks"): the local socket only, with no arguments. A port sender
-/// falls through to the unknown-command rejection. The store runs under
-/// the tick hold before the acknowledgement is written, and the wake
-/// after it, so the client always reads the acceptance before the exit
-/// closes its socket, and a waiter that has checked and not yet parked
-/// cannot miss the store.
+/// Ends the hub as SIGTERM does; with `sessions` true, first shuts down
+/// every running session the hub knows of, each through its own
+/// shutdown, then exits (`docs/invocation.md`, "What the hub speaks").
+/// Any authenticated connection may send it. Without `sessions` the
+/// answer carries the `command_id` only, on local and websocket paths,
+/// and the hub ends at once. With `sessions` the answer carries
+/// `{"sessions_stopped": N}`, or `command_rejected` `io_failed` naming
+/// each session unconfirmed at the bound or the abort, and the hub exits
+/// after answering. On a websocket the answer goes out behind the drain
+/// barrier: a `hub-stop-out` thread writes under the connection writer
+/// lock and shuts the bridge write side; the serving thread parks on the
+/// tick until written and `web.drained()`, or `STOP_CLOSE_WAIT`. A
+/// `sessions` that is not a boolean, an explicit null, or any unknown
+/// key is `invalid_arguments` and the hub keeps running. The store runs
+/// under the tick hold before the acknowledgement is written, and the
+/// wake after it, so the client always reads the acceptance before the
+/// exit closes its socket, and a waiter that has checked and not yet
+/// parked cannot miss the store.
 fn on_stop(
     id: &CommandId,
     args: &Map<String, Value>,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
+    web: Option<&Arc<crate::port::Web>>,
 ) {
-    if !args.is_empty() {
-        reject(
-            writer,
-            hub,
-            Some(id),
-            &ErrorCode::InvalidArguments,
-            "The arguments do not fit this command.",
-        );
+    let sessions = match stop_sessions(args) {
+        Ok(sessions) => sessions,
+        Err(()) => {
+            reject(
+                writer,
+                hub,
+                Some(id),
+                &ErrorCode::InvalidArguments,
+                "The arguments do not fit this command.",
+            );
+            return;
+        }
+    };
+    if !sessions.unwrap_or(false) {
+        let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+        match web {
+            Some(web) => drain_web(hub, writer, web, "command_accepted", payload),
+            None => send(writer, hub, "command_accepted", payload),
+        }
+        hub.request_stop();
+        hub.tick.wake();
         return;
     }
-    hub.request_stop();
-    let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
-    send(writer, hub, "command_accepted", payload);
+    let _answering = Answering::take(hub);
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
     hub.tick.wake();
+    let outcome = crate::sessions_stop::run(hub);
+    if hub.stop_requested() {
+        #[cfg(test)]
+        if let Some(hook) = lock(&hub.before_abort_answer).take() {
+            hook();
+        }
+    }
+    if outcome.unconfirmed.is_empty() {
+        let result = CommandResult::Stop {
+            sessions_stopped: outcome.confirmed.len(),
+        };
+        let result = serde_json::to_value(&result).unwrap_or(Value::Null);
+        match web {
+            Some(web) => {
+                let mut payload =
+                    Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+                payload.insert("result".to_owned(), result);
+                drain_web(hub, writer, web, "command_accepted", payload);
+            }
+            None => accept_result(writer, hub, id, result),
+        }
+    } else {
+        let message = unconfirmed_message(&outcome.unconfirmed);
+        match web {
+            Some(web) => drain_web(
+                hub,
+                writer,
+                web,
+                "command_rejected",
+                rejection(Some(id), &ErrorCode::IoFailed, &message),
+            ),
+            None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, &message),
+        }
+    }
+    hub.request_stop();
+    drop(_answering);
+    hub.tick.wake();
+}
+
+/// The `sessions` request: `None` when absent (a bare stop), `Some`
+/// when exactly one `sessions` boolean key. A `sessions` that is not a
+/// boolean, an explicit null, or any unknown key is `Err`: the caller
+/// refuses it `invalid_arguments` and the hub keeps running.
+fn stop_sessions(args: &Map<String, Value>) -> Result<Option<bool>, ()> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+    if contains_null(&Value::Object(args.clone())) {
+        return Err(());
+    }
+    if args.len() != 1 {
+        return Err(());
+    }
+    match args.get("sessions") {
+        Some(Value::Bool(sessions)) => Ok(Some(*sessions)),
+        _ => Err(()),
+    }
+}
+
+/// What a partial sessions stop tells the asker: `io_failed` naming each
+/// session unconfirmed at the bound or the abort, in id order.
+fn unconfirmed_message(unconfirmed: &[SessionId]) -> String {
+    let ids: Vec<&str> = unconfirmed.iter().map(|id| id.0.as_str()).collect();
+    if ids.len() == 1 {
+        format!("Session {} is still running.", ids[0])
+    } else {
+        format!("Sessions {} are still running.", ids.join(", "))
+    }
+}
+
+/// A `stop` with `sessions` now answering: the Signal arm aborts the
+/// loop only while one is held, and waits only for its flush. Held from
+/// before the `sessions_stopping` store until after the answer and, on
+/// a websocket, its drain barrier: the drop's wake ends the arm's flush
+/// wait.
+struct Answering<'a> {
+    hub: &'a Hub,
+}
+
+impl<'a> Answering<'a> {
+    fn take(hub: &'a Hub) -> Self {
+        hub.sessions_answering.fetch_add(1, Ordering::SeqCst);
+        Self { hub }
+    }
+}
+
+impl Drop for Answering<'_> {
+    fn drop(&mut self) {
+        self.hub.sessions_answering.fetch_sub(1, Ordering::SeqCst);
+        self.hub.tick.wake();
+    }
+}
+
+/// Writes one stop answer on a websocket behind the drain barrier: a
+/// `hub-stop-out` thread writes under the connection writer lock and
+/// shuts the bridge write side, so the pump forwards the answer, then
+/// its close, then drains; the serving thread parks on the tick until
+/// written and `web.drained()`, or `STOP_CLOSE_WAIT`.
+fn drain_web(
+    hub: &Hub,
+    writer: &Arc<Mutex<UnixStream>>,
+    web: &Arc<crate::port::Web>,
+    kind: &str,
+    payload: Map<String, Value>,
+) {
+    let written = Arc::new(AtomicBool::new(false));
+    let line = Arc::new(line(hub, kind, payload));
+    let wrote = spawn(hub, "hub-stop-out", {
+        let writer = Arc::clone(writer);
+        let written = Arc::clone(&written);
+        let tick = Arc::clone(&hub.tick);
+        let line = Arc::clone(&line);
+        move || {
+            let mut writer = lock(&writer);
+            support::framing::write_line(&mut *writer, &line).unwrap_or(());
+            writer.shutdown(Shutdown::Write).unwrap_or(());
+            written.store(true, Ordering::SeqCst);
+            tick.wake();
+        }
+    });
+    if wrote.is_err() {
+        // A thread that cannot be spawned writes on the serving thread:
+        // the answer still goes out before the exit.
+        let mut writer = lock(writer);
+        support::framing::write_line(&mut *writer, &line).unwrap_or(());
+        writer.shutdown(Shutdown::Write).unwrap_or(());
+        written.store(true, Ordering::SeqCst);
+    }
+    let end = hub.clock.now() + crate::port::STOP_CLOSE_WAIT;
+    hub.tick.wait_for(&*hub.clock, &mut |now| {
+        if written.load(Ordering::SeqCst) && web.drained() {
+            return crate::tick::Wait::Done;
+        }
+        if now >= end {
+            return crate::tick::Wait::Done;
+        }
+        crate::tick::Wait::Until(Some(end))
+    });
 }
 
 /// Answers `placeholder_env` with the hub's captured values for the
@@ -1174,6 +1362,30 @@ pub(crate) struct Refused {
     pub(crate) code: ErrorCode,
     /// What the client is told.
     pub(crate) message: String,
+}
+
+/// One admitted bind: decrements `inflight_binds` on drop, then wakes
+/// the tick, so a sessions stop parked in its zero-wait sees the count
+/// reach zero. Dropping follows the bind on every path: on any arm but
+/// `Connected`, after `started.kill()`.
+pub(crate) struct Admitted<'a> {
+    hub: &'a Hub,
+}
+
+impl Drop for Admitted<'_> {
+    fn drop(&mut self) {
+        self.hub.inflight_binds.fetch_sub(1, Ordering::SeqCst);
+        self.hub.tick.wake();
+    }
+}
+
+/// Why a start, resume or rewind is refused while a sessions stop runs:
+/// `io_failed`, with the sentence every stopping refusal carries.
+pub(crate) fn stopping() -> Refused {
+    Refused {
+        code: ErrorCode::IoFailed,
+        message: "the hub is stopping.".to_owned(),
+    }
 }
 
 pub(crate) fn reject(

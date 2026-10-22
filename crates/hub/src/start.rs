@@ -10,6 +10,7 @@
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use contract::diag::Op;
@@ -22,8 +23,9 @@ use crate::connection::{Hub, Refused};
 /// How long a session started by `start` has to bind `run/<id>` or exit.
 pub(crate) const START_DEADLINE: Duration = Duration::from_secs(30);
 
-/// How often `start` retries the session's socket on the injected clock.
-const START_POLL: Duration = Duration::from_millis(10);
+/// How often `start` retries the session's socket on the injected clock:
+/// the step the bind-wait tests park on.
+pub(crate) const START_POLL: Duration = Duration::from_millis(10);
 
 /// How long the `content` handshake waits for the session's acknowledgement.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -82,6 +84,15 @@ pub(crate) fn run(
     content: Option<&Value>,
     continues: Option<&SessionId>,
 ) -> Outcome {
+    // Admission first: the increment precedes the flag load, so a
+    // sessions stop stored before this refuses it, and one stored
+    // after waits for this bind in its zero-wait. The guard drops only
+    // after `await_bind` returns, and on any arm but `Connected` after
+    // `started.kill()`.
+    let _admitted = match hub.admit() {
+        Ok(admitted) => admitted,
+        Err(refused) => return Outcome::Rejected(refused),
+    };
     // Stamped at bind, emitted at return: a failure measures through
     // the failure, and an invalid request is an entered start.
     let mut timer = log::diag::timed(&hub.diag, Op::HubSessionStart, None, None);
@@ -124,6 +135,10 @@ pub(crate) fn run(
             stream
         }
         Bind::Exited => return exited_or_io(hub, &id, started.as_ref()),
+        Bind::Stopping => {
+            started.kill();
+            return Outcome::Rejected(crate::connection::stopping());
+        }
         Bind::TimedOut => return io_failed(hub, &id, "it did not bind its socket."),
         Bind::Failed(detail) => return io_failed(hub, &id, &detail),
     };
@@ -162,6 +177,10 @@ pub(crate) enum Bind {
     Exited,
     /// [`START_DEADLINE`] passed with the socket missing or refusing.
     TimedOut,
+    /// A sessions stop landed while the socket was missing or refusing:
+    /// the starter is killed, the bind refused. Only from the retry
+    /// branch, never when the socket accepts.
+    Stopping,
     /// Connecting failed in a way waiting cannot mend: the error, as a
     /// sentence.
     Failed(String),
@@ -184,6 +203,9 @@ pub(crate) fn await_bind(hub: &Hub, socket: &Path, started: &dyn crate::Started)
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
                 ) =>
             {
+                if hub.sessions_stopping.load(Ordering::SeqCst) {
+                    return Bind::Stopping;
+                }
                 if hub.clock.now() >= deadline {
                     return Bind::TimedOut;
                 }

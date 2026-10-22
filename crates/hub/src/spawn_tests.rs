@@ -55,11 +55,12 @@ fn printing(lines: &[String]) -> Child {
 }
 
 #[track_caller]
-fn drained(child: Child) -> Arc<(Mutex<State>, Condvar)> {
+fn drained(child: Child) -> (Arc<Mutex<Child>>, Arc<(Mutex<State>, Condvar)>) {
     let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
         Mutex::new(State {
             exited: false,
             failure: None,
+            reading: None,
         }),
         Condvar::new(),
     ));
@@ -81,7 +82,7 @@ fn drained(child: Child) -> Arc<(Mutex<State>, Condvar)> {
     Deadline::after(DRAIN_DEADLINE)
         .recv(&done_rx)
         .expect("drain finishes before its deadline");
-    state
+    (child, state)
 }
 
 fn failure_of(state: &Arc<(Mutex<State>, Condvar)>) -> Option<Failure> {
@@ -92,24 +93,29 @@ fn failure_of(state: &Arc<(Mutex<State>, Condvar)>) -> Option<Failure> {
 fn exited_is_none_while_the_session_runs() {
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
+        child: Arc::new(Mutex::new(printing(&[]))),
         state: Arc::new((
             Mutex::new(State {
                 exited: false,
                 failure: None,
+                reading: None,
             }),
             Condvar::new(),
         )),
     };
     assert!(spawned.exited().is_none());
+    // Reap the only child this test made: it printed nothing and exited.
+    support::lock(&spawned.child).wait().unwrap();
 }
 
 #[test]
 fn exited_reports_the_drained_failure() {
     let child = printing(&[exited_line("no_model", "No model is configured.")]);
-    let state = drained(child);
+    let (child, state) = drained(child);
     assert!(support::lock(&state.0).exited);
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
+        child,
         state,
     };
     let failure = spawned.exited().expect("the drained failure");
@@ -120,9 +126,10 @@ fn exited_reports_the_drained_failure() {
 #[test]
 fn exited_without_a_verdict_is_io_failed() {
     let child = printing(&["not a verdict".to_owned()]);
-    let state = drained(child);
+    let (child, state) = drained(child);
     let spawned = Spawned {
         id: SessionId("s_0123456789abcdef".to_owned()),
+        child,
         state,
     };
     let failure = spawned.exited().expect("the fallback failure");
@@ -137,7 +144,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
         exited_line("invalid_request", "The request was bad."),
         "noise".to_owned(),
     ]);
-    let state = drained(child);
+    let (_, state) = drained(child);
     assert!(support::lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
@@ -147,7 +154,7 @@ fn drain_keeps_the_last_fiber_exited_line() {
 #[test]
 fn drain_marks_exited_once_stdout_closes() {
     let child = printing(&[]);
-    let state = drained(child);
+    let (_, state) = drained(child);
     assert!(support::lock(&state.0).exited);
     assert!(failure_of(&state).is_none());
 }
@@ -306,6 +313,7 @@ fn wait_exited_blocks_until_the_child_exits() {
         Mutex::new(State {
             exited: false,
             failure: None,
+            reading: None,
         }),
         Condvar::new(),
     ));
@@ -320,6 +328,7 @@ fn wait_exited_blocks_until_the_child_exits() {
         .unwrap();
     let spawned = Spawned {
         id: SessionId("s_wait".to_owned()),
+        child: Arc::clone(&child),
         state,
     };
     let (started_tx, started_rx) = mpsc::channel();
@@ -349,6 +358,43 @@ fn wait_exited_blocks_until_the_child_exits() {
         .expect("the session exits before its deadline")
         .expect("the session exits before its deadline");
     assert_eq!(failure.code, ErrorCode::IoFailed);
+}
+
+#[test]
+fn kill_returns_while_the_drain_still_holds_the_pipe_open() {
+    // `cat` holds stdout open until killed or stdin closes: stdin stays
+    // open here, so even a panic leaves no sleeper behind.
+    let id = SessionId("s_aaaabbbbccccdddd".to_owned());
+    let (reading_tx, reading_rx) = mpsc::channel();
+    *DRAIN_READING.lock().unwrap() = Some((id.clone(), reading_tx));
+    let mut command = Command::new("cat");
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let spawned = spawn(&id, command).expect("cat spawns");
+    // The drain fires just before its first read, the pipe still open:
+    // a `kill` that waited on the drain's lock would hang here.
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&reading_rx)
+        .expect("the drain reaches its first read");
+    // `kill` returns while the drain still holds the pipe: received
+    // through a deadline, so a lock-scoped regression fails here.
+    // The kill thread hands the session back; the test thread then
+    // reaps it directly.
+    let (killed_tx, killed_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-kill".to_owned())
+        .spawn(move || {
+            spawned.kill();
+            killed_tx.send(spawned).unwrap_or(());
+        })
+        .unwrap();
+    let spawned = Deadline::after(DRAIN_DEADLINE)
+        .recv(&killed_rx)
+        .expect("kill returns while the drain reads");
+    // The kill ends `cat`: the drain sees EOF, reaps, and notifies.
+    let _ = spawned.wait_exited();
 }
 
 #[test]

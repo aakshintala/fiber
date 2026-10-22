@@ -15,6 +15,13 @@ use serde_json::Value;
 
 use crate::{Environment, Environments, Started, Starter};
 
+/// Tests only: armed by a test before `spawn`, fired by the drain with
+/// no lock held just before its first read, so the test proves `kill`
+/// returns while the drain still holds the pipe open. Keyed by session
+/// id: a concurrent foreign spawn leaves another test's sender alone.
+#[cfg(test)]
+static DRAIN_READING: Mutex<Option<(SessionId, std::sync::mpsc::Sender<()>)>> = Mutex::new(None);
+
 /// Starts the internal session command: `<exe> session --id <id>
 /// --workspace <workspace> [--model <model>]`, never `--prompt`, or with
 /// `--resume` for a session the log holds. Whoever starts a session
@@ -227,10 +234,18 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
     // that never starts leaves the child behind, so it is killed and
     // reaped here.
     let child = command.spawn()?;
+    #[cfg(test)]
+    let reading = DRAIN_READING
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take_if(|(wanted, _)| *wanted == *id)
+        .map(|(_, sender)| sender);
     let shared: Arc<(Mutex<State>, Condvar)> = Arc::new((
         Mutex::new(State {
             exited: false,
             failure: None,
+            #[cfg(test)]
+            reading,
         }),
         Condvar::new(),
     ));
@@ -242,6 +257,7 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
     }) {
         Ok(_) => Ok(Box::new(Spawned {
             id: id.clone(),
+            child,
             state: shared,
         })),
         Err(error) => {
@@ -265,6 +281,10 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
 /// the drain; the session keeps running.
 struct Spawned {
     id: SessionId,
+    /// The child handle: `kill` takes the lock for the kill only, never
+    /// across a wait, and the drain takes it for the final `wait` only,
+    /// never across a stdout read.
+    child: Arc<Mutex<Child>>,
     /// `drain` notifies the `Condvar` once it sets `State::exited`.
     state: Arc<(Mutex<State>, Condvar)>,
 }
@@ -273,6 +293,10 @@ struct State {
     exited: bool,
     /// The `fiber_exited` line printed last on stdout, when it parsed.
     failure: Option<Failure>,
+    /// Tests only: fired by the drain with no lock held just before its
+    /// first read.
+    #[cfg(test)]
+    reading: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Started for Spawned {
@@ -287,6 +311,18 @@ impl Started for Spawned {
             retry_after_ms: None,
             provider: None,
         }))
+    }
+
+    fn kill(&self) {
+        // The lock only for the kill: never across a wait, and the
+        // drain never holds it across a stdout read, so `kill` returns
+        // while the drain still holds the pipe open.
+        if let Ok(child) = self.child.lock() {
+            let mut child = child;
+            match child.kill() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 
     fn wait_exited(&self) -> Option<Failure> {
@@ -304,10 +340,16 @@ impl Started for Spawned {
 }
 
 /// Reads the session's stdout to EOF, keeping the `fiber_exited` line
-/// printed last, then reaps the child.
+/// printed last, then reaps the child. The child lock is held only to
+/// take stdout and across the final `wait()`, never across a stdout
+/// read, so `kill` returns while the drain still holds the pipe open.
 fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
-    let mut child = support::lock(child);
-    if let Some(stdout) = child.stdout.take() {
+    let stdout = support::lock(child).stdout.take();
+    if let Some(stdout) = stdout {
+        #[cfg(test)]
+        if let Some(reading) = support::lock(&shared.0).reading.take() {
+            reading.send(()).unwrap_or(());
+        }
         let mut read = BufReader::new(stdout);
         let mut buf = String::new();
         loop {
@@ -322,7 +364,7 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
             }
         }
     }
-    match child.wait() {
+    match support::lock(child).wait() {
         Ok(_) | Err(_) => {}
     }
     support::lock(&shared.0).exited = true;

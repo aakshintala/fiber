@@ -10,7 +10,7 @@
 )]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use log::diag::{Level, Severity};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::Hub;
@@ -166,7 +167,18 @@ fn serve_with_hub(
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    serve_with_hub_at(temp, idle, clock, Level::Info)
+    serve_with_hub_and_starter(temp, idle, clock, FakeStarter::hang(&temp.dir))
+}
+
+/// [`serve_with_hub`] with the test's starter: sessions-stop tests run
+/// real fake sessions instead of the hanging starter.
+fn serve_with_hub_and_starter(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    starter: FakeStarter,
+) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    serve_with_hub_at_and_starter(temp, idle, clock, Level::Info, starter)
 }
 
 /// [`serve_with_hub`] at a diagnostic level.
@@ -177,26 +189,55 @@ fn serve_with_hub_at(
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     let idle_seam: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(|_| {});
-    serve_with_hub_at_peak_between(temp, idle, clock, level, log::diag::peak_kib, idle_seam)
+    serve_with_hub_at_peak_between_and_starter(
+        temp,
+        idle,
+        clock,
+        level,
+        log::diag::peak_kib,
+        idle_seam,
+        FakeStarter::hang(&temp.dir),
+    )
+}
+
+/// [`serve_with_hub_at`] with the test's starter.
+fn serve_with_hub_at_and_starter(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+    starter: FakeStarter,
+) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    let idle_seam: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(|_| {});
+    serve_with_hub_at_peak_between_and_starter(
+        temp,
+        idle,
+        clock,
+        level,
+        log::diag::peak_kib,
+        idle_seam,
+        starter,
+    )
 }
 
 /// [`serve_with_hub_at`] reading the peak memory with `peak` and running
 /// `between` between the stop lines' two appends. Tests use them to
 /// force the stop-pair race with a deterministic `peak_memory` value.
-fn serve_with_hub_at_peak_between(
+fn serve_with_hub_at_peak_between_and_starter(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
     peak: fn() -> Option<u64>,
     between: Arc<dyn Fn(bool) + Send + Sync>,
+    starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     // Keeps its own hub: the diag carries the test's level, peak reader and between hook.
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
         "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
+        Arc::new(starter),
         Arc::clone(&timed),
         crate::diag::open(&temp.dir, timed)
             .with_level(level)
@@ -259,7 +300,7 @@ fn await_idle_park(clock: &Arc<fakes::clock::FakeClock>, zero: Instant, what: &s
 
 /// A client on the hub's socket: connected once its `hub_hello` arrives.
 struct Client {
-    _stream: UnixStream,
+    stream: UnixStream,
     read: BufReader<UnixStream>,
 }
 
@@ -276,8 +317,28 @@ fn connect(temp: &Temp) -> Client {
         "the hub answers with hub_hello: {hello:?}"
     );
     Client {
-        _stream: stream,
+        stream: stream.try_clone().unwrap(),
         read,
+    }
+}
+
+impl Client {
+    /// Sends one command line.
+    fn send(&mut self, line: &Value) {
+        let mut bytes = serde_json::to_vec(line).unwrap();
+        bytes.push(b'\n');
+        self.stream.write_all(&bytes).unwrap();
+        self.stream.flush().unwrap();
+    }
+
+    /// The next line, parsed, or `None` at EOF.
+    fn next(&mut self, what: &str) -> Option<Value> {
+        let mut text = String::new();
+        match self.read.read_line(&mut text) {
+            Ok(0) => None,
+            Ok(_) => Some(serde_json::from_str(&text).unwrap()),
+            Err(error) => panic!("the hub never answers {what}: {error:?}"),
+        }
     }
 }
 
@@ -636,6 +697,284 @@ fn a_signal_stops_the_hub_with_its_code() {
 }
 
 #[test]
+fn a_signal_aborts_a_sessions_stop_with_a_partial_answer() {
+    // One strict session answers `subscribe` and `close`, then holds
+    // its socket open: the stop's fan-out parks with it unconfirmed.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub_and_starter(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        FakeStarter::strict(&temp.dir),
+    );
+    await_idle_park(&clock, clock.origin(), "at start");
+    let workspace = temp.dir.join("w");
+    fs::create_dir_all(&workspace).unwrap();
+    let mut asker = connect(&temp);
+    asker.send(&json!({"id": "c_1", "command": "start", "args": {"workspace": workspace}}));
+    let started = asker.next("the start").expect("the hub starts the session");
+    let session = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The fan-out wait parks with the session unconfirmed.
+    let (parked_tx, parked) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+    }));
+    asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
+    assert!(
+        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        "the loop parks unconfirmed"
+    );
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    // The asker reads the partial rejection naming the session, then EOF.
+    let rejected = asker
+        .next("the rejection")
+        .expect("the hub answers the stop");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["code"], "io_failed");
+    assert_eq!(rejected["payload"]["command_id"], "c_stop");
+    assert!(
+        rejected["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&session),
+        "the rejection names the session: {rejected}"
+    );
+    assert!(asker.next("the close").is_none(), "EOF follows the answer");
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    // One stop, one line, and the fake clock never advanced.
+    assert_eq!(temp.log().matches("hub_stopped").count(), 1);
+    assert_eq!(clock.now(), clock.origin());
+}
+
+#[test]
+fn a_second_bare_stop_aborts_a_sessions_stop() {
+    // Same unconfirmed session, but a second client's bare `stop`
+    // aborts the scan instead of a signal: its `request_stop` drives
+    // the same Signal arm.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, _got, done) = serve_with_hub_and_starter(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        FakeStarter::strict(&temp.dir),
+    );
+    await_idle_park(&clock, clock.origin(), "at start");
+    let workspace = temp.dir.join("w");
+    fs::create_dir_all(&workspace).unwrap();
+    let mut asker = connect(&temp);
+    asker.send(&json!({"id": "c_1", "command": "start", "args": {"workspace": workspace}}));
+    let started = asker.next("the start").expect("the hub starts the session");
+    let session = started["payload"]["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (parked_tx, parked) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+    }));
+    asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
+    assert!(
+        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        "the loop parks unconfirmed"
+    );
+    let mut second = connect(&temp);
+    second.send(&json!({"id": "c_2", "command": "stop", "args": {}}));
+    // The second client reads its bare ack, then EOF.
+    let ack = second
+        .next("the bare ack")
+        .expect("the hub acks the bare stop");
+    assert_eq!(ack["kind"], "command_accepted");
+    assert_eq!(ack["payload"]["command_id"], "c_2");
+    assert!(
+        ack["payload"].get("result").is_none(),
+        "a bare ack carries no result"
+    );
+    assert!(second.next("the close").is_none(), "EOF follows the ack");
+    // The asker reads the rejection, then EOF.
+    let rejected = asker
+        .next("the rejection")
+        .expect("the hub answers the stop");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["code"], "io_failed");
+    assert!(
+        rejected["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&session),
+        "the rejection names the session: {rejected}"
+    );
+    assert!(asker.next("the close").is_none(), "EOF follows the answer");
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert_eq!(clock.now(), clock.origin());
+}
+
+#[test]
+fn a_signal_before_the_first_listing_names_only_the_live_session() {
+    // A start held between the admit steps keeps the serving thread in
+    // its first zero-wait: the aborting probe lists `run/` and names
+    // the live listener, skipping the stale path.
+    const LIVE: &str = "s_0123456789abcdef";
+    const STALE: &str = "s_1111111111111111";
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    let run = temp.dir.join("run");
+    let _live = UnixListener::bind(run.join(LIVE)).unwrap();
+    drop(UnixListener::bind(run.join(STALE)).unwrap());
+    // The start pauses after its increment, before its flag load.
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *hub.between_admit_steps.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let workspace = temp.dir.join("w");
+    fs::create_dir_all(&workspace).unwrap();
+    let mut starter = connect(&temp);
+    starter.send(&json!({"id": "c_1", "command": "start", "args": {"workspace": workspace}}));
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the start pauses between the admit steps"
+    );
+    let (waiting_tx, waiting) = mpsc::channel();
+    *hub.on_inflight_wait.lock().unwrap() = Some(Box::new(move || {
+        waiting_tx.send(()).unwrap_or(());
+    }));
+    let mut asker = connect(&temp);
+    asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
+    assert!(
+        Deadline::after(DEADLINE).recv(&waiting).is_ok(),
+        "the stop parks on the nonzero count"
+    );
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    // The probe names the live listener and skips the stale path.
+    let rejected = asker
+        .next("the rejection")
+        .expect("the hub answers the stop");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["code"], "io_failed");
+    let message = rejected["payload"]["message"].as_str().unwrap().to_owned();
+    assert!(
+        message.contains(LIVE),
+        "the rejection names the live session: {message}"
+    );
+    assert!(
+        !message.contains(STALE),
+        "the rejection skips the stale path: {message}"
+    );
+    assert!(asker.next("the close").is_none(), "EOF follows the answer");
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert_eq!(clock.now(), clock.origin());
+    // Releasing the paused start refuses it on the closed socket.
+    drop(release_tx);
+}
+
+#[test]
+fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
+    // The serving thread sees the abort but never writes: the arm's
+    // flush wait expires on the injected clock, and the asker reads
+    // EOF with no answer.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub_and_starter(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        FakeStarter::strict(&temp.dir),
+    );
+    await_idle_park(&clock, clock.origin(), "at start");
+    let workspace = temp.dir.join("w");
+    fs::create_dir_all(&workspace).unwrap();
+    let mut asker = connect(&temp);
+    asker.send(&json!({"id": "c_1", "command": "start", "args": {"workspace": workspace}}));
+    asker.next("the start").expect("the hub starts the session");
+    let (parked_tx, parked) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+    }));
+    let (flushed_tx, flushed) = mpsc::channel();
+    *hub.on_abort_flush.lock().unwrap() = Some(Box::new(move || {
+        flushed_tx.send(()).unwrap_or(());
+    }));
+    // The serving thread blocks after the abort, before its answer.
+    // Its entry proves it left the fan-out park, so the arm's flush
+    // wait is the only clock park when the test advances.
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *hub.before_abort_answer.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
+    assert!(
+        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        "the loop parks unconfirmed"
+    );
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the loop sees the abort"
+    );
+    // The arm parks in its flush wait with the answer still held.
+    let end = clock.origin() + SESSIONS_ABORT_FLUSH;
+    assert!(
+        clock.await_parked(end, fakes::Deadline::after(WITHIN)),
+        "the arm parks on the flush bound"
+    );
+    assert!(Deadline::after(DEADLINE).recv(&flushed).is_ok());
+    // One millisecond short of the bound the hub stays.
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        SESSIONS_ABORT_FLUSH - Duration::from_millis(1),
+        &fakes::Deadline::after(DEADLINE),
+    );
+    assert!(done.try_recv().is_err(), "the hub stays before the bound");
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        Duration::from_millis(1),
+        &fakes::Deadline::after(DEADLINE),
+    );
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert!(
+        asker.next("the close").is_none(),
+        "EOF arrives with no answer"
+    );
+    // The released write lands on the closed socket and fails silently.
+    drop(release_tx);
+}
+
+#[test]
 fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
@@ -715,13 +1054,14 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         let calls = Arc::clone(&calls);
         move |held| calls.lock().unwrap().push(held)
     });
-    let (hub, got, done) = serve_with_hub_at_peak_between(
+    let (hub, got, done) = serve_with_hub_at_peak_between_and_starter(
         &temp,
         IDLE,
         Arc::clone(&clock),
         Level::Debug,
         || Some(9),
         between,
+        FakeStarter::hang(&temp.dir),
     );
     await_idle_park(&clock, clock.origin(), "at start");
     let client = connect(&temp);

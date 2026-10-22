@@ -9,6 +9,9 @@
 //! removes `run/hub` while still holding the lock when the path is still
 //! its own socket (see `Held::stop`), and returns 0. On the
 //! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
+//! exits, unless a `stop` with `sessions` is answering: then it aborts the
+//! sessions stop first and waits only for the answer's flush, bounded by
+//! `SESSIONS_ABORT_FLUSH`.
 //! relay stream, writes `peak_memory` at the debug level, then
 //! `hub_stopped`, removes `run/hub` on the same condition, and returns 128
 //! plus the signal. Each websocket gets a close message saying the hub is
@@ -24,7 +27,15 @@ use std::time::Duration;
 
 use crate::connection::{Accept, Hub, Idle, serve_counted};
 use crate::listen::Held;
+use contract::clock::Wake;
 use log::diag::Severity;
+
+/// How long the Signal arm waits for a sessions stop's answer flush
+/// after aborting it: `STOP_CLOSE_WAIT` plus 500 ms (1.5 s) for the
+/// websocket drain barrier, itself bounded by `STOP_CLOSE_WAIT`, plus
+/// the serving thread's wake and write. The only wait the signal path
+/// adds beyond the base's.
+const SESSIONS_ABORT_FLUSH: Duration = Duration::from_millis(1500);
 
 /// How the hub stopped.
 pub(crate) enum Exit {
@@ -128,6 +139,7 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
     loop {
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {
+                abort_sessions_stop(&hub);
                 stop.store(true, Ordering::SeqCst);
                 hub.shutdown_clients();
                 // Before `hub_stopped`: every `environment_built` line
@@ -147,6 +159,32 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             Idle::Woken => {}
         }
     }
+}
+
+/// Aborts a sessions stop the Signal arm interrupted: wakes the serving
+/// thread out of its loop, then waits only for the answer's flush,
+/// bounded by `SESSIONS_ABORT_FLUSH`. With none answering the arm is
+/// unchanged: no store, no wait.
+fn abort_sessions_stop(hub: &Hub) {
+    if hub.sessions_answering.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    hub.request_stop();
+    hub.tick.wake();
+    let end = hub.clock.now() + SESSIONS_ABORT_FLUSH;
+    hub.tick.wait_for(&*hub.clock, &mut |now| {
+        if hub.sessions_answering.load(Ordering::SeqCst) == 0 {
+            return crate::tick::Wait::Done;
+        }
+        if now >= end {
+            return crate::tick::Wait::Done;
+        }
+        #[cfg(test)]
+        if let Some(hook) = crate::connection::lock(&hub.on_abort_flush).take() {
+            hook();
+        }
+        crate::tick::Wait::Until(Some(end))
+    });
 }
 
 /// Writes an `error` line naming what kept the hub from accepting.
