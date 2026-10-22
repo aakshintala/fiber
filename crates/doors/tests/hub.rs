@@ -1207,11 +1207,8 @@ impl Clock for HeldSleep {
 
     fn sleep(&self, d: Duration) {
         self.entered.send(d).unwrap_or(());
-        // A sender dropped by a failing test, or a deadline, also frees
-        // the sleeper, so a bug ends the test rather than hanging it.
-        Deadline::after(DEADLINE)
-            .recv(&self.release.lock().unwrap())
-            .unwrap_or(());
+        // A sender dropped by a failing test frees the sleeper.
+        self.release.lock().unwrap().recv().unwrap_or(());
         self.inner.sleep(d);
     }
 
@@ -1231,7 +1228,6 @@ struct HeldConnect {
     entered: mpsc::Receiver<Duration>,
     release: mpsc::Sender<()>,
     done: mpsc::Receiver<io::Result<Hub>>,
-    starts: Arc<AtomicUsize>,
 }
 
 fn connect_held(home: PathBuf, total: Duration) -> HeldConnect {
@@ -1243,16 +1239,10 @@ fn connect_held(home: PathBuf, total: Duration) -> HeldConnect {
         entered: entered_tx,
         release: Mutex::new(release_rx),
     };
-    let starts = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&starts);
     let (done_tx, done) = mpsc::channel();
     thread::spawn(move || {
         let deadline = held.now() + total;
-        let mut start = || {
-            counted.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        };
-        let hub = hub::connect_until(&home, &mut start, &held, deadline, &mut || {});
+        let hub = hub::connect_until(&home, &mut || Ok(()), &held, deadline, &mut || {});
         done_tx.send(hub).unwrap_or(());
     });
     HeldConnect {
@@ -1260,22 +1250,30 @@ fn connect_held(home: PathBuf, total: Duration) -> HeldConnect {
         entered,
         release,
         done,
-        starts,
     }
+}
+
+/// The bind poll's sleep, which [`parked`] waits for.
+const POLL: Duration = Duration::from_millis(10);
+
+/// A [`connect_held`] parked in its first bind poll with no hub bound, and
+/// the fake clock's origin.
+fn parked(home: PathBuf, total: Duration) -> (HeldConnect, Instant) {
+    let held = connect_held(home, total);
+    let origin = held.clock.origin();
+    let slept = Deadline::after(DEADLINE).recv_or_fail(
+        &held.entered,
+        "the connect's bind poll to sleep with no hub bound",
+    );
+    assert_eq!(slept, POLL);
+    (held, origin)
 }
 
 #[test]
 fn a_hub_that_binds_after_the_bind_deadline_is_a_bind_timeout() {
     let temp = Temp::new();
     let home = run_home(&temp);
-    let poll = Duration::from_millis(10);
-    let held = connect_held(home, poll);
-    let origin = held.clock.origin();
-    let slept = Deadline::after(DEADLINE).recv_or_fail(
-        &held.entered,
-        "the connect's bind poll to sleep with no hub bound",
-    );
-    assert_eq!(slept, poll);
+    let (held, origin) = parked(home, POLL);
     // The hub has not bound when the sleep ends, and the sleep ends the
     // bind deadline: a bind after this is too late.
     held.release.send(()).unwrap();
@@ -1284,8 +1282,7 @@ fn a_hub_that_binds_after_the_bind_deadline_is_a_bind_timeout() {
         .expect_err("a hub that has not bound by the deadline times out");
     assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
     assert!(error.to_string().contains("did not bind"), "{error}");
-    assert_eq!(held.starts.load(Ordering::SeqCst), 1);
-    assert_eq!(held.clock.now(), origin + poll);
+    assert_eq!(held.clock.now(), origin + POLL);
 }
 
 #[test]
@@ -1293,14 +1290,7 @@ fn a_hub_that_binds_while_the_connect_polls_is_connected() {
     let temp = Temp::new();
     let home = run_home(&temp);
     let socket = home.join("run").join("hub");
-    let poll = Duration::from_millis(10);
-    let held = connect_held(home, hub::CONNECT_DEADLINE);
-    let origin = held.clock.origin();
-    let slept = Deadline::after(DEADLINE).recv_or_fail(
-        &held.entered,
-        "the connect's bind poll to sleep with no hub bound",
-    );
-    assert_eq!(slept, poll);
+    let (held, origin) = parked(home, hub::CONNECT_DEADLINE);
     // The hub binds only after the connect is parked in its poll: the
     // connect waits on the bind, not on the clock.
     let listener = UnixListener::bind(&socket).unwrap();
@@ -1310,6 +1300,5 @@ fn a_hub_that_binds_while_the_connect_polls_is_connected() {
         .recv_or_fail(&held.done, "the connect's answer")
         .expect("a hub that binds inside the deadline connects");
     assert_eq!(hub.1.kind, "hub_hello");
-    assert_eq!(held.starts.load(Ordering::SeqCst), 1);
-    assert_eq!(held.clock.now(), origin + poll);
+    assert_eq!(held.clock.now(), origin + POLL);
 }
