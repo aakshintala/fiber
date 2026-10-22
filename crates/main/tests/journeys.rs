@@ -12,6 +12,13 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
+use fakes::{ProviderServer, Response};
+use serde_json::{Value, json};
+use support::pty::{Grid, Run};
+use support::{Setup, write_json};
+
 /// The spinner glyphs of the working line: braille frames, or `●` under
 /// reduced motion.
 const SPINNERS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏●";
@@ -356,4 +363,181 @@ fn a_reply_that_says_working_is_left_alone() {
 fn rows_are_trimmed_and_the_cursor_line_is_last() {
     let rows = ["a   ".to_owned(), String::new(), "  b ".to_owned()];
     assert_eq!(grid_text(&rows, (29, 4), &[]), "a\n\n  b\ncursor=(29,4)");
+}
+
+/// The one `tui` config object every journey writes: no rail and no panel
+/// cards, so no live figure or temp path reaches a snapshot.
+fn tui_off() -> Value {
+    json!({"rail": {"shown": false}, "panel": {"cards": []}})
+}
+
+/// A reply saying `text` in two deltas.
+fn reply(text: &str) -> Response {
+    let at = text.len() / 2;
+    let (first, rest) = text.split_at(at);
+    support::stream(&[
+        json!({"type": "response.output_text.delta", "delta": first}),
+        json!({"type": "response.output_text.delta", "delta": rest}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": text}]
+        }}),
+    ])
+}
+
+/// Whether any grid row holds `needle`.
+fn shows(screen: &Grid, needle: &str) -> bool {
+    screen.rows.iter().any(|row| row.contains(needle))
+}
+
+/// Installs a provider `fake` with models `alpha-1` (named
+/// "Claude Opus 5.5") and `beta-2` (no name) on `openai-responses` at the
+/// fake server, reading its key from `FIBER_TEST_FAKE_KEY`, and makes
+/// `fake/alpha-1` the configured model. Neither the provider nor either id
+/// contains "opus": only the display name can carry the picker's
+/// "opus 5.5" query.
+fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [
+                {"id": "alpha-1", "protocol": "openai-responses",
+                 "base_url": format!("{}/v1", server.url()),
+                 "context_window": 100000, "name": "Claude Opus 5.5"},
+                {"id": "beta-2", "protocol": "openai-responses",
+                 "base_url": format!("{}/v1", server.url()),
+                 "context_window": 100000},
+            ],
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/alpha-1", "hub": {"idle_exit_ms": 200}, "tui": tui_off()}),
+    );
+}
+
+/// The model picker mid-session: opened after a first answer, narrowed by
+/// a display name only the name carries, switched to the other model,
+/// answered on it, and quit from an open picker.
+#[test]
+fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
+    let setup = Setup::new();
+    // The first reply carries no usage, so opening the picker draws no
+    // cache-rebuild notice.
+    let server = ProviderServer::start([reply("Hello."), reply("Beta here.")]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    let ids: Vec<String> = Vec::new();
+    // The end of the first frame proves the input reader runs before the
+    // prompt goes out.
+    run.ready();
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
+    // Ctrl+L opens the picker: the open picker's catalogue proves the key
+    // is taken. Both models list before any filter.
+    run.write(b"\x0c");
+    let opened = run.wait_screen("the open picker with its catalogue", |screen| {
+        shows(screen, "Type to search")
+            && shows(screen, "alpha-1")
+            && shows(screen, "beta-2")
+            && !shows(screen, "refreshing…")
+    });
+    assert!(
+        shows(&opened, "Type to search"),
+        "the picker shows its filter"
+    );
+    assert!(shows(&opened, "alpha-1"), "alpha-1 lists before the filter");
+    assert!(shows(&opened, "beta-2"), "beta-2 lists before the filter");
+    insta::assert_snapshot!(
+        "model_picker_open",
+        grid_text(&opened.rows, opened.cursor, &ids)
+    );
+    // What only the display name carries narrows the list to `alpha-1`.
+    run.write(b"opus 5.5");
+    let filtered = run.wait_screen("the name-filtered list", |screen| {
+        shows(screen, "1 of 2 models") && shows(screen, "alpha-1") && !shows(screen, "beta-2")
+    });
+    assert!(
+        shows(&filtered, "1 of 2 models"),
+        "the count names one of two"
+    );
+    assert!(shows(&filtered, "alpha-1"), "the named model stays");
+    assert!(!shows(&filtered, "beta-2"), "beta-2 dropped out");
+    insta::assert_snapshot!(
+        "model_picker_by_name",
+        grid_text(&filtered.rows, filtered.cursor, &ids)
+    );
+    // Clear the query, find `beta-2` and choose it: the picker closes.
+    run.write(b"\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fbeta");
+    run.wait_screen("the beta-filtered list", |screen| {
+        shows(screen, "1 of 2 models") && shows(screen, "beta-2") && !shows(screen, "opus 5.5")
+    });
+    run.write(b"\r");
+    run.wait_screen("the closed picker", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "›")
+    });
+    // The next prompt is answered on the chosen model.
+    let from = run.output().len();
+    run.write(b"again\r");
+    run.wait_screen("the second reply", |screen| shows(screen, "Beta here."));
+    run.turn_finished(from);
+    let answered = run.wait_screen("the second closed turn", |screen| {
+        shows(screen, "Beta here.")
+            && screen
+                .rows
+                .iter()
+                .filter(|row| row.contains("▣ completed"))
+                .count()
+                == 2
+            && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "model_picker_answered_on_beta",
+        grid_text(&answered.rows, answered.cursor, &ids)
+    );
+    let requests = server.requests();
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(second["model"], "beta-2", "the second turn ran on beta-2");
+    // Quit from an open picker filtered by the name.
+    run.write(b"\x0c");
+    run.wait_screen("the reopened picker", |screen| {
+        shows(screen, "Type to search") && shows(screen, "alpha-1")
+    });
+    run.write(b"opus 5.5");
+    run.wait_screen("the name-filtered list again", |screen| {
+        shows(screen, "1 of 2 models") && shows(screen, "alpha-1")
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
 }
