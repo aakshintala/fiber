@@ -3,8 +3,7 @@ use std::fs;
 
 use serde_json::{Value, json};
 
-use super::{Run, debug_pass, debug_workloads, tally};
-use crate::home::Home;
+use super::{Run, debug_pass, debug_workloads, run_debug, tally};
 use crate::idle;
 use crate::{Pass, Side};
 
@@ -37,6 +36,27 @@ fn line(code: &str, data: Value) -> String {
 fn op(op: &str, ms: u64) -> String {
     line("op_timing", json!({"op": op, "ms": ms}))
 }
+
+/// A fixture workload for `run_debug`: a child home writes one diagnostic line.
+fn fixture_workload(ctx: &idle::Ctx<'_>, _: &mut Vec<String>) -> Result<idle::Samples, String> {
+    let child = ctx.home.child([])?;
+    let config: Value = serde_json::from_slice(
+        &fs::read(child.home().join("config.json")).map_err(|err| err.to_string())?,
+    )
+    .map_err(|err| err.to_string())?;
+    assert_eq!(config["diagnostics"]["level"], "debug");
+    let logs = child.home().join("logs");
+    fs::create_dir_all(&logs).map_err(|err| err.to_string())?;
+    fs::write(logs.join("session.log"), op("startup.config", 7)).map_err(|err| err.to_string())?;
+    drop(child);
+    Ok(Vec::new())
+}
+
+const FIXTURE_WORKLOAD: idle::Workload = idle::Workload {
+    name: "session start",
+    timing: true,
+    run: fixture_workload,
+};
 
 /// A log file holding `lines`, as `read_logs` returns it.
 fn text(lines: Vec<String>) -> Result<String, String> {
@@ -229,24 +249,21 @@ fn debug_pass_tallies_a_child_homes_diagnostic_log() {
     );
 
     let fiber = std::env::current_exe().unwrap();
-    let (home, logs) = Home::debug(&fiber).unwrap();
+    let clock = crate::run::System;
     let mut head = Pass::new(Side::Head, args);
     debug_pass(&mut head, |workload| {
         if workload.name != "session start" {
             return run(Ok(()), Vec::new(), Vec::new());
         }
-        let child = home.child([]).unwrap();
-        let config: Value =
-            serde_json::from_slice(&fs::read(child.home().join("config.json")).unwrap()).unwrap();
-        assert_eq!(config["diagnostics"]["level"], "debug");
-
-        let dir = child.home().join("logs");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("session.log"), op("startup.config", 7)).unwrap();
-        drop(child);
-        run(Ok(()), Vec::new(), std::mem::take(&mut *logs.borrow_mut()))
+        run_debug(
+            &fiber,
+            &clock,
+            None,
+            std::time::Duration::ZERO,
+            None,
+            &FIXTURE_WORKLOAD,
+        )
     });
-    assert_eq!(home.finish(), Ok(()));
 
     let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
     assert_eq!(entries.len(), 3);
