@@ -750,15 +750,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
     // every deadline here, so only the cancel ends it; a bare `sleep` this
     // long is refused before it starts.
     let fifo = setup.root.path().join("started");
-    let mut mkfifo = Command::new("mkfifo");
-    mkfifo
-        .arg(&fifo)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = support::run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "mkfifo: {made:?}");
+    fakes::fifo(&fifo);
     let (opened, started) = mpsc::channel();
     let reading = fifo.clone();
     thread::spawn(move || {
