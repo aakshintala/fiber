@@ -16,6 +16,9 @@ name: Release
 # dispatch (`gh workflow run release.yml`) is a nightly under the same check,
 # unless it sets `-f rehearse=true`, which runs only the rehearsal job and
 # skips the nightly path.
+# After the release is published, the site jobs build the user docs site
+# from the newest stable and nightly tags and deploy it to Pages
+# (docs/ci.md, "The user docs site").
 on:
   push:
     branches: [main]
@@ -655,6 +658,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release-pack draft-delete "${{ needs.preflight.outputs.version }}"
 
+  # debt: site and nightly-site duplicate their five steps (two jobs); upgrade trigger: a third Pages deploy job appears, extract the shared steps into a composite action.
+  site:
+    name: Site
+    needs: [preflight, publish]
+    if: needs.preflight.outputs.version-changed == 'true'
+    runs-on: ubuntu-24.04
+    # A new job gets a generous bound: a cold xtask build and the Pages upload (docs/ci.md, "Job time limits").
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The builder reads the release tags, which a shallow checkout
+          # without tags does not hold.
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - name: Build the site from the release tags
+        run: cargo xtask site --out "$RUNNER_TEMP/site"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deploy
+
   nightly-publish:
     name: Nightly publish
     needs: [nightly-preflight, nightly-build, nightly-assets, nightly-gate]
@@ -770,6 +808,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REHEARSAL_CREATED: ${{ steps.publish.outputs.created }}
         run: scripts/release-pack rehearsal-cleanup "$VERSION" "$GITHUB_SHA"
+
+  nightly-site:
+    name: Nightly site
+    needs: [nightly-preflight, nightly-publish]
+    if: needs.nightly-preflight.outputs.nightly-needed == 'publish'
+    runs-on: ubuntu-24.04
+    # A new job gets a generous bound: a cold xtask build and the Pages upload (docs/ci.md, "Job time limits").
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The builder reads the release tags, which a shallow checkout
+          # without tags does not hold.
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - name: Build the site from the release tags
+        run: cargo xtask site --out "$RUNNER_TEMP/site"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deploy
 
   # Benchmarks report, never gate: a slow sample or a missing figure is a
   # line in the summary, not a failure (docs/ci.md, "Releases"). The Linux

@@ -168,7 +168,17 @@ fn late_preparer(calls: &Arc<AtomicUsize>, installed: &Arc<AtomicUsize>) -> r#lo
                 message: "The repository's `late` extension reported a warning.".into(),
                 extension: Some("late".into()),
             }],
-            servers: Vec::new(),
+            server_sync: r#loop::ServerSync {
+                servers: contract::events::ReloadedServers {
+                    kept: Vec::new(),
+                    restarted: Vec::new(),
+                    started: Vec::new(),
+                    stopped: Vec::new(),
+                },
+                server_records: Vec::new(),
+                server_failures: Vec::new(),
+                new_prompts: None,
+            },
             hooks: None,
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
@@ -537,7 +547,17 @@ fn a_reload_before_the_first_prompt_builds_twice_around_the_late_step() {
                 tools: vec![("repo".to_owned(), Arc::clone(&reload_tool) as Arc<dyn Tool>)],
                 extensions: Vec::new(),
                 notices: Vec::new(),
-                servers: vec!["kept".into()],
+                server_sync: r#loop::ServerSync {
+                    servers: contract::events::ReloadedServers {
+                        kept: Vec::new(),
+                        restarted: Vec::new(),
+                        started: Vec::new(),
+                        stopped: Vec::new(),
+                    },
+                    server_records: Vec::new(),
+                    server_failures: Vec::new(),
+                    new_prompts: None,
+                },
                 hooks: None,
                 reviewer: Err(Failure {
                     code: ErrorCode::NoModel,

@@ -289,11 +289,11 @@ a second client lacks.
 Reload:
 
 1. Re-reads configuration.
-2. Keeps unchanged, healthy servers connected, and asks each for its tools
-   again.
+2. Keeps unchanged, healthy servers connected, and asks each for its tools,
+   and its prompts when it advertises them, again.
 3. Restarts changed servers and servers that died.
 4. Starts every server not yet started this session, to get its tools.
-5. Updates each server's cached tool list.
+5. Updates each server's cached tool and prompt lists.
 6. Reloads extensions (`docs/extensions.md`).
 7. Declares the new tool set.
 

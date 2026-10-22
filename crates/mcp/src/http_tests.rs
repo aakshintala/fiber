@@ -61,7 +61,7 @@ impl Setup {
             )
         })
         .expect("the remote server starts");
-        let OpenServer { server, listed } = opened;
+        let OpenServer { server, listed, .. } = opened;
         (Arc::new(server), listed)
     }
 
@@ -107,7 +107,7 @@ impl Setup {
             )
         })
         .expect("the remote server starts");
-        let OpenServer { server, listed: _ } = opened;
+        let OpenServer { server, .. } = opened;
         Arc::new(server)
     }
 

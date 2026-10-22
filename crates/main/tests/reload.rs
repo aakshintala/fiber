@@ -893,3 +893,281 @@ fn reload_applies_a_changed_shell_read_only_list() {
         assert_no_reload_marker(label, bytes);
     }
 }
+
+/// One read-only fixture tool: calls take the permission fast path, as in
+/// `mcp.rs`' echo tool.
+fn fixture_tool(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "A fixture tool.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": true, "openWorldHint": false},
+    })
+}
+
+/// A fixture server directory holding `tools.json` and one result file
+/// per call: `fakes::mcp_fixture`'s `server.sh` serves the directory.
+fn mcp_dir(setup: &Setup, name: &str, tools: &Value, calls: &[(&str, &str)]) -> std::path::PathBuf {
+    let dir = setup.root.path().join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("tools.json"), tools.to_string()).unwrap();
+    for (file, body) in calls {
+        fs::write(dir.join(file), body).unwrap();
+    }
+    dir
+}
+
+fn mcp_entry(dir: &std::path::Path) -> Value {
+    json!({
+        "command": "/bin/bash",
+        "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+    })
+}
+
+fn tool_names_in(body: &Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn reload_replaces_restarts_starts_and_drops_mcp_servers() {
+    let setup = Setup::new();
+    let hi = r#"{"content":[{"type":"text","text":"hi"}]}"#;
+    let keep = mcp_dir(
+        &setup,
+        "keep",
+        &json!([fixture_tool("keep_tool")]),
+        &[("call-keep_tool.json", hi)],
+    );
+    let change = mcp_dir(
+        &setup,
+        "change",
+        &json!([fixture_tool("v1")]),
+        &[("call-v1.json", hi)],
+    );
+    let change_next = mcp_dir(
+        &setup,
+        "change-next",
+        &json!([fixture_tool("v2")]),
+        &[(
+            "call-v2.json",
+            r#"{"content":[{"type":"text","text":"v2hi"}]}"#,
+        )],
+    );
+    let die = mcp_dir(
+        &setup,
+        "die",
+        &json!([fixture_tool("die_tool")]),
+        &[("call-die_tool.json", hi)],
+    );
+    let drop = mcp_dir(
+        &setup,
+        "drop",
+        &json!([fixture_tool("drop_tool")]),
+        &[("call-drop_tool.json", hi)],
+    );
+    let new = mcp_dir(
+        &setup,
+        "new",
+        &json!([fixture_tool("new_tool")]),
+        &[("call-new_tool.json", hi)],
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call("call_v2", "mcp__change__v2", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {
+            "keep": mcp_entry(&keep),
+            "change": mcp_entry(&change),
+            "die": mcp_entry(&die),
+            "drop": mcp_entry(&drop),
+        }}}),
+    );
+    let mut session = Session::start(setup);
+    let keep_cache = fs::read(session.setup.home().join("cache/mcp/keep.json")).unwrap();
+
+    // `die` exits while idle: the reload restarts it beside the old slot,
+    // carrying the death before the ready.
+    let pid: u32 = fs::read_to_string(die.join("pid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    support::kill_pid(session.setup.deadline, pid, "KILL").unwrap();
+    write_json(
+        &session.setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {
+            "keep": mcp_entry(&keep),
+            "change": mcp_entry(&change_next),
+            "die": mcp_entry(&die),
+            "new": mcp_entry(&new),
+        }}}),
+    );
+    session
+        .client
+        .send(&json!({"id":doors::mint("c_"),"command":"reload"}).to_string());
+    session
+        .stream
+        .extend(until(&session.client, "reload preamble", |line| {
+            line["kind"] == "preamble_built"
+        }));
+    session.expected.extend([
+        "mcp_server_ready",
+        "mcp_server_failed",
+        "mcp_server_ready",
+        "mcp_server_ready",
+        "reloaded",
+        "command_accepted",
+        "extensions_loaded",
+        "preamble_built",
+    ]);
+    let at = session
+        .stream
+        .iter()
+        .position(|line| line["kind"] == "reloaded")
+        .unwrap();
+    let before = &session.stream[at - 4..at];
+    assert_eq!(
+        kinds(before),
+        [
+            "mcp_server_ready",
+            "mcp_server_failed",
+            "mcp_server_ready",
+            "mcp_server_ready"
+        ]
+    );
+    assert_eq!(before[0]["payload"]["server"], "change");
+    assert_eq!(before[1]["payload"]["server"], "die");
+    assert_eq!(before[1]["payload"]["will_restart"], true);
+    assert_eq!(before[2]["payload"]["server"], "die");
+    assert_eq!(before[3]["payload"]["server"], "new");
+    let reloaded = &session.stream[at];
+    assert_eq!(
+        reloaded["payload"]["servers"],
+        json!({"kept":["keep"],"restarted":["change","die"],"started":["new"],"stopped":["drop"]})
+    );
+    assert!(reloaded["payload"].get("failed").is_none());
+
+    // Each cached list is updated; the kept one is byte-identical.
+    let cache = |server: &str| {
+        fs::read_to_string(
+            session
+                .setup
+                .home()
+                .join("cache/mcp")
+                .join(format!("{server}.json")),
+        )
+        .unwrap()
+    };
+    let tools_of = |server: &str| {
+        serde_json::from_str::<Value>(&cache(server)).unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tools_of("change"), ["v2"]);
+    assert_eq!(tools_of("new"), ["new_tool"]);
+    assert_eq!(tools_of("die"), ["die_tool"]);
+    assert_eq!(
+        fs::read(session.setup.home().join("cache/mcp/keep.json")).unwrap(),
+        keep_cache
+    );
+    // The replacement answers from its own server.
+    assert_ne!(
+        fs::read_to_string(die.join("pid.txt")).unwrap().trim(),
+        pid.to_string()
+    );
+
+    // The reload rebuilds the preamble once — the one prompt-cache miss —
+    // with the new tool set and without the dropped tool.
+    let preambles: Vec<_> = session
+        .stream
+        .iter()
+        .filter(|line| line["kind"] == "preamble_built")
+        .collect();
+    // The startup never builds a preamble: the reload's rebuild is the
+    // only one, the one prompt-cache miss the reload costs.
+    assert_eq!(preambles.len(), 1);
+    let rebuilt = preambles[0];
+    assert_eq!(rebuilt["payload"]["reason"], "reload");
+    let names: Vec<_> = rebuilt["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    for tool in [
+        "mcp__keep__keep_tool",
+        "mcp__change__v2",
+        "mcp__die__die_tool",
+        "mcp__new__new_tool",
+    ] {
+        assert!(names.contains(&tool), "{names:?}");
+    }
+    assert!(!names.contains(&"mcp__drop__drop_tool"), "{names:?}");
+
+    // The new executable answers. The opening message goes out with the
+    // first turn, after the reload's preamble.
+    session.send_prompt();
+    session
+        .stream
+        .extend(until(&session.client, "tool turn completed", |line| {
+            line["kind"] == "turn_completed"
+        }));
+    session.expected.extend([
+        "opening_message",
+        "turn_started",
+        "command_accepted",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    let completed = session
+        .stream
+        .iter()
+        .rev()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["content"][0]["text"], "v2hi");
+    let log = fs::read_to_string(change_next.join("requests.log")).unwrap();
+    assert!(log.contains(r#""method":"tools/call""#), "log:\n{log}");
+    assert!(log.contains(r#""name":"v2""#), "log:\n{log}");
+
+    // The turn's requests carry the rebuilt tool set under the session's
+    // prompt-cache key: the one miss, then the chain continues.
+    let seen = bodies(&server);
+    assert_eq!(seen.len(), 2);
+    for body in &seen {
+        assert_eq!(body["prompt_cache_key"], json!(session.id));
+        let names = tool_names_in(body);
+        assert!(names.contains(&"mcp__change__v2".to_owned()), "{names:?}");
+        assert!(
+            !names.contains(&"mcp__drop__drop_tool".to_owned()),
+            "{names:?}"
+        );
+    }
+    session.finish();
+}
