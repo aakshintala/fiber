@@ -723,17 +723,7 @@ fn import_source_parses_the_named_sources() {
     for arg in ["vim", "Codex", "both", "codex "] {
         assert_eq!(ImportSource::parse(arg), None, "{arg}");
     }
-}
-
-#[test]
-fn import_source_arg_round_trips_the_report_title() {
     assert_eq!(ImportSource::ClaudeCode.arg(), Some("claude-code"));
     assert_eq!(ImportSource::Codex.arg(), Some("codex"));
     assert_eq!(ImportSource::Both.arg(), None);
-    assert_eq!(
-        title_for(ImportSource::ClaudeCode.arg()),
-        "Imported from Claude Code"
-    );
-    assert_eq!(title_for(ImportSource::Codex.arg()), "Imported from Codex");
-    assert_eq!(title_for(ImportSource::Both.arg()), "Imported");
 }

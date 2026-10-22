@@ -279,6 +279,7 @@ fn other_session_line(kind: &str, payload: Value) -> Line {
     line
 }
 
+/// Results carrying no import report: a missing result, a null
 /// A valid import `result`: one copied server, nothing left behind.
 fn import_result() -> Value {
     json!({
@@ -290,6 +291,18 @@ fn import_result() -> Value {
         },
         "left_behind": [],
     })
+}
+
+/// Results carrying no import report: a missing result, a null
+/// one, a valid other command's result, and a shape no command
+/// answers with (which fails the typed accept parse).
+fn malformed_results() -> [Value; 4] {
+    [
+        json!({}),
+        json!({"result": null}),
+        json!({"result": {"tools": []}}),
+        json!({"result": {"unrelated": true}}),
+    ]
 }
 
 #[test]
@@ -328,15 +341,8 @@ fn an_accept_for_another_session_opens_the_report() {
 
 #[test]
 fn a_malformed_accepted_import_adds_one_notice_and_opens_no_report() {
-    // Each `result` below carries no import report: a missing result,
-    // a null one, a valid other command's result, and a shape no
-    // command answers with (which fails the typed accept parse).
-    let stubs = [
-        json!({}),
-        json!({"result": null}),
-        json!({"result": {"tools": []}}),
-        json!({"result": {"unrelated": true}}),
-    ];
+    // Each stub carries no import report (see `malformed_results`).
+    let stubs = malformed_results();
     for stub in &stubs {
         let mut app = attached();
         let lines = sent(enter(&mut app, "/import codex"));
@@ -374,12 +380,7 @@ fn a_malformed_accepted_import_adds_one_notice_and_opens_no_report() {
 
 #[test]
 fn a_malformed_accept_for_another_session_adds_one_notice() {
-    let stubs = [
-        json!({}),
-        json!({"result": null}),
-        json!({"result": {"tools": []}}),
-        json!({"result": {"unrelated": true}}),
-    ];
+    let stubs = malformed_results();
     for stub in &stubs {
         let mut app = attached();
         let lines = sent(enter(&mut app, "/import codex"));

@@ -1616,11 +1616,7 @@ impl App {
             }
             None => return None,
         };
-        let source = match &entry {
-            Some((Kind::Import(source), _)) => Some(*source),
-            _ => None,
-        };
-        if let Some(source) = source {
+        if let Some((Kind::Import(source), _)) = entry.as_ref() {
             let opened = accepted.is_some_and(|answer| {
                 self.import_answered(source.arg().map(str::to_owned), answer)
             });
