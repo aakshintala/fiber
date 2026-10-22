@@ -65,7 +65,7 @@ pub(super) fn draw(
                 );
                 targets.push(Target {
                     id: TargetId::MoreNotices,
-                    rect: Rect::new(area.x, row, super::to_u16(kept), 1),
+                    rect: Rect::new(area.x, row, crate::text::to_u16(kept), 1),
                 });
             }
         }

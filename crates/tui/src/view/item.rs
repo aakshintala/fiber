@@ -116,11 +116,11 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
         style(Role::Muted),
     );
     let height = usize::from(area.height).saturating_sub(1);
-    let rows = app.item_output_rows(area.width, super::to_u16(height));
+    let rows = app.item_output_rows(area.width, crate::text::to_u16(height));
     for (index, row) in rows.iter().enumerate() {
         let y = area
             .y
-            .saturating_add(super::to_u16(index).saturating_add(1));
+            .saturating_add(crate::text::to_u16(index).saturating_add(1));
         buf.set_stringn(area.x, y, format::cut(row, wide), wide, style(Role::Text));
     }
 }

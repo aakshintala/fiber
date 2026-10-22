@@ -2,7 +2,7 @@
 
 use super::{
     char_width, controls_to_space, cut, cut_left, fit, paste_clean, printable, strip_controls,
-    width,
+    to_u16, width,
 };
 
 #[test]
@@ -113,4 +113,12 @@ fn fit_fills_exactly_the_columns() {
     assert_eq!(width(&combining), 20);
     assert_eq!(fit(&combining, 20), combining);
     assert_eq!(width(&fit("\u{1F389}", 20)), 20);
+}
+
+#[test]
+fn to_u16_saturates_at_the_largest_coordinate() {
+    assert_eq!(to_u16(0), 0);
+    assert_eq!(to_u16(65_535), 65_535);
+    assert_eq!(to_u16(65_536), 65_535);
+    assert_eq!(to_u16(usize::MAX), 65_535);
 }

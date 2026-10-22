@@ -159,6 +159,12 @@ pub(crate) fn fit(text: &str, columns: usize) -> String {
     out
 }
 
+/// A row or column count as a screen coordinate; a screen is never
+/// larger than `u16::MAX`.
+pub(crate) fn to_u16(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
+}
+
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod tests;

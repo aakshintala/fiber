@@ -7,10 +7,11 @@ use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use super::{ALERT_TINT, APPROVAL_TINT, paragraph, rows, to_u16};
+use super::{ALERT_TINT, APPROVAL_TINT, paragraph, rows};
 use crate::approvals::Panel;
 use crate::mouse::{Target, TargetId};
 use crate::surface;
+use crate::text::to_u16;
 use crate::theme::Role;
 
 /// Panel line `line` with its styled runs: the marks' bytes in their

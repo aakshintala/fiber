@@ -463,7 +463,7 @@ pub(crate) fn kept(app: &App) -> usize {
 /// cursor share it, so the caret never lands on a status row.
 pub(crate) fn input_bottom(app: &App, area: Rect) -> u16 {
     area.bottom()
-        .saturating_sub(super::to_u16(kept(app)))
+        .saturating_sub(crate::text::to_u16(kept(app)))
         .max(area.y)
 }
 
