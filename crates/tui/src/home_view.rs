@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use super::{FOCUS_STYLE, completions, lift_hover};
-use crate::app::{App, Surface};
+use crate::app::App;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
@@ -935,23 +935,19 @@ pub(super) fn render(
     // on it, as the question frames do.
     // The surfaces that draw a frame go up bottom first, so the quit
     // question draws above the report.
-    for surface in app.framed_surfaces() {
-        if surface == Surface::Report {
-            let before = targets.len();
-            let slab = crate::import_report::draw_report(app, area, buf, &mut targets);
-            if !slab.is_empty() {
-                targets.insert(
-                    before.min(targets.len()),
-                    Target {
-                        id: TargetId::Home(Spot::Question),
-                        rect: slab,
-                    },
-                );
-            }
-        } else if surface == Surface::Quit {
-            super::quit::draw(app, area, buf, &mut targets);
+    super::draw_framed(app, area, buf, &mut targets, |targets, buf| {
+        let before = targets.len();
+        let slab = crate::import_report::draw_report(app, area, buf, targets);
+        if !slab.is_empty() {
+            targets.insert(
+                before.min(targets.len()),
+                Target {
+                    id: TargetId::Home(Spot::Question),
+                    rect: slab,
+                },
+            );
         }
-    }
+    });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row))
         && !matches!(id, TargetId::Home(Spot::Question))
     {

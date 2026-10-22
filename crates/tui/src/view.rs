@@ -120,6 +120,25 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     }
 }
 
+/// Draws the open framed surfaces, bottom first, so the one on top draws
+/// last: `report` draws the import report where the caller's view puts
+/// it, the quit question over `area`.
+fn draw_framed(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    mut report: impl FnMut(&mut Vec<Target>, &mut Buffer),
+) {
+    for surface in app.framed_surfaces() {
+        if surface == Surface::Report {
+            report(targets, buf);
+        } else if surface == Surface::Quit {
+            quit::draw(app, area, buf, targets);
+        }
+    }
+}
+
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
 /// layout's status rows on the last rows, then the input box with a
 /// completion panel above it, or the approval panel in their place, then
@@ -164,13 +183,9 @@ pub(crate) fn render(
         // The import report and the quit question take every key over
         // these views, so they draw over them too, the quit question
         // last: without it Enter would quit while the choices never show.
-        for surface in app.framed_surfaces() {
-            if surface == Surface::Report {
-                crate::import_report::draw_report(app, area, buf, &mut targets);
-            } else if surface == Surface::Quit {
-                quit::draw(app, area, buf, &mut targets);
-            }
-        }
+        draw_framed(app, area, buf, &mut targets, |targets, buf| {
+            crate::import_report::draw_report(app, area, buf, targets);
+        });
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
                 lift_hover(buf, target.rect);
@@ -330,24 +345,20 @@ pub(crate) fn render(
     // (`docs/tui.md`, "Overlays"). The conversation's own targets go
     // away under it, as under the notices overlay. The quit question
     // draws above the report, as it takes every key while open.
-    for surface in app.framed_surfaces() {
-        if surface == Surface::Report {
-            targets.retain(|target| {
-                !matches!(
-                    target.id,
-                    TargetId::Line(_)
-                        | TargetId::Link { .. }
-                        | TargetId::FindResult(_)
-                        | TargetId::NewBelow
-                        | TargetId::Turn(_)
-                        | TargetId::Offer(_)
-                )
-            });
-            crate::import_report::draw_report(app, conversation, buf, &mut targets);
-        } else if surface == Surface::Quit {
-            quit::draw(app, area, buf, &mut targets);
-        }
-    }
+    draw_framed(app, area, buf, &mut targets, |targets, buf| {
+        targets.retain(|target| {
+            !matches!(
+                target.id,
+                TargetId::Line(_)
+                    | TargetId::Link { .. }
+                    | TargetId::FindResult(_)
+                    | TargetId::NewBelow
+                    | TargetId::Turn(_)
+                    | TargetId::Offer(_)
+            )
+        });
+        crate::import_report::draw_report(app, conversation, buf, targets);
+    });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             lift_hover(buf, target.rect);

@@ -112,16 +112,13 @@ impl App {
     }
 
     /// The surfaces that draw a frame of their own over every view, in
-    /// the order they draw, bottom first, as far as they are open: the
-    /// quit question draws above the report, as it is above it in
-    /// [`Surface`].
+    /// the order they draw: [`Self::top_surfaces`] from the bottom up, so
+    /// the one on top draws last, as far as they are open.
     pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Surface> {
-        [
-            (Surface::Report, self.import_report_open()),
-            (Surface::Quit, self.quit_open()),
-        ]
-        .into_iter()
-        .filter_map(|(surface, open)| open.then_some(surface))
+        self.top_surfaces()
+            .into_iter()
+            .rev()
+            .filter(|surface| matches!(surface, Surface::Report | Surface::Quit))
     }
 
     /// The surface on top: the head of [`Self::top_surfaces`].
