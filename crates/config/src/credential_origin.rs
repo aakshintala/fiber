@@ -197,7 +197,7 @@ impl Credentials {
             return Ok(Located::Source(source));
         }
         if label == DEFAULT_LABEL
-            && let Some(own) = provider.credential.clone()
+            && let Some(own) = provider.credential_from.credential().cloned()
         {
             return Ok(Located::Source(own));
         }
