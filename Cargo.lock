@@ -1220,6 +1220,7 @@ dependencies = [
  "libc",
  "log 0.0.0",
  "ring",
+ "rustix",
  "serde",
  "serde_json",
  "signal-hook",

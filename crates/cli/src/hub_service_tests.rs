@@ -1483,10 +1483,15 @@ fn an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait() {
         ready.path().display()
     );
     let clock = FakeClock::new();
-    let due = clock.origin() + MANAGER_WAIT;
     let (done_tx, done_rx) = mpsc::channel();
+    let (wait_tx, wait_rx) = mpsc::channel();
     let worker = Arc::clone(&clock);
     thread::spawn(move || {
+        // The hook fires on this same thread, inside the drain wait:
+        // arming it here reaches the runner.
+        super::on_drain_wait(move || {
+            wait_tx.send(()).unwrap_or(());
+        });
         done_tx
             .send(system_run_bounded(
                 "sh",
@@ -1498,12 +1503,13 @@ fn an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait() {
     let pids = ready.wait(Deadline::after(DEADLINE));
     assert_eq!(pids.len(), 1, "the child writes its own pid once");
     let group = pids[0];
-    // The direct child is already gone, but the drain holds the pipe: the
-    // parked wait below is the signal the join is under the bound.
-    assert!(
-        clock.await_parked(due, Deadline::after(DEADLINE)),
-        "the drain parks at its wait"
-    );
+    // The direct child is already gone and the drain holds the pipe:
+    // the hook fires only in the post-exit drain wait, never on a
+    // live-child park at the same deadline, so advancing now takes
+    // the expiry path instead of the timeout.
+    Deadline::after(DEADLINE)
+        .recv(&wait_rx)
+        .expect("the runner reaches its drain wait");
     clock.advance(MANAGER_WAIT + Duration::from_secs(1));
     let ran = Deadline::after(DEADLINE)
         .recv(&done_rx)

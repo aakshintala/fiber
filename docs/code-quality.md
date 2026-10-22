@@ -120,8 +120,6 @@ the code and the list disagree.
 | `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
-| `hub` | `crates/hub/src/sessions_stop/transport.rs` | the bounded session-socket calls: a non-blocking `socket` + `connect` with readiness `poll` and the deferred `SO_ERROR` read |
-| `hub` | `crates/hub/src/sessions_stop_tests.rs` | the stop-loop pins open probe sockets by hand: an unconnected socket, refused and reset dials, a linger-zero reset, a path-only fd, and closed-fd flag probes, forcing the error paths the loop reads |
 | `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 

@@ -168,6 +168,23 @@ pub(crate) fn system_run_bounded(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The drain test arms it, and `join_drained` runs it on its first
+    /// unfinished pass: the runner reached its post-exit drain wait,
+    /// not just any park at the bound. Test only: production has no
+    /// seam there.
+    static DRAIN_WAIT: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Arms the one-shot drain hook before the next bounded run.
+/// Test only: production has no seam there.
+#[cfg(test)]
+pub(crate) fn on_drain_wait(hook: impl FnOnce() + 'static) {
+    DRAIN_WAIT.with(|slot| slot.set(Some(Box::new(hook))));
+}
+
 /// Joins the stderr drain under `deadline`: a background descendant that
 /// outlives the direct child keeps the pipe open, so the join parks only
 /// until the bound, kills the group that remains, then joins. Returns the
@@ -180,6 +197,14 @@ fn join_drained(
 ) -> String {
     let parker = Parker::new();
     while !drained.is_finished() {
+        // Tests only: the lingering-descendant case logs the drain
+        // wait, on this same thread.
+        #[cfg(test)]
+        DRAIN_WAIT.with(|slot| {
+            if let Some(hook) = slot.take() {
+                hook();
+            }
+        });
         if clock.now() >= deadline {
             // A background descendant still holds the pipe: the kill
             // frees every end, so the join below returns at once.

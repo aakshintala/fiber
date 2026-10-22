@@ -11,8 +11,6 @@
 
 use std::fs;
 use std::io::{BufReader, Write};
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -20,6 +18,10 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use rustix::event::PollFlags;
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use rustix::io::{Errno, FdFlags, fcntl_getfd};
+use rustix::net::{self, AddressFamily, Ipv4Addr, SocketAddrV4, SocketType};
 use serde_json::Value;
 
 use super::transport::*;
@@ -80,6 +82,34 @@ fn stop_async(hub: &Arc<Hub>) -> mpsc::Receiver<Outcome> {
         })
         .unwrap();
     rx
+}
+
+/// An unreadable `run/` fails the stop instead of reading as absence: a
+/// file where the directory belongs makes the listing fail, so no
+/// session is named, stopped or running.
+#[test]
+fn an_unreadable_run_directory_fails_the_stop() {
+    let temp = Temp::new("ss-run-unreadable");
+    fs::remove_dir(temp.dir.join("run")).unwrap();
+    fs::write(temp.dir.join("run"), b"").unwrap();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join(stop_async(&hub));
+    assert!(outcome.list_failed);
+    assert!(outcome.confirmed.is_empty());
+    assert!(outcome.unconfirmed.is_empty());
+}
+
+/// A missing `run/` is no sessions: a home that never started one stops
+/// nothing and answers zero, instead of failing the listing.
+#[test]
+fn a_missing_run_directory_stops_nothing() {
+    let temp = Temp::new("ss-run-missing");
+    fs::remove_dir(temp.dir.join("run")).unwrap();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let outcome = join(stop_async(&hub));
+    assert!(!outcome.list_failed);
+    assert!(outcome.confirmed.is_empty());
+    assert!(outcome.unconfirmed.is_empty());
 }
 
 /// Joins a loop thread under one deadline: a loop that waits out the
@@ -390,7 +420,7 @@ fn an_expired_bound_with_no_stop_returns_not_ready() {
     // The origin is already past: the clock never moves backward, and no
     // stop was requested, so the real code never reaches the poll.
     assert!(
-        !wait_ready(reader.as_fd(), libc::POLLIN, &hub, temp.clock.origin()),
+        !wait_ready(reader.as_fd(), PollFlags::IN, &hub, temp.clock.origin()),
         "an expired bound with no stop returns not ready"
     );
 }
@@ -398,53 +428,26 @@ fn an_expired_bound_with_no_stop_returns_not_ready() {
 /// A refused loopback port queues first, then reads its queued error:
 /// refused means gone, so the loop skips the session and continues.
 #[test]
-#[allow(unsafe_code, reason = "the probe socket is opened and dialled by hand")]
 fn a_refused_connect_reads_gone() {
     let closed = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = closed.local_addr().unwrap().port();
     drop(closed);
-    // SAFETY: a fresh socket fd this test owns; the assert below
-    // checks the call before the fd is used.
-    let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-    assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one yet.
-    let socket = unsafe { OwnedFd::from_raw_fd(raw) };
-    // SAFETY: flag reads and writes touch only the owned probe socket.
-    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL, 0) };
-    assert_ne!(flags, -1, "the probe socket offers its flags");
-    assert_ne!(
-        // SAFETY: flag reads and writes touch only the owned probe socket.
-        unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) },
-        -1,
-        "the probe socket goes non-blocking"
-    );
-    let addr = libc::sockaddr_in {
-        sin_family: libc::sa_family_t::try_from(libc::AF_INET).unwrap(),
-        sin_port: port.to_be(),
-        sin_addr: libc::in_addr {
-            s_addr: 0x7f00_0001u32.to_be(),
-        },
-        sin_zero: [0; 8],
-    };
-    let connected = {
-        // SAFETY: `addr` is a local of at least `len` bytes; `connect`
-        // reads only those bytes and takes no ownership.
-        unsafe {
-            libc::connect(
-                raw,
-                &addr as *const libc::sockaddr_in as *const libc::sockaddr,
-                std::mem::size_of::<libc::sockaddr_in>().try_into().unwrap(),
-            )
-        }
-    };
-    assert_eq!(connected, -1, "the closed port refuses");
+    let socket =
+        net::socket(AddressFamily::INET, SocketType::STREAM, None).expect("the probe socket opens");
+    fcntl_setfl(
+        &socket,
+        fcntl_getfl(&socket).unwrap().union(OFlags::NONBLOCK),
+    )
+    .expect("the probe socket goes non-blocking");
+    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let queued = net::connect(&socket, &addr).expect_err("the closed port refuses");
     assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::EINPROGRESS),
+        queued,
+        Errno::INPROGRESS,
         "a refused loopback port queues first"
     );
     assert!(
-        raw_poll(raw, libc::POLLOUT, 5_000) & libc::POLLOUT != 0,
+        poll_ready(socket.as_fd(), PollFlags::OUT),
         "the refusal surfaces"
     );
     assert!(
@@ -468,7 +471,6 @@ fn a_connected_connect_reads_ok() {
 /// resets only after the release, so the client can fill its send
 /// buffer first and the reset never races the fill. Reads after the
 /// reset see neither refused nor connected.
-#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
 fn reset_loopback() -> (TcpStream, mpsc::Sender<()>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -476,24 +478,8 @@ fn reset_loopback() -> (TcpStream, mpsc::Sender<()>, thread::JoinHandle<()>) {
     let server = thread::spawn(move || {
         let (conn, _) = listener.accept().unwrap();
         go_rx.recv().unwrap();
-        let reset = libc::linger {
-            l_onoff: 1,
-            l_linger: 0,
-        };
-        let ok = {
-            // SAFETY: `reset` is a local of exactly the option's
-            // length; `setsockopt` reads only it and takes no ownership.
-            unsafe {
-                libc::setsockopt(
-                    conn.as_raw_fd(),
-                    libc::SOL_SOCKET,
-                    libc::SO_LINGER,
-                    &reset as *const libc::linger as *const libc::c_void,
-                    std::mem::size_of::<libc::linger>().try_into().unwrap(),
-                )
-            }
-        };
-        assert_eq!(ok, 0, "linger-zero arms the reset");
+        rustix::net::sockopt::set_socket_linger(&conn, Some(Duration::ZERO))
+            .expect("linger-zero arms the reset");
         // Dropping a linger-zero socket resets the connection.
     });
     let client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
@@ -503,24 +489,18 @@ fn reset_loopback() -> (TcpStream, mpsc::Sender<()>, thread::JoinHandle<()>) {
 /// Waits, event by event, until the reset surfaces as a poll error on
 /// the client: the reset is in the kernel before this returns.
 fn await_reset(client: &TcpStream) {
-    let mut revents = 0;
     for _ in 0..50 {
-        revents = raw_poll(client.as_raw_fd(), libc::POLLERR | libc::POLLHUP, 100);
-        if revents & libc::POLLERR != 0 {
-            break;
+        if poll_ready(client.as_fd(), PollFlags::empty()) {
+            return;
         }
     }
-    assert!(
-        revents & libc::POLLERR != 0,
-        "the reset surfaces as a poll error"
-    );
+    panic!("the reset surfaces as a poll error");
 }
 
 /// A reset after the close acknowledgement still confirms: the loop
 /// reads the close as accepted and the reset as gone-after-close, not
 /// as a wait. Waiting on the reset instead would hang past the bound.
 #[test]
-#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
 fn a_reset_after_the_close_ack_still_confirms() {
     let temp = Temp::new("ss-reset-after-close");
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
@@ -542,22 +522,8 @@ fn a_reset_after_the_close_ack_still_confirms() {
             writer.write_all(&bytes).unwrap();
             answered += 1;
             if answered == 2 {
-                let reset = libc::linger {
-                    l_onoff: 1,
-                    l_linger: 0,
-                };
-                // SAFETY: `reset` is a local of exactly the option's
-                // length; `setsockopt` reads only it and takes no ownership.
-                let ok = unsafe {
-                    libc::setsockopt(
-                        writer.as_raw_fd(),
-                        libc::SOL_SOCKET,
-                        libc::SO_LINGER,
-                        &reset as *const libc::linger as *const libc::c_void,
-                        std::mem::size_of::<libc::linger>().try_into().unwrap(),
-                    )
-                };
-                assert_eq!(ok, 0, "linger-zero arms the reset");
+                rustix::net::sockopt::set_socket_linger(&writer, Some(Duration::ZERO))
+                    .expect("linger-zero arms the reset");
                 return;
             }
         }
@@ -570,7 +536,6 @@ fn a_reset_after_the_close_ack_still_confirms() {
 /// A reset loopback connection reads neither refused nor connected: the
 /// loop neither skips the session nor proceeds, but waits out the bound.
 #[test]
-#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
 fn a_reset_connect_reads_unconfirmed() {
     let (client, go, server) = reset_loopback();
     go.send(()).unwrap();
@@ -586,47 +551,43 @@ fn a_reset_connect_reads_unconfirmed() {
 }
 
 /// A reset socket reports its error even when no event is requested:
-/// `poll` always returns the error and hangup bits, so the readiness
-/// mask sees them with an empty request. Dropping either bit from the
-/// mask would report a reset socket as quiet.
+/// the wait always joins the error and hangup bits, so a reset answers
+/// ready with an empty request.
 #[test]
-#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
 fn a_reset_socket_reports_its_error_when_nothing_is_requested() {
     let (client, go, server) = reset_loopback();
     go.send(()).unwrap();
     server.join().unwrap();
     await_reset(&client);
     assert!(
-        poll_ready(client.as_fd(), 0),
+        poll_ready(client.as_fd(), PollFlags::empty()),
         "a reset socket reports its error"
     );
 }
 
-/// A path-only fd polls ready through its invalid marker: `poll` reports
-/// `POLLNVAL`, which the readiness mask counts. Linux-only: `O_PATH`
-/// opens a fd that cannot read or write.
+/// A path-only fd polls ready through its invalid marker: the wait
+/// counts `POLLNVAL` as readiness, as it does hangup and error.
+/// Linux-only: `O_PATH` opens a fd that cannot read or write.
 #[test]
 #[cfg(target_os = "linux")]
-#[allow(unsafe_code, reason = "the path fd is opened by hand")]
 fn a_path_only_fd_polls_ready() {
     let temp = Temp::new("ss-pollnval");
-    let path = std::ffi::CString::new(temp.dir.as_os_str().as_bytes()).unwrap();
-    // SAFETY: `path` names the live test directory; the assert below
-    // checks the open before the fd is used.
-    let raw = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_RDONLY) };
-    assert!(raw >= 0, "the path fd opens");
-    // SAFETY: `raw` is the open path fd above, owned by no one yet.
-    let held = unsafe { OwnedFd::from_raw_fd(raw) };
+    let held = rustix::fs::openat(
+        rustix::fs::CWD,
+        &temp.dir,
+        rustix::fs::OFlags::PATH.union(rustix::fs::OFlags::RDONLY),
+        rustix::fs::Mode::empty(),
+    )
+    .expect("the path fd opens");
     assert!(
-        poll_ready(held.as_fd(), libc::POLLIN),
+        poll_ready(held.as_fd(), PollFlags::IN),
         "a path-only fd polls ready through POLLNVAL"
     );
 }
 
 /// A bare error polls ready: a refused datagram surfaces as `POLLERR`
 /// with no readability, hangup or invalid marker beside it, which the
-/// mask still counts. Replacing the mask's first `+` with `-` drops
-/// exactly the error bit, so the error waits out the slice instead.
+/// wait counts as readiness like any other event.
 #[test]
 fn a_bare_error_polls_ready() {
     // Bind-then-drop leaves a port nothing answers: each datagram it
@@ -642,7 +603,7 @@ fn a_bare_error_polls_ready() {
     let mut ready = false;
     for _ in 0..50 {
         socket.send(b"x").unwrap_or(0);
-        if poll_ready(socket.as_fd(), libc::POLLIN) {
+        if poll_ready(socket.as_fd(), PollFlags::IN) {
             ready = true;
             break;
         }
@@ -656,7 +617,7 @@ fn a_bare_error_polls_ready() {
 fn a_quiet_socket_polls_not_ready() {
     let (socket, _peer) = UnixStream::pair().unwrap();
     assert!(
-        !poll_ready(socket.as_fd(), libc::POLLIN),
+        !poll_ready(socket.as_fd(), PollFlags::IN),
         "a quiet socket polls not ready"
     );
 }
@@ -668,17 +629,17 @@ fn readiness_reports_each_single_flag_combination() {
     let (readable, peer) = UnixStream::pair().unwrap();
     (&peer).write_all(b"x").unwrap();
     assert!(
-        poll_ready(readable.as_fd(), libc::POLLIN),
+        poll_ready(readable.as_fd(), PollFlags::IN),
         "a readable socket polls ready"
     );
     let (writable, _held) = UnixStream::pair().unwrap();
     assert!(
-        poll_ready(writable.as_fd(), libc::POLLOUT),
+        poll_ready(writable.as_fd(), PollFlags::OUT),
         "a fresh pair polls writable"
     );
     let (quiet, _kept) = UnixStream::pair().unwrap();
     assert!(
-        !poll_ready(quiet.as_fd(), libc::POLLIN),
+        !poll_ready(quiet.as_fd(), PollFlags::IN),
         "a quiet socket polls not ready"
     );
 }
@@ -694,9 +655,10 @@ fn a_full_send_buffer_retries_until_drained() {
     peer.set_nonblocking(true).unwrap();
     // Fill the send buffer: small writes until the kernel says to wait.
     let filler = vec![0u8; 65_536];
+    let mut written = 0;
     for _ in 0..128 {
         match (&writer).write(&filler) {
-            Ok(_) => {}
+            Ok(n) => written += n,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) => panic!("filling the send buffer: {error}"),
         }
@@ -717,13 +679,19 @@ fn a_full_send_buffer_retries_until_drained() {
         temp.clock.await_parked(end, Deadline::after(DEADLINE)),
         "the bounded write waits for room"
     );
-    // Drain the filler: the freed room unblocks the write.
+    // Drain exactly the filler: the freed room unblocks the write,
+    // while the line it sends next stays unread for the assertion
+    // below. `take` caps the read, so none of the line is consumed.
     let mut chunk = vec![0u8; 65_536];
-    loop {
-        match (&peer).read(&mut chunk) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-            Err(error) => panic!("draining the peer: {error}"),
+    let mut drained = 0;
+    while drained < written {
+        match (&peer)
+            .take(u64::try_from(written - drained).unwrap())
+            .read(&mut chunk)
+        {
+            Ok(0) => panic!("the peer closed with filler still unread"),
+            Ok(n) => drained += n,
+            Err(error) => panic!("draining exactly the filler: {error}"),
         }
     }
     assert!(
@@ -931,6 +899,58 @@ fn a_rejected_acknowledgement_reports_rejected() {
     );
 }
 
+/// Events plus the acknowledgement in one write answer at once: every
+/// complete buffered line drains before the socket is touched again, so
+/// a buffered answer never waits out the bound with the peer open, and
+/// at end of input only the final partial line takes the single parse.
+#[test]
+fn buffered_events_plus_the_acknowledgement_answer_at_once() {
+    let temp = Temp::new("ss-ack-drain");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    let line = |kind: &str, command_id: &str| {
+        let mut line = serde_json::to_vec(&serde_json::json!({"kind": kind, "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": command_id}}))
+        .unwrap();
+        line.push(b'\n');
+        line
+    };
+    // Two other answers plus this command's in one write, peer open:
+    // the answer is already buffered, so no wait runs.
+    let (client, session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let mut read = BufReader::new(client);
+    let mut all = line("command_accepted", "c_first");
+    all.extend_from_slice(&line("command_accepted", "c_second"));
+    all.extend_from_slice(&line("command_accepted", "c_mine"));
+    (&session).write_all(&all).unwrap();
+    let worker = Arc::clone(&hub);
+    let answer = thread::spawn(move || read_ack(&mut read, &stream, &worker, "c_mine", end));
+    temp.clock
+        .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
+    assert!(
+        matches!(answer.join().unwrap(), Ack::Accepted),
+        "a buffered acknowledgement answers with the socket open"
+    );
+    // The same write with the peer closed: the answer still parses,
+    // instead of joining its lines into one failed value.
+    let (client, session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let mut read = BufReader::new(client);
+    (&session).write_all(&all).unwrap();
+    drop(session);
+    assert!(
+        matches!(
+            read_ack(&mut read, &stream, &hub, "c_mine", end),
+            Ack::Accepted
+        ),
+        "buffered lines parse singly at end of input"
+    );
+}
+
 /// A long line far below the length edge still reaches its
 /// acknowledgement: the bound is tens of megabytes out, not a product
 /// of the bytes seen so far.
@@ -970,16 +990,10 @@ fn a_long_line_below_the_edge_still_reaches_its_ack() {
 /// gone, never waited on. Advancing past the bound turns a blind wait
 /// into unconfirmed instead of a hang.
 #[test]
-#[allow(unsafe_code, reason = "the probe socket stays unconnected by hand")]
 fn an_unconnected_socket_is_gone_not_waited_on() {
     let temp = Temp::new("ss-unconnected");
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
-    // SAFETY: a fresh socket fd this test owns; the assert below
-    // checks the call before the fd is used.
-    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one yet.
-    let socket = unsafe { OwnedFd::from_raw_fd(raw) };
+    let socket = open_socket().expect("the probe socket opens");
     let unix = UnixStream::from(socket);
     let stream = unix.try_clone().unwrap();
     let mut read = BufReader::new(unix);
@@ -993,74 +1007,36 @@ fn an_unconnected_socket_is_gone_not_waited_on() {
     );
 }
 
-/// A closed fd cannot go non-blocking: the raw seam reports the
-/// failure with no borrow involved, which is what the `open_socket`
-/// caller checks to fail the open.
+/// A stop socket starts non-blocking and close-on-exec: the flags the
+/// open sets, read back through the same calls.
 #[test]
-#[allow(
-    unsafe_code,
-    reason = "the probe fd is closed by hand to fail the call"
-)]
-fn a_closed_fd_fails_nonblocking() {
-    // SAFETY: a fresh socket fd this test owns; the close below takes
-    // it, and the flagged call after takes the number by value.
-    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one: closing
-    // it touches nothing else, and the flagged call takes the number
-    // by value, so no borrow outlives the close.
-    unsafe { libc::close(raw) };
-    assert_ne!(
-        // SAFETY: `fcntl_flag` takes the number by value: the closed
-        // number fails `EBADF` with no borrow involved.
-        unsafe { fcntl_flag(raw, libc::F_SETFL, libc::O_NONBLOCK) },
-        0,
-        "a closed fd cannot go non-blocking"
+fn open_socket_marks_the_fd_nonblocking_and_close_on_exec() {
+    let fd = open_socket().expect("the probe socket opens");
+    assert!(
+        fcntl_getfl(&fd)
+            .expect("the probe socket offers its flags")
+            .contains(OFlags::NONBLOCK),
+        "a stop socket starts non-blocking"
+    );
+    assert!(
+        fcntl_getfd(&fd)
+            .expect("the probe socket offers its descriptor flags")
+            .contains(FdFlags::CLOEXEC),
+        "a stop socket starts close-on-exec"
     );
 }
 
-/// A closed fd cannot go close-on-exec: the raw seam answers nonzero
-/// for the close-on-exec command, which is what the `open_socket`
-/// caller checks to fail the open. Replacing the seam with
-/// `Default::default` answers 0, reporting success on the failure.
+/// An overlong socket path never confirms: no address holds it, so the
+/// connect fails before the socket is touched.
 #[test]
-#[allow(
-    unsafe_code,
-    reason = "the probe fd is closed by hand to fail the call"
-)]
-fn a_closed_fd_fails_close_on_exec() {
-    // SAFETY: a fresh socket fd this test owns; the close below takes
-    // it, and the flagged call after takes the number by value.
-    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one: closing
-    // it touches nothing else, and the flagged call takes the number
-    // by value, so no borrow outlives the close.
-    unsafe { libc::close(raw) };
-    assert_ne!(
-        // SAFETY: `fcntl_flag` takes the number by value: the closed
-        // number fails `EBADF` with no borrow involved.
-        unsafe { fcntl_flag(raw, libc::F_SETFD, libc::FD_CLOEXEC) },
-        0,
-        "a closed fd cannot go close-on-exec"
-    );
-}
-
-/// An address beside the family still computes its bound: family bytes
-/// plus path bytes plus the NUL.
-#[test]
-fn an_address_beside_the_family_computes_its_bound() {
-    let name = format!("s_{}", "a".repeat(100));
-    let path = Path::new("run").join(&name);
-    let (_, len) = unix_addr(&path).unwrap();
-    assert_eq!(
-        len as usize,
-        std::mem::size_of::<libc::sa_family_t>() + path.as_os_str().as_bytes().len() + 1,
-        "the length covers the family, the bytes and the NUL"
-    );
+fn an_overlong_socket_path_never_confirms() {
+    let fd = open_socket().expect("the probe socket opens");
     let too_long = Path::new("run").join(format!("s_{}", "a".repeat(104)));
     assert!(
-        unix_addr(&too_long).is_err(),
-        "a path filling sun_path is refused"
+        matches!(
+            start_connect(fd.as_fd(), &too_long),
+            Err(ConnectError::Unconfirmed)
+        ),
+        "a path no address holds never confirms"
     );
 }

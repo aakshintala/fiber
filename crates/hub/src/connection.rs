@@ -1088,7 +1088,19 @@ fn on_stop(
             hook();
         }
     }
-    if outcome.unconfirmed.is_empty() {
+    if outcome.list_failed {
+        let message = "The session list could not be read.";
+        match web {
+            Some(web) => drain_web(
+                hub,
+                writer,
+                web,
+                "command_rejected",
+                rejection(Some(id), &ErrorCode::IoFailed, message),
+            ),
+            None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, message),
+        }
+    } else if outcome.unconfirmed.is_empty() {
         let result = CommandResult::Stop {
             sessions_stopped: outcome.confirmed.len(),
         };

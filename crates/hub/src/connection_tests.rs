@@ -343,6 +343,30 @@ fn stop_with_sessions_and_none_running_answers_zero() {
 }
 
 #[test]
+fn stop_with_sessions_and_an_unreadable_list_answers_io_failed() {
+    let temp = Temp::new();
+    // A file where `run/` belongs: the listing fails, so the stop names
+    // no session as stopped and answers `io_failed` instead of a count.
+    fs::write(temp.dir.join("run"), b"").unwrap();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (code, id, message) = rejected(&client.next("the acknowledgement"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(id, Some("c_stop".to_owned()));
+    assert_eq!(message, "The session list could not be read.");
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
 fn stop_with_sessions_stops_the_running_session() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::exit_on_close(&temp.dir));

@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::Wake;
+use rustix::event::PollFlags;
 use transport::{
     Ack, ConnectError, Wrote, check_connected, open_socket, read_ack, start_connect, wait_ready,
     write_line_bounded,
@@ -52,6 +53,9 @@ pub(crate) struct Outcome {
     /// Every listed session neither confirmed nor skipped as refused, in
     /// id order: still running, or gone past the bound.
     pub(crate) unconfirmed: Vec<SessionId>,
+    /// The `run/` listing failed: no session is named, stopped or
+    /// running, and the stop answers `io_failed` instead of a count.
+    pub(crate) list_failed: bool,
 }
 
 /// Shuts down every running session the hub knows of in `run/`, each
@@ -69,7 +73,16 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     if hub.stop_requested() {
         return probe(hub);
     }
-    let first = list(hub);
+    let first = match list(hub) {
+        Ok(first) => first,
+        Err(_) => {
+            return Outcome {
+                confirmed: Vec::new(),
+                unconfirmed: Vec::new(),
+                list_failed: true,
+            };
+        }
+    };
     #[cfg(test)]
     if let Some(hook) = lock(&hub.on_scan_listed).take() {
         hook();
@@ -85,7 +98,16 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     if hub.stop_requested() {
         return finish(first, Vec::new(), &confirmed, &gone);
     }
-    let second = list(hub);
+    let second = match list(hub) {
+        Ok(second) => second,
+        Err(_) => {
+            return Outcome {
+                confirmed: Vec::new(),
+                unconfirmed: Vec::new(),
+                list_failed: true,
+            };
+        }
+    };
     let fresh: Vec<SessionId> = second
         .iter()
         .filter(|id| !confirmed.contains(&id.0))
@@ -118,19 +140,27 @@ fn zero_wait(hub: &Arc<Hub>, end: Instant) {
 }
 
 /// The `run/` entries that name a session, in id order: the same read and
-/// filter the feed scan applies before it connects.
-fn list(hub: &Hub) -> Vec<SessionId> {
-    let mut ids: Vec<SessionId> = fs::read_dir(hub.home.join("run"))
-        .map(|dir| {
-            dir.filter_map(Result::ok)
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .filter(|name| valid_session_id(name))
-                .map(SessionId)
-                .collect()
-        })
-        .unwrap_or_default();
+/// filter the feed scan applies before it connects. A missing `run/` is
+/// no entries, as for a home that never started a session. Any other
+/// open or entry failure is `Err`: the stop answers `io_failed` instead
+/// of accepting a partial list as the whole.
+fn list(hub: &Hub) -> std::io::Result<Vec<SessionId>> {
+    let dir = match fs::read_dir(hub.home.join("run")) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let mut ids = Vec::new();
+    for entry in dir {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if valid_session_id(&name) {
+            ids.push(SessionId(name));
+        }
+    }
     ids.sort_by(|a, b| a.0.cmp(&b.0));
-    ids
+    Ok(ids)
 }
 
 /// The no-wait probe for an abort before any listing ran: one
@@ -139,7 +169,17 @@ fn list(hub: &Hub) -> Vec<SessionId> {
 /// else is named.
 fn probe(hub: &Hub) -> Outcome {
     let mut unconfirmed = Vec::new();
-    for id in list(hub) {
+    let ids = match list(hub) {
+        Ok(ids) => ids,
+        Err(_) => {
+            return Outcome {
+                confirmed: Vec::new(),
+                unconfirmed: Vec::new(),
+                list_failed: true,
+            };
+        }
+    };
+    for id in ids {
         if connect_now(hub, &id) {
             unconfirmed.push(id);
         }
@@ -147,6 +187,7 @@ fn probe(hub: &Hub) -> Outcome {
     Outcome {
         confirmed: Vec::new(),
         unconfirmed,
+        list_failed: false,
     }
 }
 
@@ -314,7 +355,7 @@ fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
             Ok(Some(_)) => {}
             Ok(None) => return SessionOutcome::Confirmed,
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                if !wait_ready(stream.as_fd(), libc::POLLIN, hub, end) {
+                if !wait_ready(stream.as_fd(), PollFlags::IN, hub, end) {
                     return SessionOutcome::Unconfirmed;
                 }
             }
@@ -360,7 +401,7 @@ fn connect_session(hub: &Hub, id: &SessionId, end: Instant) -> Connected {
         match start_connect(fd.as_fd(), &socket) {
             Ok(()) => return Connected::Stream(UnixStream::from(fd)),
             Err(ConnectError::Queued) => {
-                if !wait_ready(fd.as_fd(), libc::POLLOUT, hub, until) {
+                if !wait_ready(fd.as_fd(), PollFlags::OUT, hub, until) {
                     return Connected::Unconfirmed;
                 }
                 match check_connected(fd.as_fd()) {
@@ -395,6 +436,7 @@ fn finish(
     Outcome {
         confirmed,
         unconfirmed,
+        list_failed: false,
     }
 }
 
