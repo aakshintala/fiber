@@ -77,7 +77,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.programs.paste = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
-    lp.files_out = Some(out);
+    lp.files_out = out;
     let (ours, theirs) = UnixStream::pair().unwrap();
     lp.hub.store(ours);
     lp.app
@@ -135,7 +135,7 @@ fn a_second_press_after_a_synchronous_failure_starts_a_read() {
     // With a reader, the next press starts a read instead of dying quiet.
     lp.programs.paste = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
-    lp.files_out = Some(out);
+    lp.files_out = out;
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
     let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();
     let Input::Image { ticket, result } = landed else {

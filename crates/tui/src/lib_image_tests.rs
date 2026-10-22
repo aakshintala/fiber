@@ -10,7 +10,7 @@ use std::time::Duration;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::{Loop, hub::Connection};
+use super::Loop;
 use crate::Input;
 use crate::app::{App, Effect, Target};
 use crate::link::Line;
@@ -82,7 +82,7 @@ fn loop_with_viewer(
         marker.to_str().unwrap_or_default().to_owned(),
     ];
     let mut lp = Loop::for_test(app, screen);
-    lp.files_out = Some(out);
+    lp.files_out = out;
     lp.programs.viewer = viewer;
     lp.programs.images_dir = images.clone();
     lp.hub.store(ours);

@@ -182,6 +182,7 @@ pub(crate) fn run_with(
         ),
         images_dir,
     };
+    let (tx, rx) = mpsc::channel();
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -190,7 +191,7 @@ pub(crate) fn run_with(
         tty: Some(tty),
         on_attach,
         clock,
-        files_out: None,
+        files_out: tx.clone(),
         search: None,
         reader: None,
         model_reader: catalogue::Reader::new(models),
@@ -222,8 +223,6 @@ pub(crate) fn run_with(
     // wakes before the first arm, so they fade like every other event.
     terminal.app.sweep_notices(terminal.clock.now());
     terminal.write_title();
-    let (tx, rx) = mpsc::channel();
-    terminal.files_out = Some(tx.clone());
     // The cached lists are asked after the first frame, so the first
     // frame draws at once and the picker lists them as soon as the read
     // answers. The ask bypasses the owed picker reads, so it counts as
@@ -340,7 +339,7 @@ struct Loop<B: Backend> {
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     /// Where workers post their results.
-    files_out: Option<Sender<Input>>,
+    files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
     /// The tty's reader, paused while the editor has the terminal.
@@ -545,7 +544,7 @@ impl<B: Backend> Loop<B> {
                     if let Some(notice) = crate::paste_image::start(
                         self.programs.paste.as_ref(),
                         &self.clock,
-                        self.files_out.as_ref(),
+                        Some(&self.files_out),
                         ticket,
                     ) {
                         // Nothing started, so the running ticket's
@@ -558,7 +557,7 @@ impl<B: Backend> Loop<B> {
                 Effect::Feedback { description } => {
                     if let Some(notice) = crate::feedback::start(
                         self.app.feedback_writer(),
-                        self.files_out.as_ref(),
+                        Some(&self.files_out),
                         description,
                     ) {
                         // Nothing started, so no answer can arrive:
@@ -567,16 +566,14 @@ impl<B: Backend> Loop<B> {
                     }
                 }
                 Effect::FindPause { generation, after } => {
-                    if let Some(out) = &self.files_out {
-                        let clock = Arc::clone(&self.clock);
-                        let out = out.clone();
-                        // A pause thread outliving the loop finds
-                        // the channel closed and returns.
-                        drop(crate::sources::builder("tui-find-pause").spawn(move || {
-                            clock.sleep(after);
-                            drop(out.send(Input::FindDue(generation)));
-                        }));
-                    }
+                    let clock = Arc::clone(&self.clock);
+                    let out = self.files_out.clone();
+                    // A pause thread outliving the loop finds
+                    // the channel closed and returns.
+                    drop(crate::sources::builder("tui-find-pause").spawn(move || {
+                        clock.sleep(after);
+                        drop(out.send(Input::FindDue(generation)));
+                    }));
                 }
                 Effect::Search { generation, query } => {
                     if let Some(search) = &self.search {
@@ -614,15 +611,14 @@ impl<B: Backend> Loop<B> {
             self.search = None;
         }
         // The model-list read the picker owes, if one is owed.
-        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
-            self.model_reader.ask(refresh, &out.clone());
+        if let Some(refresh) = self.app.take_reads() {
+            self.model_reader.ask(refresh, &self.files_out);
         }
         // The browser login the input asked for, if one waits: its
         // progress and its end arrive as `Input::Login`.
-        if let Some(out) = self.files_out.clone()
-            && let Some(start) = self.app.take_login_start()
-        {
-            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
+        if let Some(start) = self.app.take_login_start() {
+            let worker =
+                crate::login_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
             self.app.login_started(worker);
         }
         self.save_shares();
@@ -670,10 +666,8 @@ impl<B: Backend> Loop<B> {
             Input::Models(result) => {
                 self.app.on_models(result);
                 // The queued read, if one waits, starts on the loop's
-                // channel; without one there is no loop to answer.
-                if let Some(out) = self.files_out.clone() {
-                    self.model_reader.done(&out);
-                }
+                // channel.
+                self.model_reader.done(&self.files_out);
             }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::Feedback(result) => self.app.on_feedback(result),
@@ -774,14 +768,15 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Opens the queued viewer copies: one worker per view, each
-    /// answering once with `Input::Viewed`. Nothing is queued while
-    /// the loop has no channel to answer on.
+    /// answering once with `Input::Viewed`.
     fn drain_images(&mut self) {
-        let Some(out) = self.files_out.clone() else {
-            return;
-        };
         for view in self.app.take_image_out().view {
-            crate::viewer::spawn(&self.programs.viewer, &self.programs.images_dir, view, &out);
+            crate::viewer::spawn(
+                &self.programs.viewer,
+                &self.programs.images_dir,
+                view,
+                &self.files_out,
+            );
         }
     }
 
@@ -843,15 +838,16 @@ impl<B: Backend> Loop<B> {
     /// Starts the `@` panel's search worker on a listing of the workspace,
     /// searching for an empty query at the current generation.
     fn list_files(&mut self) {
-        let Some(out) = &self.files_out else {
-            return;
-        };
         // With no local workspace there is no directory to list.
         let Some(workspace) = self.app.workspace() else {
             return;
         };
         let roots = files::Roots::new(workspace.clone(), std::env::var_os("HOME"));
-        let search = files::Search::spawn(move || files::list(&workspace), roots, out.clone());
+        let search = files::Search::spawn(
+            move || files::list(&workspace),
+            roots,
+            self.files_out.clone(),
+        );
         search.search(self.app.generation(), String::new());
         self.search = Some(search);
     }

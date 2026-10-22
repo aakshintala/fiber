@@ -160,9 +160,12 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
 
 impl<B: Backend> Loop<B> {
     /// A loop on `screen` at today's test defaults: a fake clock, no tty, no
-    /// reader, no worker channel, hover on and no environment. A test sets
+    /// reader, hover on and no environment. A test sets
     /// any other value by assigning the field.
     pub(super) fn for_test(app: App, screen: Screen<B>) -> Self {
+        // The receiver is dropped: a worker's answer finds the channel
+        // closed and is lost, and the channel `run` reads is the test's own.
+        let (files_out, _) = mpsc::channel();
         Self {
             app,
             parser: crate::keys::Parser::default(),
@@ -171,7 +174,7 @@ impl<B: Backend> Loop<B> {
             tty: None,
             on_attach: Box::new(|_| {}),
             clock: fakes::clock::FakeClock::new(),
-            files_out: None,
+            files_out,
             search: None,
             reader: None,
             model_reader: crate::catalogue::Reader::new(None),
@@ -2236,7 +2239,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     let screen =
         Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
-    lp.files_out = Some(out);
+    lp.files_out = out;
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
@@ -2326,7 +2329,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     let (hub, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     lp.hub.store(hub);
     let (found, due) = mpsc::channel();
-    lp.files_out = Some(found);
+    lp.files_out = found;
     let (_, main) = mpsc::channel::<Input>();
     // Ctrl+F and three keystrokes in one read: three pauses, one
     // generation each.
@@ -2670,7 +2673,7 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     });
     lp.model_reader = crate::catalogue::Reader::new(Some(read));
     let (tx, rx) = mpsc::channel();
-    lp.files_out = Some(tx);
+    lp.files_out = tx;
     let (_, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
     assert!(lp.app.model_picker_open());
