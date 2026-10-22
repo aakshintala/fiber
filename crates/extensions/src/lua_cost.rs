@@ -94,6 +94,10 @@ impl Provider for Costed {
         self.inner.warms(request)
     }
 
+    fn defers(&self) -> bool {
+        self.inner.defers()
+    }
+
     fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
         Some(Arc::clone(&self.lookup) as Arc<dyn CostLookup>)
     }

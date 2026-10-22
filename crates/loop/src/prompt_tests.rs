@@ -231,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        6228,
-        0x820f184314f0d947,
+        6454,
+        0x7a572ed3056ab6b8,
     );
 }
 

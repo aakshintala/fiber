@@ -682,6 +682,16 @@ The runner reads each `*.json` file directly inside `tests/`, in filename byte
 order. Each file is one case. Its optional `name` defaults to the file stem.
 Each case runs with a fresh Fiber home and workspace.
 
+Before any case, the runner checks each provider that has a `providers/<name>.json`
+file against its Lua. It loads the package in a temporary Fiber home and reads which
+functions the provider registered; it calls none of them. If `credential()` is
+registered and the data declares neither `login` nor `credential_label`, or if
+`credential_label` is declared and `credential()` is not registered, the run prints
+one `fiber: ` line on stderr for each mismatch, naming the field to add or remove,
+runs no case and exits 1. Malformed provider data or a provider script that fails to
+load fails the run the same way, with one line. A provider with no data file is
+exempt.
+
 ### Session cases
 
 A session case requires `script`, `prompt` and `expect`. `script` uses the
@@ -1412,7 +1422,7 @@ nothing at start:
 - an extension disabled for the project, which never starts;
 - an extension with no Lua, only data, skills, themes, prompt templates,
   opening-message files or binaries, which starts no VM, such as the
-  first-party `memory` extension;
+  first-party `memory` and `init` extensions;
 - a provider, which its manifest's `providers` and its data file declare. Its
   `models()`, if it has one, may run at start to refresh a stale model list,
   and the provider is unloaded once the list is written. Its other Lua
@@ -1586,7 +1596,7 @@ new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
-`cursor-agent`, `hooks` and `memory` are short names for
+`cursor-agent`, `hooks`, `init` and `memory` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
 A short name also names the extension's directories in Fiber home
@@ -1713,16 +1723,17 @@ start ("Loading, and cost when nothing is loaded").
 ### A fresh install
 
 A fresh install has every first-party extension: the eleven providers,
-the Claude Code and cursor-agent harnesses, `hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
+the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills") and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
-A provider, `hooks` or `memory` costs nothing in a session that does not use it. A
+A provider, `hooks`, `init` or `memory` costs nothing in a session that does not use it. A
 provider that is pure data is only read, a Lua provider runs only to refresh a
 stale model list or when a session uses one of its models, and `hooks` loads only when configuration has
-a `hooks` key. `memory` has no code, and its opening-message section adds
+a `hooks` key. `init` has no code, and its one prompt template is read only as a
+skill. `memory` has no code, and its opening-message section adds
 nothing while the store is empty.
 
 A person who removed a provider can install it again with

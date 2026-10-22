@@ -1577,7 +1577,9 @@ that disables tools. The session runs anyway.
   bytes bear no relation to their tokens. A request that reported no input
   tokens, such as one that failed before the provider named its generation, is
   skipped the same way. Until a request gives a rate,
-  sizes are shown in bytes.
+  sizes are shown in bytes. The rate updates just after `usage_recorded`
+  is written, so a `tools` request sent the moment that event arrives can
+  still show the previous rate.
 - `preamble_built` records, for each tool definition, whether it was deferred
   (`docs/events.md`).
 

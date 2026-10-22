@@ -708,13 +708,7 @@ fn event_wakes_the_worker_before_the_advance(
     what: &str,
 ) {
     let go = test.dir.path().join("go");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&go)
-            .status()
-            .unwrap()
-            .success()
-    );
+    fakes::fifo(&go);
     let fake = FakeClock::new();
     let end = fake.now() + LIMIT;
     let (held, left) = HoldingClock::new(Arc::clone(&fake));

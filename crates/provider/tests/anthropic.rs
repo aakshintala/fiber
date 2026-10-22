@@ -39,76 +39,330 @@ use probes::Recorded;
 
 use harness::{anthropic_completed as completed_reply, anthropic_sse as stream, run, sent_body};
 
+/// A call by `model` to `name`, answered under `id`.
+fn call_input(id: &str, model: &str, name: &str, arguments: Value) -> Input {
+    Input::ToolCall {
+        action_id: ActionId(id.into()),
+        model: model.into(),
+        call: ToolCallRequested {
+            name: name.into(),
+            arguments,
+            provider_id: None,
+            repair: None,
+            ran_by: None,
+            provider_item: None,
+        },
+    }
+}
+
+fn answer(id: &str, text: &str) -> Input {
+    Input::ToolResult {
+        action_id: ActionId(id.into()),
+        text: text.into(),
+        is_error: false,
+        images: vec![],
+        pdfs: vec![],
+    }
+}
+
+fn found(id: &str, loaded: &[&str]) -> Input {
+    Input::ToolSearchResult {
+        action_id: ActionId(id.into()),
+        loaded: loaded.iter().map(|name| (*name).to_owned()).collect(),
+    }
+}
+
+/// `tools::ToolSearch`'s definition, copied: its `minLength` and `minimum`
+/// keys put it outside the strict subset.
+fn search_tool(deferred: bool) -> ToolDefinition {
+    ToolDefinition {
+        name: "tool_search".into(),
+        description: "Search the deferred tools.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Words describing the tool you need."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The most tools to load; 8 when absent."
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        }),
+        deferred,
+        hosted: None,
+    }
+}
+
+/// A tool whose schema fits the strict subset.
+fn strict_tool(name: &str, deferred: bool) -> ToolDefinition {
+    ToolDefinition {
+        name: name.into(),
+        deferred,
+        ..weather_tool()
+    }
+}
+
+fn wired(protocol: &Messages, tools: &[ToolDefinition]) -> Vec<Value> {
+    protocol
+        .wire_tools(tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect()
+}
+
+/// The conversation of a `tool_search` call answered by `search`, with a
+/// sibling call answered before or after it.
+fn search_conversation(model: &str, search: Input, sibling_last: bool) -> Vec<Input> {
+    let mut conversation = vec![
+        Input::User {
+            text: "Find a and b.".into(),
+            images: Vec::new(),
+        },
+        call_input("a_1", model, "tool_search", json!({"query": "q"})),
+        call_input("a_2", model, "sibling", json!({})),
+    ];
+    if sibling_last {
+        conversation.push(search);
+        conversation.push(answer("a_2", "sibling answer"));
+    } else {
+        conversation.push(answer("a_2", "sibling answer"));
+        conversation.push(search);
+    }
+    conversation
+}
+
+fn references(names: &[&str]) -> Value {
+    Value::Array(
+        names
+            .iter()
+            .map(|name| json!({"tool_name": name, "type": "tool_reference"}))
+            .collect(),
+    )
+}
+
 #[test]
-fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
+fn a_tool_search_result_is_sent_as_tool_references_in_loaded_order() {
     let server = ProviderServer::start(vec![
+        harness::anthropic_completed(),
         harness::anthropic_completed(),
         harness::anthropic_completed(),
     ])
     .unwrap();
     let ep = endpoint(&server);
     let model = ep.reference();
+    let protocol = Messages::new(ep);
     let mut req = request();
-    req.conversation.push(Input::ToolCall {
-        action_id: ActionId("a_1".into()),
-        model: model.clone(),
-        call: ToolCallRequested {
-            name: "tool_search".into(),
-            arguments: json!({"query":"q"}),
-            provider_id: None,
-            repair: None,
-            ran_by: None,
-            provider_item: None,
-        },
-    });
-    req.conversation.push(Input::ToolSearchResult {
-        action_id: ActionId("a_1".into()),
-        loaded: vec!["a".into(), "b".into()],
-    });
-    req.conversation.insert(
-        2,
-        Input::ToolCall {
-            action_id: ActionId("a_2".into()),
-            model: ep.reference(),
-            call: ToolCallRequested {
-                name: "sibling".into(),
-                arguments: json!({}),
-                provider_id: None,
-                repair: None,
-                ran_by: None,
-                provider_item: None,
-            },
-        },
-    );
-    req.conversation.push(Input::ToolResult {
-        action_id: ActionId("a_2".into()),
-        text: "sibling answer".into(),
-        is_error: false,
-        images: vec![],
-        pdfs: vec![],
-    });
-    let protocol = Messages::new(ep.clone());
+    req.conversation = search_conversation(&model, found("a_1", &["b", "a"]), true);
     run(protocol.call(&req)).0.unwrap();
-    req.conversation[3] = Input::ToolResult {
-        action_id: ActionId("a_1".into()),
-        text: "Loaded: a, b.".into(),
-        is_error: false,
-        images: vec![],
-        pdfs: vec![],
-    };
+    // The same request again sends the same bytes.
     run(protocol.call(&req)).0.unwrap();
     let requests = server.requests();
-    let pair = &requests[requests.len() - 2..];
-    assert_eq!(pair[0].body, pair[1].body);
-    let body: Value = serde_json::from_slice(&pair[0].body).unwrap();
+    assert_eq!(requests[0].body, requests[1].body);
+    let body = sent_body(&server, 0);
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
     assert_eq!(messages[2]["role"], "user");
     assert_eq!(messages[2]["content"].as_array().unwrap().len(), 2);
     assert_eq!(
         messages[2]["content"][0],
-        json!({"type":"tool_result", "tool_use_id":"a_1", "content":"Loaded: a, b."})
+        json!({
+            "content": [
+                {"tool_name": "b", "type": "tool_reference"},
+                {"tool_name": "a", "type": "tool_reference"}
+            ],
+            "tool_use_id": "a_1",
+            "type": "tool_result"
+        })
     );
+    assert_eq!(
+        messages[2]["content"][1],
+        json!({
+            "content": "sibling answer",
+            "tool_use_id": "a_2",
+            "type": "tool_result",
+            "cache_control": {"type": "ephemeral"}
+        })
+    );
+    // The names keep the order `loaded` has.
+    req.conversation = search_conversation(&model, found("a_1", &["a", "b"]), true);
+    run(protocol.call(&req)).0.unwrap();
+    assert_eq!(
+        sent_body(&server, 2)["messages"][2]["content"][0]["content"],
+        references(&["a", "b"])
+    );
+}
+
+#[test]
+fn the_cache_marker_lands_on_a_last_tool_search_result() {
+    let server = ProviderServer::start(vec![harness::anthropic_completed()]).unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    let mut req = request();
+    req.conversation = search_conversation(&model, found("a_1", &["a", "b"]), false);
+    run(Messages::new(ep).call(&req)).0.unwrap();
+    let body = sent_body(&server, 0);
+    let content = body["messages"][2]["content"].as_array().unwrap().clone();
+    assert_eq!(content.len(), 2);
+    assert_eq!(
+        content[1],
+        json!({
+            "cache_control": {"type": "ephemeral"},
+            "content": [
+                {"tool_name": "a", "type": "tool_reference"},
+                {"tool_name": "b", "type": "tool_reference"}
+            ],
+            "tool_use_id": "a_1",
+            "type": "tool_result"
+        })
+    );
+    assert!(content[0].get("cache_control").is_none());
+}
+
+#[test]
+fn a_tool_search_result_uses_the_providers_call_id() {
+    let server = ProviderServer::start(vec![harness::anthropic_completed()]).unwrap();
+    let ep = endpoint(&server);
+    let model = ep.reference();
+    let mut req = request();
+    let mut call = call_input("a_1", &model, "tool_search", json!({"query": "q"}));
+    if let Input::ToolCall { call, .. } = &mut call {
+        call.provider_id = Some(ProviderCallId("toolu_9".into()));
+    }
+    req.conversation.push(call);
+    req.conversation.push(found("a_1", &["a"]));
+    run(Messages::new(ep).call(&req)).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["messages"][1]["content"][0]["id"], "toolu_9");
+    assert_eq!(body["messages"][2]["content"][0]["tool_use_id"], "toolu_9");
+}
+
+#[test]
+fn defers_is_false_until_the_builder_says_so() {
+    let server = ProviderServer::start(vec![]).unwrap();
+    let ep = endpoint(&server);
+    assert!(!Messages::new(ep.clone()).defers());
+    assert!(Messages::new(ep.clone()).deferred_tools(true).defers());
+    assert!(!Messages::new(ep).deferred_tools(false).defers());
+}
+
+#[test]
+fn a_deferred_tool_is_declared_with_defer_loading_and_a_full_tool_is_not() {
+    let server = ProviderServer::start(vec![harness::anthropic_completed()]).unwrap();
+    let protocol = Messages::new(endpoint(&server)).deferred_tools(true);
+    let tools = [
+        strict_tool("b_deferred", true),
+        strict_tool("a_full", false),
+    ];
+    let schema = weather_tool().input_schema;
+    let expected = vec![
+        json!({
+            "description": "Weather for a city.",
+            "input_schema": schema,
+            "name": "a_full",
+            "strict": true
+        }),
+        json!({
+            "defer_loading": true,
+            "description": "Weather for a city.",
+            "input_schema": schema,
+            "name": "b_deferred",
+            "strict": true
+        }),
+    ];
+    assert_eq!(wired(&protocol, &tools), expected);
+    let mut req = request();
+    req.tools = tools.to_vec();
+    run(protocol.call(&req)).0.unwrap();
+    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(expected));
+}
+
+#[test]
+fn a_deferred_tool_without_the_builder_flag_is_sent_in_full() {
+    let server = ProviderServer::start(vec![
+        harness::anthropic_completed(),
+        harness::anthropic_completed(),
+    ])
+    .unwrap();
+    let protocol = Messages::new(endpoint(&server));
+    let mut req = request();
+    req.tools = vec![strict_tool("later", true)];
+    run(protocol.call(&req)).0.unwrap();
+    req.tools = vec![strict_tool("later", false)];
+    run(protocol.call(&req)).0.unwrap();
+    let requests = server.requests();
+    assert_eq!(requests[0].body, requests[1].body);
+    assert!(
+        sent_body(&server, 0)["tools"][0]
+            .get("defer_loading")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_hosted_tool_is_never_sent_with_defer_loading() {
+    let server = ProviderServer::start(vec![]).unwrap();
+    let protocol = Messages::new(endpoint(&server)).deferred_tools(true);
+    let hosted = ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({"type": "object"}),
+        deferred: true,
+        hosted: Some("web_search_20250305".into()),
+    };
+    assert_eq!(
+        wired(&protocol, &[hosted]),
+        vec![json!({"name": "web_search", "type": "web_search_20250305"})]
+    );
+}
+
+#[test]
+fn tool_search_is_sent_loose_and_never_deferred() {
+    let server = ProviderServer::start(vec![]).unwrap();
+    let protocol = Messages::new(endpoint(&server)).deferred_tools(true);
+    for deferred in [false, true] {
+        let search = search_tool(deferred);
+        assert_eq!(
+            wired(&protocol, std::slice::from_ref(&search)),
+            vec![json!({
+                "description": "Search the deferred tools.",
+                "input_schema": search.input_schema,
+                "name": "tool_search",
+                "strict": false
+            })],
+            "deferred {deferred}"
+        );
+    }
+}
+
+#[test]
+fn deferred_tools_spend_the_strict_budget_and_tool_search_takes_none() {
+    let server = ProviderServer::start(vec![harness::anthropic_completed()]).unwrap();
+    let protocol = Messages::new(endpoint(&server)).deferred_tools(true);
+    let mut tools: Vec<ToolDefinition> = (0..21)
+        .map(|i| strict_tool(&format!("tool_{i:02}"), true))
+        .collect();
+    tools.push(search_tool(false));
+    let mut req = request();
+    req.tools = tools;
+    run(protocol.call(&req)).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    let sent = sent.as_array().unwrap();
+    assert_eq!(sent.len(), 22);
+    for (i, tool) in sent[..21].iter().enumerate() {
+        assert_eq!(tool["name"], format!("tool_{i:02}"));
+        assert_eq!(tool["defer_loading"], true, "tool_{i:02}");
+        assert_eq!(tool["strict"], i < 20, "tool_{i:02}");
+    }
+    assert_eq!(sent[21]["name"], "tool_search");
+    assert_eq!(sent[21]["strict"], false);
+    assert!(sent[21].get("defer_loading").is_none());
 }
 
 fn research(path: &str) -> PathBuf {
