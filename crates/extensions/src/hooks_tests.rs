@@ -3582,3 +3582,11 @@ fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
 }
+
+#[test]
+fn the_hooks_manifest_names_the_package_and_its_settings_key() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../extensions/hooks/extension.json")).unwrap();
+    assert_eq!(manifest["name"], config::full_name("hooks"),);
+    assert_eq!(manifest["repo_settings"], json!(["hooks"]));
+}
