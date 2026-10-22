@@ -4,8 +4,12 @@
 //! `127.0.0.1`: the default load of a fresh install (`docs/performance.md`,
 //! "What a budget covers").
 
+use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use fakes::{ProviderServer, Response, TempDir, Watchdog};
 use serde_json::{Value, json};
@@ -22,6 +26,10 @@ const SESSION_IDLE_EXIT_MS: u64 = 3_600_000;
 /// leaves, as `crates/main/tests/terminal.rs` sets it.
 const HUB_IDLE_EXIT_MS: u64 = 1_000;
 
+/// Every log text read from a diagnostic home's `logs/`, or why one could
+/// not be read.
+pub(crate) type DiagnosticLogs = Rc<RefCell<Vec<Result<String, String>>>>;
+
 /// The temporary root, removed on drop. The copy of `fiber` gives every
 /// process the harness starts, the hub and its sessions included, one
 /// unique path on its command line, which the matching watchdog kills.
@@ -31,20 +39,29 @@ pub(crate) struct Home {
     watchdog: Option<Watchdog>,
     // Held so the provider's base URL answers for the whole run.
     server: ProviderServer,
+    // Set on a home built by `debug` and on each child of one: the sink
+    // this home's `logs/` are read into when it drops.
+    diagnostic_logs: Option<DiagnosticLogs>,
 }
 
 impl Home {
     /// Copies `fiber` into a new root and installs the provider and the
     /// configuration. The provider answers no request.
     pub(crate) fn new(fiber: &Path) -> Result<Self, String> {
-        Self::scripted(fiber, [])
+        Self::start(fiber, [], None)
     }
 
-    /// [`Home::new`], with the provider answering each request with the
-    /// next response of `script`.
-    pub(crate) fn scripted(
+    /// A new home from this home's copy of `fiber`, its provider answering
+    /// each request with the next response of `script`. It shares this
+    /// home's sink, so it is debug when this home is.
+    pub(crate) fn child(&self, script: impl IntoIterator<Item = Response>) -> Result<Self, String> {
+        Self::start(self.fiber(), script, self.diagnostic_logs.clone())
+    }
+
+    fn start(
         fiber: &Path,
         script: impl IntoIterator<Item = Response>,
+        diagnostic_logs: Option<DiagnosticLogs>,
     ) -> Result<Self, String> {
         let server = ProviderServer::start(script)
             .map_err(|err| format!("starting the fake provider: {err}"))?;
@@ -64,6 +81,7 @@ impl Home {
             fiber: copy,
             watchdog: Some(watchdog),
             server,
+            diagnostic_logs,
         };
         home.install()?;
         Ok(home)
@@ -106,11 +124,7 @@ impl Home {
         .map_err(|err| format!("installing the provider: {err:?}"))?;
         write(
             &self.home().join("config.json"),
-            &json!({
-                "model": "fake/m",
-                "session": {"idle_exit_ms": SESSION_IDLE_EXIT_MS},
-                "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
-            }),
+            &config(self.diagnostic_logs.is_some()),
         )
     }
 
@@ -165,6 +179,57 @@ impl Home {
     }
 }
 
+impl Drop for Home {
+    /// Reads this home's `logs/` before the root is removed, so a home
+    /// dropped without `finish` still contributes its lines.
+    fn drop(&mut self) {
+        if let Some(sink) = &self.diagnostic_logs {
+            let logs = read_logs(&self.home().join("logs"));
+            sink.borrow_mut().extend(logs);
+        }
+    }
+}
+
+/// The `config.json` a home installs. `diagnostics.level` is `debug` only
+/// when the harness reads the home's log lines back.
+fn config(debug: bool) -> Value {
+    let mut config = json!({
+        "model": "fake/m",
+        "session": {"idle_exit_ms": SESSION_IDLE_EXIT_MS},
+        "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
+    });
+    if debug && let Some(object) = config.as_object_mut() {
+        object.insert("diagnostics".to_owned(), json!({"level": "debug"}));
+    }
+    config
+}
+
+/// The text of every direct `*.log` file in `dir`, in file-name order. A
+/// file that cannot be read is an `Err` naming it; a missing `dir` holds
+/// no logs. Rotated `*.log.1` files and subdirectories are not read.
+fn read_logs(dir: &Path) -> Vec<Result<String, String>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Vec::new(),
+        Err(err) => return vec![Err(format!("listing {}: {err}", dir.display()))],
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(err) => return vec![Err(format!("listing {}: {err}", dir.display()))],
+        }
+    }
+    paths.retain(|path| path.extension() == Some(OsStr::new("log")));
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| {
+            fs::read_to_string(path).map_err(|err| format!("reading {}: {err}", path.display()))
+        })
+        .collect()
+}
+
 fn create(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|err| format!("creating {}: {err}", dir.display()))
 }
@@ -175,3 +240,7 @@ fn write(file: &Path, value: &Value) -> Result<(), String> {
     }
     fs::write(file, value.to_string()).map_err(|err| format!("writing {}: {err}", file.display()))
 }
+
+#[cfg(test)]
+#[path = "home_tests.rs"]
+mod tests;

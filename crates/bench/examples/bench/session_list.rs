@@ -4,7 +4,6 @@
 use crate::busy::{
     self, READY, TURN, call_reply, in_home, read_log, session, text_reply, until_stdout,
 };
-use crate::home::Home;
 use crate::idle::{Ctx, Samples, Workload};
 use crate::run::Session;
 use serde_json::{Value, json};
@@ -21,7 +20,7 @@ fn measure(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
         call_reply("call_list", "session_list", "{}", prompt.len()),
         text_reply("listed", prompt.len()),
     ];
-    in_home(Home::scripted(ctx.home.fiber(), script)?, |home| {
+    in_home(ctx.home.child(script)?, |home| {
         let mut idle = Vec::new();
         for _ in 0..2 {
             let id = doors::mint("s_");
