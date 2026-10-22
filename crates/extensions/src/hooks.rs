@@ -791,8 +791,31 @@ impl SessionExtensions {
         self.search_backend.clone()
     }
 
-    /// Offers one appended event to every watcher registered for its kind,
-    /// in extension-name order then watcher registration order: the one
+    /// Offers a delegate end to the extension that binds its job: the
+    /// finish is held until the completion pushes the one `run` item. A
+    /// finish no loaded extension binds is not held, so model-owned
+    /// delegates pass through; a completion no extension binds pushes
+    /// nothing, so released or removed ids never run. Runs on whatever
+    /// thread appended the line, before the watcher fan-out below.
+    fn observe_delegate(&self, event: &Event) {
+        if let Event::DelegateFinished(finished) = event {
+            for extension in &self.lua {
+                if extension.hub().hold_delegate_finish(finished) {
+                    break;
+                }
+            }
+        } else if let Event::JobCompleted(completed) = event {
+            for extension in &self.lua {
+                if extension
+                    .hub()
+                    .push_delegate_run(extension.name(), completed)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
     /// `Log::append` offer fans out here. An ephemeral event skips a
     /// watcher with a delivery queued or running — a watcher that falls
     /// behind loses ephemeral events — while a durable one always queues,
@@ -800,6 +823,7 @@ impl SessionExtensions {
     /// advances to it; an ephemeral offer carries none. No-op when the
     /// session holds no watchers.
     pub fn deliver(&self, event: &Event, seq: Option<Seq>) {
+        self.observe_delegate(event);
         if self.watchers.is_empty() {
             return;
         }
@@ -1030,6 +1054,16 @@ impl SessionExtensions {
     #[cfg(test)]
     pub(crate) fn lua_extension(&self, name: &str) -> Option<Arc<LuaExtension>> {
         self.lua.iter().find(|ext| ext.name() == name).cloned()
+    }
+
+    /// Forgets the delegate bindings for `jobs` on every loaded extension:
+    /// after the normal end releases an id, its completion queues no `run`
+    /// and its queued item never starts. Idempotent, and never blocks on a
+    /// job's end; never called under the hub lock.
+    pub fn release_delegates(&self, jobs: &[contract::JobId]) {
+        for extension in &self.lua {
+            extension.hub().release_delegates(jobs);
+        }
     }
 
     /// Hands the session's delegate starter to every extension's

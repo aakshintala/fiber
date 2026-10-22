@@ -63,6 +63,11 @@ pub(super) struct Vm {
     /// The timers `host.after` and `host.every` set, by id in set order:
     /// each firing runs the function stored here.
     pub(super) timer_funcs: Table,
+    /// The `host.delegate` chunk's `handles` table: each started
+    /// delegate's `{ timeout, run }` under its handle, so the end's
+    /// stream item can reach the stored `run`. Cleared per handle when
+    /// the run's item ends.
+    delegate_handles: Table,
 }
 
 /// One step of a callback: it returned, or it suspended on a host call.
@@ -164,7 +169,7 @@ impl Vm {
             scope: Cell::new(host::state::Scope::Other),
         });
         host::state::install(&lua, state.clone(), &failures.failure).map_err(lua_error)?;
-        let (http_tag, timer_funcs) = host::install(
+        let (http_tag, timer_funcs, delegate_handles) = host::install(
             &lua,
             host::HostContext {
                 home: home.to_owned(),
@@ -204,6 +209,7 @@ impl Vm {
             search,
             failures: failure_state,
             timer_funcs,
+            delegate_handles,
         };
 
         if !dir.join(ENTRY).is_file() {
@@ -326,6 +332,16 @@ impl Vm {
             Target::Tool(name) => self.tools.function(name, "run"),
             Target::Search(name) => self.search.function(name),
             Target::Effects(name) => self.tools.function(name, "effects"),
+            // The end's item reaches the `run` the start stored under its
+            // handle: a Lua function value crosses into Rust only through
+            // the VM that owns it, so the store stays in Lua and Rust
+            // carries plain data.
+            Target::Delegate { handle, .. } => self
+                .delegate_handles
+                .get::<Option<Table>>(*handle)
+                .and_then(|table| {
+                    table.map_or(Ok(None), |table| table.get::<Option<Function>>("run"))
+                }),
         }
         .map_err(fail)?;
         let Some(run) = run else {
@@ -343,6 +359,7 @@ impl Vm {
             | Target::Watcher { .. }
             | Target::Tool(_)
             | Target::Search(_)
+            | Target::Delegate { .. }
             | Target::Effects(_) => host::to_lua(&self.lua, arg).map_err(fail)?,
             // A firing takes no argument.
             Target::Timer { .. } => mlua::Value::Nil,
@@ -451,6 +468,11 @@ impl Vm {
             | Target::Effects(_) => host::to_json(&value).map_err(fail),
             // A watcher changes nothing: its return value is ignored.
             Target::Watcher { .. } => Ok(Value::Null),
+            // A delegate `run` changes nothing by returning: its work is
+            // a side effect, so its return value is ignored, like a
+            // watcher's. A value that would fail conversion never becomes
+            // a spurious failure notice for a successful run.
+            Target::Delegate { .. } => Ok(Value::Null),
             Target::Search(name) => {
                 // A field such as `title = function() end` would fail a
                 // bare JSON conversion with no backend, extension or
@@ -625,6 +647,17 @@ impl Vm {
             | host::Request::Callback { .. }
             | host::Request::Lock
             | host::Request::Sleep(_) => Ok(request),
+        }
+    }
+
+    /// Clears the stored `{ timeout, run }` pair for `handle`: the end's
+    /// stream item consumed it, so a later completion for the same id
+    /// pushes nothing and a reloaded VM never reaches the old `run`.
+    pub(super) fn clear_delegate_handle(&self, handle: u64) {
+        // Setting `nil` removes the key; a missing handle is already
+        // cleared, so any outcome is ignored.
+        match self.delegate_handles.set(handle, mlua::Value::Nil) {
+            Ok(()) | Err(_) => {}
         }
     }
 

@@ -432,6 +432,7 @@ pub(super) fn admit<'a>(
                 | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Search(_)
+                | Target::Delegate { .. }
                 | Target::Effects(_) => None,
             };
             match runner {
@@ -479,6 +480,7 @@ pub(super) fn admit<'a>(
                 | Target::Command(_)
                 | Target::Hook { .. }
                 | Target::Watcher { .. }
+                | Target::Delegate { .. }
                 | Target::Timer { .. } => {
                     match model {
                         Some(model) => {
@@ -554,10 +556,15 @@ pub(super) fn admit<'a>(
                 }
             }
         }
-        Request::Delegate { arguments, handle } => {
+        Request::Delegate {
+            arguments,
+            handle,
+            timeout,
+        } => {
             // The target comes first, as the `Request::Model` arm does: a
             // provider function, a search function or an effects function
-            // never reaches the service.
+            // never reaches the service. A delegate `run` may start
+            // another delegate, as a tool's `run` may.
             match target {
                 Target::Provider { .. }
                 | Target::Watcher { .. }
@@ -572,6 +579,7 @@ pub(super) fn admit<'a>(
                 Target::Tool(_)
                 | Target::Command(_)
                 | Target::Hook { .. }
+                | Target::Delegate { .. }
                 | Target::Timer { .. } => match delegate {
                     // No service is injected: only a sealed hub sees this;
                     // it answers `closing`, as `host.drive` does.
@@ -621,7 +629,7 @@ pub(super) fn admit<'a>(
                                         let mut bound: Option<contract::JobId> = None;
                                         let mut bind = |id: &contract::JobId| {
                                             bound = Some(id.clone());
-                                            worker.bind_delegate(id.clone(), handle);
+                                            worker.bind_delegate(id.clone(), handle, timeout);
                                         };
                                         match service.start(&extension, &arguments, &mut bind) {
                                             Ok(id) => {
@@ -726,6 +734,10 @@ pub(super) fn admit<'a>(
                 Target::Search(_) => {
                     drop(shared);
                     Admitted::Replied(Reply::Lock(Err(no_credential("search backend"))))
+                }
+                Target::Delegate { .. } => {
+                    drop(shared);
+                    Admitted::Replied(Reply::Lock(Err(no_credential("delegate run"))))
                 }
             }
         }
