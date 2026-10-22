@@ -209,6 +209,12 @@ command that does it later. It never picks a model nobody chose. Running
 preselected; a step already done is shown as done, and changing it runs its
 command again.
 
+Setup prints no `model_unconfigured` notice. A model missing its per-account
+host is left out of the model question. For a provider that logs in,
+picking it in the first question runs its login, which asks for the missing
+value (`docs/model-routing.md`, "A per-account host"). `fiber models` still
+prints each such notice.
+
 **Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
 "Installing").
 
