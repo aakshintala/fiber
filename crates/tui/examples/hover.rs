@@ -50,6 +50,10 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
+    if reports == 0 {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
     if width < BADGE || height < 2 {
         eprintln!("hover: the screen must be at least {BADGE} by 2");
         return ExitCode::from(2);
