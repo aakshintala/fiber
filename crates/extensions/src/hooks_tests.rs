@@ -3368,11 +3368,14 @@ fn a_watch_refusal_surfaces_as_the_registration_notice() {
 /// Installs the package named `github.com/aakshintala/fiber/extensions/hooks`
 /// with `init` as its entry script.
 fn install_hooks(home: &Home, init: &str) {
-    let name = config::full_name("hooks");
     let src = home.root.path().join("src").join("hooks-first-party");
     fs::create_dir_all(&src).unwrap();
-    let manifest = json!({"name": name, "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
-    fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
+    // The package's own manifest, so the tests load what ships.
+    fs::write(
+        src.join("extension.json"),
+        include_str!("../../../extensions/hooks/extension.json"),
+    )
+    .unwrap();
     fs::write(src.join("init.lua"), init).unwrap();
     plan(
         &home.home(),
@@ -3581,12 +3584,4 @@ fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     // propagates, and the gate fails the start with its code.
     let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
-}
-
-#[test]
-fn the_hooks_manifest_names_the_package_and_its_settings_key() {
-    let manifest: serde_json::Value =
-        serde_json::from_str(include_str!("../../../extensions/hooks/extension.json")).unwrap();
-    assert_eq!(manifest["name"], config::full_name("hooks"),);
-    assert_eq!(manifest["repo_settings"], json!(["hooks"]));
 }

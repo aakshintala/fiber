@@ -120,13 +120,17 @@ local function register(name, entry)
     fiber.hook("command", { entry = name })
     return
   end
-  -- `phase`, `timeout`, `on_failure`, `check` placement and `tools` are
-  -- validated by `fiber.hook`, whose entry-labeled refusal names the entry
-  -- and the field, and the entry is not registered. The set below only
-  -- filters a registered entry's runs; an unregistered entry never runs,
-  -- so a `tools` the refusal rejected leaves no set behind.
+  -- `tools` filters the tool points only, and an empty list can never run:
+  -- either way the entry is unregistered with a notice naming the entry and
+  -- `tools`, refused the same way as `command` above. Omitted, it means
+  -- every tool call.
   local tools_set = nil
-  if type(entry.tools) == "table" then
+  if entry.tools ~= nil then
+    local at_tool_point = entry.point == "before_tool" or entry.point == "after_tool"
+    if not at_tool_point or type(entry.tools) ~= "table" or next(entry.tools) == nil then
+      fiber.hook("tools", { entry = name })
+      return
+    end
     tools_set = {}
     for _, tool in ipairs(entry.tools) do
       if type(tool) == "string" then
@@ -134,11 +138,13 @@ local function register(name, entry)
       end
     end
   end
+  -- `phase`, `timeout`, `on_failure` and `check` placement are validated
+  -- by `fiber.hook`, whose entry-labeled refusal names the entry and the
+  -- field, and the entry is not registered.
   fiber.hook(entry.point, {
     phase = entry.phase,
     timeout = entry.timeout,
     on_failure = entry.on_failure,
-    tools = entry.tools,
     entry = name,
     run = run_entry(name, entry.point, entry.command, entry.args or {}, tools_set),
   })
