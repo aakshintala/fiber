@@ -19,12 +19,19 @@ use contract::{ErrorCode, GenerationId};
 /// every price; a count equal to a threshold stays on the tier below it.
 /// Two tiers with the same threshold: the first listed wins. Below every
 /// threshold, the base prices apply, and a missing cache price is 0.
+/// A write keyed `"1h"` costs twice the selected tier's input price; any
+/// other key costs the selected `cache_write` price, so an unknown key
+/// defaults to the 5-minute rate.
 pub(crate) fn price(cost: &Cost, tokens: &Tokens) -> f64 {
-    let written = tokens
-        .cache_write
-        .values()
-        .copied()
-        .fold(0, u64::saturating_add);
+    let (mut five, mut hour): (u64, u64) = (0, 0);
+    for (lifetime, count) in &tokens.cache_write {
+        if lifetime == "1h" {
+            hour = hour.saturating_add(*count);
+        } else {
+            five = five.saturating_add(*count);
+        }
+    }
+    let written = five.saturating_add(hour);
     let prompt = tokens
         .input
         .saturating_add(tokens.cache_read)
@@ -40,7 +47,8 @@ pub(crate) fn price(cost: &Cost, tokens: &Tokens) -> f64 {
     };
     (input * tokens.input as f64
         + cache_read * tokens.cache_read as f64
-        + cache_write * written as f64
+        + cache_write * five as f64
+        + 2.0 * input * hour as f64
         + output * tokens.output as f64)
         / 1_000_000.0
 }

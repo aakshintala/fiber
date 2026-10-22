@@ -59,8 +59,8 @@ fn each_kind_is_priced_at_its_own_price_per_million() {
         &[("5m", 100_000), ("1h", 300_000)],
         500_000,
     );
-    // 2 + 0.4 + (400_000 * 2.5) / 1e6 + 5
-    assert_eq!(price(&cost, &counted), 8.4);
+    // 2 + 0.4 + (100_000 * 2.5) / 1e6 + (300_000 * 2 * 2.0) / 1e6 + 5
+    assert_eq!(price(&cost, &counted), 8.85);
 }
 
 #[test]
@@ -130,15 +130,18 @@ fn cache_tokens_count_toward_the_tier_threshold() {
         price(&cost, &tokens(0, 101, &[], 0)),
         101.0 * 1.0 / 1_000_000.0
     );
-    // Cache writes of every lifetime count, and are priced together.
+    // Cache writes of every lifetime count toward the threshold; the
+    // 5-minute write costs the tier's write price and the 1-hour write
+    // twice the tier's input price.
     assert_eq!(
         price(&cost, &tokens(40, 30, &[("5m", 20), ("1h", 11)], 0)),
-        (40.0 * 8.0 + 30.0 * 1.0 + 31.0 * 4.0) / 1_000_000.0
+        (40.0 * 8.0 + 30.0 * 1.0 + 20.0 * 4.0 + 2.0 * 8.0 * 11.0) / 1_000_000.0
     );
     // One short of the threshold, cache writes included, stays on the base.
+    // The 1-hour write still costs twice the base input price.
     assert_eq!(
         price(&cost, &tokens(40, 30, &[("5m", 20), ("1h", 10)], 0)),
-        (40.0 * 2.0 + 30.0 * 0.2 + 30.0 * 1.0) / 1_000_000.0
+        (40.0 * 2.0 + 30.0 * 0.2 + 20.0 * 1.0 + 2.0 * 2.0 * 10.0) / 1_000_000.0
     );
 }
 
@@ -220,7 +223,7 @@ fn an_overflowing_prompt_prices_the_highest_tier() {
     // Cache writes that do not fit in `u64` saturate and take that same tier.
     assert_eq!(
         price(&cost, &tokens(0, 0, &[("5m", u64::MAX), ("1h", 1)], 0)),
-        u64::MAX as f64 * 6.0 / 1_000_000.0
+        (u64::MAX as f64 * 6.0 + 2.0 * 8.0) / 1_000_000.0
     );
 }
 
@@ -264,6 +267,47 @@ fn mixed_lifetime_writes_sum_both_rates() {
         ),
         5.0
     );
+}
+
+#[test]
+fn a_one_hour_write_prices_at_twice_the_selected_tier_input() {
+    let cost = tiered();
+    // The whole input clears the 272,000 threshold, so the 1-hour write
+    // costs twice that tier's 4.0 input price.
+    assert_eq!(
+        price(&cost, &tokens(100_001, 0, &[("1h", 1_000_000)], 0)),
+        (100_001.0 * 4.0 + 2.0 * 4.0 * 1_000_000.0) / 1_000_000.0
+    );
+}
+
+#[test]
+fn without_a_declared_write_price_five_minutes_is_free_and_one_hour_is_not() {
+    let cost = Cost {
+        input: 3.0,
+        output: 15.0,
+        cache_read: None,
+        cache_write: None,
+        tiers: Vec::new(),
+    };
+    assert_eq!(
+        price(
+            &cost,
+            &tokens(0, 0, &[("5m", 1_000_000), ("1h", 1_000_000)], 0)
+        ),
+        6.0
+    );
+}
+
+#[test]
+fn an_unknown_lifetime_key_prices_at_the_five_minute_rate() {
+    let cost = Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: Some(0.2),
+        cache_write: Some(1.0),
+        tiers: Vec::new(),
+    };
+    assert_eq!(price(&cost, &tokens(0, 0, &[("9m", 1_000_000)], 0)), 1.0);
 }
 
 fn recorded(id: &str, input: u64, cache_read: u64, written: u64, output: u64) -> UsageRecorded {
@@ -349,6 +393,22 @@ fn a_partial_record_prices_its_tokens_at_the_declared_prices() {
     assert_eq!(line.model, "fake/m");
     assert_eq!(line.input_bytes, 123);
     assert_eq!(line.cost, Some(2.0));
+}
+
+#[test]
+fn a_partial_record_prices_a_one_hour_write_at_twice_input() {
+    let prices = priced();
+    let usage = CallUsage {
+        generation_id: Some(GenerationId("gen_u".into())),
+        tokens: tokens(1_000_000, 0, &[("1h", 1_000_000)], 0),
+        web_searches: None,
+        input_size: InputSize {
+            bytes: 123,
+            media: false,
+        },
+    };
+    let line = built(usage, None, "fake/m", Some(&prices), false).line;
+    assert_eq!(line.cost, Some(6.0));
 }
 
 #[test]
