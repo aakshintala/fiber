@@ -437,12 +437,15 @@ fn wait_ready(fd: BorrowedFd, events: libc::c_short, hub: &Hub, until: Instant) 
 /// One readiness slice: true when the poll saw any event, error or hangup
 /// included, as the hub client's own poll does.
 fn poll_ready(fd: BorrowedFd, events: libc::c_short) -> bool {
-    raw_poll(
-        fd.as_raw_fd(),
-        events,
-        POLL_SLICE.as_millis() as libc::c_int,
-    ) & (libc::POLLIN | libc::POLLOUT | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
-        as libc::c_short
+    // POLL_SLICE is ten milliseconds: the cast cannot truncate.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "POLL_SLICE is ten milliseconds"
+    )]
+    let timeout = POLL_SLICE.as_millis() as libc::c_int;
+    raw_poll(fd.as_raw_fd(), events, timeout)
+        & (libc::POLLIN | libc::POLLOUT | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+            as libc::c_short
         != 0
 }
 
@@ -466,7 +469,10 @@ fn write_line_bounded(stream: &UnixStream, line: &Value, hub: &Hub, end: Instant
     let mut out: &UnixStream = stream;
     let mut done = 0;
     loop {
-        match out.write(&bytes[done..]) {
+        // `done` stays below `bytes.len()`: the loop returns Done once it reaches it.
+        #[allow(clippy::indexing_slicing, reason = "done stays below bytes.len()")]
+        let chunk = &bytes[done..];
+        match out.write(chunk) {
             Ok(0) => return Wrote::Gone,
             Ok(n) => {
                 done += n;
@@ -639,7 +645,13 @@ fn unix_addr(socket: &std::path::Path) -> std::io::Result<(libc::sockaddr_un, li
     // SAFETY: the struct is a local never shared; zeroing it only writes
     // the local, and the NUL terminator is already there.
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    // AF_UNIX fits in a sa_family_t.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "AF_UNIX fits in a sa_family_t"
+    )]
+    let family = libc::AF_UNIX as libc::sa_family_t;
+    addr.sun_family = family;
     let bytes = socket.as_os_str().as_bytes();
     if bytes.len() >= addr.sun_path.len() {
         return Err(std::io::Error::new(
@@ -648,8 +660,16 @@ fn unix_addr(socket: &std::path::Path) -> std::io::Result<(libc::sockaddr_un, li
         ));
     }
     for (slot, byte) in addr.sun_path.iter_mut().zip(bytes.iter()) {
-        *slot = *byte as libc::c_char;
+        // The path bytes copy raw into sun_path.
+        #[allow(clippy::cast_possible_wrap, reason = "the path bytes copy raw")]
+        let raw = *byte as libc::c_char;
+        *slot = raw;
     }
+    // The length check above bounds the path, so the sum fits.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the length check above bounds the path"
+    )]
     let len = (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
     Ok((addr, len))
 }
@@ -681,7 +701,14 @@ fn raw_socket_error(fd: RawFd) -> libc::c_int {
     // SAFETY: `err` is a local `c_int` and `len` names exactly it, so
     // `getsockopt` writes only the local; the call takes no ownership.
     let mut err: libc::c_int = 0;
+    // A c_int's size fits in a socklen_t.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a c_int's size fits in a socklen_t"
+    )]
     let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: `err` is a local `c_int` and `len` names exactly it, so
+    // `getsockopt` writes only the local; the call takes no ownership.
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -708,6 +735,8 @@ fn raw_poll(fd: RawFd, events: libc::c_short, timeout_ms: libc::c_int) -> libc::
         events,
         revents: 0,
     };
+    // SAFETY: `watched` is a local naming one fd this module holds;
+    // `poll` reads only it for one slice and takes no ownership.
     let rc = unsafe { libc::poll(&mut watched, 1, timeout_ms) };
     if rc <= 0 { 0 } else { watched.revents }
 }

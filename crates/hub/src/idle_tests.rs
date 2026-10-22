@@ -950,7 +950,9 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
     clock.advance_when_parked(
         Some(end),
         None,
-        SESSIONS_ABORT_FLUSH - Duration::from_millis(1),
+        SESSIONS_ABORT_FLUSH
+            .checked_sub(Duration::from_millis(1))
+            .expect("the flush bound exceeds a millisecond"),
         &fakes::Deadline::after(DEADLINE),
     );
     assert!(done.try_recv().is_err(), "the hub stays before the bound");

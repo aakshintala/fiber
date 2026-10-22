@@ -54,8 +54,11 @@ fn printing(lines: &[String]) -> Child {
         .unwrap()
 }
 
+/// What `drained` hands back: the shared child and its drain state.
+type Drained = (Arc<Mutex<Child>>, Arc<(Mutex<State>, Condvar)>);
+
 #[track_caller]
-fn drained(child: Child) -> (Arc<Mutex<Child>>, Arc<(Mutex<State>, Condvar)>) {
+fn drained(child: Child) -> Drained {
     let state: Arc<(Mutex<State>, Condvar)> = Arc::new((
         Mutex::new(State {
             exited: false,

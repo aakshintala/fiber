@@ -725,6 +725,10 @@ struct Remote {
     fed: Option<u64>,
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the dispatch threads every serving context to each command arm; the stop arm needs the web drain"
+)]
 fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
@@ -1140,10 +1144,9 @@ fn stop_sessions(args: &Map<String, Value>) -> Result<Option<bool>, ()> {
 /// session unconfirmed at the bound or the abort, in id order.
 fn unconfirmed_message(unconfirmed: &[SessionId]) -> String {
     let ids: Vec<&str> = unconfirmed.iter().map(|id| id.0.as_str()).collect();
-    if ids.len() == 1 {
-        format!("Session {} is still running.", ids[0])
-    } else {
-        format!("Sessions {} are still running.", ids.join(", "))
+    match ids.as_slice() {
+        [only] => format!("Session {only} is still running."),
+        _ => format!("Sessions {} are still running.", ids.join(", ")),
     }
 }
 

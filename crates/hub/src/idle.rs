@@ -139,6 +139,11 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
     loop {
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {
+                // The loop's `Arc` stays owned past the abort; the borrow derefs to `&Hub`.
+                #[allow(
+                    clippy::needless_borrow,
+                    reason = "the loop keeps owning its Arc past the abort"
+                )]
                 abort_sessions_stop(&hub);
                 stop.store(true, Ordering::SeqCst);
                 hub.shutdown_clients();

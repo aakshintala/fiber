@@ -146,6 +146,7 @@ credential a session uses"). A new session takes its label from
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `stop [--hub <name>]` | Shuts down every running session, then the hub. With nothing running it prints `Nothing running.`. |
 | `feedback [<prompt>] [-]` | Writes a feedback report with the description, version, platform and `fiber doctor` output, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |

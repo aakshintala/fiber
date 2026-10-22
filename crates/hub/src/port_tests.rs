@@ -810,8 +810,8 @@ fn a_websocket_stop_interrupted_mid_scan_names_what_is_still_running() {
         })
         .unwrap();
     client.text(r#"{"id":"c_stop","command":"stop","args":{"sessions":true}}"#);
-    answered_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&answered_rx)
         .expect("the session answers both lines");
     signal(&hub, &got);
     let rejected = text_of(&client, "the partial rejection");

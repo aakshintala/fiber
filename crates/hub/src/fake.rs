@@ -466,6 +466,10 @@ fn append_started(home: &Path, id: &SessionId) {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fake threads every shared table to each serving connection"
+)]
 fn accept_loop(
     listener: UnixListener,
     received: &Arc<Received>,
@@ -508,6 +512,10 @@ fn accept_loop(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fake threads every shared table to each serving connection"
+)]
 fn serve_one(
     stream: UnixStream,
     received: &Arc<Received>,
