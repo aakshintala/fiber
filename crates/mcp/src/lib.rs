@@ -42,6 +42,7 @@ pub use start::{
     ServerSpec, Servers, Started, StdioSpec, Transport, restart, start, start_observed,
 };
 pub use sync::{
-    Disposition, StagedSync, SyncInputs, SyncRow, Synced, classify_sync, commit_sync, stage_sync,
+    Disposition, StagedSync, SyncInputs, SyncRow, Synced, apply_sync, classify_sync, plan_sync,
+    stage_sync,
 };
 pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};

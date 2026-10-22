@@ -1,8 +1,9 @@
 //! The reload's server sync (`docs/mcp.md`, "Reload"): classify each new
 //! spec against the live slots, stage (re-list keeps, shadow-start
-//! replacements and starts), then commit (stop and remove old slots,
-//! install the new ones, write caches, declare). `main` prepare drives
-//! this through the crate root and never touches slots directly.
+//! replacements and starts), then plan (pure) and apply (infallible:
+//! stop and remove old slots, install the new ones, write caches).
+//! `main` prepare drives this through the crate root and never touches
+//! slots directly.
 
 #[cfg(test)]
 mod tests;
@@ -24,8 +25,8 @@ use crate::start::{
 };
 
 /// One sync's startup inputs, as at session start: the public stage and
-/// commit entries thread this instead of one argument each, and `main`
-/// builds it at the call site.
+/// plan and apply entries thread this instead of one argument each,
+/// and `main` builds it at the call site.
 pub struct SyncInputs<'a> {
     /// The session workspace the servers run in.
     pub workspace: &'a Path,
@@ -43,9 +44,9 @@ pub struct SyncInputs<'a> {
 
 /// One row of the reload sync, classified from the new specs against the
 /// live slots (`docs/mcp.md`, "Reload"). `Keep` re-lists in place with a
-/// staged install; `Shadow` shadow-starts fresh and installs at commit;
-/// `Remove` stops and drops at commit. Main drives the
-/// classify/stage/commit entries and never touches slots directly.
+/// staged install; `Shadow` shadow-starts fresh and installs at apply;
+/// `Remove` stops and drops at apply. Main drives the
+/// classify/stage/plan/apply entries and never touches slots directly.
 pub enum SyncRow {
     /// The same executable with only declare-time differences, or an
     /// identical spec: re-list in place, rebuilding the declaration
@@ -230,9 +231,24 @@ enum StagedRow {
 
 /// The staged sync: every kept re-list outcome and every shadow-started
 /// replacement, with staged tools and staged cache writes. Opaque to
-/// `main`, which passes it from stage to commit.
+/// `main`, which passes it from stage to plan to apply.
 pub struct StagedSync {
     rows: Vec<StagedRow>,
+}
+
+impl Drop for StagedSync {
+    /// A staged sync that never applies stops every shadow not yet
+    /// applied: a rejected prepare drops its staged sync, so no
+    /// replacement child outlives the rejection while the old slots keep
+    /// serving. `apply_sync` takes the rows out first, so an applied
+    /// sync stops nothing here.
+    fn drop(&mut self) {
+        for row in &self.rows {
+            if let StagedRow::ShadowUp { slot, .. } = row {
+                slot.stop();
+            }
+        }
+    }
 }
 
 /// The start's failure for a required shadow that failed to start: the
@@ -284,7 +300,7 @@ pub fn stage_sync(
                 let name = spec.name.clone();
                 let Some(slot) = servers.slot(&name) else {
                     unreachable!(
-                        "commit is the only remover and runs on this thread, so nothing can vanish mid-prepare"
+                        "apply is the only remover and prepare never removes, so nothing can vanish mid-prepare"
                     );
                 };
                 match slot.relist() {
@@ -431,25 +447,19 @@ pub struct Synced {
     pub prompt_sources: Prompts,
 }
 
-/// Installs a non-required shadow-start failure at commit: the old slot
-/// is already gone for a replacement, the carried records ride first and
-/// the failure rides its failed record and the `failed` entry, filed
-/// under `restarted` (a replacement) or `started` (a fresh start).
+/// Plans a non-required shadow-start failure: the carried records ride
+/// first and the failure rides its failed record and the `failed`
+/// entry, filed under `restarted` (a replacement) or `started` (a
+/// fresh start). The stale slot is dropped at apply time, for both
+/// dispositions, so no stale slot survives.
 fn install_failed(
     installing: &mut Synced,
-    servers: &Servers,
     spec: &ServerSpec,
     carried: Vec<ServerRecord>,
     failure: McpServerFailed,
     disposition: Disposition,
 ) {
     let name = spec.name.clone();
-    if disposition == Disposition::Restarted {
-        // A non-required replacement still stops the old slot at
-        // commit: the configuration changed, so no stale slot survives,
-        // with the server showing failed.
-        servers.remove(&name);
-    }
     installing.records.extend(carried);
     installing
         .records
@@ -472,12 +482,15 @@ fn empty_servers() -> ReloadedServers {
     }
 }
 
-/// Commits the staged sync: the install runs only after every required
+/// Plans the staged sync without touching the live slots or the cache
+/// files: the plan builds the tools, records, grouping and prompt
+/// sources, and computes the resources decision from the staged rows
+/// plus the keep slots. The install runs only after every required
 /// shadow start has succeeded, so no two slots for one name ever serve
 /// at once — and the install itself cannot fail, so a keep that died
-/// racing the commit still declares its staged tools while its cache
+/// racing the apply still declares its staged tools while its cache
 /// stays as the stage left it.
-pub fn commit_sync(staged: StagedSync, servers: &Servers, inputs: &SyncInputs) -> Synced {
+pub fn plan_sync(staged: &StagedSync, servers: &Servers, inputs: &SyncInputs) -> Synced {
     let mut installing = Synced {
         tools: Vec::new(),
         records: Vec::new(),
@@ -486,49 +499,60 @@ pub fn commit_sync(staged: StagedSync, servers: &Servers, inputs: &SyncInputs) -
         prompt_sources: Prompts::default(),
     };
     let mut all_sources: Vec<PromptSource> = Vec::new();
-    for row in staged.rows {
+    // Names the apply drops: replacements swap the old slot out,
+    // failures and removals leave none behind.
+    let mut dropped = std::collections::HashSet::new();
+    for row in &staged.rows {
         match row {
-            StagedRow::Keep { spec, listed, used } => {
+            StagedRow::ShadowUp { spec, .. } | StagedRow::ShadowFailed { spec, .. } => {
+                dropped.insert(spec.name.clone());
+            }
+            StagedRow::Remove { name } => {
+                dropped.insert(name.clone());
+            }
+            StagedRow::Keep { .. } => {}
+        }
+    }
+    // Whether any post-apply slot offers resources, as at session start:
+    // staged shadows read their staged flag, while every live slot the
+    // apply keeps reads its live one — including slots no row covers,
+    // such as repository-protected ones the caller filtered out.
+    let mut offers_resources = false;
+    for row in &staged.rows {
+        if let StagedRow::ShadowUp { slot, .. } = row
+            && slot.offers_resources()
+        {
+            offers_resources = true;
+        }
+    }
+    if !offers_resources {
+        let slots = servers.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        offers_resources = slots
+            .iter()
+            .any(|slot| !dropped.contains(&slot.spec().name) && slot.offers_resources());
+    }
+    for row in &staged.rows {
+        match row {
+            StagedRow::Keep { spec, used, .. } => {
                 let name = spec.name.clone();
-                // One gate for the cache write: the install answers whether
-                // the slot was still live under its own lock, so a keep
-                // that died racing the commit keeps its old cache bytes
-                // while its staged tools still declare.
-                if let Some(slot) = servers.slot(&name)
-                    && slot.install_relisted(listed.clone())
-                {
-                    cache::write(inputs.cache, &name, &spec.key(), &listed);
-                }
-                installing.tools.extend(used);
+                installing.tools.extend(used.iter().cloned());
                 installing.servers.kept.push(name);
             }
             StagedRow::ShadowUp {
                 spec,
-                slot,
-                listed,
                 used,
                 records: carried,
                 disposition,
                 sources,
+                ..
             } => {
                 let name = spec.name.clone();
-                // A fresh start swaps a leftover slot out, and a
-                // replacement swaps the stale spec out: a lazy
-                // `NotStarted` or failed slot with the same name never
-                // serves again once the commit installs the new one.
-                servers.remove(&name);
-                servers
-                    .slots
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(slot);
-                cache::write(inputs.cache, &name, &spec.key(), &listed);
-                installing.tools.extend(used);
-                installing.records.extend(carried);
+                installing.tools.extend(used.iter().cloned());
+                installing.records.extend(carried.iter().cloned());
                 installing.records.push(ServerRecord::Ready(McpServerReady {
                     server: name.clone(),
                 }));
-                all_sources.extend(sources);
+                all_sources.extend(sources.iter().cloned());
                 disposition.file(&mut installing.servers, name);
             }
             StagedRow::ShadowFailed {
@@ -536,19 +560,18 @@ pub fn commit_sync(staged: StagedSync, servers: &Servers, inputs: &SyncInputs) -
                 failure,
                 records: carried,
                 disposition,
+                ..
             } => {
                 install_failed(
                     &mut installing,
-                    servers,
-                    &spec,
-                    carried,
-                    failure,
-                    disposition,
+                    spec,
+                    carried.clone(),
+                    failure.clone(),
+                    *disposition,
                 );
             }
             StagedRow::Remove { name } => {
-                servers.remove(&name);
-                installing.servers.stopped.push(name);
+                installing.servers.stopped.push(name.clone());
             }
         }
     }
@@ -557,12 +580,65 @@ pub fn commit_sync(staged: StagedSync, servers: &Servers, inputs: &SyncInputs) -
     // the sources, and `loop` routes the new tags to it, so an appended
     // row fetches through the same path as a startup row.
     installing.prompt_sources = Prompts::collect(all_sources);
-    // One `mcp_resources` when any post-sync slot offers resources, as at
-    // session start: the installed hook undeclares it when none does.
-    if let Some(declaration) =
-        resources_declaration(&servers.slots, inputs.artifacts, inputs.images)
+    // One `mcp_resources` when any post-apply slot offers resources, as
+    // at session start: the installed hook undeclares it when none does.
+    // The declaration reads the live slots at call time, once applied.
+    if offers_resources
+        && let Some(declaration) =
+            resources_declaration(&servers.slots, inputs.artifacts, inputs.images)
     {
         installing.tools.push(declaration);
     }
     installing
+}
+
+/// Applies the staged sync: the install runs only after the plan, and
+/// itself cannot fail — slot swaps, `servers.remove` calls and
+/// `cache::write` calls. The rows are taken out first, so the `Drop`
+/// above stops nothing once applied.
+pub fn apply_sync(mut staged: StagedSync, servers: &Servers, inputs: &SyncInputs) {
+    let rows = std::mem::take(&mut staged.rows);
+    for row in rows {
+        match row {
+            StagedRow::Keep { spec, listed, .. } => {
+                let name = spec.name.clone();
+                // One gate for the cache write: the install answers whether
+                // the slot was still live under its own lock, so a keep
+                // that died racing the apply keeps its old cache bytes
+                // while its staged tools still declare.
+                if let Some(slot) = servers.slot(&name)
+                    && slot.install_relisted(listed.clone())
+                {
+                    cache::write(inputs.cache, &name, &spec.key(), &listed);
+                }
+            }
+            StagedRow::ShadowUp {
+                spec, slot, listed, ..
+            } => {
+                let name = spec.name.clone();
+                // A fresh start swaps a leftover slot out, and a
+                // replacement swaps the stale spec out: a lazy
+                // `NotStarted` or failed slot with the same name never
+                // serves again once the apply installs the new one.
+                servers.remove(&name);
+                servers
+                    .slots
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(slot);
+                cache::write(inputs.cache, &name, &spec.key(), &listed);
+            }
+            StagedRow::ShadowFailed { spec, .. } => {
+                // A non-required failure still drops the stale slot at
+                // apply, for both dispositions: the configuration
+                // changed (a replacement) or a leftover lazy slot never
+                // served (a fresh start), so no stale slot survives,
+                // with the server showing failed.
+                servers.remove(&spec.name);
+            }
+            StagedRow::Remove { name } => {
+                servers.remove(&name);
+            }
+        }
+    }
 }

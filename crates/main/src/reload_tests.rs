@@ -193,8 +193,8 @@ impl Fixture {
             template: parts.prompt,
             current: Arc::new(crate::session_extensions::Current::new(parts.extensions)),
             switching: Arc::new(parts.switching),
-            tools: Vec::new(),
-            kept_infos: Vec::new(),
+            tools: Mutex::new(Vec::new()),
+            kept_infos: Mutex::new(Vec::new()),
             prompt_rows: Mutex::new(Vec::new()),
             late: Arc::default(),
             repository: Arc::new(Mutex::new(
@@ -441,8 +441,8 @@ fn reload_preserves_tool_precedence_late_tools_and_only_current_declarations() {
     {
         let state = Arc::get_mut(&mut fixture.state).unwrap();
         // Input order forces the built-in/MCP precedence to be established by prepare.
-        state.tools = vec![("db".into(), echo), ("builtin".into(), read.clone())];
-        state.kept_infos = vec![read_info.clone(), echo_info, web_info];
+        *state.tools.lock().unwrap() = vec![("db".into(), echo), ("builtin".into(), read.clone())];
+        *state.kept_infos.lock().unwrap() = vec![read_info.clone(), echo_info, web_info];
         *state.names.lock().unwrap() = vec!["removed".into(), "read".into()];
         let mut held = state.late.lock().unwrap();
         held.tools = vec![("repository".into(), read), ("repository".into(), late)];
@@ -1265,8 +1265,8 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         template: base.template.clone(),
         current: Arc::clone(&base.current),
         switching: Arc::clone(&base.switching),
-        tools: started.tools,
-        kept_infos: started.infos,
+        tools: Mutex::new(started.tools),
+        kept_infos: Mutex::new(started.infos),
         prompt_rows: Mutex::new(started.prompts.commands()),
         late: Arc::clone(&base.late),
         repository: Arc::clone(&base.repository),
@@ -1315,6 +1315,8 @@ impl Fixture {
     fn tool(&self, name: &str) -> Arc<dyn contract::tool::Tool> {
         self.state
             .tools
+            .lock()
+            .unwrap()
             .iter()
             .find(|(_, tool)| tool.definition().name == name)
             .unwrap_or_else(|| panic!("tool {name} is registered"))
@@ -1524,9 +1526,10 @@ fn reload_routes_a_replaced_servers_kept_prompt_through_the_replacement() {
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
     assert_ne!(next.pid(), old_pid, "the new executable answers");
+    (prepared.installed)();
     assert!(
         !fakes::pid_alive(old_pid),
-        "the old slot serves nothing again after the commit stops it"
+        "the old slot serves nothing again after the install stops it"
     );
     let carried = prepared
         .server_sync
@@ -1677,6 +1680,7 @@ fn reload_declares_a_tool_added_to_an_advertised_empty_list() {
     fixture.servers[0].answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.kept, ["fx"]);
+    (prepared.installed)();
     assert!(
         run_named(&prepared.tools, &fixture, "mcp__fx__echo")
             .error
@@ -1720,6 +1724,7 @@ fn reload_starts_a_readded_name_fresh() {
     fixture.rewrite(json!({}));
     let removed = fixture.prepare();
     assert_eq!(removed.server_sync.servers.stopped, ["fx"]);
+    (removed.installed)();
     fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({}))}));
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.started, ["fx"]);
@@ -1765,6 +1770,7 @@ fn reload_restarts_a_changed_approved_repository_server() {
             .error
             .is_none()
     );
+    (first.installed)();
     let pid = db.pid();
     // A new executable under the same name, approved anew: the changed
     // key takes the replace path and the new server answers.
@@ -1800,6 +1806,7 @@ fn reload_relists_an_unchanged_approved_repository_server_without_reconnecting()
     approve(&fixture, contract::events::OfferedKind::McpServer, "db");
     let first = fixture.prepare();
     assert_eq!(first.server_sync.servers.started, ["db"]);
+    (first.installed)();
     let pid = db.pid();
     let prepared = fixture.prepare();
     assert_eq!(prepared.server_sync.servers.kept, ["fx", "db"]);
@@ -1916,7 +1923,7 @@ fn reload_with_a_failing_replacement_stops_the_old_slot_and_shows_failed() {
     fixture.rewrite(json!({"fx": {"command": "/nonexistent/fiber-mcp"}}));
     let prepared = fixture.prepare();
     // Non-required, so the reload succeeds with the server failed: the
-    // old slot is stopped at commit, never restarted.
+    // old slot is stopped at install, never restarted.
     assert!(prepared.server_sync.servers.kept.is_empty());
     assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
     assert_eq!(prepared.server_sync.server_failures.len(), 1);
@@ -1930,16 +1937,16 @@ fn reload_with_a_failing_replacement_stops_the_old_slot_and_shows_failed() {
         "the failure rides a failed record"
     );
     assert!(
-        !fixture.state.servers.has_slot("fx"),
-        "the old slot is stopped at commit"
-    );
-    assert!(
         prepared
             .tools
             .iter()
             .all(|(_, tool)| tool.definition().name != "mcp__fx__echo")
     );
     (prepared.installed)();
+    assert!(
+        !fixture.state.servers.has_slot("fx"),
+        "the old slot is stopped at install"
+    );
     assert!(
         !fixture
             .declared_names()
@@ -1966,6 +1973,8 @@ fn reload_adds_mcp_resources_when_a_protected_slot_offers_them() {
         fixture
             .state
             .tools
+            .lock()
+            .unwrap()
             .iter()
             .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL),
         "the lazy start declares the resources tool"
@@ -2000,6 +2009,8 @@ fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
         fixture
             .state
             .tools
+            .lock()
+            .unwrap()
             .iter()
             .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL),
         "the lazy start declares the resources tool"
@@ -2261,5 +2272,168 @@ fn a_second_reload_retains_the_first_reloads_prompt_rows_for_kept_servers() {
     assert!(
         commands.iter().any(|row| row.tag == "new"),
         "the `/` list keeps the first reload's row"
+    );
+}
+
+#[test]
+fn a_dropped_preparation_after_a_server_change_installs_nothing() {
+    // `docs/configuration.md`, "When Fiber reads configuration": a
+    // rejected reload changes nothing. Preparation stages the
+    // replacement but installs nothing: the old slot still answers,
+    // the cache is unchanged, and the shadow is staged but not live.
+    // Dropping the preparation stops the shadow without declaring
+    // anything, so a failure in the fallible steps after the plan
+    // cannot leave the reload half-applied.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let old_pid = fixture.servers[0].pid();
+    let cache = fixture.cache_bytes("fx");
+    let next = FakeServer::new(&fixture.rig, "fx-next", &json!([{"name": "plus"}]));
+    next.answer("plus", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    fixture.rewrite(json!({"fx": next.entry(json!({}))}));
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
+    assert!(
+        fakes::pid_alive(old_pid),
+        "the old slot still answers before anything is installed"
+    );
+    assert!(
+        fixture.run(&fixture.tool("mcp__fx__echo")).error.is_none(),
+        "the old registration still answers"
+    );
+    assert_eq!(
+        fixture.cache_bytes("fx"),
+        cache,
+        "no cache write before install"
+    );
+    let shadow_pid = next.pid();
+    assert!(
+        fakes::pid_alive(shadow_pid),
+        "the shadow started while staging"
+    );
+    drop(prepared);
+    assert!(
+        !fakes::pid_alive(shadow_pid),
+        "the dropped sync stops its shadow"
+    );
+    assert!(fakes::pid_alive(old_pid), "the old slot keeps serving");
+    assert!(
+        fixture.run(&fixture.tool("mcp__fx__echo")).error.is_none(),
+        "the old registration still answers"
+    );
+    assert_eq!(fixture.cache_bytes("fx"), cache);
+    assert!(
+        fixture.declared_names().is_empty(),
+        "nothing declared, so no `reloaded` line could follow"
+    );
+}
+
+#[test]
+fn a_late_approval_after_a_replacing_reload_declares_the_replacement() {
+    // An explicit reload replaces the server and installs the new
+    // set; a later extension approval prepares from the session-held
+    // set, so it keeps the replacement's tools, not the startup ones.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let next = FakeServer::new(&fixture.rig, "fx-next", &json!([{"name": "plus"}]));
+    next.answer("plus", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    fixture.rewrite(json!({"fx": next.entry(json!({}))}));
+    let prepared = fixture.prepare();
+    assert_eq!(prepared.server_sync.servers.restarted, ["fx"]);
+    (prepared.installed)();
+    let state =
+        Arc::try_unwrap(fixture.state).unwrap_or_else(|_| panic!("only the test holds the state"));
+    let (_reload, late) = state.preparers(Vec::new());
+    let prepared = fakes::within(
+        "late preparation",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            late(&r#loop::ReloadRoute {
+                model: "scripted/s.json".into(),
+                credential: None,
+            })
+            .unwrap()
+        },
+    );
+    let names: Vec<String> = prepared
+        .tools
+        .iter()
+        .map(|(_, tool)| tool.definition().name)
+        .collect();
+    assert!(
+        names.contains(&"mcp__fx__plus".to_owned()),
+        "the late set holds the replacement's tools: {names:?}"
+    );
+    assert!(
+        !names.contains(&"mcp__fx__echo".to_owned()),
+        "the startup tools stay gone: {names:?}"
+    );
+    let tool = prepared
+        .tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "mcp__fx__plus")
+        .expect("the replacement tool")
+        .1
+        .clone();
+    let answered = tool.run(
+        &Default::default(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(answered.error.is_none(), "{:?}", answered.error);
+}
+
+#[test]
+fn a_failed_start_of_a_not_started_server_removes_its_slot_and_its_resources() {
+    // A lazy `NotStarted` slot whose start fails at reload leaves no
+    // slot behind, so `mcp_resources` does not count it either.
+    let mut fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    let fx_entry = fixture.servers[0].entry(json!({}));
+    let gx = FakeServer::new(&fixture.rig, "gx", &json!([{"name": "echo"}]));
+    gx.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    // Prime gx's cache, then relaunch without it, so the cache stays
+    // on disk with no slot.
+    fixture.rewrite(json!({"fx": fx_entry.clone(), "gx": gx.entry(json!({}))}));
+    fixture.relaunch();
+    fixture.flip_resources("gx", true);
+    fixture.rewrite(json!({"fx": fx_entry.clone()}));
+    fixture.relaunch();
+    assert!(!fixture.state.servers.has_slot("gx"));
+    // Re-adding gx goes lazy off the cache: a `NotStarted` slot with
+    // no server behind it.
+    fixture.rewrite(json!({"fx": fx_entry.clone(), "gx": gx.entry(json!({}))}));
+    fixture.relaunch();
+    assert!(
+        fixture.state.servers.has_slot("gx"),
+        "the cached slot stays"
+    );
+    assert!(
+        !fixture.state.servers.running("gx"),
+        "the relaunched slot never started"
+    );
+    // The start fails at reload.
+    std::fs::write(gx.dir.join("fail-start"), "").unwrap();
+    let prepared = fixture.prepare();
+    // The final relaunch went lazy off both caches, so both start
+    // fresh here; only gx fails.
+    assert_eq!(prepared.server_sync.servers.started, ["fx", "gx"]);
+    assert_eq!(prepared.server_sync.server_failures.len(), 1);
+    assert_eq!(prepared.server_sync.server_failures[0].server, "gx");
+    assert!(
+        prepared
+            .tools
+            .iter()
+            .all(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL),
+        "no slot offers resources, so none is declared"
+    );
+    (prepared.installed)();
+    // The install drops the stale slot, so it never serves again and
+    // the hub's resource read stops counting it.
+    assert!(
+        !fixture.state.servers.has_slot("gx"),
+        "the failed slot is gone"
+    );
+    assert!(
+        !fixture
+            .declared_names()
+            .contains(&mcp::RESOURCES_TOOL.to_owned())
     );
 }

@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::slot::Served;
 use crate::test_support::FakeImages;
 use crate::test_support::{Setup, WITHIN};
-use crate::{Disposition, SyncRow, classify_sync, commit_sync, stage_sync};
+use crate::{Disposition, SyncRow, apply_sync, classify_sync, plan_sync, stage_sync};
 
 const HI: &str = r#"{"content":[{"type":"text","text":"hi"}]}"#;
 
@@ -96,7 +96,8 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
         .expect("the stage ends");
     let staged = outcome.expect("an unchanged keep stages");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert_eq!(
         setup.cache_bytes(),
@@ -176,7 +177,8 @@ fn commit_writes_a_prompts_only_change_for_an_unchanged_tool_list() {
         .expect("the stage ends");
     let staged = outcome.expect("a prompts-only change stages");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let names: Vec<String> = setup
         .cached_prompts()
@@ -211,7 +213,8 @@ fn commit_installs_a_keep_dead_at_install_as_listed() {
     setup.kill_slot(&slot);
     assert!(!slot.is_live(), "the kept slot died before the commit");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert!(synced.servers.restarted.is_empty());
     assert!(synced.records.is_empty(), "a keep writes no records");
@@ -261,7 +264,8 @@ fn commit_never_writes_a_declined_keep_payload() {
     setup.kill_slot(&slot);
     assert!(!slot.is_live(), "the kept slot died before the commit");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert_eq!(
         setup.cache_bytes(),
@@ -317,7 +321,8 @@ fn an_optional_replacement_failure_still_writes_the_detected_death() {
         .expect("the stage ends");
     let staged = outcome.expect("an optional shadow failure stages");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
     assert_eq!(
         synced.records.len(),
@@ -364,7 +369,8 @@ fn commit_declares_mcp_resources_only_when_a_slot_offers_them() {
             .expect("the stage ends");
         let staged = outcome.expect("an empty stage");
         let owned = setup.owned_inputs(&images);
-        let synced = commit_sync(staged, &servers, &owned.inputs());
+        let synced = plan_sync(&staged, &servers, &owned.inputs());
+        apply_sync(staged, &servers, &owned.inputs());
         let offered = synced
             .tools
             .iter()
@@ -410,7 +416,8 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
         .expect("the stage ends");
     let staged = outcome.expect("a fresh start stages");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.started, ["fx".to_owned()]);
     assert!(
         matches!(synced.records.as_slice(), [ServerRecord::Ready(_)]),
@@ -486,7 +493,8 @@ fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
             .expect("the stage ends");
         let staged = outcome.expect("a replacement stages");
         let owned = setup.owned_inputs(&images);
-        let synced = commit_sync(staged, &servers, &owned.inputs());
+        let synced = plan_sync(&staged, &servers, &owned.inputs());
+        apply_sync(staged, &servers, &owned.inputs());
         assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
         assert!(
             synced.servers.started.is_empty(),
@@ -584,7 +592,8 @@ fn stage_sync_starts_shadows_in_parallel() {
         .expect("the stage ends");
     let staged = outcome.expect("fresh starts stage");
     let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    apply_sync(staged, &servers, &owned.inputs());
     assert_eq!(
         synced.servers.started,
         vec!["aa".to_owned(), "bb".to_owned()]

@@ -101,8 +101,8 @@ pub(crate) struct State {
     pub(crate) template: r#loop::PromptInputs,
     pub(crate) current: Arc<crate::session_extensions::Current>,
     pub(crate) switching: Arc<crate::switch::Switching>,
-    pub(crate) tools: Tools,
-    pub(crate) kept_infos: Vec<contract::events::ToolInfo>,
+    pub(crate) tools: std::sync::Mutex<Tools>,
+    pub(crate) kept_infos: std::sync::Mutex<Vec<contract::events::ToolInfo>>,
     pub(crate) prompt_rows: std::sync::Mutex<Vec<contract::events::CommandInfo>>,
     pub(crate) late: Arc<std::sync::Mutex<Late>>,
     /// The repository scope the next preparation reads: the launch
@@ -199,8 +199,8 @@ impl State {
             template,
             current,
             switching,
-            tools,
-            kept_infos: servers.kept_infos,
+            tools: std::sync::Mutex::new(tools),
+            kept_infos: std::sync::Mutex::new(servers.kept_infos),
             prompt_rows: std::sync::Mutex::new(servers.prompts.commands()),
             late,
             repository,
@@ -365,69 +365,71 @@ impl State {
         // sync; the late preparation skips it, so no slot starts, no
         // cache writes, and the grouping, records and failures stay
         // empty.
-        let (synced, protected, ready): (Option<mcp::Synced>, Vec<String>, Vec<String>) =
-            if preparation == Preparation::Late {
-                (None, Vec::new(), Vec::new())
-            } else {
-                let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
-                notices.extend(specs.notices);
-                // Repository servers stay with the offer flow that owns
-                // them: never removed while still declared.
-                let protected: Vec<String> = specs
-                    .repository
-                    .iter()
-                    .map(|repo| repo.spec.name.clone())
-                    .collect();
-                // Eligible approved repository servers classify like any
-                // other server: changed takes the replace path, same-spec
-                // healthy re-lists in place, and a server approved
-                // in-session starts with its prompt sources joining the
-                // `/` list. Repository-unapproved servers are skipped.
-                let prepared = crate::mcp_servers::repository_servers::prepare(
-                    &self.sources.home,
-                    &self.sources.project,
-                    scope.workspace.as_ref().unwrap_or(&self.sources.workspace),
-                    &now.loader.clock,
-                    &scope.skipped,
-                    specs.repository,
-                );
-                if let Some(failed) = prepared.required_failed {
-                    return Err(Rejection {
-                        code: contract::ErrorCode::McpRequiredServerFailed,
-                        message: failed.error.message,
-                    });
-                }
-                for failed in prepared.failed {
-                    notices.push(contract::events::Notice {
-                        code: failed.error.code,
-                        message: failed.error.message,
-                        extension: None,
-                    });
-                }
-                let ready: Vec<String> = prepared
-                    .ready
-                    .iter()
-                    .map(|spec| spec.name.clone())
-                    .collect();
-                let mut sync_specs = specs.specs;
-                sync_specs.extend(prepared.ready);
-                let mut rows = mcp::classify_sync(sync_specs, &self.servers);
-                rows.retain(
-                    |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
-                );
-                let staged =
-                    mcp::stage_sync(rows, &self.servers, &sync_inputs).map_err(|error| {
-                        Rejection {
-                            code: error.code,
-                            message: error.message,
-                        }
-                    })?;
-                (
-                    Some(mcp::commit_sync(staged, &self.servers, &sync_inputs)),
-                    protected,
-                    ready,
-                )
-            };
+        let (synced, staged, protected, ready): (
+            Option<mcp::Synced>,
+            Option<mcp::StagedSync>,
+            Vec<String>,
+            Vec<String>,
+        ) = if preparation == Preparation::Late {
+            (None, None, Vec::new(), Vec::new())
+        } else {
+            let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
+            notices.extend(specs.notices);
+            // Repository servers stay with the offer flow that owns
+            // them: never removed while still declared.
+            let protected: Vec<String> = specs
+                .repository
+                .iter()
+                .map(|repo| repo.spec.name.clone())
+                .collect();
+            // Eligible approved repository servers classify like any
+            // other server: changed takes the replace path, same-spec
+            // healthy re-lists in place, and a server approved
+            // in-session starts with its prompt sources joining the
+            // `/` list. Repository-unapproved servers are skipped.
+            let prepared = crate::mcp_servers::repository_servers::prepare(
+                &self.sources.home,
+                &self.sources.project,
+                scope.workspace.as_ref().unwrap_or(&self.sources.workspace),
+                &now.loader.clock,
+                &scope.skipped,
+                specs.repository,
+            );
+            if let Some(failed) = prepared.required_failed {
+                return Err(Rejection {
+                    code: contract::ErrorCode::McpRequiredServerFailed,
+                    message: failed.error.message,
+                });
+            }
+            for failed in prepared.failed {
+                notices.push(contract::events::Notice {
+                    code: failed.error.code,
+                    message: failed.error.message,
+                    extension: None,
+                });
+            }
+            let ready: Vec<String> = prepared
+                .ready
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect();
+            let mut sync_specs = specs.specs;
+            sync_specs.extend(prepared.ready);
+            let mut rows = mcp::classify_sync(sync_specs, &self.servers);
+            rows.retain(
+                |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
+            );
+            let staged =
+                mcp::stage_sync(rows, &self.servers, &sync_inputs).map_err(|error| Rejection {
+                    code: error.code,
+                    message: error.message,
+                })?;
+            // The plan is pure: slots swap and caches write only in
+            // the installed hook below, so no fallible step after
+            // the plan can leave a half-applied reload.
+            let planned = mcp::plan_sync(&staged, &self.servers, &sync_inputs);
+            (Some(planned), Some(staged), protected, ready)
+        };
         // Every shadow source joins the carried rows: a started
         // server's rows are new, and a replaced server's rows ride
         // along so `loop` routes those tags to the replacement source
@@ -463,8 +465,8 @@ impl State {
         // tool, cache or prompt row changes.
         let (mut tools, mut infos): (Tools, Vec<contract::events::ToolInfo>) = match &synced {
             Some(_) => {
-                let tools: Tools = self
-                    .tools
+                let held_tools = self.tools.lock().unwrap_or_else(PoisonError::into_inner);
+                let tools: Tools = held_tools
                     .iter()
                     .filter(|(owner, tool)| {
                         // The stale `mcp_resources` never carries: the sync
@@ -478,7 +480,11 @@ impl State {
                     })
                     .cloned()
                     .collect();
-                let mut infos = self.kept_infos.clone();
+                let mut infos = self
+                    .kept_infos
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
                 infos.retain(|info| {
                     info.name != "web_search"
                         && info.name != mcp::RESOURCES_TOOL
@@ -492,7 +498,16 @@ impl State {
                 });
                 (tools, infos)
             }
-            None => (self.tools.clone(), self.kept_infos.clone()),
+            None => (
+                self.tools
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+                self.kept_infos
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+            ),
         };
         if let Some((tool, info)) = crate::builtin::web_search(
             model.model.web_search.as_deref(),
@@ -512,6 +527,13 @@ impl State {
             );
             infos.extend(synced.tools.iter().map(|(_, _, info)| info.clone()));
         }
+        // The session-held MCP set the install below publishes: the
+        // next preparation rebuilds from it, so a late approval after a
+        // replacing reload keeps the replacement's tools. The
+        // `web_search` and extension tools below stay out: each
+        // preparation adds its own.
+        let stored_tools = tools.clone();
+        let stored_infos = infos.clone();
         // MCP registrations follow built-ins, so they keep their startup precedence.
         tools.sort_by_key(|(owner, _)| owner != "builtin");
         crate::mcp_servers::add_extension_tools(&mut tools, &mut infos, extensions.tools())
@@ -539,6 +561,14 @@ impl State {
             self.switching.reviewer_for(route, &config, &here);
         let hooks: Arc<dyn contract::hook::Hooks> = extensions.clone();
         let loaded = extensions.loaded();
+        // Owned inputs for the installed hook's apply: the hook runs
+        // after `next` moves the loader below, so the clock is cloned
+        // while it still borrows.
+        let apply_workspace = self.sources.workspace.clone();
+        let apply_artifacts = self.artifacts.clone();
+        let apply_images = Arc::clone(&self.images);
+        let apply_cache = cache.clone();
+        let apply_clock = Arc::clone(&now.loader.clock);
         let next = crate::switch::Reloadable {
             config,
             caps,
@@ -558,6 +588,31 @@ impl State {
         // to its own servers nor suppresses the needed one.
         let declares_resources = infos.iter().any(|info| info.name == mcp::RESOURCES_TOOL);
         let installed = Box::new(move || {
+            // The staged sync applies here, before any declaration:
+            // nothing fallible runs after the shadows become live.
+            if let Some(staged) = staged {
+                let apply_inputs = mcp::SyncInputs {
+                    workspace: &apply_workspace,
+                    artifacts: &apply_artifacts,
+                    images: &apply_images,
+                    cache: &apply_cache,
+                    clock: &apply_clock,
+                    version: env!("CARGO_PKG_VERSION"),
+                };
+                mcp::apply_sync(staged, &shared.servers, &apply_inputs);
+            }
+            // The install publishes the session-held MCP set the next
+            // preparation rebuilds from, so a late approval after a
+            // replacing reload keeps the replacement's tools.
+            {
+                let mut held_tools = shared.tools.lock().unwrap_or_else(PoisonError::into_inner);
+                *held_tools = stored_tools;
+                let mut held_infos = shared
+                    .kept_infos
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                *held_infos = stored_infos;
+            }
             // The session's current rows grow by this reload's additions,
             // so the next preparation rebuilds from them: rows the session
             // already lists stay, and only new names are appended, while
