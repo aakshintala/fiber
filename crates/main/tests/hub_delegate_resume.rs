@@ -25,9 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
-use fakes::{Deadline, ProviderServer, Request, Watchdog};
+use fakes::{ProviderServer, Request, Watchdog};
 use serde_json::{Value, json};
 
 /// A running `fiber session` process: its drained stdout lines, killed on
@@ -94,14 +93,14 @@ impl Running {
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let mut got = Vec::new();
         loop {
-            let left = self.deadline.left().min(Duration::from_secs(5));
+            let left = self.deadline.left();
             if left.is_zero() {
                 panic!(
                     "waited until the deadline for {what}; got {got:?}; stderr: {}",
                     self.stderr.try_recv().unwrap_or_default()
                 )
             }
-            match Deadline::after(left).recv(&self.lines) {
+            match self.deadline.recv(&self.lines) {
                 Ok(line) => {
                     let stop = done(&line);
                     got.push(line);

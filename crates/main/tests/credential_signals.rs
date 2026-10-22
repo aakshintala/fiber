@@ -17,6 +17,7 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -288,7 +289,7 @@ fn observe_group_members(deadline: Deadline, pgid: u32) -> Result<Vec<GroupMembe
     let ps_group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let wait = deadline.left().min(Duration::from_secs(3));
+    let wait = deadline.left().min(MUST_SUCCEED_WITHIN);
     let output = match Deadline::after(wait).recv(&finished) {
         Ok(output) => output.map_err(|error| format!("ps could not be reaped: {error}"))?,
         Err(_) => {
@@ -506,20 +507,20 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
 }
 
 #[test]
-fn fiber_models_with_nothing_in_flight_exits_within_two_seconds() {
+fn fiber_models_with_nothing_in_flight_exits_successfully() {
     let setup = Setup::new();
     // Declared after `setup`, so it drops first: a failing run kills this
     // test's refresh child before its directory is removed.
     let refresh_guard = Watchdog::matching(&setup.refresh_pattern());
     // The command exits at once with a key, so nothing is in flight when
     // `fiber models` settles its reads on exit: under the `==`/`!=` mutant
-    // that settle waits the full bound, so the 2 s deadline below fails
+    // that settle waits the full bound, so the deadline below fails
     // the test at once.
     install(&setup.home(), "printf key");
     let (fiber_pid, child, watchdog) = setup.start(&["models"]);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let deadline = Deadline::after(Duration::from_secs(2));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let output = match deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(deadline, fiber_pid, &finished, "`fiber models` to exit"),
