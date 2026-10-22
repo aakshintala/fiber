@@ -736,6 +736,7 @@ jobs:
           rm -f "$RUNNER_TEMP/release/payload.txt"
           ls "$RUNNER_TEMP/release"/fiber-*.tar.gz "$RUNNER_TEMP/release"/fiber-*.tar.gz.sha256
       - name: Create the draft, upload every asset, publish last
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -747,20 +748,27 @@ jobs:
           "$pack" nightly-notes "${last_stable:-}" "$GITHUB_SHA" > notes.md
           [ -s notes.md ] || { printf 'release: %s\n' "the $VERSION notes are empty." >&2; exit 1; }
           "$pack" draft-begin --prerelease "$VERSION" "$GITHUB_SHA" notes.md
+          # Only this execution created the release: the cleanup step
+          # deletes a published release only on this output, so a re-run
+          # (same version, same commit) refuses the pre-existing release
+          # instead of deleting it.
+          echo "created=true" >> "$GITHUB_OUTPUT"
           "$pack" draft-upload "$VERSION" install.sh fiber-*.tar.gz fiber-*.tar.gz.sha256
           "$pack" draft-publish "$VERSION"
       - name: Delete the rehearsal release and its tag
         # Always runs, so a cancelled or ambiguously-published run still
         # cleans up: `rehearsal-cleanup` inspects the release state and
         # deletes a draft with `draft-delete`, deletes a published release
-        # only when its target is still this run's commit (what
-        # `draft-begin` recorded), failing on a collision instead, and
-        # no-ops only on a confirmed not-found. Any other lookup failure
-        # fails the step instead of skipping the delete, and a failed
-        # delete fails the job.
+        # only when this execution created it (the publish step's `created`
+        # output, carried as REHEARSAL_CREATED) and its target is still
+        # this run's commit, failing on a collision instead, and no-ops
+        # only on a confirmed not-found. Any other lookup failure fails
+        # the step instead of skipping the delete, and a failed delete
+        # fails the job.
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          REHEARSAL_CREATED: ${{ steps.publish.outputs.created }}
         run: scripts/release-pack rehearsal-cleanup "$VERSION" "$GITHUB_SHA"
 
   # Benchmarks report, never gate: a slow sample or a missing figure is a

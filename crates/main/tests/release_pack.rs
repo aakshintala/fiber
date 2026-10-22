@@ -1412,15 +1412,19 @@ fn draft_begin_prerelease_marks_the_release() {
     );
 }
 
-/// `rehearsal-cleanup` deletes a published rehearsal release created from
-/// this run's commit: the published state holding the run's commit goes,
-/// with `--cleanup-tag` on the delete call.
+/// `rehearsal-cleanup` deletes a published rehearsal release this execution
+/// created: the publish step marks creation only after its own `draft-begin`
+/// succeeds, and the published state holding the run's commit goes, with
+/// `--cleanup-tag` on the delete call.
 #[test]
 fn rehearsal_cleanup_deletes_the_runs_own_published_release() {
     let pack = Pack::start();
     let own = "a".repeat(40);
     pack.wfile("state/published-1.2.3", own.as_bytes(), 0o644);
-    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &own]);
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &own],
+        &[("REHEARSAL_CREATED", "true")],
+    );
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert!(!pack.state().join("published-1.2.3").exists());
     let delete = pack
@@ -1432,18 +1436,44 @@ fn rehearsal_cleanup_deletes_the_runs_own_published_release() {
     assert!(delete.contains("--cleanup-tag"), "{delete}");
 }
 
+/// `rehearsal-cleanup` refuses a published release this execution did not
+/// create even when its target is the run's commit: a re-run carries the
+/// same version and commit, so the target alone proves nothing. The
+/// collision fails instead of being deleted, and no delete call runs.
+#[test]
+fn rehearsal_cleanup_refuses_a_published_release_from_a_rerun() {
+    let pack = Pack::start();
+    let own = "a".repeat(40);
+    pack.wfile("state/published-1.2.3", own.as_bytes(), 0o644);
+    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &own]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: v1.2.3 is already published; refusing to delete a release this run did not create.\n"
+    );
+    assert!(pack.state().join("published-1.2.3").exists());
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "the re-run release was touched: {}",
+        pack.calls()
+    );
+}
+
 /// `rehearsal-cleanup` refuses a published release created from another
-/// commit: the collision fails instead of being deleted, and no delete
-/// call runs.
+/// commit even when this execution created one: the collision fails instead
+/// of being deleted, and no delete call runs.
 #[test]
 fn rehearsal_cleanup_refuses_a_published_release_from_another_commit() {
     let pack = Pack::start();
     pack.wfile("state/published-1.2.3", "b".repeat(40).as_bytes(), 0o644);
-    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &"a".repeat(40)]);
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &"a".repeat(40)],
+        &[("REHEARSAL_CREATED", "true")],
+    );
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     assert_eq!(
         run.stderr,
-        "release-pack: v1.2.3 is already published for another commit; refusing to delete it.\n"
+        "release-pack: v1.2.3 is already published; refusing to delete a release this run did not create.\n"
     );
     assert!(pack.state().join("published-1.2.3").exists());
     assert!(
