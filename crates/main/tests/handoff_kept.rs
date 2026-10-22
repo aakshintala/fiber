@@ -14,8 +14,8 @@
 mod support;
 
 use fakes::ProviderServer;
-use serde_json::{Value, json};
-use support::{Run, Setup, function_call, run_to_exit, text_reply, write_json};
+use serde_json::json;
+use support::{Run, Setup, function_call, kinds, run_to_exit, text_reply, write_json};
 
 /// `fiber <args>` run from the workspace to its exit.
 fn fiber(setup: &Setup, args: &[&str]) -> Run {
@@ -61,8 +61,42 @@ fn a_handoff_carries_turn_ones_order_word_for_word_ahead_of_the_note() {
     let id = first.session_id().to_owned();
     let second = fiber(&setup, &["ask", "--resume", &id, "List the workspace."]);
     assert_eq!(second.code, Some(0), "{}", second.stderr);
-    assert_eq!(second.all("handoff_completed").len(), 1);
-    assert_eq!(second.all("reviewer_kept").len(), 1);
+    // The whole resumed run in order; `session_status` is set aside
+    // (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&second.lines),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "usage_recorded",
+            "reviewer_kept",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     // Requests: turn 1, turn 2's call, the note request, then the first
     // request after the handoff.
@@ -80,10 +114,9 @@ fn a_handoff_carries_turn_ones_order_word_for_word_ahead_of_the_note() {
     );
     // The note request, before the handoff, held it once too: the old
     // context, which the handoff replaced.
-    let before: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert!(
-        before
-            .to_string()
+        String::from_utf8(requests[2].body.clone())
+            .unwrap()
             .contains("Do not modify files in this task.")
     );
 }

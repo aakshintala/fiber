@@ -1585,6 +1585,12 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     assert!(agent[0].starts_with("This message is from Fiber"));
     // The kept message is carried whole, before the turn's input and the
     // note.
-    assert_eq!(agent[1..], [long.as_str(), "second", "The note."]);
+    assert_eq!(agent[2..], ["second", "The note."]);
+    assert!(
+        agent[1] == long,
+        "the kept message is carried whole: {} bytes of {}",
+        agent[1].len(),
+        long.len()
+    );
     assert_eq!(session.requests().len(), 3);
 }

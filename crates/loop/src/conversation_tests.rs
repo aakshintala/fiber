@@ -4135,12 +4135,11 @@ fn texts(conversation: &[Input]) -> Vec<&str> {
     conversation.iter().map(user_text).collect()
 }
 
-/// The text of the opening message `start_opening` renders.
-fn opening_text() -> String {
-    let Event::OpeningMessage(message) = start_opening() else {
-        panic!("start_opening is an opening message");
-    };
-    crate::opening::render(&message)
+/// The texts after the opening message, which must come first.
+fn after_opening(conversation: &[Input]) -> Vec<&str> {
+    let texts = texts(conversation);
+    assert!(texts[0].starts_with("This message is from Fiber"));
+    texts[1..].to_vec()
 }
 
 #[test]
@@ -4152,10 +4151,7 @@ fn a_kept_message_sits_between_the_opening_and_the_carried_input() {
         (9, "opening_message", start_opening()),
         (10, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "read-only", "NOTE"]
-    );
+    assert_eq!(after_opening(&conversation), ["read-only", "NOTE"]);
 }
 
 #[test]
@@ -4168,10 +4164,7 @@ fn kept_messages_go_in_oldest_first_order() {
         (15, "opening_message", start_opening()),
         (16, "reviewer_kept", kept_of(&[(6, 0), (12, 0)])),
     ]);
-    assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "A", "B", "NOTE"]
-    );
+    assert_eq!(after_opening(&conversation), ["A", "B", "NOTE"]);
 }
 
 #[test]
@@ -4181,7 +4174,7 @@ fn a_session_opening_arms_no_kept_slot() {
         (6, "turn_started", start_turn("read-only")),
         (7, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    assert_eq!(texts(&conversation), [opening_text().as_str(), "read-only"]);
+    assert_eq!(after_opening(&conversation), ["read-only"]);
     assert_eq!(carry.input_at, None);
 }
 
@@ -4195,10 +4188,7 @@ fn a_kept_message_follows_the_session_start_context() {
         (10, "context_added", start_context("session_start", "ctx")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "ctx", "read-only", "NOTE"]
-    );
+    assert_eq!(after_opening(&conversation), ["ctx", "read-only", "NOTE"]);
 }
 
 #[test]
@@ -4211,10 +4201,7 @@ fn a_context_that_is_not_session_start_leaves_the_kept_spot_alone() {
         (10, "context_added", start_context("before_message", "late")),
         (11, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
-    assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "read-only", "NOTE", "late"]
-    );
+    assert_eq!(after_opening(&conversation), ["read-only", "NOTE", "late"]);
 }
 
 #[test]
@@ -4227,8 +4214,8 @@ fn a_kept_message_of_this_turn_is_not_repeated() {
         (32, "reviewer_kept", kept_of(&[(6, 0), (29, 0)])),
     ]);
     assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "read-only", "this turn", "NOTE"]
+        after_opening(&conversation),
+        ["read-only", "this turn", "NOTE"]
     );
 }
 
@@ -4244,13 +4231,8 @@ fn a_parent_message_sharing_a_key_with_this_turn_is_still_kept() {
         (9, "reviewer_kept", kept_of(&[(6, 0)])),
     ]);
     assert_eq!(
-        texts(&conversation),
-        [
-            opening_text().as_str(),
-            "parent: read-only",
-            "child",
-            "NOTE"
-        ]
+        after_opening(&conversation),
+        ["parent: read-only", "child", "NOTE"]
     );
 }
 
@@ -4266,10 +4248,7 @@ fn a_second_handoff_in_the_same_turn_does_not_repeat_this_turns_message() {
         (17, "opening_message", start_opening()),
         (18, "reviewer_kept", kept_of(&[(12, 0)])),
     ]);
-    assert_eq!(
-        texts(&conversation),
-        [opening_text().as_str(), "B", "NOTE 2"]
-    );
+    assert_eq!(after_opening(&conversation), ["B", "NOTE 2"]);
 }
 
 #[test]
@@ -4315,8 +4294,42 @@ fn a_message_in_a_rewind_summary_turn_is_not_kept() {
         (11, "opening_message", start_opening()),
         (12, "reviewer_kept", kept_of(&[(6, 1), (7, 0)])),
     ]);
-    assert_eq!(texts(&conversation), [opening_text().as_str(), "NOTE"]);
+    assert_eq!(after_opening(&conversation), ["NOTE"]);
     assert!(carry.person.is_empty());
+}
+
+#[test]
+fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
+    let steer = |origin| {
+        Event::SteeringApplied(contract::events::SteeringApplied {
+            content: vec![ContentPart::Text {
+                text: "steered".into(),
+            }],
+            sender: Sender {
+                origin,
+                command_id: None,
+            },
+            changed_by: None,
+        })
+    };
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (7, "steering_applied", steer(Origin::Driver)),
+        (
+            8,
+            "steering_applied",
+            steer(Origin::Extension {
+                extension: "fiber.test/ext".into(),
+            }),
+        ),
+        (9, "turn_started", kept_handoff_turn()),
+        (10, "handoff_completed", kept_handoff_done("NOTE")),
+        (11, "opening_message", start_opening()),
+        (12, "reviewer_kept", kept_of(&[(7, 0), (8, 0)])),
+    ]);
+    // The driver's steering is carried; the extension's is not the
+    // person's, so naming it keeps nothing.
+    assert_eq!(after_opening(&conversation), ["steered", "NOTE"]);
 }
 
 #[test]
@@ -4335,7 +4348,7 @@ fn a_second_handoff_keeps_only_what_the_first_kept() {
     ]);
     // B was dropped at the first selection: the second names a message the
     // index no longer holds, and carries nothing.
-    assert_eq!(texts(&conversation), [opening_text().as_str(), "NOTE 2"]);
+    assert_eq!(after_opening(&conversation), ["NOTE 2"]);
     assert!(carry.person.is_empty());
 }
 
@@ -4348,5 +4361,5 @@ fn a_kept_key_naming_no_message_inserts_nothing() {
         (9, "opening_message", start_opening()),
         (10, "reviewer_kept", kept_of(&[(99, 0), (6, 3)])),
     ]);
-    assert_eq!(texts(&conversation), [opening_text().as_str(), "NOTE"]);
+    assert_eq!(after_opening(&conversation), ["NOTE"]);
 }

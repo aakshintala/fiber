@@ -200,6 +200,7 @@ impl Rendered {
         completed: &HashSet<ActionId>,
         open: &HashSet<ActionId>,
     ) {
+        let seq_key = seq.map(Seq);
         if inner_action(event, action, &mut self.carry) {
             self.carry.fold_jobs(event);
             crate::changes::apply(&mut self.had, event);
@@ -211,11 +212,11 @@ impl Rendered {
             // call block alone would be refused.
             Event::ToolCallRequested(call) if call.provider_item.is_some() => {
                 if action.is_some_and(|action| completed.contains(action)) {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                 }
             }
             Event::ToolCallCompleted(done) if done.provider_item.is_some() => {
-                self.render(event, action, model, seq.map(Seq));
+                self.render(event, action, model, seq_key);
             }
             Event::ToolCallRequested(call) => {
                 if let Some(action) = action {
@@ -268,7 +269,7 @@ impl Rendered {
             // each call with its result, so no result outlives its call.
             Event::FiberStarted(_) => {
                 self.flush();
-                self.render(event, action, model, seq.map(Seq));
+                self.render(event, action, model, seq_key);
             }
             // The next round starts a new batch: every call of the last
             // one still without a result gets its fixed one first, before
@@ -285,7 +286,7 @@ impl Rendered {
             | Event::HandoffStarted(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
-                self.render(event, action, model, seq.map(Seq));
+                self.render(event, action, model, seq_key);
             }
             // Every other kind either continues the batch or adds nothing.
             // Each is listed, so a new kind does not compile until it is
@@ -339,7 +340,7 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
-                self.render(event, action, model, seq.map(Seq));
+                self.render(event, action, model, seq_key);
             }
             // A sent shell waits for the next turn: held under its line's
             // `seq`, which the `turn_started` naming it releases. It
@@ -355,7 +356,7 @@ impl Rendered {
             Event::JobLine(line) => {
                 self.flush();
                 if self.outstanding.is_empty() {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                 } else {
                     self.held.push(Input::User {
                         text: crate::jobs::line_text(line),
@@ -372,7 +373,7 @@ impl Rendered {
             // waits for that batch's results.
             Event::JobCompleted(job) => {
                 if self.carry.owned(&job.job_id.0) {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                     return;
                 }
                 if action.is_none() {
@@ -388,12 +389,12 @@ impl Rendered {
                         });
                     }
                 } else {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                 }
             }
             Event::DelegateFinished(finished) => {
                 if self.carry.owned(&finished.job_id.0) {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                     return;
                 }
                 if action.is_none() {
@@ -405,7 +406,7 @@ impl Rendered {
                         images: Vec::new(),
                     });
                 } else {
-                    self.render(event, action, model, seq.map(Seq));
+                    self.render(event, action, model, seq_key);
                 }
             }
         }
