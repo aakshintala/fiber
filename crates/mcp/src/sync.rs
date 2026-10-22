@@ -606,14 +606,16 @@ pub fn apply_sync(mut staged: StagedSync, servers: &Servers, inputs: &SyncInputs
         match row {
             StagedRow::Keep { spec, listed, .. } => {
                 let name = spec.name.clone();
-                // One gate for the cache write: the install answers whether
-                // the slot was still live under its own lock, so a keep
-                // that died racing the apply keeps its old cache bytes
-                // while its staged tools still declare.
-                if let Some(slot) = servers.slot(&name)
-                    && slot.install_relisted(listed.clone())
-                {
-                    cache::write(inputs.cache, &name, &spec.key(), &listed);
+                // The staged declaration already used the new spec, so the
+                // slot carries it from here: the next classify and the call
+                // timeouts read the re-declared values. The swap lands even
+                // when the re-list install below declines, so a keep that
+                // died racing the apply still declares its staged tools.
+                if let Some(slot) = servers.slot(&name) {
+                    slot.set_spec(spec.clone());
+                    if slot.install_relisted(listed.clone()) {
+                        cache::write(inputs.cache, &name, &spec.key(), &listed);
+                    }
                 }
             }
             StagedRow::ShadowUp {
