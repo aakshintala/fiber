@@ -13,15 +13,12 @@
 )]
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 
 use super::pty::{Grid, Run};
-use super::{Deadline, Setup, write_json};
+use super::{Setup, write_json};
 
 /// The spinner glyphs of the working line: braille frames, or `●` under
 /// reduced motion.
@@ -222,7 +219,7 @@ pub(crate) fn grid_text(
         let row = closing_row(&row);
         let row = working_line(&row);
         let row = tool_group(&row);
-        text.push(provider_heading(&row).trim_end().to_owned());
+        text.push(provider_heading(&row));
     }
     text.push(if hide_cursor {
         "cursor=hidden".to_owned()
@@ -365,52 +362,18 @@ pub(crate) fn provider_full(
     write_json(&setup.home().join("config.json"), &config);
 }
 
-/// [`provider_full`], with the fake model declaring `input`
-/// `["text", "image"]`, so a pasted image is sent as an image part.
-pub(crate) fn provider_with_images(setup: &Setup, server: &ProviderServer) {
-    provider_full(
-        setup,
-        &json!({"input": ["text", "image"]}),
-        server,
-        &json!({}),
-    );
-}
-
-/// The project's sessions directory, through the canonical workspace,
-/// as the project key names it.
-pub(crate) fn sessions(setup: &Setup) -> PathBuf {
-    let workspace = fs::canonicalize(setup.workspace()).unwrap();
-    let key = workspace.to_string_lossy().replace('/', "-");
-    setup.home().join("projects").join(key).join("sessions")
-}
-
-/// The one session in [`sessions`].
+/// The one session in the project's sessions directory.
 pub(crate) fn only_session(setup: &Setup) -> String {
-    let mut ids: Vec<String> = fs::read_dir(sessions(setup))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
+    let mut ids: Vec<String> = fs::read_dir(log::sessions_dir(
+        &setup.home(),
+        &doors::project(&setup.workspace()),
+    ))
+    .unwrap()
+    .flatten()
+    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+    .collect();
     assert_eq!(ids.len(), 1, "one session");
     ids.pop().unwrap()
-}
-
-/// Waits under the test's [`Deadline`] until `socket` exists or not, as
-/// `present` says, naming `what` on expiry.
-#[track_caller]
-pub(crate) fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
-    let socket = socket.to_owned();
-    let (done, reached) = mpsc::channel();
-    thread::spawn(move || {
-        while socket.exists() != present {
-            thread::yield_now();
-        }
-        done.send(()).unwrap_or(());
-    });
-    assert!(
-        deadline.recv(&reached).is_ok(),
-        "waited until the deadline for {what}"
-    );
 }
 
 /// Whether the grid shows a working line with its elapsed count:

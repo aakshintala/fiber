@@ -15,15 +15,15 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::journey::{
     dismiss_cache_rebuild, grid_text, install_picker_provider, only_session, provider_full,
-    provider_heading, provider_with_images, reply, sessions, shows, stalled, tui_off, until_socket,
-    working_elapsed,
+    provider_heading, reply, shows, stalled, tui_off, working_elapsed,
 };
-use support::pty::{Grid, KITTY_PUSH, Run, WAITING_TITLE};
+use support::pty::{Grid, KITTY_PUSH, Run, WAITING_TITLE, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
 
 /// `grid_text` over one row, without its cursor line.
@@ -479,7 +479,12 @@ fn pixel_answered(screen: &Grid) -> bool {
 fn journey_image_paste_answer_close_resume() {
     let setup = Setup::new();
     let server = ProviderServer::start([reply("A pixel.")]).unwrap();
-    provider_with_images(&setup, &server);
+    provider_full(
+        &setup,
+        &json!({"input": ["text", "image"]}),
+        &server,
+        &json!({}),
+    );
     // A fake clipboard program first on the child's PATH, printing the
     // pixel in its real program's form.
     let bin = setup.root.path().join("bin");
@@ -550,10 +555,10 @@ fn journey_image_paste_answer_close_resume() {
     let id = only_session(&setup);
     ids.push(id.clone());
     run.write(b"/close\r");
-    until_socket(
+    until_hub_exits(
         setup.deadline,
-        &setup.home().join("run").join(&id),
-        false,
+        &setup.session_socket(&id),
+        Path::new(""),
         "the closed session to exit",
     );
     run.write(b"\x03\x03\r");
@@ -675,7 +680,7 @@ fn journey_interrupt_then_retried_answer() {
     // 500.
     assert_eq!(server.requests().len(), 3);
     let id = only_session(&setup);
-    let log = fs::read_to_string(sessions(&setup).join(id).join("events.jsonl")).unwrap();
+    let log = fs::read_to_string(support::session_dir(&setup, &id).join("events.jsonl")).unwrap();
     let lines = support::complete_lines(&log);
     let failed: Vec<&Value> = lines
         .iter()
