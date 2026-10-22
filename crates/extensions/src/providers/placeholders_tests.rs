@@ -11,7 +11,7 @@ use std::path::Path;
 
 use config::{Config, ConfigError, Placeholder, ProjectKey, ProviderData, Sources};
 
-use super::{Filled, Source, fill, host, hosts, not_a_host, unconfigured, value};
+use super::{Filled, Source, Unconfigured, fill, host, hosts, not_a_host, unconfigured, value};
 use crate::Providers;
 
 /// A lookup that serves `value` from the setting for `name` and nothing
@@ -518,4 +518,120 @@ fn not_a_host_from_the_environment_names_the_variable_without_the_value() {
          which has no value, and the value of `ACME_HOST` is not a host."
     );
     assert!(!notice.message.contains("evil"));
+}
+
+/// Provider `acme`'s models `ids` left out for its unset `workspace`.
+fn left_out(ids: &[&str], variable: Option<&str>, login: bool) -> Unconfigured {
+    Unconfigured {
+        provider: "acme".to_owned(),
+        extension: "ext-acme".to_owned(),
+        setting: "workspace".to_owned(),
+        variable: variable.map(str::to_owned),
+        login,
+        models: ids.iter().map(|id| (*id).to_owned()).collect(),
+    }
+}
+
+/// Admits every reference.
+fn every(_: &str) -> bool {
+    true
+}
+
+#[test]
+fn the_aggregate_notice_counts_the_models_it_leaves_out() {
+    let ids: Vec<String> = (1..=136).map(|n| format!("m-{n}")).collect();
+    let many: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let cases: [(&[&str], Option<&str>, bool, Option<&str>); 6] = [
+        (&[], None, true, None),
+        (
+            &["m"],
+            None,
+            true,
+            Some(
+                "`acme`: 1 model needs the setting `workspace` for its base URL, \
+                 which has no value. Run `fiber login acme`, or set `workspace` in \
+                 `config/ext-acme.json` in Fiber home.",
+            ),
+        ),
+        (
+            &["m", "n"],
+            None,
+            true,
+            Some(
+                "`acme`: 2 models need the setting `workspace` for their base URL, \
+                 which has no value. Run `fiber login acme`, or set `workspace` in \
+                 `config/ext-acme.json` in Fiber home.",
+            ),
+        ),
+        (
+            &many,
+            None,
+            false,
+            Some(
+                "`acme`: 136 models need the setting `workspace` for their base URL, \
+                 which has no value. Set `workspace` in `config/ext-acme.json` in Fiber home.",
+            ),
+        ),
+        (
+            &["m", "n"],
+            Some("ACME_HOST"),
+            true,
+            Some(
+                "`acme`: 2 models need the setting `workspace` for their base URL, \
+                 which has no value, and `ACME_HOST` is not set in the hub's environment \
+                 (your login shell). Run `fiber login acme`, or set `workspace` in \
+                 `config/ext-acme.json` in Fiber home, or export it in your shell profile \
+                 and run `fiber hub refresh`.",
+            ),
+        ),
+        (
+            &["m", "n"],
+            Some("ACME_HOST"),
+            false,
+            Some(
+                "`acme`: 2 models need the setting `workspace` for their base URL, \
+                 which has no value, and `ACME_HOST` is not set in the hub's environment \
+                 (your login shell). Set `workspace` in `config/ext-acme.json` in Fiber home, \
+                 or export it in your shell profile and run `fiber hub refresh`.",
+            ),
+        ),
+    ];
+    for (ids, variable, login, expected) in cases {
+        let notice = left_out(ids, variable, login).notice(&every);
+        assert_eq!(
+            notice.as_ref().map(|notice| notice.message.as_str()),
+            expected,
+            "{} models, {variable:?}, login {login}",
+            ids.len()
+        );
+        if let Some(notice) = notice {
+            assert_eq!(notice.code, contract::ErrorCode::ModelUnconfigured);
+            assert_eq!(notice.extension.as_deref(), Some("ext-acme"));
+        }
+    }
+}
+
+#[test]
+fn the_aggregate_notice_counts_only_the_models_listed_admits() {
+    let group = left_out(&["alpha-1", "alpha-2", "beta-1"], None, true);
+    assert_eq!(group.provider(), "acme");
+    assert_eq!(group.setting(), "workspace");
+    assert_eq!(group.models(), ["alpha-1", "alpha-2", "beta-1"]);
+    let alpha = group
+        .notice(&|reference: &str| reference.starts_with("acme/alpha"))
+        .unwrap();
+    assert!(
+        alpha.message.starts_with("`acme`: 2 models need"),
+        "{}",
+        alpha.message
+    );
+    let beta = group
+        .notice(&|reference: &str| reference == "acme/beta-1")
+        .unwrap();
+    assert!(
+        beta.message.starts_with("`acme`: 1 model needs"),
+        "{}",
+        beta.message
+    );
+    assert_eq!(group.notice(&|_: &str| false), None);
 }
