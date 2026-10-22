@@ -11,13 +11,13 @@ use ratatui::style::{Modifier, Style};
 
 use contract::events::{ImportedNames, LeftBehindEntry};
 
-use super::{ImportReport, PREFER, capacity, title_for};
+use super::{ImportReport, PREFER, title_for};
 
 use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
-use crate::view::overlay::Row;
+use crate::view::overlay::{self, Row};
 
 /// The 120-line import answer: 60 copied names across the 4 kinds and
 /// 60 left-behind items, each one row in the report.
@@ -551,7 +551,10 @@ fn a_row_spanning_the_item_reason_boundary_counts_the_dropped_space_with_the_ite
 fn scrolling_by_rows_holds_at_both_edges() {
     let report = full();
     // Fourteen body rows in a two-row frame scroll twelve.
-    let max = report.rows(67).len().saturating_sub(capacity(10));
+    let max = report
+        .rows(67)
+        .len()
+        .saturating_sub(overlay::question_capacity(10));
     assert_eq!(max, 12);
     let mut scrolled = report.clone();
     scrolled.scroll_by(true, 1, max);
@@ -574,7 +577,10 @@ fn scrolling_by_rows_holds_at_both_edges() {
 #[test]
 fn scrolling_clamps_a_stale_offset_before_it_moves() {
     let mut report = full();
-    let max = report.rows(67).len().saturating_sub(capacity(10));
+    let max = report
+        .rows(67)
+        .len()
+        .saturating_sub(overlay::question_capacity(10));
     report.top = max.saturating_add(4);
     report.scroll_by(true, 1, max);
     assert_eq!(report.top(), max);
@@ -587,8 +593,11 @@ fn scrolling_clamps_a_stale_offset_before_it_moves() {
 fn paging_moves_a_page_and_holds_at_the_edges() {
     let report = full();
     // Fourteen body rows in a two-row frame: a page is two rows.
-    let max = report.rows(67).len().saturating_sub(capacity(10));
-    let page = capacity(10);
+    let max = report
+        .rows(67)
+        .len()
+        .saturating_sub(overlay::question_capacity(10));
+    let page = overlay::question_capacity(10);
     assert_eq!((max, page), (12, 2));
     let mut scrolled = report.clone();
     scrolled.scroll_page(true, 10, max);
@@ -613,7 +622,7 @@ fn the_frame_windows_the_body_at_the_scrolled_offset() {
     let mut report = full();
     let inner = 67;
     let height = 12;
-    let cap = capacity(height);
+    let cap = overlay::question_capacity(height);
     let all = texts(&report, inner);
     assert!(all.len() > cap);
     let framed = report.frame(inner, height);

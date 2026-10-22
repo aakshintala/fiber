@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use contract::SessionId;
 use contract::events::CommandAccepted;
+use contract::{CommandId, SessionId};
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
@@ -304,17 +304,17 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args))
+    Some(app.send_command("handoff", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
-    Some(app.send_command("name", Some(json!({ "text": rest }))))
+    Some(app.send_command("name", Some(json!({ "text": rest }))).0)
 }
 
 fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
-    Some(app.send_command("reload", None))
+    Some(app.send_command("reload", None).0)
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
@@ -323,18 +323,15 @@ fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     // source rides beside the pending entry under the command's id, so
     // the accepted answer's report names it; a bare import reports the
     // generic title.
-    let Some((session, _)) = app.command_session() else {
-        return Some(Effect::None);
-    };
     let rest = rest.trim();
-    let id = mint();
     let args = (!rest.is_empty()).then(|| json!({"source": rest}));
-    let line = session_command(&id, "import", &session, args).to_string();
-    let draft = std::mem::take(&mut app.draft);
-    app.outbox.insert(id.clone(), Kind::Command, draft);
-    app.import_sources
-        .insert(id, (!rest.is_empty()).then(|| rest.to_owned()));
-    Some(Effect::Send(vec![line]))
+    let source = (!rest.is_empty()).then(|| rest.to_owned());
+    let (effect, id) = app.send_command("import", args);
+    let Some(id) = id else {
+        return Some(effect);
+    };
+    app.import_sources.insert(CommandId(id), source);
+    Some(effect)
 }
 
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -591,7 +588,7 @@ impl App {
             } else {
                 Some(json!({"name": name, "text": rest}))
             };
-            return Some(self.send_command("command", args));
+            return Some(self.send_command("command", args).0);
         }
         if !slash::is_built_in(name) {
             return None;
@@ -666,17 +663,22 @@ impl App {
         (self.outbox.is_up()).then(|| (session.clone(), *busy))
     }
 
-    /// Sends `command` to the attached session. A rejection returns the
-    /// draft.
-    fn send_command(&mut self, command: &str, args: Option<serde_json::Value>) -> Effect {
+    /// Sends `command` to the attached session, returning the minted
+    /// command id beside the effect for callers recording per-command
+    /// state. A rejection returns the draft.
+    fn send_command(
+        &mut self,
+        command: &str,
+        args: Option<serde_json::Value>,
+    ) -> (Effect, Option<String>) {
         let Some((session, _)) = self.command_session() else {
-            return Effect::None;
+            return (Effect::None, None);
         };
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
-        self.outbox.insert(id, Kind::Command, draft);
-        Effect::Send(vec![line])
+        self.outbox.insert(id.clone(), Kind::Command, draft);
+        (Effect::Send(vec![line]), Some(id))
     }
 
     /// `/close`: one `close` with `now`, whether the session is busy or

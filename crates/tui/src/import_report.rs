@@ -21,28 +21,11 @@ use contract::events::{ImportedNames, LeftBehindEntry};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
-use crate::rows::Join;
 use crate::view::overlay::{self, Place, Row};
 
 /// The overlay's preferred content width: the question-or-notice class
 /// (`docs/tui.md`, "Overlays").
 pub(crate) const PREFER: u16 = 71;
-/// The widest body the rows wrap at: 67 content columns at the
-/// 71-column preference.
-const MAX_INNER: usize = 67;
-
-/// The body's inner width for `area_w` columns: the frame's four blank
-/// columns off, kept where wrapping stays readable.
-pub(crate) fn inner_width(area_w: u16) -> usize {
-    usize::from(area_w.saturating_sub(4)).clamp(1, MAX_INNER)
-}
-
-/// The body rows the frame shows in `height` rows: the frame's chrome
-/// off (two edges, two pads, the title and its gap, the footer and its
-/// gap), at least one row.
-pub(crate) fn capacity(height: u16) -> usize {
-    usize::from(height.saturating_sub(8)).max(1)
-}
 
 /// The report's title for `source`: the harness the import copied, or
 /// the generic title for a bare `/import` covering both.
@@ -173,7 +156,9 @@ impl ImportReport {
     /// The highest first row the frame shows at `inner` columns in
     /// `height` rows: the rows past the frame's capacity.
     pub(crate) fn max_top(&self, inner: usize, height: u16) -> usize {
-        self.rows(inner).len().saturating_sub(capacity(height))
+        self.rows(inner)
+            .len()
+            .saturating_sub(overlay::question_capacity(height))
     }
 
     /// Scrolls by `n` rows, holding at both edges.
@@ -189,7 +174,7 @@ impl ImportReport {
     /// Scrolls by one page (`height` rows' worth), holding at both
     /// edges.
     pub(crate) fn scroll_page(&mut self, down: bool, height: u16, max: usize) {
-        self.scroll_by(down, capacity(height), max);
+        self.scroll_by(down, overlay::question_capacity(height), max);
     }
 
     /// The shared frame for the report at `inner` columns in `height`
@@ -202,7 +187,7 @@ impl ImportReport {
             .rows(inner)
             .into_iter()
             .skip(self.top.min(max))
-            .take(capacity(height))
+            .take(overlay::question_capacity(height))
             .collect();
         overlay::Overlay {
             title: Some((self.title.clone(), Some(Span::raw("✕")))),
@@ -230,38 +215,12 @@ fn footer() -> Row {
 
 /// One left-behind entry's rows at `inner` columns: `item: reason`
 /// wrapped as one paragraph, the item in the normal colour and the
-/// reason dim. The wrap drops the breaking space, so each wrapped row
-/// after the first starts one cell past the plain text it shows.
+/// reason dim. The walk is the shared `overlay::head_tail_rows` one,
+/// so the report and the login failure wrap alike.
 fn left_rows(item: &str, reason: &str, inner: usize) -> Vec<Row> {
     let head = format!("{item}: ");
-    let plain = format!("{head}{reason}");
     let dim = Style::new().add_modifier(Modifier::DIM);
-    let mut rows = Vec::new();
-    // The plain text's offset where this wrapped row starts.
-    let mut at = 0usize;
-    for (line, join) in crate::format::wrap_joined(&plain, inner) {
-        let start = at;
-        at = at.saturating_add(line.chars().count());
-        if join == Join::WrapSpace {
-            at = at.saturating_add(1);
-        }
-        let end = start.saturating_add(line.chars().count());
-        let cut = head.chars().count().clamp(start, end).saturating_sub(start);
-        let at = line
-            .char_indices()
-            .nth(cut)
-            .map(|(at, _)| at)
-            .unwrap_or(line.len());
-        let (normal, dimmed) = line.split_at(at);
-        let mut spans = Vec::new();
-        if !normal.is_empty() {
-            spans.push(Span::raw(normal.to_owned()));
-        }
-        if !dimmed.is_empty() {
-            spans.push(Span::styled(dimmed.to_owned(), dim));
-        }
-        rows.push(ImportReport::row(spans));
-    }
+    let mut rows = overlay::head_tail_rows(&head, Style::new(), reason, dim, "", inner);
     if rows.is_empty() {
         rows.push(ImportReport::row(Vec::new()));
     }
@@ -319,7 +278,7 @@ impl App {
     /// Scrolls the open report by `n` rows, holding at both edges.
     pub(crate) fn scroll_report_rows(&mut self, down: bool, n: usize) {
         let area = self.report_area();
-        let inner = inner_width(area.width);
+        let inner = overlay::question_inner(area.width);
         if let Some(report) = self.import_report.as_mut() {
             let max = report.max_top(inner, area.height);
             report.scroll_by(down, n, max);
@@ -329,7 +288,7 @@ impl App {
     /// Scrolls the open report by one page, holding at both edges.
     pub(crate) fn scroll_report_page(&mut self, down: bool) {
         let area = self.report_area();
-        let inner = inner_width(area.width);
+        let inner = overlay::question_inner(area.width);
         if let Some(report) = self.import_report.as_mut() {
             let max = report.max_top(inner, area.height);
             report.scroll_page(down, area.height, max);
@@ -411,6 +370,6 @@ pub(crate) fn draw_report(
     let Some(report) = app.import_report.as_ref() else {
         return Rect::new(area.x, area.y, 0, 0);
     };
-    let framed = report.frame(inner_width(area.width), area.height);
+    let framed = report.frame(overlay::question_inner(area.width), area.height);
     overlay::draw(buf, area, &framed, Place::Centre, targets)
 }

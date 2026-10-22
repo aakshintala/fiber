@@ -14,7 +14,7 @@ use contract::events::{
     SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, Seq, SessionId};
+use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use serde_json::{Map, Value};
 
@@ -212,7 +212,7 @@ pub(crate) struct App {
     /// or `None` for a bare `/import` covering both. The answer folds
     /// the entry: an acceptance opens the report with it, any other
     /// fold drops it, so a late answer finds nothing.
-    import_sources: HashMap<String, Option<String>>,
+    import_sources: HashMap<CommandId, Option<String>>,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
@@ -1657,7 +1657,7 @@ impl App {
                         // no report opens off screen, and a later
                         // duplicate finds nothing.
                         self.outbox.answered(&accepted.command_id.0);
-                        self.import_sources.remove(&accepted.command_id.0);
+                        self.import_sources.remove(&accepted.command_id);
                     }
                 }
                 "command_rejected" => {
@@ -1667,7 +1667,7 @@ impl App {
                         // A refused background import drops its source
                         // entry beside its pending entry, so a later
                         // accept for the id opens no stale report.
-                        self.import_sources.remove(&id.0);
+                        self.import_sources.remove(&id);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -1710,7 +1710,7 @@ impl App {
                     // The accepted import's source entry is consumed by
                     // its answer: a late or duplicate answer finds
                     // nothing and changes nothing.
-                    if let Some(source) = self.import_sources.remove(&accepted.command_id.0) {
+                    if let Some(source) = self.import_sources.remove(&accepted.command_id) {
                         self.import_answered(source, &accepted);
                     }
                     changed |= self.offer.file_answered(&accepted);
@@ -1736,7 +1736,7 @@ impl App {
                         .file_refused(&id.0, &rejected.code, &rejected.message);
                     // A refused import drops its source entry with its
                     // answer, as an accepted one consumes it.
-                    self.import_sources.remove(&id.0);
+                    self.import_sources.remove(&id);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }

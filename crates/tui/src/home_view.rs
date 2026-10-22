@@ -167,13 +167,6 @@ fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16,
     );
 }
 
-/// The delete frame's body rows in an area `height` rows high: two
-/// edges, two pad rows, the title and its gap, and the footer and its
-/// gap, leaving the rest, at least one row.
-fn question_capacity(height: u16) -> usize {
-    usize::from(height.saturating_sub(8)).max(1)
-}
-
 /// The delete question's footer: one session, or every session the
 /// cascade question names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,8 +219,8 @@ fn question_row(spans: Vec<Span<'static>>) -> super::overlay::Row {
 /// clamps to what the view draws.
 fn question_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
     // The frame wraps at its inner width first, so it shrinks to what
-    // the head needs: 67 content columns at the 71-column preference.
-    let inner = usize::from(area.width.saturating_sub(4)).clamp(1, 67);
+    // the head needs (`overlay::question_inner`).
+    let inner = super::overlay::question_inner(area.width);
     let (head, _) = split_question(question);
     let mut rows: Vec<super::overlay::Row> = wrap(head, inner)
         .into_iter()
@@ -250,8 +243,8 @@ fn question_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
 /// always fit the frame they draw in.
 fn import_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
     // The frame wraps at its inner width first, so it shrinks to what
-    // the head needs: 67 content columns at the 71-column preference.
-    let inner = usize::from(area.width.saturating_sub(4)).clamp(1, 67);
+    // the head needs (`overlay::question_inner`).
+    let inner = super::overlay::question_inner(area.width);
     let mut rows: Vec<super::overlay::Row> = wrap(question, inner)
         .into_iter()
         .map(|line| question_row(vec![Span::styled(line, Style::default())]))
@@ -325,7 +318,7 @@ pub(crate) fn max_question_scroll(_app: &App, screen: &HomeScreen, area: Rect) -
     }
     question_rows(question, area)
         .len()
-        .saturating_sub(question_capacity(area.height))
+        .saturating_sub(super::overlay::question_capacity(area.height))
 }
 
 /// Draws the delete question over `area`: the frame centred with its
@@ -339,7 +332,7 @@ fn draw_delete_question(
     targets: &mut Vec<Target>,
 ) {
     let rows = question_rows(question, area);
-    let capacity = question_capacity(area.height);
+    let capacity = super::overlay::question_capacity(area.height);
     let max = rows.len().saturating_sub(capacity);
     let (_, footer) = split_question(question);
     let legend = match footer {
