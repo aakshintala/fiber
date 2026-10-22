@@ -349,6 +349,16 @@ fn source_escape_closes_notices_first_and_ctrl_c_still_clears_then_quits() {
 }
 
 #[test]
+fn source_escape_closes_the_source_and_keeps_the_offer() {
+    let mut app = with_source();
+    open_source(&mut app);
+    assert!(app.offer.source_open());
+    assert_eq!(press(&mut app, Key::Esc), Effect::None);
+    assert!(!app.offer.source_open());
+    assert!(app.offer.open(), "the first Esc leaves the offer up");
+}
+
+#[test]
 fn pagedown_reaches_a_long_files_end_with_the_rail_and_panel_shown() {
     let mut app = with_source();
     app.set_size(120, 30);

@@ -83,10 +83,6 @@ impl App {
                 Some(self.find.type_query(ch.encode_utf8(&mut text)))
             }
             Key::Backspace if !self.find.query().is_empty() => Some(self.find.pop_query()),
-            // Esc with the notice overlay open closes it first, as the
-            // overlay's own arm does (`docs/tui.md`, "Keys": Esc closes
-            // whatever is on top).
-            Key::Esc if self.notice_overlay().is_some() => None,
             Key::Esc => {
                 self.find.close();
                 Some(Effect::None)

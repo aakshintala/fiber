@@ -1,7 +1,7 @@
 //! What a click does to the terminal's state (`docs/tui.md`, "Mouse and
 //! hover").
 
-use super::{App, Effect, Target};
+use super::{App, Effect, Surface, Target};
 use crate::app::rail::Spot;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::mouse::TargetId;
@@ -81,13 +81,7 @@ impl App {
                 Effect::None
             }
             TargetId::CloseOverlay => {
-                // The import report's ✕ closes the report: the generic
-                // close below stays for every other overlay.
-                if self.import_report_open() {
-                    self.close_import_report();
-                } else {
-                    self.close_overlay();
-                }
+                self.close_overlay();
                 Effect::None
             }
             TargetId::Home(spot) => self.home_click(spot),
@@ -133,10 +127,21 @@ impl App {
             }
         };
         let at = Position::new(mouse.col, mouse.row);
+        let order = self.top_surfaces();
+        let covered = |covers: &[Surface]| order.iter().any(|open| covers.contains(open));
         // The open report owns the wheel, ahead of the panel, the
         // conversation, home and the rail.
-        if self.import_report_open() {
+        if order.contains(&Surface::Report) {
             self.scroll_report_rows(!up, WHEEL_ROWS);
+            return;
+        }
+        // The quit question and the notice overlay have nothing to
+        // scroll, and their frames cover the rows beneath: the wheel
+        // over a frame is theirs and moves nothing.
+        if [Surface::Quit, Surface::Notice]
+            .into_iter()
+            .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
+        {
             return;
         }
         if self
@@ -147,13 +152,11 @@ impl App {
         {
             self.wheel_panel(mouse.row, up);
         } else if self.session().is_some()
-            && self.keymap_top().is_none()
-            && !self.offer_open()
-            && !self.results_open()
+            && !covered(&[Surface::Keymap, Surface::Offer, Surface::Results])
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
-        } else if self.on_home() && !self.home_modal() {
+        } else if self.on_home() && !covered(&[Surface::DeleteQuestion, Surface::WorkspacePicker]) {
             self.wheel_home(up, at);
         }
         let over_rail = self

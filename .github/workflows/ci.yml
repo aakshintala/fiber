@@ -253,10 +253,45 @@ jobs:
           tool: cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
-      - name: Install zsh and fish
+      # The archives are cached per runner image and architecture. The key
+      # names the package list: change it here, in mutants-scheduled.yml and
+      # in scripts/install-shells together. ImageOS and ImageVersion are not in
+      # the `env` context, so a step builds the key.
+      - &shell-debs-key
+        name: Key the zsh and fish archive cache
+        id: shell-debs-key
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: scripts/install-shells
+        run: echo "key=shell-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-zsh-fish" >> "$GITHUB_OUTPUT"
+      - &shell-debs-restore
+        name: Restore the zsh and fish archives
+        id: shell-debs
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
+      - &install-shells
+        name: Install zsh and fish
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        env:
+          SHELL_DEBS_CACHE_HIT: ${{ steps.shell-debs.outputs.cache-hit }}
+        run: |
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$SHELL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/shell-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/shell-debs"
+      - &shell-debs-save
+        name: Save the zsh and fish archives
+        if: runner.os == 'Linux' && steps.shell-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -397,9 +432,10 @@ jobs:
           tool: cargo-mutants,cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
-      - name: Install zsh and fish
-        timeout-minutes: 5
-        run: scripts/install-shells
+      - *shell-debs-key
+      - *shell-debs-restore
+      - *install-shells
+      - *shell-debs-save
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"

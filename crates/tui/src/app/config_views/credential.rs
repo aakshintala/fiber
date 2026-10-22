@@ -250,11 +250,9 @@ impl App {
         matches!(self.config_views.open, Some(Open::Credential(_)))
     }
 
-    /// Chooses for this session unless an overlay owns the input.
+    /// Chooses for this session; the caller runs it only while the picker
+    /// is the surface on top.
     pub(in crate::app) fn credential_session_only(&mut self) -> Effect {
-        if self.quit_open() || self.keymap_top().is_some() {
-            return Effect::None;
-        }
         let Some(Open::Credential(picker)) = &self.config_views.open else {
             return Effect::None;
         };

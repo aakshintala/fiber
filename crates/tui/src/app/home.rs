@@ -267,16 +267,6 @@ impl App {
             .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
     }
 
-    /// Whether a home modal holds the keyboard: the delete question,
-    /// the import offer, or the workspace picker, the `home_key`
-    /// branches after the quit question.
-    pub(crate) fn home_modal(&self) -> bool {
-        self.on_home()
-            && self.home.as_ref().is_some_and(|home| {
-                home.questions.prompt().is_some() || home.chooser.picker().is_some()
-            })
-    }
-
     /// The session list's scroll offset: what the frame's window
     /// starts at, after clamping it to the rows past the window.
     pub(crate) fn home_list_scroll(&self) -> usize {
@@ -810,38 +800,35 @@ impl App {
         home.focus_list = Some(ListFocus::Row(key));
     }
 
-    /// A key for home, ahead of the key map and focus: the picker's keys
-    /// while open, then the chip row's and the list's arrows, and j at
-    /// the last drawn list stop paging below the fold. `None` for anything
+    /// Whether home's delete question or first-run import offer is open:
+    /// the home screen's question, below the quit question.
+    pub(in crate::app) fn home_question_open(&self) -> bool {
+        self.on_home()
+            && self.home.as_ref().is_some_and(|home| {
+                home.questions
+                    .prompt()
+                    .is_some_and(|prompt| !matches!(prompt, Prompt::Quit))
+            })
+    }
+
+    /// Whether home's workspace picker is open.
+    pub(in crate::app) fn home_picker_open(&self) -> bool {
+        self.on_home()
+            && self
+                .home
+                .as_ref()
+                .is_some_and(|home| home.chooser.picker().is_some())
+    }
+
+    /// A key for home's own screen, once no question or picker holds
+    /// the keyboard: the chip row's and the list's arrows, and j at the
+    /// last drawn list stop paging below the fold. `None` for anything
     /// else, so focused stops keep moving as they do on the conversation.
     /// ↓ from the entry bar focuses the last chip; ↑ from an empty bar
     /// focuses the last drawn list stop. Typing on a row returns to the box.
-    pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
-        // The quit question takes every key first, on home or not.
-        if let Some(effect) = self.quit_key(key) {
-            return Some(effect);
-        }
+    pub(super) fn home_screen_key(&mut self, key: &Key) -> Option<Effect> {
         if !self.on_home() {
             return None;
-        }
-        // The delete question takes every key first.
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.questions.prompt().is_some())
-        {
-            return self.question_key(key);
-        }
-        // The picker takes every key first: typing, completing,
-        // moving, choosing and closing it, while Ctrl+C passes through
-        // and anything else is swallowed so the draft keeps nothing
-        // typed into the picker.
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-        {
-            return self.picker_key(key);
         }
         // Esc on home goes back to the session home came from, with a
         // chip or a row focused as well as from the entry bar.

@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use super::super::commands::commands_testkit::{
     attached as hub_attached, connected, enter, key, turn_starts, type_any,
 };
-use super::super::{App, Effect};
+use super::super::{App, Effect, Surface};
 use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::keyset::Context;
@@ -301,7 +301,7 @@ fn delete_question() -> App {
         })
         .expect("one row");
     assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     app
 }
 
@@ -315,14 +315,14 @@ fn the_quit_question_is_an_overlay_on_its_own() {
     assert!(app.panel().is_none());
     assert!(!app.offer_open());
     assert!(app.search_panel().is_none());
-    assert!(!app.home_modal());
+    assert_eq!(app.top_surface(), Surface::Quit);
     assert_eq!(app.key_context(), Context::Overlay);
 }
 
 #[test]
 fn the_delete_question_is_an_overlay() {
     let app = delete_question();
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     assert_eq!(app.key_context(), Context::Overlay);
 }
 
@@ -330,14 +330,14 @@ fn the_delete_question_is_an_overlay() {
 fn the_workspace_picker_is_an_overlay() {
     let mut app = home();
     assert_eq!(app.home_click(Spot::Workspace), Effect::None);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::WorkspacePicker);
     assert_eq!(app.key_context(), Context::Overlay);
 }
 
 #[test]
-fn home_modal_needs_home_with_a_prompt_or_the_picker() {
-    assert!(!home().home_modal());
-    assert!(!attached(80, 24).home_modal());
+fn nothing_open_leaves_the_draft_on_top_of_home_and_a_session() {
+    assert_eq!(home().top_surface(), Surface::Draft);
+    assert_eq!(attached(80, 24).top_surface(), Surface::Draft);
 }
 
 #[test]
@@ -656,7 +656,7 @@ fn an_open_key_map_keeps_right_and_esc_from_going_back() {
 fn an_open_workspace_picker_keeps_right_and_esc_from_going_back() {
     let mut app = backed();
     app.home_click(Spot::Workspace);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::WorkspacePicker);
     assert_eq!(press(&mut app, "right"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -693,7 +693,7 @@ fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
         })
         .expect("the exited row");
     assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     assert_eq!(press(&mut app, "right"), Effect::None);
     assert!(app.session().is_none());
     assert!(app.on_home());
@@ -721,7 +721,7 @@ fn esc_closes_a_notice_without_going_back() {
 fn an_open_workspace_picker_keeps_go_back_empty() {
     let mut app = backed();
     app.home_click(Spot::Workspace);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::WorkspacePicker);
     assert!(app.completions().is_none());
     assert_eq!(app.draft(), "");
     assert_eq!(app.key_context(), Context::Overlay);
@@ -1059,7 +1059,7 @@ fn enter_on_a_focused_item_still_opens_it() {
 fn enter_on_the_delete_question_still_deletes() {
     let mut app = delete_question();
     keyed(&mut app, &[("send", json!("ctrl+s"))]);
-    assert!(app.home_modal());
+    assert_eq!(app.top_surface(), Surface::DeleteQuestion);
     assert!(matches!(press(&mut app, "enter"), Effect::Send(_)));
 }
 
