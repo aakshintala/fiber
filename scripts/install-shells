@@ -1,15 +1,34 @@
 #!/usr/bin/env bash
 # Installs zsh and fish on a Linux CI runner (docs/ci.md, "The backstop").
-# The network part, `apt-get update` and `apt-get install --download-only`,
-# runs under a 90-second bound and is retried once after 5 seconds; the install
-# from the downloaded archives has no bound, because killing dpkg mid-unpack
-# leaves the dpkg lock held and a package half configured.
+# With a cached archive directory holding .deb files, it installs them with
+# dpkg and makes no network call; a failure there fails the script, with no
+# network fallback. Otherwise the network part, `apt-get update` and
+# `apt-get install --download-only`, runs under a 90-second bound per attempt
+# and is retried after 5 seconds until it succeeds (apt keeps partial archives,
+# so each attempt resumes), leaving the step's timeout as the outer bound. The
+# downloaded archives are copied into the directory for the workflow to cache.
+# The install has no bound, because killing dpkg mid-unpack leaves the dpkg
+# lock held and a package half configured.
 #
-# Usage: scripts/install-shells
+# Usage: scripts/install-shells [DIR]
+# DIR is the archive cache directory. With no DIR, nothing is kept.
 # APT_OPTS holds apt-get's options; it is split on whitespace on purpose.
 set -euo pipefail
 
 apt_opts="${APT_OPTS:-}"
+archives=/var/cache/apt/archives
+
+dir="${1:-}"
+if [ -z "$dir" ]; then
+  dir="$(mktemp -d)"
+  trap 'rm -rf "$dir"' EXIT
+fi
+
+if compgen -G "$dir/*.deb" >/dev/null; then
+  echo "install-shells: installing cached archives from $dir"
+  sudo dpkg -i "$dir"/*.deb
+  exit 0
+fi
 
 download() {
   # shellcheck disable=SC2016 # $1 expands in the inner shell
@@ -18,12 +37,27 @@ download() {
     sh "$apt_opts"
 }
 
-if ! download; then
-  echo "install-shells: download failed or passed 90 s; retrying once in 5 s" >&2
+# shellcheck disable=SC2086 # apt_opts is a list of options
+sudo apt-get $apt_opts clean
+attempt=1
+until download; do
+  echo "install-shells: download attempt $attempt failed or passed 90 s; retrying in 5 s" >&2
+  attempt=$((attempt + 1))
   sleep 5
-  echo "install-shells: second download attempt starting" >&2
-  download
+done
+
+mkdir -p "$dir"
+if compgen -G "$archives/*.deb" >/dev/null; then
+  cp "$archives"/*.deb "$dir"/
 fi
+# An incomplete set would make a later hit fail on a missing package.
+for package in zsh zsh-common fish fish-common xsel; do
+  if ! compgen -G "$dir/${package}_*.deb" >/dev/null; then
+    echo "install-shells: no $package archive downloaded; caching nothing" >&2
+    rm -f "$dir"/*.deb
+    break
+  fi
+done
 
 # shellcheck disable=SC2086 # apt_opts is a list of options
 sudo apt-get $apt_opts install -y zsh fish
