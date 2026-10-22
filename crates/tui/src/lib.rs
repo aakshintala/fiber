@@ -33,6 +33,7 @@ mod format;
 mod highlight;
 mod home;
 mod image;
+mod import_report;
 mod input;
 mod jigs;
 mod keymap;

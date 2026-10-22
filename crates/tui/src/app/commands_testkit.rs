@@ -16,6 +16,21 @@ pub(crate) fn now() -> Instant {
     fakes::clock::FakeClock::new().now()
 }
 
+/// `app` painted whole at `width` by `height`, sized first so paging
+/// and framing agree: the drawn text with the shared text helper and
+/// the frame's click targets.
+pub(crate) fn painted(
+    app: &mut App,
+    width: u16,
+    height: u16,
+) -> (String, Vec<crate::mouse::Target>) {
+    app.set_size(width, height);
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    (crate::view::text(&buf), targets)
+}
+
 /// An app in `/w`, connected to the hub, with no session.
 pub(crate) fn connected() -> App {
     let mut app = App::new(PathBuf::from("/w"));

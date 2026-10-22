@@ -1754,83 +1754,18 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
 
 /// The failed line wrapped at `inner` as one line: the actual wrapped
 /// rows, the head and the closing dot plain, the reason in `error`.
-/// Rows past the wrap are the caller’s to drop in order.
+/// Rows past the wrap are the caller's to drop in order. The walk is
+/// the shared `overlay::head_tail_rows` one, so the login failure and
+/// the import report's left-behind rows wrap alike.
 fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay::Row> {
-    use std::collections::VecDeque;
-
-    use crate::rows::Join;
-
-    let error = Style::new().fg(Role::Error.color());
-    let plain = Style::new();
-    let combined = format!("{head}{reason}{dot}");
-    // Each source char with whether it is the reason: the wrap drops
-    // spaces and line breaks, so the styles follow the chars, not
-    // offsets into the combined text.
-    let mut source: VecDeque<(char, bool)> = VecDeque::new();
-    source.extend(head.chars().map(|ch| (ch, false)));
-    source.extend(reason.chars().map(|ch| (ch, true)));
-    source.extend(dot.chars().map(|ch| (ch, false)));
-    let mut out = Vec::new();
-    for (row, join) in format::wrap_joined(&combined, inner.max(1)) {
-        // The wrap dropped one space or line break here; an empty
-        // row's only source char is this separator.
-        match join {
-            Join::WrapSpace => {
-                if matches!(source.front(), Some((' ', _))) {
-                    source.pop_front();
-                }
-            }
-            Join::Break => {
-                if matches!(source.front(), Some(('\n', _))) {
-                    source.pop_front();
-                }
-            }
-            Join::Wrap => {}
-        }
-        let mut styled: Vec<(char, bool)> = Vec::new();
-        for ch in row.chars() {
-            // Skip anything else the wrap dropped, such as the spaces
-            // before a row's first word, keeping each char with its
-            // source's style.
-            while matches!(source.front(), Some((next, _)) if *next != ch) {
-                source.pop_front();
-            }
-            let failed = source.pop_front().is_some_and(|(_, failed)| failed);
-            styled.push((ch, failed));
-        }
-        let mut spans = Vec::new();
-        let mut run = String::new();
-        let mut run_error: Option<bool> = None;
-        for (ch, failed) in styled {
-            if run_error.is_none() {
-                run_error = Some(failed);
-            }
-            if run_error == Some(failed) {
-                run.push(ch);
-            } else {
-                spans.push(Span::styled(
-                    std::mem::take(&mut run),
-                    if run_error == Some(true) {
-                        error
-                    } else {
-                        plain
-                    },
-                ));
-                run.push(ch);
-                run_error = Some(failed);
-            }
-        }
-        if let Some(failed) = run_error {
-            spans.push(Span::styled(run, if failed { error } else { plain }));
-        }
-        out.push(overlay::Row {
-            spans,
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        });
-    }
-    out
+    overlay::head_tail_rows(
+        head,
+        Style::new(),
+        reason,
+        Style::new().fg(Role::Error.color()),
+        dot,
+        inner,
+    )
 }
 
 /// The view's rows for `targets`: a heading over each group that has rows.
