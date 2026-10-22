@@ -12,27 +12,6 @@ use crate::rows::Join;
 /// One character and its style, before wrapping.
 pub(super) type Cell = (char, Style);
 
-/// `text` cut to `room` cells, ending in `…` when cut.
-pub(super) fn truncate(text: &str, room: usize) -> String {
-    if crate::text::width(text) <= room {
-        return text.to_owned();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let width = crate::text::char_width(ch);
-        if used.saturating_add(width).saturating_add(1) > room {
-            break;
-        }
-        out.push(ch);
-        used = used.saturating_add(width);
-    }
-    if room > 0 {
-        out.push('…');
-    }
-    out
-}
-
 /// Wraps `cells` into lines `width` wide, the first after `first` and the
 /// rest after `rest`, each with how it joins the line before. With `words`
 /// a line breaks between words where it can, and spaces at a break are

@@ -134,6 +134,31 @@ fn cut_to(text: &str, max: usize) -> String {
     out
 }
 
+/// `text` cut from the left to at most `max` columns, with a leading `…`.
+pub(crate) fn cut_left(text: &str, max: usize) -> String {
+    if width(text) <= max {
+        return text.to_owned();
+    }
+    let mut kept = Vec::new();
+    let mut taken = 0;
+    for ch in text.chars().rev() {
+        let cell = char_width(ch);
+        if taken + cell > max.saturating_sub(1) {
+            break;
+        }
+        taken += cell;
+        kept.push(ch);
+    }
+    format!("…{}", kept.iter().rev().collect::<String>())
+}
+
+/// `text` in exactly `columns` terminal columns: padded, or cut with `…`.
+pub(crate) fn fit(text: &str, columns: usize) -> String {
+    let mut out = cut(text, columns, "…");
+    out.push_str(&" ".repeat(columns.saturating_sub(width(&out))));
+    out
+}
+
 #[cfg(test)]
 #[path = "text_tests.rs"]
 mod tests;

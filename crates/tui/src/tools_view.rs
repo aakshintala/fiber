@@ -7,10 +7,10 @@
 use contract::events::{ToolInfo, ToolSource, ToolState};
 
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
-use crate::format::{cut, width};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, reload_text};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
+pub(crate) use crate::text::fit;
 
 /// A tool name's column.
 const NAME: usize = 20;
@@ -22,19 +22,6 @@ pub(crate) fn on(lists: &ToolLists, tool: &str) -> bool {
         .as_ref()
         .is_none_or(|names| names.iter().any(|name| name == tool))
         && !lists.disabled.iter().any(|name| name == tool)
-}
-
-/// `text` in exactly `columns` terminal columns: padded, or cut with `…`.
-pub(crate) fn fit(text: &str, columns: usize) -> String {
-    if width(text) <= columns {
-        let mut out = text.to_owned();
-        out.push_str(&" ".repeat(columns.saturating_sub(width(text))));
-        return out;
-    }
-    let mut out = cut(text, columns.saturating_sub(1));
-    out.push('…');
-    out.push_str(&" ".repeat(columns.saturating_sub(width(&out))));
-    out
 }
 
 /// A switch's mark: on or off, with `›` when it is the selection's focus.

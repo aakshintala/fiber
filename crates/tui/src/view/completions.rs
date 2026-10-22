@@ -11,7 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use crate::completion_rows::{Completions, Rows};
-use crate::format::{cut, width as cells};
+use crate::format::width as cells;
 use crate::markdown::Role;
 use crate::mouse::Target;
 use crate::slash;
@@ -48,17 +48,6 @@ fn range_text(start: usize, shown: usize, total: usize) -> Option<String> {
         parts.push(format!("↓ {} more", total.saturating_sub(end)));
     }
     Some(parts.join(" · "))
-}
-
-/// `text` cut to `room` columns with an ellipsis when cut.
-fn dot_cut(text: &str, room: usize) -> String {
-    if cells(text) <= room {
-        return text.to_owned();
-    }
-    if room == 0 {
-        return String::new();
-    }
-    format!("{}…", cut(text, room.saturating_sub(1)))
 }
 
 /// `path` cut from the left to `max` columns, so the file name stays:
@@ -193,7 +182,7 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
     let alias = row.alias.as_deref().map_or(0, |alias| cells(alias) + 2);
     let fixed = 2 + name_w + alias + 1 + cells(&hint) + 1 + cells(&row.tag);
     spans.push(Span::styled(
-        dot_cut(&row.description, room.saturating_sub(fixed)),
+        crate::text::cut(&row.description, room.saturating_sub(fixed), "…"),
         dim,
     ));
     spans.push(Span::styled(hint, Style::new().fg(Role::Attention.color())));

@@ -20,7 +20,7 @@ pub(crate) use crate::theme::Role;
 use crate::highlight;
 use crate::rows::{Join, RowText};
 use crate::surface::{self, edge_row};
-use wrap::{Cell, link_cols, spans_of, truncate, wrap, wrap_joined_indices};
+use wrap::{Cell, link_cols, spans_of, wrap, wrap_joined_indices};
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -564,7 +564,7 @@ fn copy_cols(width: u16) -> Option<Range<u16>> {
 fn header(label: &str, width: usize) -> Line<'static> {
     let copy = if width >= COPY.len() { COPY } else { "" };
     let room = width.saturating_sub(COPY.len().saturating_add(2));
-    let shown = truncate(label, room);
+    let shown = crate::text::cut(label, room, "…");
     let lead = if width > COPY.len() { " " } else { "" };
     let pad = width.saturating_sub(
         crate::text::width(lead)

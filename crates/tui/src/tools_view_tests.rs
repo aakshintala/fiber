@@ -7,7 +7,7 @@ use std::path::Path;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Act, Ctx, Tools, fit, on};
+use super::{Act, Ctx, Tools, on};
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::configure_fake::Fake;
 use crate::format::width;
@@ -544,21 +544,6 @@ fn a_name_past_its_column_is_cut() {
         frame.rows[3][0].0.contains(&format!("{}…", "e".repeat(19))),
         "{frame:?}"
     );
-}
-
-#[test]
-fn fit_counts_terminal_columns() {
-    assert_eq!(width(&fit(&"\u{3042}".repeat(10), 20)), 20);
-    assert_eq!(fit(&"\u{3042}".repeat(10), 20), "\u{3042}".repeat(10));
-    assert_eq!(
-        fit(&"\u{3042}".repeat(11), 20),
-        format!("{}… ", "\u{3042}".repeat(9))
-    );
-    assert_eq!(width(&fit(&"\u{3042}".repeat(11), 20)), 20);
-    let combining = "e\u{301}".repeat(20);
-    assert_eq!(width(&combining), 20);
-    assert_eq!(fit(&combining, 20), combining);
-    assert_eq!(width(&fit("\u{1F389}", 20)), 20);
 }
 
 #[test]

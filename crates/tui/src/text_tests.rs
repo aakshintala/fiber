@@ -1,6 +1,9 @@
 //! Tests for the text helpers.
 
-use super::{char_width, controls_to_space, cut, paste_clean, printable, strip_controls, width};
+use super::{
+    char_width, controls_to_space, cut, cut_left, fit, paste_clean, printable, strip_controls,
+    width,
+};
 
 #[test]
 fn paste_clean_turns_line_ends_into_newlines_and_drops_controls() {
@@ -79,4 +82,35 @@ fn cut_with_an_ellipsis_ends_in_it_only_when_it_cuts() {
     assert_eq!(cut("caf\u{e9}x", 5, "…"), "caf\u{e9}x");
     assert_eq!(cut("語語語", 4, "…"), "語…");
     assert_eq!(cut("", 0, "…"), "");
+    assert_eq!(cut("abcdef", 7, "…"), "abcdef");
+    assert_eq!(cut("caf\u{e9}xy", 4, "…"), "caf…");
+    assert_eq!(cut("▣ a.png · 1×1", 40, "…"), "▣ a.png · 1×1");
+    assert_eq!(cut("▣ a.png · 1×1", 0, "…"), "");
+}
+
+#[test]
+fn cut_left_keeps_the_end_behind_an_ellipsis() {
+    assert_eq!(cut_left("abcdef", 4), "…def");
+    assert_eq!(cut_left("abc", 3), "abc");
+    // A wide character that would cross the edge is left out.
+    assert_eq!(cut_left("日本語", 4), "…語");
+}
+
+#[test]
+fn fit_fills_exactly_the_columns() {
+    assert_eq!(fit("ab", 5), "ab   ");
+    assert_eq!(fit("abcdefg", 5), "abcd…");
+    assert_eq!(fit("abcde", 5), "abcde");
+    assert_eq!(fit("abcdefg", 0), "");
+    assert_eq!(width(&fit(&"\u{3042}".repeat(10), 20)), 20);
+    assert_eq!(fit(&"\u{3042}".repeat(10), 20), "\u{3042}".repeat(10));
+    assert_eq!(
+        fit(&"\u{3042}".repeat(11), 20),
+        format!("{}… ", "\u{3042}".repeat(9))
+    );
+    assert_eq!(width(&fit(&"\u{3042}".repeat(11), 20)), 20);
+    let combining = "e\u{301}".repeat(20);
+    assert_eq!(width(&combining), 20);
+    assert_eq!(fit(&combining, 20), combining);
+    assert_eq!(width(&fit("\u{1F389}", 20)), 20);
 }
