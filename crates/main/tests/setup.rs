@@ -795,14 +795,14 @@ fn setup_prints_no_model_unconfigured_notice_and_keeps_those_models_out() {
     let run = setup.run_on_terminal(&["setup", "--no-hub", "--no-completions"], "\n\n", &[]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(run.stderr.starts_with("Providers:"), "{}", run.stderr);
-    assert!(!run.stderr.contains("needs the setting"), "{}", run.stderr);
+    assert!(!run.stderr.contains("the setting `"), "{}", run.stderr);
     assert!(!run.stderr.contains("vertex/"), "{}", run.stderr);
     assert!(run.stderr.contains("1) fake/m"), "{}", run.stderr);
 
     // `fiber models` still prints the notice.
     let models = setup.run_setup(&["models"], None, &[]);
     assert!(
-        models.stderr.contains("needs the setting `project`"),
+        models.stderr.contains("the setting `project`"),
         "{}",
         models.stderr
     );

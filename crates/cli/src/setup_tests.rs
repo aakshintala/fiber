@@ -1768,5 +1768,5 @@ fn setup_terminal_run_prints_other_notices_but_no_model_unconfigured() {
     assert_eq!(lines[1], "Providers:", "{segment:?}");
     assert!(!segment.contains("acme/m"), "{segment:?}");
     assert!(!segment.contains(UNCONFIGURED_HOST), "{segment:?}");
-    assert!(!segment.contains("needs the setting"), "{segment:?}");
+    assert!(!segment.contains("the setting `"), "{segment:?}");
 }
