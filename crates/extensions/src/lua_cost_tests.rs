@@ -298,3 +298,48 @@ fn costed_forwards_whether_the_inner_provider_warms() {
         assert_eq!(wrapped.warms(&request()), warms);
     }
 }
+
+/// `Inner` that answers a fixed `defers`. `Inner` keeps the trait default, so
+/// a wrapper that forwarded nothing would look the same as the inner provider.
+struct Deferring(bool);
+
+impl Provider for Deferring {
+    fn call(
+        &self,
+        request: &contract::provider::ModelRequest,
+    ) -> Box<dyn contract::provider::ModelCall> {
+        Inner::default().call(request)
+    }
+
+    fn wire_tools(
+        &self,
+        tools: &[ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        Inner::default().wire_tools(tools)
+    }
+
+    fn defers(&self) -> bool {
+        self.0
+    }
+}
+
+#[test]
+fn costed_forwards_whether_the_inner_provider_defers() {
+    for defers in [false, true] {
+        let root = fakes::TempDir::new("fiber-lua-cost");
+        let (lua, _) = provider_on(
+            &root,
+            "fiber.provider(\"p\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
+            FakeClock::new(),
+        );
+        let inner: Arc<dyn Provider> = Arc::new(Deferring(defers));
+        let wrapped = fakes::within(
+            "lua.costed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.costed(inner, "http://h/v1", None),
+        )
+        .unwrap();
+        assert!(wrapped.cost_lookup().is_some());
+        assert_eq!(wrapped.defers(), defers);
+    }
+}

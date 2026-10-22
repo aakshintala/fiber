@@ -94,6 +94,80 @@ fn tabs_run_all_then_each_area_in_table_order() {
 }
 
 #[test]
+fn each_area_tab_shows_exactly_its_bindings_in_table_order() {
+    let keys = Keyset::default();
+    let tabs: [(&str, &[&str]); 5] = [
+        (
+            "Sessions",
+            &[
+                "send",
+                "line_break",
+                "close_or_interrupt",
+                "clear_then_quit",
+                "go_home",
+                "new_session",
+                "rail_row_n",
+                "delete_session",
+            ],
+        ),
+        (
+            "The input box",
+            &[
+                "recall_prompt",
+                "focus_rail",
+                "search_prompts",
+                "move_word",
+                "delete_word",
+                "delete_to_line_start",
+                "line_start_end",
+                "open_in_editor",
+                "paste_image",
+            ],
+        ),
+        (
+            "The conversation",
+            &[
+                "toggle_ledgers",
+                "navigate",
+                "focus_next_prev",
+                "open_focused",
+                "copy_focused",
+                "focus_area",
+                "toggle_panel",
+                "toggle_rail",
+                "search",
+                "search_results",
+                "search_next_prev",
+                "jump_to_end",
+            ],
+        ),
+        (
+            "Steering",
+            &["select_steering", "amend_steering", "drop_steering"],
+        ),
+        (
+            "Requests, models and help",
+            &[
+                "next_request",
+                "model_picker",
+                "session_only",
+                "show_all",
+                "refresh_lists",
+                "key_map",
+            ],
+        ),
+    ];
+    assert_eq!(tabs.len(), areas().len());
+    for (index, (area, ids)) in tabs.iter().enumerate() {
+        let mut state = KeyMap::default();
+        state.move_tab((index + 1).cast_signed());
+        assert_eq!(areas()[index], *area);
+        assert_eq!(state.tab(), index + 1, "{area}");
+        assert_eq!(shown(&state, &keys), *ids, "{area}");
+    }
+}
+
+#[test]
 fn tab_movement_stops_at_both_ends() {
     let mut state = KeyMap::default();
     state.move_tab(-1);
