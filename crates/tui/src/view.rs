@@ -90,8 +90,9 @@ pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
 
 /// The slab the quit question or the notice overlay draws now, or an
 /// empty rect when `frame` is not open: it draws that frame alone over the
-/// area the real frame gives it, into a blank buffer, and takes the cells
-/// it set. The wheel over the slab is the frame's, whatever lies beneath.
+/// area the real frame gives it, into a scratch buffer, and takes the slab
+/// the draw returns. The wheel over the slab is the frame's, whatever lies
+/// beneath.
 pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     let (width, height) = app.screen_size();
     let screen = Rect::new(0, 0, width, height);
@@ -110,22 +111,11 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     };
     let mut buf = Buffer::empty(screen);
     let mut targets = Vec::new();
-    if frame == Surface::Quit {
-        quit::draw(app, area, &mut buf, &mut targets);
-    } else if frame == Surface::Notice {
-        notice_rows::overlay(app, area, &mut buf, &mut targets);
+    match frame {
+        Surface::Quit => quit::draw(app, area, &mut buf, &mut targets),
+        Surface::Notice => notice_rows::overlay(app, area, &mut buf, &mut targets),
+        _ => Rect::default(),
     }
-    let blank = ratatui::buffer::Cell::default();
-    let mut slab: Option<Rect> = None;
-    for y in screen.top()..screen.bottom() {
-        for x in screen.left()..screen.right() {
-            if buf[(x, y)] != blank {
-                let cell = Rect::new(x, y, 1, 1);
-                slab = Some(slab.map_or(cell, |seen| seen.union(cell)));
-            }
-        }
-    }
-    slab.unwrap_or_default()
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
@@ -172,7 +162,7 @@ pub(crate) fn render(
         // The import report and the quit question take every key over
         // these views, so they draw over them too, the quit question
         // last: without it Enter would quit while the choices never show.
-        for surface in app.top_surfaces().into_iter().rev() {
+        for surface in app.framed_surfaces() {
             if surface == Surface::Report {
                 crate::import_report::draw_report(app, area, buf, &mut targets);
             } else if surface == Surface::Quit {
@@ -338,7 +328,7 @@ pub(crate) fn render(
     // (`docs/tui.md`, "Overlays"). The conversation's own targets go
     // away under it, as under the notices overlay. The quit question
     // draws above the report, as it takes every key while open.
-    for surface in app.top_surfaces().into_iter().rev() {
+    for surface in app.framed_surfaces() {
         if surface == Surface::Report {
             targets.retain(|target| {
                 !matches!(

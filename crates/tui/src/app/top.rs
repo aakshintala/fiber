@@ -111,6 +111,19 @@ impl App {
             .collect()
     }
 
+    /// The surfaces that draw a frame of their own over every view, in
+    /// the order they draw, bottom first, as far as they are open: the
+    /// quit question draws above the report, as it is above it in
+    /// [`Surface`].
+    pub(crate) fn framed_surfaces(&self) -> impl Iterator<Item = Surface> {
+        [
+            (Surface::Report, self.import_report_open()),
+            (Surface::Quit, self.quit_open()),
+        ]
+        .into_iter()
+        .filter_map(|(surface, open)| open.then_some(surface))
+    }
+
     /// The surface on top: the head of [`Self::top_surfaces`].
     pub(crate) fn top_surface(&self) -> Surface {
         self.top_surfaces()
@@ -177,8 +190,9 @@ impl App {
         match surface {
             Surface::Quit => self.quit_key(key),
             Surface::Report => self.report_key(key),
-            // The screen takes its strokes in `on_press`.
-            Surface::KeysScreen => None,
+            // The screen takes its strokes in `on_press`, and the
+            // completion panels in `route_key`, between two slices.
+            Surface::KeysScreen | Surface::Completion => None,
             Surface::Keymap => self.keymap_key(key),
             Surface::Picker => self
                 .model_picker_key(key)
@@ -198,7 +212,6 @@ impl App {
             Surface::Results => self.results_key(key),
             Surface::Find => self.find_key(key),
             Surface::Focus => self.focus_key(key),
-            Surface::Completion => self.completion_key(key),
             Surface::Job => self.item_job_key(key),
             Surface::Notice => (*key == Key::Esc && self.notices.close()).then_some(Effect::None),
             Surface::Draft => Some(self.input_key(key)),

@@ -156,13 +156,7 @@ impl App {
             && self.over_conversation(at)
         {
             self.scroll_conversation(up);
-        } else if self.on_home()
-            && !covered(&[
-                Surface::Quit,
-                Surface::DeleteQuestion,
-                Surface::WorkspacePicker,
-            ])
-        {
+        } else if self.on_home() && !covered(&[Surface::DeleteQuestion, Surface::WorkspacePicker]) {
             self.wheel_home(up, at);
         }
         let over_rail = self

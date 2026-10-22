@@ -935,7 +935,7 @@ pub(super) fn render(
     // on it, as the question frames do.
     // The surfaces that draw a frame go up bottom first, so the quit
     // question draws above the report.
-    for surface in app.top_surfaces().into_iter().rev() {
+    for surface in app.framed_surfaces() {
         if surface == Surface::Report {
             let before = targets.len();
             let slab = crate::import_report::draw_report(app, area, buf, &mut targets);

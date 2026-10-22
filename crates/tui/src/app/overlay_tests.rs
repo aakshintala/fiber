@@ -3315,16 +3315,25 @@ mod stacked {
             app.home_list_scroll() > 0,
             "the list scrolls with nothing open"
         );
-        for covering in [
-            Surface::Quit,
-            Surface::DeleteQuestion,
-            Surface::WorkspacePicker,
-        ] {
+        for covering in [Surface::DeleteQuestion, Surface::WorkspacePicker] {
             let mut app = short_home();
             open(&mut app, covering);
             app.on_wheel(&wheel(2, 5, true));
             assert_eq!(app.home_list_scroll(), 0, "{covering:?}");
         }
+    }
+
+    #[test]
+    fn the_wheel_off_the_quit_frame_on_home_still_scrolls_the_list() {
+        let mut app = short_home();
+        open(&mut app, Surface::Quit);
+        let slab = crate::view::frame_of(&app, Surface::Quit);
+        assert!(
+            !slab.contains(ratatui::layout::Position::new(2, 5)),
+            "{slab:?}"
+        );
+        app.on_wheel(&wheel(2, 5, true));
+        assert!(app.home_list_scroll() > 0, "{slab:?}");
     }
 
     #[test]
