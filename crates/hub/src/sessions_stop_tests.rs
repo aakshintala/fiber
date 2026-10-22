@@ -401,15 +401,19 @@ fn a_connected_connect_reads_ok() {
     );
 }
 
-/// A reset loopback connection reads neither refused nor connected: the
-/// loop neither skips the session nor proceeds, but waits out the bound.
-#[test]
+/// A loopback connection reset by a linger-zero close: returns the
+/// client and the release that resets it, once accepted. The server
+/// resets only after the release, so the client can fill its send
+/// buffer first and the reset never races the fill. Reads after the
+/// reset see neither refused nor connected.
 #[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
-fn a_reset_connect_reads_unconfirmed() {
+fn reset_loopback() -> (TcpStream, mpsc::Sender<()>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
     let server = thread::spawn(move || {
         let (conn, _) = listener.accept().unwrap();
+        go_rx.recv().unwrap();
         let reset = libc::linger {
             l_onoff: 1,
             l_linger: 0,
@@ -431,9 +435,12 @@ fn a_reset_connect_reads_unconfirmed() {
         // Dropping a linger-zero socket resets the connection.
     });
     let client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    server.join().unwrap();
-    // The reset arrives as a poll error: the test waits for the event,
-    // never sleeps for it.
+    (client, go_tx, server)
+}
+
+/// Waits, event by event, until the reset surfaces as a poll error on
+/// the client: the reset is in the kernel before this returns.
+fn await_reset(client: &TcpStream) {
     let mut revents = 0;
     for _ in 0..50 {
         revents = raw_poll(client.as_raw_fd(), libc::POLLERR | libc::POLLHUP, 100);
@@ -445,12 +452,112 @@ fn a_reset_connect_reads_unconfirmed() {
         revents & libc::POLLERR != 0,
         "the reset surfaces as a poll error"
     );
+}
+
+/// A reset after the close acknowledgement still confirms: the loop
+/// reads the close as accepted and the reset as gone-after-close, not
+/// as a wait. Waiting on the reset instead would hang past the bound.
+#[test]
+#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
+fn a_reset_after_the_close_ack_still_confirms() {
+    let temp = Temp::new("ss-reset-after-close");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let id = SessionId(testkit::id(7));
+    let listener = UnixListener::bind(temp.run(&id)).unwrap();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut read = BufReader::new(stream);
+        let mut answered = 0;
+        while let Ok(Some(line)) =
+            support::framing::read_line(&mut read, support::framing::MAX_LINE)
+        {
+            let command: Value = serde_json::from_slice(&line).unwrap();
+            let ack = serde_json::json!({"kind": "command_accepted",
+                "payload": {"command_id": command.get("id")}});
+            let mut bytes = serde_json::to_vec(&ack).unwrap();
+            bytes.push(b'\n');
+            writer.write_all(&bytes).unwrap();
+            answered += 1;
+            if answered == 2 {
+                let reset = libc::linger {
+                    l_onoff: 1,
+                    l_linger: 0,
+                };
+                // SAFETY: `reset` is a local of exactly the option's
+                // length; `setsockopt` reads only it and takes no ownership.
+                let ok = unsafe {
+                    libc::setsockopt(
+                        writer.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_LINGER,
+                        &reset as *const libc::linger as *const libc::c_void,
+                        std::mem::size_of::<libc::linger>().try_into().unwrap(),
+                    )
+                };
+                assert_eq!(ok, 0, "linger-zero arms the reset");
+                return;
+            }
+        }
+    });
+    let outcome = join(stop_async(&hub));
+    assert_eq!(outcome.confirmed, vec![id]);
+    assert!(outcome.unconfirmed.is_empty());
+}
+
+/// A reset loopback connection reads neither refused nor connected: the
+/// loop neither skips the session nor proceeds, but waits out the bound.
+#[test]
+#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
+fn a_reset_connect_reads_unconfirmed() {
+    let (client, go, server) = reset_loopback();
+    go.send(()).unwrap();
+    server.join().unwrap();
+    await_reset(&client);
     assert!(
         matches!(
             check_connected(client.as_fd()),
             Err(ConnectError::Unconfirmed)
         ),
         "a reset connect is unconfirmed"
+    );
+}
+
+/// A reset socket reports its error even when no event is requested:
+/// `poll` always returns the error and hangup bits, so the readiness
+/// mask sees them with an empty request. Dropping either bit from the
+/// mask would report a reset socket as quiet.
+#[test]
+#[allow(unsafe_code, reason = "linger-zero is set by hand to reset")]
+fn a_reset_socket_reports_its_error_when_nothing_is_requested() {
+    let (client, go, server) = reset_loopback();
+    go.send(()).unwrap();
+    server.join().unwrap();
+    await_reset(&client);
+    assert!(
+        poll_ready(client.as_fd(), 0),
+        "a reset socket reports its error"
+    );
+}
+
+/// A path-only fd polls ready through its invalid marker: `poll` reports
+/// `POLLNVAL`, which the readiness mask counts. Linux-only: `O_PATH`
+/// opens a fd that cannot read or write.
+#[test]
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "the path fd is opened by hand")]
+fn a_path_only_fd_polls_ready() {
+    let temp = Temp::new("ss-pollnval");
+    let path = std::ffi::CString::new(temp.dir.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `path` names the live test directory; the assert below
+    // checks the open before the fd is used.
+    let raw = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_RDONLY) };
+    assert!(raw >= 0, "the path fd opens");
+    // SAFETY: `raw` is the open path fd above, owned by no one yet.
+    let held = unsafe { OwnedFd::from_raw_fd(raw) };
+    assert!(
+        poll_ready(held.as_fd(), libc::POLLIN),
+        "a path-only fd polls ready through POLLNVAL"
     );
 }
 
@@ -555,6 +662,70 @@ fn a_full_send_buffer_retries_until_drained() {
     );
 }
 
+/// A dead peer abandons the write as gone: with the send buffer full
+/// and the reader closed, the line cannot land, and the session is
+/// gone rather than unconfirmed past the bound.
+#[test]
+fn a_dead_peer_abandons_the_write_as_gone() {
+    let temp = Temp::new("ss-write-dead");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let (writer, peer) = UnixStream::pair().unwrap();
+    writer.set_nonblocking(true).unwrap();
+    peer.set_nonblocking(true).unwrap();
+    // Fill the send buffer, then close the reader: the first write
+    // after the close fails instead of waiting.
+    let filler = vec![0u8; 65_536];
+    for _ in 0..128 {
+        match (&writer).write(&filler) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("filling the send buffer: {error}"),
+        }
+    }
+    drop(peer);
+    let line = serde_json::json!({"id": "c_write_dead", "command": "subscribe",
+        "args": {"level": "summary"}});
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    // Advancing past the bound turns a blind wait into unconfirmed
+    // instead of a hang.
+    let outcome = thread::spawn(move || write_line_bounded(&writer, &line, &hub, end));
+    temp.clock
+        .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
+    assert!(
+        matches!(outcome.join().unwrap(), Wrote::Gone),
+        "a dead peer abandons the write as gone"
+    );
+}
+
+/// A newline-terminated acknowledgement answers without a close: the
+/// fill path finds the newline with the socket still open, so no end
+/// of input rescues a scan that never sees one. Advancing past the
+/// bound turns a blind scan's wait into unconfirmed instead of a hang.
+#[test]
+fn a_newline_terminated_ack_answers_without_a_close() {
+    let temp = Temp::new("ss-ack-no-close");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let (client, session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let mut read = BufReader::new(client);
+    let mut full = serde_json::to_vec(&serde_json::json!({"kind": "command_accepted", "ts": 1,
+        "schema_version": contract::SCHEMA_VERSION,
+        "payload": {"command_id": "c_open"}}))
+    .unwrap();
+    full.push(b'\n');
+    (&session).write_all(&full).unwrap();
+    // The socket stays open: no end of input follows the line.
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    let answer = thread::spawn(move || read_ack(&mut read, &stream, &hub, "c_open", end));
+    temp.clock
+        .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
+    assert!(
+        matches!(answer.join().unwrap(), Ack::Accepted),
+        "a newline-terminated acknowledgement answers with the socket open"
+    );
+}
+
 /// A partial line at end of input still answers: without its newline the
 /// acknowledgement parses once the close ends the input.
 #[test]
@@ -648,7 +819,8 @@ fn a_long_line_below_the_edge_still_reaches_its_ack() {
 }
 
 /// An unconnected socket fails its first read: the acknowledgement is
-/// gone, never waited on.
+/// gone, never waited on. Advancing past the bound turns a blind wait
+/// into unconfirmed instead of a hang.
 #[test]
 #[allow(unsafe_code, reason = "the probe socket stays unconnected by hand")]
 fn an_unconnected_socket_is_gone_not_waited_on() {
@@ -664,8 +836,11 @@ fn an_unconnected_socket_is_gone_not_waited_on() {
     let stream = unix.try_clone().unwrap();
     let mut read = BufReader::new(unix);
     let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    let answer = thread::spawn(move || read_ack(&mut read, &stream, &hub, "c_dead", end));
+    temp.clock
+        .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     assert!(
-        matches!(read_ack(&mut read, &stream, &hub, "c_dead", end), Ack::Gone),
+        matches!(answer.join().unwrap(), Ack::Gone),
         "an unconnected socket is gone"
     );
 }
