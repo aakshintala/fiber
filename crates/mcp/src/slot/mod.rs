@@ -230,7 +230,7 @@ impl Slot {
     /// untimed.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the observed companion adds only the Timing"
+        reason = "the observed companion adds Timing plus the advertises_tools and advertises_prompts flags"
     )]
     pub(crate) fn running_observed(
         spec: ServerSpec,

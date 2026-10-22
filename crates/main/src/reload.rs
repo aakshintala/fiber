@@ -1,6 +1,6 @@
 //! Preparation and publication of configuration reloads (`docs/configuration.md`).
 use contract::diag::DebugLog as _;
-use contract::events::{ReloadedServers, ToolSource};
+use contract::events::ToolSource;
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
@@ -367,11 +367,6 @@ impl State {
                 // healthy re-lists in place, and a server approved
                 // in-session starts with its prompt sources joining the
                 // `/` list. Unapproved stay skipped exactly as before.
-                let scope = self
-                    .repository
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
                 let prepared = crate::mcp_servers::repository_servers::prepare(
                     &self.sources.home,
                     &self.sources.project,
@@ -621,17 +616,7 @@ impl State {
                 },
                 // The late preparation skips the sync: no grouping,
                 // records, failures or carried prompt sources.
-                None => r#loop::ServerSync {
-                    servers: ReloadedServers {
-                        kept: Vec::new(),
-                        restarted: Vec::new(),
-                        started: Vec::new(),
-                        stopped: Vec::new(),
-                    },
-                    server_records: Vec::new(),
-                    server_failures: Vec::new(),
-                    new_prompts: None,
-                },
+                None => r#loop::ServerSync::default(),
             },
             hooks: Some(hooks),
             reviewer,

@@ -80,12 +80,7 @@ pub fn commit_sync(
         tools: Vec::new(),
         records: Vec::new(),
         failed: Vec::new(),
-        servers: ReloadedServers {
-            kept: Vec::new(),
-            restarted: Vec::new(),
-            started: Vec::new(),
-            stopped: Vec::new(),
-        },
+        servers: ReloadedServers::default(),
         prompt_sources: Prompts::default(),
     };
     let mut all_sources: Vec<PromptSource> = Vec::new();

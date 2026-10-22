@@ -59,7 +59,7 @@ pub struct Reloaded {
 }
 
 /// The servers a reload kept, restarted, started and stopped, by name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReloadedServers {
     /// Kept as they were.
     pub kept: Vec<String>,

@@ -193,17 +193,7 @@ fn prepared() -> ReloadPrepared {
         tools: Vec::new(),
         extensions: Vec::new(),
         notices: Vec::new(),
-        server_sync: ServerSync {
-            servers: contract::events::ReloadedServers {
-                kept: Vec::new(),
-                restarted: Vec::new(),
-                started: Vec::new(),
-                stopped: Vec::new(),
-            },
-            server_records: Vec::new(),
-            server_failures: Vec::new(),
-            new_prompts: None,
-        },
+        server_sync: ServerSync::default(),
         hooks: None,
         reviewer: Err(Failure {
             code: ErrorCode::NoModel,

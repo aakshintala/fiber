@@ -90,6 +90,7 @@ pub struct ReloadSettings {
 /// new-server prompt rows. Carried as one result from preparation
 /// through installation to the log, so the fields describing one sync
 /// never drift apart.
+#[derive(Default)]
 pub struct ServerSync {
     /// Kept, restarted, started and stopped, by name.
     pub servers: ReloadedServers,
@@ -302,21 +303,15 @@ impl Loop {
         let Installed {
             extensions,
             notices,
-            sync:
-                ServerSync {
-                    servers,
-                    server_records,
-                    server_failures,
-                    new_prompts: _,
-                },
+            sync,
         } = installed;
-        for record in &server_records {
+        for record in &sync.server_records {
             self.write(&record_event(record), None, None)?;
         }
-        let failed = (!server_failures.is_empty()).then_some(server_failures);
+        let failed = (!sync.server_failures.is_empty()).then_some(sync.server_failures);
         self.write(
             &Event::Reloaded(Reloaded {
-                servers,
+                servers: sync.servers,
                 extensions: extensions
                     .iter()
                     .map(|extension| extension.name.clone())
