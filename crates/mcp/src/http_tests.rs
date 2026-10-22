@@ -895,19 +895,6 @@ fn login_failures_cover_the_probe_initialized_and_both_lists() {
             standard()(request)
         }).unwrap();
         let setup = Setup::new();
-        if failure == "prompts/list" {
-            // A login failure from the startup prompts/list keeps no
-            // prompts while the start goes on (base startup behavior);
-            // only the re-list takes the replace path on it.
-            let (server, listed) = setup.start(&fake, Duration::from_secs(5));
-            assert!(
-                listed.prompts.is_empty(),
-                "a prompts/list login keeps no prompts"
-            );
-            assert_eq!(listed_names(&listed), ["echo"]);
-            let _ = server;
-            continue;
-        }
         assert!(
             matches!(
                 setup.start_err(&format!("{}/mcp", fake.url()), Duration::from_secs(5)),

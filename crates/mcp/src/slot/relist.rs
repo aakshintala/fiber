@@ -79,16 +79,17 @@ impl Slot {
         // see, and any other end replaces with no records.
         let fail = |error: Option<CallError>| replace(self, restarted, error);
         let tools = if list_tools {
-            match crate::server::list_pages::<ListedTool>(
+            match crate::server::list_pages::<ListedTool, Relisted>(
                 &server,
                 &self.clock,
                 "tools/list",
                 "tools",
                 bound,
                 &crate::wait::NoCancel,
+                |error| Err(fail(error)),
             ) {
                 Ok(tools) => tools,
-                Err(error) => return fail(error),
+                Err(relisted) => return relisted,
             }
         } else {
             Vec::new()
@@ -96,16 +97,17 @@ impl Slot {
         let prompts = if list_prompts {
             // Any prompts/list error falls back to the replace path: a
             // failed listing never writes a cache from an empty list.
-            match crate::server::list_pages::<ListedPrompt>(
+            match crate::server::list_pages::<ListedPrompt, Relisted>(
                 &server,
                 &self.clock,
                 "prompts/list",
                 "prompts",
                 bound,
                 &crate::wait::NoCancel,
+                |error| Err(fail(error)),
             ) {
                 Ok(prompts) => prompts,
-                Err(error) => return fail(error),
+                Err(relisted) => return relisted,
             }
         } else {
             Vec::new()
