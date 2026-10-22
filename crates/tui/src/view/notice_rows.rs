@@ -16,6 +16,7 @@ use crate::app::NoticeLine;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::text::to_u16;
 
 /// The overlay's preferred content width (`docs/tui.md`, "Overlays").
 const PREFER: u16 = 71;
@@ -65,7 +66,7 @@ pub(super) fn draw(
                 );
                 targets.push(Target {
                     id: TargetId::MoreNotices,
-                    rect: Rect::new(area.x, row, crate::text::to_u16(kept), 1),
+                    rect: Rect::new(area.x, row, to_u16(kept), 1),
                 });
             }
         }

@@ -13,6 +13,7 @@ use crate::app::panel::Spot;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::text::to_u16;
 use crate::theme;
 use crate::view::panel::{Card, bar_spans, branch_text, cards, fit_spans};
 
@@ -462,9 +463,7 @@ pub(crate) fn kept(app: &App) -> usize {
 /// column's bottom less the kept status rows. Drawing and the terminal
 /// cursor share it, so the caret never lands on a status row.
 pub(crate) fn input_bottom(app: &App, area: Rect) -> u16 {
-    area.bottom()
-        .saturating_sub(crate::text::to_u16(kept(app)))
-        .max(area.y)
+    area.bottom().saturating_sub(to_u16(kept(app))).max(area.y)
 }
 
 /// Draws the status line at the bottom of the column: row 1 above row 2,
