@@ -16,8 +16,8 @@ mod support;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::pty::{Grid, Run};
-use support::{Setup, write_json};
+use support::pty::{Grid, Run, WAITING_TITLE};
+use support::{Setup, TRUECOLOUR, write_json};
 
 /// The spinner glyphs of the working line: braille frames, or `●` under
 /// reduced motion.
@@ -147,12 +147,23 @@ fn working_line(row: &str) -> String {
 }
 
 /// A tool-group summary: a row ending in ` ▸` or ` ▾` whose last word
-/// before it is a duration.
+/// before it is a duration. A running group leads with a braille spinner
+/// frame, which reads `*`; the `●` of a finished group stays.
 fn tool_group(row: &str) -> String {
     let Some(body) = row.strip_suffix(" ▸").or_else(|| row.strip_suffix(" ▾")) else {
         return row.to_owned();
     };
     let suffix = &row[body.len()..];
+    let indent = body.len() - body.trim_start().len();
+    let spun = body[indent..].strip_prefix(|glyph| SPINNERS.contains(glyph) && glyph != '●');
+    let owned;
+    let body = match spun.filter(|rest| rest.starts_with(' ')) {
+        Some(rest) => {
+            owned = format!("{}*{rest}", &body[..indent]);
+            owned.as_str()
+        }
+        None => body,
+    };
     for (space, _) in body.match_indices(' ') {
         let tail = &body[space + 1..];
         if duration_len(tail) == Some(tail.len()) {
@@ -309,6 +320,28 @@ fn a_tool_group_summary_reads_its_duration_as_a_placeholder() {
         one("  ● 4s ran 3 questions ▸", &[]),
         "  ● 4s ran 3 questions ▸"
     );
+}
+
+#[test]
+fn a_running_tool_group_reads_its_spinner_as_a_placeholder() {
+    let want = "  * Asked 3 questions · ask_user 3 questions [duration] ▸";
+    assert_eq!(
+        one("  ⠇ Asked 3 questions · ask_user 3 questions 4s ▸", &[]),
+        want
+    );
+    assert_eq!(
+        one("  ⠙ Asked 3 questions · ask_user 3 questions 0s ▸", &[]),
+        want
+    );
+    assert_eq!(
+        one("  ● Asked 3 questions 4s ▸", &[]),
+        "  ● Asked 3 questions [duration] ▸"
+    );
+    assert_eq!(
+        one("  ⠇Asked 3 questions 4s ▸", &[]),
+        "  ⠇Asked 3 questions [duration] ▸"
+    );
+    assert_eq!(one("  ⠇ Working on it", &[]), "  ⠇ Working on it");
 }
 
 #[test]
@@ -564,6 +597,119 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     run.write(b"\x03\x03\r");
     run.wait_screen("the restored terminal", |screen| {
         !screen.alternate_screen && !screen.hide_cursor
+    });
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The scripted `ask_user` step: one call with three questions.
+fn form_step() -> Value {
+    json!({"tool_calls": [{"name": "ask_user", "arguments": {"questions": [
+        {"header": "Scope", "question": "Which crates should the change touch?",
+         "multiSelect": true, "options": [
+            {"label": "hub", "description": "the session host"},
+            {"label": "tui", "description": "the terminal"}]},
+        {"header": "Tests", "question": "Which tests cover it?",
+         "options": [{"label": "unit"}, {"label": "pty"}]},
+        {"header": "Docs", "question": "Which docs change?"},
+    ]}}]})
+}
+
+/// Whether the grid draws the three-question form's title and first
+/// question.
+fn form_drawn(screen: &Grid) -> bool {
+    shows(
+        screen,
+        "Question from run it · 3 questions, any can be skipped",
+    ) && shows(screen, "Which crates should the change touch?")
+}
+
+/// A question form answered through its tabs, then the session's second
+/// form declined with Esc.
+#[test]
+fn journey_question_form_answered_then_declined() {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [form_step(), {"text": ["Thanks."]}, form_step()]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}, "tui": tui_off()}),
+    );
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    let ids: Vec<String> = Vec::new();
+    run.ready();
+    let from = run.output().len();
+    run.write(b"run it\r");
+    run.wait_screen("the question form", form_drawn);
+    // The waiting title orders the session's Waiting state before the
+    // grid with no working line.
+    run.wait_bytes(from, WAITING_TITLE, "the question turn waiting");
+    let open = run.wait_screen("the open form without a working line", |screen| {
+        form_drawn(screen) && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "question_form_open",
+        grid_text(&open.rows, open.cursor, &ids)
+    );
+    // Answer the first form: a digit chooses an option, → and Tab move
+    // between questions, Enter on Submit answers.
+    run.write(b"2");
+    run.wait_screen("the toggled option", |screen| shows(screen, "2 [x] tui"));
+    run.write(b"\x1b[C");
+    run.wait_screen("the Tests tab", |screen| {
+        shows(screen, "Which tests cover it?")
+    });
+    run.write(b"\t");
+    run.wait_screen("the Docs words row", |screen| {
+        shows(screen, "Which docs change?") && shows(screen, "Type an answer")
+    });
+    run.write(b"2");
+    run.wait_screen("the typed answer", |screen| shows(screen, "✎ 2"));
+    run.write(b"\t");
+    run.wait_screen("the Submit tab", |screen| shows(screen, "Review"));
+    let from = run.output().len();
+    run.write(b"\r");
+    let card = run.wait_screen("the answered card", |screen| {
+        shows(screen, "you answered") && shows(screen, "Thanks.")
+    });
+    assert!(shows(&card, "you answered"), "the answers land in the card");
+    assert!(shows(&card, "Thanks."), "the turn goes on to its text");
+    run.turn_finished(from);
+    let answered = run.wait_screen("the closed turn", |screen| {
+        shows(screen, "Thanks.")
+            && shows(screen, "▣ completed")
+            && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "question_form_answered",
+        grid_text(&answered.rows, answered.cursor, &ids)
+    );
+    // The session's second form: Esc declines it and ends the turn.
+    run.write(b"again\r");
+    run.wait_screen("the second form", |screen| {
+        form_drawn(screen) && shows(screen, "Thanks.")
+    });
+    run.write(b"\x1b[27u");
+    let declined = run.wait_screen("the declined turn", |screen| {
+        shows(screen, "declined")
+            && !shows(screen, "Question from")
+            && shows(screen, "▣ interrupted")
+            && !shows(screen, "Esc to interrupt")
+    });
+    assert!(
+        declined.contents.contains("declined"),
+        "{}",
+        declined.contents
+    );
+    insta::assert_snapshot!(
+        "question_form_declined",
+        grid_text(&declined.rows, declined.cursor, &ids)
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor && shows(screen, "fiber resume")
     });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
