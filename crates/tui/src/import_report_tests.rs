@@ -7,10 +7,17 @@
 
 use serde_json::{Value, json};
 
+use ratatui::style::{Modifier, Style};
+
+use contract::events::{ImportedNames, LeftBehindEntry};
+
+use super::{ImportReport, PREFER, capacity, title_for};
+
 use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
+use crate::view::overlay::Row;
 
 /// The 120-line import answer: 60 copied names across the 4 kinds and
 /// 60 left-behind items, each one row in the report.
@@ -355,4 +362,283 @@ fn home_paints_the_report_with_both_counts_and_a_swallow_target() {
         "clicks on the report stay with the report:\n{shown}"
     );
     assert!(app.notices().is_empty());
+}
+
+/// The report's unit tests: titles, sections, wrapping, scrolling
+/// and framing, through the rows the screen test paints.
+/// A report with every kind copied and two items left behind.
+fn full() -> ImportReport {
+    ImportReport::open(
+        Some("codex"),
+        ImportedNames {
+            mcp_servers: vec!["zeta".to_owned(), "alpha".to_owned()],
+            skills: vec!["lint".to_owned()],
+            commands: vec!["plan".to_owned()],
+            instructions: vec!["AGENTS.md".to_owned()],
+        },
+        vec![
+            LeftBehindEntry {
+                item: "auth.json".to_owned(),
+                reason: "credentials are never imported".to_owned(),
+            },
+            LeftBehindEntry {
+                item: "other.json".to_owned(),
+                reason: "unknown".to_owned(),
+            },
+        ],
+    )
+}
+
+#[test]
+fn the_title_names_the_source() {
+    assert_eq!(title_for(Some("claude-code")), "Imported from Claude Code");
+    assert_eq!(title_for(Some("codex")), "Imported from Codex");
+}
+
+#[test]
+fn a_bare_import_reports_the_generic_title() {
+    assert_eq!(title_for(None), "Imported");
+    assert_eq!(title_for(Some("prose")), "Imported");
+}
+
+/// The row texts, one per body row: styles assert separately.
+fn texts(report: &ImportReport, inner: usize) -> Vec<String> {
+    report
+        .rows(inner)
+        .iter()
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .collect()
+}
+
+#[test]
+fn sections_group_the_copied_kinds_in_hub_order() {
+    let texts = texts(&full(), 67);
+    assert_eq!(
+        texts,
+        [
+            "Copied · 5",
+            "MCP servers",
+            "zeta",
+            "alpha",
+            "Skills",
+            "lint",
+            "Commands",
+            "plan",
+            "Instructions",
+            "AGENTS.md",
+            "",
+            "Left behind · 2",
+            "auth.json: credentials are never imported",
+            "other.json: unknown",
+        ]
+    );
+}
+
+#[test]
+fn empty_groups_draw_no_header_but_kept_groups_keep_hub_order() {
+    let report = ImportReport::open(
+        Some("claude-code"),
+        ImportedNames {
+            skills: vec!["lint".to_owned()],
+            ..ImportedNames::default()
+        },
+        Vec::new(),
+    );
+    assert_eq!(
+        texts(&report, 67),
+        ["Copied · 1", "Skills", "lint", "", "Left behind · 0"]
+    );
+}
+
+#[test]
+fn an_empty_report_draws_both_sections_with_zero_counts() {
+    let report = ImportReport::open(None, ImportedNames::default(), Vec::new());
+    assert_eq!(report.title(), "Imported");
+    assert_eq!(texts(&report, 67), ["Copied · 0", "", "Left behind · 0"]);
+}
+
+#[test]
+fn section_counts_are_item_counts() {
+    let report = full();
+    assert_eq!(report.copied_count(), 5);
+    assert_eq!(report.left_count(), 2);
+}
+
+#[test]
+fn a_left_behind_row_carries_its_reason_dim() {
+    let rows = full().rows(67);
+    let row = &rows[12];
+    assert_eq!(row.spans.len(), 2);
+    assert_eq!(row.spans[0].content, "auth.json: ");
+    assert_eq!(row.spans[0].style, Style::new());
+    assert_eq!(row.spans[1].content, "credentials are never imported");
+    assert_eq!(row.spans[1].style, Style::new().add_modifier(Modifier::DIM));
+}
+
+#[test]
+fn a_wrapped_left_behind_row_keeps_the_reason_dim_past_the_break() {
+    let report = ImportReport::open(
+        None,
+        ImportedNames::default(),
+        vec![LeftBehindEntry {
+            item: "auth.json".to_owned(),
+            reason: "credentials are never imported anywhere".to_owned(),
+        }],
+    );
+    let rows = report.rows(30);
+    let plain: Vec<String> = rows
+        .iter()
+        .skip(3)
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .collect();
+    assert_eq!(
+        plain,
+        ["auth.json: credentials are", "never imported anywhere",]
+    );
+    // The break falls inside the reason, so the first row's tail
+    // and the whole second row read dim.
+    assert_eq!(rows[3].spans.len(), 2);
+    assert_eq!(
+        rows[3].spans[1].style,
+        Style::new().add_modifier(Modifier::DIM)
+    );
+    assert_eq!(rows[4].spans.len(), 1);
+    assert_eq!(
+        rows[4].spans[0].style,
+        Style::new().add_modifier(Modifier::DIM)
+    );
+}
+
+#[test]
+fn a_row_spanning_the_item_reason_boundary_counts_the_dropped_space_with_the_item() {
+    // The item's word runs past the row, so the middle row spans
+    // the `item: reason` boundary: the wrap drops the boundary's
+    // space, and the `WrapSpace` offset counts it on the item
+    // side. Without the offset the boundary moves one cell into
+    // the item, dimming its trailing space and shifting the
+    // reason's start.
+    let report = ImportReport::open(
+        None,
+        ImportedNames::default(),
+        vec![LeftBehindEntry {
+            item: "abcdefghijklmnopqrstuv".to_owned(),
+            reason: "why not".to_owned(),
+        }],
+    );
+    let rows = report.rows(14);
+    assert_eq!(rows.len(), 6);
+    let row = &rows[4];
+    assert_eq!(row.spans.len(), 2);
+    assert_eq!(row.spans[0].content, "opqrstuv: ");
+    assert_eq!(row.spans[0].style, Style::new());
+    assert_eq!(row.spans[1].content, "why");
+    assert_eq!(row.spans[1].style, Style::new().add_modifier(Modifier::DIM));
+}
+
+#[test]
+fn scrolling_by_rows_holds_at_both_edges() {
+    let report = full();
+    // Fourteen body rows in a two-row frame scroll twelve.
+    let max = report.rows(67).len().saturating_sub(capacity(10));
+    assert_eq!(max, 12);
+    let mut scrolled = report.clone();
+    scrolled.scroll_by(true, 1, max);
+    assert_eq!(scrolled.top(), 1);
+    scrolled.scroll_by(false, 1, max);
+    assert_eq!(scrolled.top(), 0);
+    // Up at the top holds.
+    scrolled.scroll_by(false, 5, max);
+    assert_eq!(scrolled.top(), 0);
+    // Down past the end holds at the last row the frame shows.
+    scrolled.scroll_by(true, max.saturating_add(10), max);
+    assert_eq!(scrolled.top(), max);
+    scrolled.scroll_by(true, 1, max);
+    assert_eq!(scrolled.top(), max);
+    // One step back from the end moves again.
+    scrolled.scroll_by(false, 1, max);
+    assert_eq!(scrolled.top(), max.saturating_sub(1));
+}
+
+#[test]
+fn scrolling_clamps_a_stale_offset_before_it_moves() {
+    let mut report = full();
+    let max = report.rows(67).len().saturating_sub(capacity(10));
+    report.top = max.saturating_add(4);
+    report.scroll_by(true, 1, max);
+    assert_eq!(report.top(), max);
+    report.top = max.saturating_add(4);
+    report.scroll_by(false, 1, max);
+    assert_eq!(report.top(), max.saturating_sub(1));
+}
+
+#[test]
+fn paging_moves_a_page_and_holds_at_the_edges() {
+    let report = full();
+    // Fourteen body rows in a two-row frame: a page is two rows.
+    let max = report.rows(67).len().saturating_sub(capacity(10));
+    let page = capacity(10);
+    assert_eq!((max, page), (12, 2));
+    let mut scrolled = report.clone();
+    scrolled.scroll_page(true, 10, max);
+    assert_eq!(scrolled.top(), page.min(max));
+    scrolled.scroll_page(true, 10, max);
+    scrolled.scroll_page(true, 10, max);
+    scrolled.scroll_page(true, 10, max);
+    scrolled.scroll_page(true, 10, max);
+    scrolled.scroll_page(true, 10, max);
+    assert_eq!(scrolled.top(), max);
+    scrolled.scroll_page(true, 10, max);
+    assert_eq!(scrolled.top(), max);
+    scrolled.scroll_page(false, 10, max);
+    assert_eq!(scrolled.top(), max.saturating_sub(page));
+    let mut top = report.clone();
+    top.scroll_page(false, 10, max);
+    assert_eq!(top.top(), 0);
+}
+
+#[test]
+fn the_frame_windows_the_body_at_the_scrolled_offset() {
+    let mut report = full();
+    let inner = 67;
+    let height = 12;
+    let cap = capacity(height);
+    let all = texts(&report, inner);
+    assert!(all.len() > cap);
+    let framed = report.frame(inner, height);
+    assert_eq!(
+        framed.title.as_ref().map(|title| title.0.clone()),
+        Some("Imported from Codex".to_owned())
+    );
+    assert_eq!(framed.prefer, PREFER);
+    assert!(framed.footer.is_some());
+    let shown: Vec<String> = framed.body.iter().map(text_of).collect();
+    assert_eq!(shown, all[..cap]);
+    // Scrolled to the bottom the frame shows the last rows.
+    let max = report.max_top(inner, height);
+    report.top = max;
+    let scrolled = report.frame(inner, height);
+    let shown: Vec<String> = scrolled.body.iter().map(text_of).collect();
+    assert_eq!(shown, all[max..]);
+    assert!(shown.contains(&"other.json: unknown".to_owned()));
+}
+
+/// One body row's text.
+fn text_of(row: &Row) -> String {
+    row.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("")
 }
