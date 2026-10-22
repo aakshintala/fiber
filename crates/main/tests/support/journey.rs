@@ -194,7 +194,11 @@ fn tool_group(row: &str) -> String {
     for (space, _) in body.match_indices(' ') {
         let tail = &body[space + 1..];
         if duration_len(tail) == Some(tail.len()) {
-            return format!("{} [duration]{suffix}", &body[..space]);
+            // The drawn row gave the padding before the duration n - 2
+            // fewer columns than the 2-char form, so hand them back.
+            // n is at least 2, so a 2-char duration adds nothing.
+            let pad = " ".repeat(tail.len() - 2);
+            return format!("{}{pad} [duration]{suffix}", &body[..space]);
         }
     }
     row.to_owned()

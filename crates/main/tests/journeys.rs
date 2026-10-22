@@ -134,7 +134,7 @@ fn a_tool_group_summary_reads_its_duration_as_a_placeholder() {
     );
     assert_eq!(
         one("  ● Ran 2 commands 1m 02s ▾", &[]),
-        "  ● Ran 2 commands [duration] ▾"
+        "  ● Ran 2 commands     [duration] ▾"
     );
     assert_eq!(
         one("  ● Asked 3 questions ▸", &[]),
