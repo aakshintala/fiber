@@ -208,29 +208,31 @@ fn with_answer(
             hook();
         }
     });
-    match answered {
-        Answered::Stopped(0) if started => {
-            if installed {
-                stop_login_service(service, run, clock)?;
-            }
-            wait_for_close(stream, deadline, clock)?;
-            report(out, NOTHING_RUNNING, installed)
-        }
+    // Every answer runs the same tail: the service step, then the close
+    // wait, then what the mark says. Only a transport failure, where no
+    // answer arrives, returns before it.
+    enum AfterAnswer {
+        /// Report the line; a close failure fails the stop.
+        Report(String),
+        /// Keep the rejection; a stalled close never replaces it.
+        Keep(Failure),
+    }
+    let marked = match answered {
+        Answered::Stopped(0) if started => AfterAnswer::Report(NOTHING_RUNNING.to_owned()),
         Answered::Stopped(stopped) => {
-            if installed {
-                stop_login_service(service, run, clock)?;
-            }
-            wait_for_close(stream, deadline, clock)?;
-            report(
-                out,
-                &format!("Stopped {stopped} sessions and the hub."),
-                installed,
-            )
+            AfterAnswer::Report(format!("Stopped {stopped} sessions and the hub."))
         }
-        Answered::Rejected(rejection) => {
-            if installed {
-                stop_login_service(service, run, clock)?;
-            }
+        Answered::Rejected(rejection) => AfterAnswer::Keep(rejection),
+    };
+    if installed {
+        stop_login_service(service, run, clock)?;
+    }
+    match marked {
+        AfterAnswer::Report(first) => {
+            wait_for_close(stream, deadline, clock)?;
+            report(out, &first, installed)
+        }
+        AfterAnswer::Keep(rejection) => {
             // A stalled close never replaces the survivor rejection.
             #[allow(
                 clippy::let_underscore_must_use,

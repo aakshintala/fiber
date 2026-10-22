@@ -352,8 +352,14 @@ fn attempt(
                 }),
             }
         }
-        Bind::TimedOut => Err(io_failed(hub, session, "it did not bind its socket.")),
-        Bind::Failed(detail) => Err(io_failed(hub, session, &detail)),
+        Bind::TimedOut => {
+            started.kill();
+            Err(io_failed(hub, session, "it did not bind its socket."))
+        }
+        Bind::Failed(detail) => {
+            started.kill();
+            Err(io_failed(hub, session, &detail))
+        }
         Bind::Stopping => {
             started.kill();
             Err(crate::connection::stopping())

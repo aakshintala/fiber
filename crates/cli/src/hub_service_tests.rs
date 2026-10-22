@@ -29,8 +29,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    InstallRow, MANAGER_WAIT, RERUN, Ran, WATCH_SLICE, current_exe, hub_answers, hub_install,
-    hub_restart, hub_uninstall, install, must, read_unit, restart, stop_login_service, system_run,
+    InstallRow, MANAGER_WAIT, RERUN, Ran, current_exe, hub_answers, hub_install, hub_restart,
+    hub_uninstall, install, must, read_unit, restart, stop_login_service, system_run,
     system_run_bounded, uninstall,
 };
 use crate::hub_unit::{Manager, Service, name};
@@ -1356,11 +1356,12 @@ fn a_slow_but_prompt_command_answers_without_a_kill() {
     });
     let pids = ready.wait(Deadline::after(DEADLINE));
     assert_eq!(pids.len(), 1, "the child writes its own pid once");
-    // Still waiting, not answered: the watchdog parks on its bound
-    // while the child holds the fifo.
+    // The watchdog parks on its bound while the child holds the fifo:
+    // the pause point, not a silent wait, proves the child is held.
+    let due = clock.origin() + MANAGER_WAIT;
     assert!(
-        Deadline::after(WATCH_SLICE * 5).recv(&done_rx).is_err(),
-        "a held child has not answered yet"
+        clock.await_parked(due, Deadline::after(DEADLINE)),
+        "a held child parks its watchdog"
     );
     // Opening a fifo for writing blocks until a reader arrives: the child
     // opens its read end only after writing its pid, so the release opens

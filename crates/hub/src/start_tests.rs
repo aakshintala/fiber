@@ -328,6 +328,41 @@ fn a_session_that_exits_first_rejects_with_its_fiber_exited() {
     assert_eq!(refused.message, "No model is configured.");
 }
 
+/// A start that times out kills its starter: the stop arriving just
+/// after the timeout must find the child already dead, so it can never
+/// bind after the stop's scans and escape shutdown.
+#[test]
+fn a_start_that_times_out_kills_its_starter() {
+    let temp = Temp::new();
+    let starter = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let workspace = temp.workspace();
+    let Outcome::Rejected(refused) = run(
+        &hub,
+        &CommandId("c_start".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start that binds nothing is rejected");
+    };
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    hub.request_stop();
+    // Exactly the timed-out session dies; a live child would bind its
+    // socket after the scans below, escaping the stop.
+    let kills = starter.kills();
+    assert_eq!(kills.len(), 1, "the timed-out start kills its starter");
+    for id in &kills {
+        assert!(
+            !temp.dir.join("run").join(&id.0).exists(),
+            "the killed starter never binds"
+        );
+    }
+}
+
 #[test]
 fn a_session_that_neither_binds_nor_exits_is_rejected_io_failed() {
     let temp = Temp::new();

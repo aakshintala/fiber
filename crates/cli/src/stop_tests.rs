@@ -895,17 +895,18 @@ fn a_failed_close_read_is_lost_not_late() {
             .send(wait_for_close(&stream, due, &*moved))
             .unwrap_or(());
     });
-    // The real code answers at once; only a parked retry waits out the
-    // deadline, and then one advance past the bound ends it as late.
-    let result = match Deadline::after(DEADLINE).recv(&done_rx) {
-        Ok(result) => result,
-        Err(_) => {
-            clock.advance(STOP_WITHIN + Duration::from_secs(1));
-            Deadline::after(DEADLINE)
-                .recv(&done_rx)
-                .expect("the parked retry returns after the advance")
+    // The retry park is the signal to advance past the bound: real code
+    // answers without parking, so the watcher never fires for it. The
+    // wall deadline fails a hang; it never decides.
+    let advancer = Arc::clone(&clock);
+    thread::spawn(move || {
+        if advancer.await_parked(due, Deadline::after(DEADLINE)) {
+            advancer.advance(STOP_WITHIN + Duration::from_secs(1));
         }
-    };
+    });
+    let result = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the close wait answers");
     let error = result.expect_err("a failed close read is lost");
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(

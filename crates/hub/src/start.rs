@@ -139,8 +139,17 @@ pub(crate) fn run(
             started.kill();
             return Outcome::Rejected(crate::connection::stopping());
         }
-        Bind::TimedOut => return io_failed(hub, &id, "it did not bind its socket."),
-        Bind::Failed(detail) => return io_failed(hub, &id, &detail),
+        Bind::TimedOut => {
+            // The guard releases after the kill below, as on every
+            // other unsuccessful arm: a child that outlives the wait
+            // must never bind after the stop's scans.
+            started.kill();
+            return io_failed(hub, &id, "it did not bind its socket.");
+        }
+        Bind::Failed(detail) => {
+            started.kill();
+            return io_failed(hub, &id, &detail);
+        }
     };
     let first = match content {
         Some(content) => {

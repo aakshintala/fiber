@@ -11,6 +11,8 @@
 
 use std::fs;
 use std::io::{BufReader, Write};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -20,6 +22,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use serde_json::Value;
 
+use super::transport::*;
 use super::*;
 use crate::Starter;
 use crate::fake::FakeStarter;
@@ -372,7 +375,6 @@ fn a_split_acknowledgement_parses_whole_after_its_tail_arrives() {
 
 use std::io::Read as _;
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::os::fd::IntoRawFd as _;
 
 /// An expired bound with no stop is not ready: past `until` returns
 /// false before polling, even with data pending on the fd. Replacing the
@@ -932,61 +934,54 @@ fn an_unconnected_socket_is_gone_not_waited_on() {
     );
 }
 
-/// A closed fd fails to go non-blocking: the error propagates instead of
-/// a silent blocking socket.
+/// A closed fd cannot go non-blocking: the raw seam reports the
+/// failure with no borrow involved, which is what the `open_socket`
+/// caller checks to fail the open.
 #[test]
 #[allow(
     unsafe_code,
     reason = "the probe fd is closed by hand to fail the call"
 )]
 fn a_closed_fd_fails_nonblocking() {
-    // SAFETY: a fresh socket fd this test owns; the assert below
-    // checks the call before the fd is used.
+    // SAFETY: a fresh socket fd this test owns; the close below takes
+    // it, and the flagged call after takes the number by value.
     let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one yet.
-    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
-    let number = owned.into_raw_fd();
-    // SAFETY: `number` is the fd just released; closing it touches
-    // nothing else, and the borrow below makes no call that could
-    // hand it out before the check runs.
-    unsafe { libc::close(number) };
-    // SAFETY: the fd stays closed through the check below: nothing
-    // runs between the close and the call it fails.
-    let closed = unsafe { BorrowedFd::borrow_raw(number) };
+    // SAFETY: `raw` is the open socket above, owned by no one: closing
+    // it touches nothing else, and the flagged call takes the number
+    // by value, so no borrow outlives the close.
+    unsafe { libc::close(raw) };
     assert_ne!(
-        set_nonblocking(closed),
+        // SAFETY: `fcntl_flag` takes the number by value: the closed
+        // number fails `EBADF` with no borrow involved.
+        unsafe { fcntl_flag(raw, libc::F_SETFL, libc::O_NONBLOCK) },
         0,
         "a closed fd cannot go non-blocking"
     );
 }
 
-/// A closed fd cannot go close-on-exec: `set_cloexec` answers nonzero,
-/// which is what the `open_socket` caller checks to fail the open.
-/// Replacing the call with `Default::default` answers 0, reporting
-/// success on the failure.
+/// A closed fd cannot go close-on-exec: the raw seam answers nonzero
+/// for the close-on-exec command, which is what the `open_socket`
+/// caller checks to fail the open. Replacing the seam with
+/// `Default::default` answers 0, reporting success on the failure.
 #[test]
 #[allow(
     unsafe_code,
     reason = "the probe fd is closed by hand to fail the call"
 )]
 fn a_closed_fd_fails_close_on_exec() {
-    // SAFETY: a fresh socket fd this test owns; the assert below
-    // checks the call before the fd is used.
+    // SAFETY: a fresh socket fd this test owns; the close below takes
+    // it, and the flagged call after takes the number by value.
     let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     assert!(raw >= 0, "the probe socket opens");
-    // SAFETY: `raw` is the open socket above, owned by no one yet.
-    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
-    let number = owned.into_raw_fd();
-    // SAFETY: `number` is the fd just released; closing it touches
-    // nothing else, and the borrow below makes no call that could
-    // hand it out before the check runs.
-    unsafe { libc::close(number) };
-    // SAFETY: the fd stays closed through the check below: nothing
-    // runs between the close and the call it fails.
-    let closed = unsafe { BorrowedFd::borrow_raw(number) };
+    // SAFETY: `raw` is the open socket above, owned by no one: closing
+    // it touches nothing else, and the flagged call takes the number
+    // by value, so no borrow outlives the close.
+    unsafe { libc::close(raw) };
     assert_ne!(
-        set_cloexec(closed),
+        // SAFETY: `fcntl_flag` takes the number by value: the closed
+        // number fails `EBADF` with no borrow involved.
+        unsafe { fcntl_flag(raw, libc::F_SETFD, libc::FD_CLOEXEC) },
         0,
         "a closed fd cannot go close-on-exec"
     );

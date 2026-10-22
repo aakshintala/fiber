@@ -196,6 +196,9 @@ pub(crate) fn reach(
             Err(crate::connection::stopping())
         }
         Bind::TimedOut | Bind::Failed(_) => {
+            // The child outlives the wait on both arms, as on `Stopping`:
+            // it must never bind after the stop's scans.
+            started.kill();
             hub.diag.line(
                 Severity::Warn,
                 Some(next),
