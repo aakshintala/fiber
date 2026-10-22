@@ -2596,6 +2596,9 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     ])]);
     let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
+    // The forward parks until the report lands: a loaded machine
+    // schedules the watcher after the drain otherwise (see #3051).
+    let release = Release::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -2603,11 +2606,15 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
             1 << 20,
             Some(1),
             None,
-            Some(rig.registry.usage_forward()),
+            Some(parked_forward(&rig, &release)),
         )
         .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
+    // Nothing is stashed: both lines are still parked behind the
+    // release, which proves the hold before the drain releases it.
+    assert!(usages.is_empty(), "the parked forward holds every line");
+    release.release();
     // The Job can precede the watcher's forwards (see #3005): both
     // streamed lines always follow on the inbox, so the boundary
     // assertion reads them only after they land.
@@ -2636,6 +2643,53 @@ fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId
         let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
         (notice, usages)
     })
+}
+
+/// A one-shot release latch for parked forwards: every watcher line
+/// waits until the test releases it, then all flow. Dropping the latch
+/// without releasing opens it too, so a failed test never leaves the
+/// watcher parked (as the `Block` watch reply). Parking forces the
+/// order a loaded machine produces by accident (see #3051): the report
+/// lands with nothing stashed, and the drain collects every line after
+/// the release, instead of racing the watcher's scheduling.
+struct Release {
+    tx: Mutex<Option<mpsc::Sender<()>>>,
+    rx: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Release {
+    fn closed() -> Arc<Self> {
+        let (tx, rx) = mpsc::channel();
+        Arc::new(Self {
+            tx: Mutex::new(Some(tx)),
+            rx: Mutex::new(rx),
+        })
+    }
+
+    fn wait(&self) {
+        // Blocks while the sender lives; dropping it (here or with
+        // this latch) unblocks every waiter at once.
+        let _released = self.rx.lock().unwrap().recv();
+    }
+
+    fn release(&self) {
+        self.tx.lock().unwrap().take();
+    }
+}
+
+/// The registry's forward behind a release latch: every watcher line
+/// parks until the test releases it, then forwards as usual. The
+/// runner's reap and report never wait on the watcher, so parking
+/// cannot deadlock the report the release waits for.
+fn parked_forward(rig: &Rig, release: &Arc<Release>) -> super::UsageForward {
+    let forward = rig.registry.usage_forward();
+    let release = Arc::clone(release);
+    Arc::new(
+        move |session: SessionId, line: contract::events::UsageRecorded| {
+            release.wait();
+            forward(session, line);
+        },
+    )
 }
 
 /// Collects streamed `DelegateUsage` deliveries until `want` have
@@ -2678,6 +2732,9 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
+    // The forward parks until the report lands: a loaded machine
+    // schedules the watcher after the drain otherwise (see #3051).
+    let release = Release::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -2685,11 +2742,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             1 << 20,
             None,
             None,
-            Some(rig.registry.usage_forward()),
+            Some(parked_forward(&rig, &release)),
         )
         .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
+    // Nothing is stashed: every line is still parked behind the
+    // release, which proves the hold before the drain releases it.
+    assert!(usages.is_empty(), "the parked forward holds every line");
+    release.release();
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
     // The Job can precede the watcher's forward, so the tap is read
@@ -3038,6 +3099,9 @@ fn a_correction_applies_only_its_delta() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
+    // The forward parks until the report lands: a loaded machine
+    // schedules the watcher after the drain otherwise (see #3051).
+    let release = Release::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -3045,11 +3109,15 @@ fn a_correction_applies_only_its_delta() {
             1 << 20,
             None,
             None,
-            Some(rig.registry.usage_forward()),
+            Some(parked_forward(&rig, &release)),
         )
         .0;
     let _waited = waited;
     let (notice, usages) = reported_with_usage(&rig);
+    // Nothing is stashed: both lines are still parked behind the
+    // release, which proves the hold before the drain releases it.
+    assert!(usages.is_empty(), "the parked forward holds every line");
+    release.release();
     // The second arrival of the same generation adds only its delta, so
     // the spend holds the latest billed figure once, not twice. The Job
     // can precede the watcher's forwards, so the tap is read only
