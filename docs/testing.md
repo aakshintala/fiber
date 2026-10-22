@@ -45,11 +45,14 @@ kills the same mutants.
 
 CI wiring has no Rust test of its own: a workflow step, or a script only CI
 runs, is proven by the pull request's own CI run exercising it, and the pull
-request links the job log that shows it working. A job that can run only from
-`main`, because its environment allows only `main`, is proven by its first
-dispatch after merge: the ticket links that run's log, and a failure there is
-a new ticket. Logic that wiring calls lives
-in `xtask` or a crate, and is tested there like any other code.
+request links the job log that shows it working. A step written once as a
+YAML anchor is proven by any job that runs it. A job that can run only from
+`main`, because its environment allows only `main` or because a schedule is
+its only trigger, is proven by its first run after merge: the ticket links
+that run's log, and a failure there is a new ticket. Wiring is the commands a
+step runs in order, a retry or a cache check included. Logic that wiring
+calls, anything that parses, computes or decides from data a test could
+supply, lives in `xtask` or a crate, and is tested there like any other code.
 
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider

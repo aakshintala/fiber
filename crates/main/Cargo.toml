@@ -33,6 +33,7 @@ tui = { path = "../tui" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+insta.workspace = true
 vt100 = "0.16.2"
 
 [lints]
