@@ -289,9 +289,7 @@ pub struct Tokens {
     pub input: u64,
     /// Input tokens read from the cache.
     pub cache_read: u64,
-    /// Input tokens written to the cache, keyed by cache-write billing class
-    /// (`"5m"`, `"1h"`), not the vendor lifetime (OpenAI's 30-minute cache
-    /// reports under `"5m"`); empty when nothing was written.
+    /// Input tokens written to the cache, keyed by billing class (see `docs/prompt-cache.md`, "The reported use"); empty when nothing was written.
     pub cache_write: BTreeMap<String, u64>,
     /// Output tokens, reasoning included.
     pub output: u64,

@@ -249,7 +249,7 @@ parameter, missed it on Anthropic and GPT-6 Luna.
 ## Usage
 
 `usage_recorded` splits its tokens into uncached input, input read from the
-cache, input written to the cache by lifetime, and output. Every provider
+cache, input written to the cache by billing class, and output. Every provider
 prices these differently, so no cost can be computed without the split.
 
 ## Cache diagnostics

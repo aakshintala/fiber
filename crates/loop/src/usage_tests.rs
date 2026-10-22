@@ -18,6 +18,17 @@ fn tokens(input: u64, cache_read: u64, cache_write: &[(&str, u64)], output: u64)
     }
 }
 
+/// Base prices without tiers: what a flat-priced model pays.
+fn flat() -> Cost {
+    Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: Some(0.2),
+        cache_write: Some(1.0),
+        tiers: Vec::new(),
+    }
+}
+
 /// Base prices, and two tiers listed with the higher threshold first.
 fn tiered() -> Cost {
     Cost {
@@ -229,37 +240,19 @@ fn an_overflowing_prompt_prices_the_highest_tier() {
 
 #[test]
 fn a_one_hour_write_prices_at_twice_input() {
-    let cost = Cost {
-        input: 2.0,
-        output: 10.0,
-        cache_read: Some(0.2),
-        cache_write: Some(1.0),
-        tiers: Vec::new(),
-    };
+    let cost = flat();
     assert_eq!(price(&cost, &tokens(0, 0, &[("1h", 1_000_000)], 0)), 4.0);
 }
 
 #[test]
 fn a_five_minute_write_keeps_the_declared_price() {
-    let cost = Cost {
-        input: 2.0,
-        output: 10.0,
-        cache_read: Some(0.2),
-        cache_write: Some(1.0),
-        tiers: Vec::new(),
-    };
+    let cost = flat();
     assert_eq!(price(&cost, &tokens(0, 0, &[("5m", 1_000_000)], 0)), 1.0);
 }
 
 #[test]
 fn mixed_lifetime_writes_sum_both_rates() {
-    let cost = Cost {
-        input: 2.0,
-        output: 10.0,
-        cache_read: Some(0.2),
-        cache_write: Some(1.0),
-        tiers: Vec::new(),
-    };
+    let cost = flat();
     assert_eq!(
         price(
             &cost,
@@ -300,13 +293,7 @@ fn without_a_declared_write_price_five_minutes_is_free_and_one_hour_is_not() {
 
 #[test]
 fn an_unknown_lifetime_key_prices_at_the_five_minute_rate() {
-    let cost = Cost {
-        input: 2.0,
-        output: 10.0,
-        cache_read: Some(0.2),
-        cache_write: Some(1.0),
-        tiers: Vec::new(),
-    };
+    let cost = flat();
     assert_eq!(price(&cost, &tokens(0, 0, &[("9m", 1_000_000)], 0)), 1.0);
 }
 
