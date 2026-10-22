@@ -108,7 +108,7 @@ pub use prompt::{Deferrals, DisabledReader, PromptInputs};
 pub use quota_notice::QuotaRead;
 pub use reload::{
     PrepareReload, PromptPatch, ReconnectServer, Reconnected, ReloadPrepared, ReloadRoute,
-    ReloadSettings,
+    ReloadSettings, ServerSync,
 };
 pub use resume::{Resumed, resumed};
 pub use retry::{Decision, Retry};

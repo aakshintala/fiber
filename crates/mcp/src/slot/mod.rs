@@ -76,6 +76,12 @@ enum State {
         server: Arc<Server>,
         live: HashSet<String>,
         listed: Cached,
+        /// Whether the handshake advertised the tools capability: the
+        /// re-list asks again for advertised sections, even when the
+        /// last list came back empty.
+        advertises_tools: bool,
+        /// Whether the handshake advertised the prompts capability.
+        advertises_prompts: bool,
         /// Whether this is the restart, so the next death is final.
         restarted: bool,
     },
@@ -133,6 +139,174 @@ pub(crate) enum Served {
     Up(Arc<Server>, Vec<ServerRecord>),
     /// The server is dead or its start failed: fail `error`.
     Failed(Box<RunFailed>),
+}
+
+/// The slot's start lease: one in-flight start at a time, so a
+/// concurrent start or stop waits for the attempt's outcome instead of
+/// spawning beside it.
+///
+/// One in-flight start's hold on its slot: clearing the flag and waking
+/// the waiters on drop, so an unwind releases the lease too.
+pub(super) struct LeaseGuard<'a> {
+    lease: &'a Mutex<bool>,
+    wake: &'a Condvar,
+}
+
+impl Drop for LeaseGuard<'_> {
+    fn drop(&mut self) {
+        *lock(self.lease) = false;
+        self.wake.notify_all();
+    }
+}
+
+/// Locks `state`, recovering from poison as the slot always has: a
+/// panicking attempt never wedges the next one.
+fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The running-server re-list: the slot entry extracts what the re-list
+/// needs and passes it explicitly; the child does the RPC and payload
+/// work, reached through [`Slot::relist`], which the sync boundary
+/// calls.
+mod relist;
+
+pub(crate) use relist::Relisted;
+
+impl Slot {
+    /// Takes the slot's start lease, waiting while another attempt holds
+    /// it: one start runs at a time, and a stop waits for the in-flight
+    /// one. The mutex is never held across a start, only across the flag;
+    /// the guard releases it on unwind too, so a panic never wedges the
+    /// slot.
+    fn acquire(&self) -> LeaseGuard<'_> {
+        let mut busy = lock(&self.lease);
+        while *busy {
+            #[cfg(test)]
+            self.note_lease_wait();
+            busy = self.wake.wait(busy).unwrap_or_else(PoisonError::into_inner);
+        }
+        *busy = true;
+        LeaseGuard {
+            lease: &self.lease,
+            wake: &self.wake,
+        }
+    }
+
+    /// Whether both locks are free right now: the state lock and the
+    /// lease lock. Test-only: a test's timing guard calls it while the
+    /// attempt's guard drops, proving no diagnostic drop holds either
+    /// lock. A mutant that moves the drop under one fails the test.
+    #[cfg(test)]
+    pub(crate) fn locks_free(&self) -> bool {
+        self.state.try_lock().is_ok() && self.lease.try_lock().is_ok()
+    }
+
+    /// Signals once when an acquirer finds the lease held. Test-only:
+    /// installed before a contender starts, taken on its first wait.
+    #[cfg(test)]
+    fn note_lease_wait(&self) {
+        if let Some(hook) = lock(&self.wait_hook).take() {
+            hook.send(()).unwrap_or(());
+        }
+    }
+
+    /// Installs the one-shot [`Slot::note_lease_wait`] signal. Test-only.
+    #[cfg(test)]
+    pub(crate) fn on_lease_wait(&self, hook: std::sync::mpsc::Sender<()>) {
+        *lock(&self.wait_hook) = Some(hook);
+    }
+
+    /// Re-lists the running server under the slot lease, bounded by the
+    /// spec's `startup_timeout`: installs nothing — the caller stages the
+    /// outcome, and the prompt payload feeds the cache write only — and
+    /// any transport failure signals the replace path instead.
+    pub(crate) fn relist(&self) -> Relisted {
+        // The lease, held across the extraction as `serve` holds it
+        // across a launch: the edge against a concurrent serve or stop.
+        // The child never touches the slot: the target below is the
+        // whole interface, so a death racing the RPC still finds the
+        // slot exactly as the extraction left it.
+        let _flight = self.acquire();
+        let target = {
+            let state = lock(&self.state);
+            match &*state {
+                State::Running {
+                    server,
+                    restarted,
+                    advertises_tools,
+                    advertises_prompts,
+                    ..
+                } if !server.is_gone() && !server.is_expired() => {
+                    // The handshake lists only advertised capabilities: the
+                    // slot holds what it advertised, so an advertised-but-
+                    // empty section re-lists on reload, and a server that
+                    // advertised an empty list picks up a tool added since.
+                    // Listing an unadvertised section would hang a server
+                    // that answers it with malformed JSON.
+                    relist::RelistTarget {
+                        server: Arc::clone(server),
+                        restarted: *restarted,
+                        list_tools: *advertises_tools,
+                        list_prompts: *advertises_prompts,
+                        timeout: self.spec.startup_timeout,
+                        resources: self.resources,
+                    }
+                }
+                State::Running { restarted, .. } => {
+                    // A Running slot that fails the first arm is gone: `expired`
+                    // is written at exactly one site, with `gone`, under the
+                    // same lock (`wait.rs::expire_if_awaiting`), so an expired
+                    // server is gone too and the guard above covered the live
+                    // case. It died while idle: this re-list is the first to see
+                    // it, as the entry of `serve` is for a call.
+                    let death = died(&self.spec.name, !*restarted, self.spec.remote());
+                    return Relisted::Replace {
+                        record: Some(ServerRecord::Failed(death.record)),
+                    };
+                }
+                State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
+                    return Relisted::Replace { record: None };
+                }
+            }
+        };
+        // The state lock is released for the RPC, as `serve` releases it
+        // for a launch: a concurrent serve or stop moves the slot while
+        // the listing runs, and the commit revalidates under its own
+        // lock before installing anything.
+        let restarted = target.restarted;
+        match relist::fetch(&target, &self.clock) {
+            relist::Fetched::Up { listed } => Relisted::Up { listed },
+            relist::Fetched::Failed {
+                error: Some(CallError::Timeout),
+            } => {
+                // The bound outlived the listing: the startup deadline
+                // the handshake's listing shares, restartable as a death
+                // the next call would restart. Built without moving the
+                // slot.
+                let mut death = not_started(
+                    &self.spec.name,
+                    &crate::server::StartError::Deadline,
+                    self.spec.startup_timeout,
+                    self.spec.required,
+                    self.spec.remote(),
+                );
+                death.record.will_restart = true;
+                Relisted::Replace {
+                    record: Some(ServerRecord::Failed(death.record)),
+                }
+            }
+            relist::Fetched::Failed {
+                error: Some(CallError::Gone),
+            } => {
+                let death = died(&self.spec.name, !restarted, self.spec.remote());
+                Relisted::Replace {
+                    record: Some(ServerRecord::Failed(death.record)),
+                }
+            }
+            relist::Fetched::Failed { .. } => Relisted::Replace { record: None },
+        }
+    }
 }
 
 impl Slot {
@@ -215,7 +389,7 @@ impl Slot {
     /// untimed.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the observed companion adds only the Timing"
+        reason = "the observed companion adds Timing plus the advertises_tools and advertises_prompts flags"
     )]
     pub(crate) fn running_observed(
         spec: ServerSpec,
@@ -225,6 +399,8 @@ impl Slot {
         version: &str,
         server: Server,
         listed: Cached,
+        advertises_tools: bool,
+        advertises_prompts: bool,
         timing: Option<contract::diag::Timing>,
     ) -> Arc<Self> {
         Self::new(
@@ -237,6 +413,8 @@ impl Slot {
                 server: Arc::new(server),
                 live: names(&listed.tools),
                 listed,
+                advertises_tools,
+                advertises_prompts,
                 restarted: false,
             },
             timing,
@@ -253,6 +431,16 @@ impl Slot {
         &self.spec
     }
 
+    /// Whether the slot served before and serves no more: `Down`
+    /// after a first death, `Dead` after a second or a stop. The
+    /// reload replaces those beside the old slot (shadow-start first,
+    /// commit swaps, the name lands in `restarted`); a `NotStarted`
+    /// slot never served and starts fresh through the forced stage
+    /// path.
+    pub(crate) fn served_before(&self) -> bool {
+        matches!(&*lock(&self.state), State::Down { .. } | State::Dead { .. })
+    }
+
     /// Whether the server runs now: the slot holds a live server. The
     /// hub's `mcp_servers` answer reads this live, so a server that
     /// died mid-session reads not-running and its row falls back to the
@@ -260,6 +448,17 @@ impl Slot {
     /// the per-server commands").
     pub(crate) fn is_running(&self) -> bool {
         matches!(*lock(&self.state), State::Running { .. })
+    }
+
+    /// Whether the slot answers a re-list: running with a live, unexpired
+    /// server. A server that died or expired while idle replaces: the
+    /// classification reads this, so a dead slot never takes the keep
+    /// path.
+    pub(crate) fn is_live(&self) -> bool {
+        match &*lock(&self.state) {
+            State::Running { server, .. } => !server.is_gone() && !server.is_expired(),
+            State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => false,
+        }
     }
 
     /// The bare tool names live now: the running server's list, else
@@ -281,6 +480,36 @@ impl Slot {
             | State::NotStarted { cached: listed } => listed.tools.clone(),
             State::Dead { .. } => Vec::new(),
         }
+    }
+
+    /// Installs re-listed `listed` on a still-running slot, refreshing the
+    /// live set the removed-tool check reads, and answers whether the
+    /// install landed. A slot whose server died, stopped or was replaced
+    /// between the re-list and the commit keeps what it has and answers
+    /// false — the check and the install hold the same lock, so the
+    /// answer also covers a death racing the commit — and the commit
+    /// writes the cache only on true, so a dead keep never persists lists
+    /// its server never served. Holds only the state lock, never the
+    /// lease, so it cannot wedge against a concurrent serve or stop.
+    pub(crate) fn install_relisted(&self, listed: Cached) -> bool {
+        let mut state = lock(&self.state);
+        if let State::Running {
+            server,
+            live,
+            listed: held,
+            ..
+        } = &mut *state
+        {
+            // Revalidated under the same lock: a keep that died after
+            // the stage keeps what it has.
+            if server.is_gone() || server.is_expired() {
+                return false;
+            }
+            *live = names(&listed.tools);
+            *held = listed;
+            return true;
+        }
+        false
     }
 
     /// The running server, starting it first when the slot is not
@@ -387,6 +616,8 @@ impl Slot {
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
                 let live = open.listed;
+                let advertises_tools = open.advertises_tools;
+                let advertises_prompts = open.advertises_prompts;
                 if live != listed {
                     cache::write(&self.cache, &name, &self.spec.key(), &live);
                 }
@@ -399,6 +630,8 @@ impl Slot {
                     server: Arc::clone(&server),
                     live: tools,
                     listed: live,
+                    advertises_tools,
+                    advertises_prompts,
                     restarted: restart,
                 };
                 if ready {
@@ -465,6 +698,26 @@ impl Slot {
                 }
             }
         }
+    }
+
+    /// The death this check is the first to see, as the entry of `serve`
+    /// is for a call: a running server that exited while idle, built
+    /// without moving the slot. Nothing for an expiry, which restarts
+    /// with no record, or a live server: the stage reads this to carry
+    /// the old death into the replacement's records.
+    pub(crate) fn idle_death(&self) -> Option<ServerRecord> {
+        let state = lock(&self.state);
+        let State::Running {
+            server, restarted, ..
+        } = &*state
+        else {
+            return None;
+        };
+        if !server.is_gone() {
+            return None;
+        }
+        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+        Some(ServerRecord::Failed(death.record))
     }
 
     /// Maps a wire outcome to its fault: the death record only when the
@@ -561,49 +814,6 @@ impl Slot {
         Some(death)
     }
 
-    /// Takes the slot's start lease, waiting while another attempt holds
-    /// it: one start runs at a time, and a stop waits for the in-flight
-    /// one. The mutex is never held across a start, only across the flag;
-    /// the guard releases it on unwind too, so a panic never wedges the
-    /// slot.
-    fn acquire(&self) -> LeaseGuard<'_> {
-        let mut busy = lock(&self.lease);
-        while *busy {
-            #[cfg(test)]
-            self.note_lease_wait();
-            busy = self.wake.wait(busy).unwrap_or_else(PoisonError::into_inner);
-        }
-        *busy = true;
-        LeaseGuard {
-            lease: &self.lease,
-            wake: &self.wake,
-        }
-    }
-
-    /// Whether both locks are free right now: the state lock and the
-    /// lease lock. Test-only: a test's timing guard calls it while the
-    /// attempt's guard drops, proving no diagnostic drop holds either
-    /// lock. A mutant that moves the drop under one fails the test.
-    #[cfg(test)]
-    pub(crate) fn locks_free(&self) -> bool {
-        self.state.try_lock().is_ok() && self.lease.try_lock().is_ok()
-    }
-
-    /// Signals once when an acquirer finds the lease held. Test-only:
-    /// installed before a contender starts, taken on its first wait.
-    #[cfg(test)]
-    fn note_lease_wait(&self) {
-        if let Some(hook) = lock(&self.wait_hook).take() {
-            hook.send(()).unwrap_or(());
-        }
-    }
-
-    /// Installs the one-shot [`Slot::note_lease_wait`] signal. Test-only.
-    #[cfg(test)]
-    pub(crate) fn on_lease_wait(&self, hook: std::sync::mpsc::Sender<()>) {
-        *lock(&self.wait_hook) = Some(hook);
-    }
-
     /// Runs `hook` after the next `serve` reserves its attempt and
     /// before it launches. Test-only: holds the replacement on the
     /// reservation so a late death report lands inside it.
@@ -684,24 +894,5 @@ fn died(server: &str, will_restart: bool, remote: bool) -> Death {
     }
 }
 
-/// One in-flight start's hold on its slot: clearing the flag and waking
-/// the waiters on drop, so an unwind releases the lease too.
-struct LeaseGuard<'a> {
-    lease: &'a Mutex<bool>,
-    wake: &'a Condvar,
-}
-
-impl Drop for LeaseGuard<'_> {
-    fn drop(&mut self) {
-        *lock(self.lease) = false;
-        self.wake.notify_all();
-    }
-}
-
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 #[cfg(test)]
-#[path = "slot_tests.rs"]
 mod tests;

@@ -80,22 +80,26 @@ pub(crate) fn shutting_down() -> StartError {
 /// handshake's shared startup `deadline`: the deadline is checked before
 /// every page request, so a server answering every page at once with a
 /// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
-/// missed deadline fails the start; any other failure runs `fail`, which
-/// fails the start for tools and keeps no prompts for prompts.
-fn list_pages<T: serde::de::DeserializeOwned>(
+/// missed deadline returns `Some(CallError::Timeout)`, a transport error
+/// its own `Some`, and a page that is not a result `None`: the caller maps
+/// the failure — the handshake to the start error, the reload's re-list to
+/// the replace path — so a login fails the start and falls back to the
+/// replace path alike.
+pub(crate) fn list_pages<T: serde::de::DeserializeOwned>(
     server: &Server,
     clock: &Arc<dyn Clock>,
     method: &str,
     entry: &str,
     deadline: Instant,
     cancel: &dyn Cancel,
-    fail: impl Fn() -> Result<Vec<T>, StartError>,
-) -> Result<Vec<T>, StartError> {
+) -> Result<Vec<T>, Option<CallError>> {
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
+    // A missed bound ends the same way for every caller; the `Some`/`None`
+    // failure rides to the caller's own mapping below.
     loop {
         if clock.now() >= deadline {
-            return Err(StartError::Deadline);
+            return Err(Some(CallError::Timeout));
         }
         let params = match &cursor {
             Some(cursor) => serde_json::json!({"cursor": cursor}),
@@ -103,17 +107,15 @@ fn list_pages<T: serde::de::DeserializeOwned>(
         };
         let page = match server.request(method, &params, deadline, cancel, None) {
             Ok(value) => value,
-            Err(CallError::Timeout) => return Err(StartError::Deadline),
-            Err(CallError::Login(detail)) => return Err(StartError::Login(detail)),
-            Err(_) => return fail(),
+            Err(error) => return Err(Some(error)),
         };
         let object = match page.as_object() {
             Some(object) => object,
-            None => return fail(),
+            None => return Err(None),
         };
         match object.get(entry).and_then(Value::as_array) {
             Some(found) => listed.extend(entries(found.clone())),
-            None => return fail(),
+            None => return Err(None),
         }
         cursor = object
             .get("nextCursor")
@@ -124,6 +126,20 @@ fn list_pages<T: serde::de::DeserializeOwned>(
         }
     }
     Ok(listed)
+}
+
+/// Maps a failed page to the failures the start refuses: a missed
+/// deadline fails it, and a login needs a usable OAuth login. `None`
+/// means the page was not a result, which the tools arm refuses while the
+/// prompts arm keeps no prompts — but a login fails the start from either
+/// list, exactly as the re-list falls back to the replace path from
+/// either list.
+fn strict_list_error(error: Option<CallError>) -> Option<StartError> {
+    match error {
+        Some(CallError::Timeout) => Some(StartError::Deadline),
+        Some(CallError::Login(detail)) => Some(StartError::Login(detail)),
+        _ => None,
+    }
 }
 
 /// Why [`Server::call`] failed.
@@ -210,6 +226,13 @@ pub(crate) struct OpenServer {
     pub server: Server,
     /// The tools and prompts it listed.
     pub listed: Cached,
+    /// Whether `initialize` advertised the tools capability: a re-list
+    /// asks again only for advertised sections, since listing an
+    /// unadvertised section can hang a server that answers it with
+    /// malformed JSON.
+    pub advertises_tools: bool,
+    /// Whether `initialize` advertised the prompts capability.
+    pub advertises_prompts: bool,
 }
 
 impl Server {
@@ -340,7 +363,7 @@ impl Server {
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let mut handshake = |server: &Server| -> Result<Cached, StartError> {
+        let mut handshake = |server: &Server| -> Result<(Cached, bool, bool), StartError> {
             let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -384,15 +407,8 @@ impl Server {
                 .and_then(|capabilities| capabilities.get("tools"))
                 .is_some_and(Value::is_object);
             let tools: Vec<ListedTool> = if advertises_tools {
-                list_pages(
-                    server,
-                    clock,
-                    "tools/list",
-                    "tools",
-                    deadline,
-                    &stopping,
-                    || Err(not_a_list()),
-                )?
+                list_pages(server, clock, "tools/list", "tools", deadline, &stopping)
+                    .map_err(|error| strict_list_error(error).unwrap_or_else(not_a_list))?
             } else {
                 Vec::new()
             };
@@ -407,20 +423,25 @@ impl Server {
             // or is not a result leaves the server with no prompts while
             // the start goes on; only a missed deadline fails it
             // (`docs/mcp.md`, "Prompts and resources").
-            let advertises = initialize
+            let advertises_prompts = initialize
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("prompts"))
                 .is_some_and(Value::is_object);
-            let prompts: Vec<ListedPrompt> = if advertises {
-                list_pages(
+            let prompts: Vec<ListedPrompt> = if advertises_prompts {
+                match list_pages(
                     server,
                     clock,
                     "prompts/list",
                     "prompts",
                     deadline,
                     &stopping,
-                    || Ok(Vec::new()),
-                )?
+                ) {
+                    Ok(prompts) => prompts,
+                    Err(error) => match strict_list_error(error) {
+                        Some(error) => return Err(error),
+                        None => Vec::new(),
+                    },
+                }
             } else {
                 Vec::new()
             };
@@ -430,14 +451,23 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("resources"))
                 .is_some_and(Value::is_object);
-            Ok(Cached {
-                tools,
-                prompts,
-                resources,
-            })
+            Ok((
+                Cached {
+                    tools,
+                    prompts,
+                    resources,
+                },
+                advertises_tools,
+                advertises_prompts,
+            ))
         };
         match handshake(&server) {
-            Ok(listed) => Ok(OpenServer { server, listed }),
+            Ok((listed, advertises_tools, advertises_prompts)) => Ok(OpenServer {
+                server,
+                listed,
+                advertises_tools,
+                advertises_prompts,
+            }),
             Err(error) => {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
