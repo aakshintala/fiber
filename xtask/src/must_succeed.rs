@@ -93,6 +93,7 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         "NO_DATA_AFTER_REJECTION",
         ABSENT,
     ),
+    kept("crates/cli/src/doctor/files_tests.rs", "ABSENT", ABSENT),
     held("crates/cli/src/extension_test_tests.rs", "held by #3103"),
     held("crates/extensions/src/hooks_tests.rs", "held by #3028"),
     held("crates/extensions/src/host_tests.rs", "held by #3028"),

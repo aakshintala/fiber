@@ -1,6 +1,7 @@
 //! `run`: what it shows, what it asks and what it records, with the input
 //! and both output streams in memory.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -14,7 +15,6 @@ use extensions::{Fetch, Origin};
 use fakes::Deadline;
 
 const APPROVE_CHILD: &str = "FIBER_CLI_APPROVE_EXIT_CHILD";
-const CHILD_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long an approval run may take before the test fails instead of
 /// hanging it.
@@ -306,7 +306,7 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
         let output = fakes::rerun_prepared(
             &format!("{name}::approve_returns_zero_on_success_and_two_on_refusal"),
             &[(APPROVE_CHILD, case)],
-            Deadline::after(CHILD_DEADLINE),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             |command| {
                 command
                     .env("FIBER_HOME", setup.home())

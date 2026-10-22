@@ -1,6 +1,7 @@
 use super::*;
 use crate::login::Plain;
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use serde_json::json;
 use std::io::{BufRead, Cursor};
 use std::os::unix::{fs::PermissionsExt, net::UnixStream};
@@ -16,7 +17,7 @@ fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), Failure>
     let (client, mut server) = UnixStream::pair().unwrap();
     let (done, done_rx) = mpsc::channel();
     let (served, served_rx) = mpsc::channel();
-    let deadline = Deadline::after(Duration::from_secs(5));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     thread::scope(|scope| {
         let client_home = home.to_owned();
         scope.spawn(move || {
@@ -37,7 +38,7 @@ fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), Failure>
             done.send((result, err)).unwrap();
         });
         scope.spawn(move || {
-            server.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            server.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
             let mut text = String::new();
             io::BufReader::new(server.try_clone().unwrap()).read_line(&mut text).unwrap();
             assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"id":"c_pair", "command":"pair", "args":{"code":"ABCDE12345"}}));
