@@ -160,8 +160,6 @@ impl Drop for LeaseGuard<'_> {
     }
 }
 
-/// Locks `state`, recovering from poison as the slot always has: a
-/// panicking attempt never wedges the next one.
 /// The running-server re-list: the slot entry extracts what the re-list
 /// needs and passes it explicitly; the child does the RPC and payload
 /// work, reached through [`Slot::relist`], which the sync boundary
