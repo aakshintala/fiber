@@ -72,10 +72,12 @@ fn first_card_bg(grid: &Grid) -> Option<Colour> {
 
 /// Which of the three hint-and-lift conditions holds on `grid`: the foot
 /// hint, the first card's lift, the second card's flat tint. A missing
-/// card counts as false, so the report names it instead of panicking.
+/// card, or a `raised` that is not `Rgb`, counts as false, so the report
+/// names it instead of panicking.
 fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool, bool) {
     let hint = grid.contents.contains(HINT_MIDDLE);
-    let first = first_card_bg(grid).is_some_and(|bg| bg == lifted(raised));
+    let first =
+        first_card_bg(grid).is_some_and(|bg| try_lift(raised).is_some_and(|lift| bg == lift));
     let second = card_row_at(grid, "second live")
         .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == *flat);
     (hint, first, second)
@@ -84,35 +86,22 @@ fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool,
 /// Waits for the hint and the lifted first card, reporting which of the
 /// three conditions was false in the last checked grid when the wait
 /// expires, with the first card's actual background (`none` when the card
-/// is absent), `raised` and `lifted(raised)`. It keeps `wait_screen`'s deadline and fast-fail path: the
-/// report rides on the timeout panic instead of replacing it, and it comes
-/// first, then the wait's name, then the screen dump.
+/// is absent), `raised` and `lifted(raised)`. It keeps `wait_screen`'s
+/// deadline and fast-fail path; the report leads the one failure panic, so
+/// it comes first, then the wait's name, then the screen dump.
 #[track_caller]
 fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
     let last = std::cell::Cell::new((false, false, false));
     let first_bg = std::cell::Cell::new(None);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run.wait_screen("the hint and the lifted first card", |grid| {
-            // Recorded before the checks: a `lifted` panic still leaves the
-            // card's background for the report.
+    run.wait_screen_leading(
+        "the hint and the lifted first card",
+        |grid| {
             first_bg.set(first_card_bg(grid));
             let checks = hint_lift_checks(grid, raised, flat);
             last.set(checks);
             checks.0 && checks.1 && checks.2
-        })
-    }));
-    match result {
-        Ok(grid) => grid,
-        Err(payload) => {
-            let base = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|held| (*held).to_owned())
-                })
-                .unwrap_or_else(|| "the hint and the lifted first card".to_owned());
+        },
+        || {
             let (hint, first, second) = last.get();
             let card = first_bg
                 .get()
@@ -121,13 +110,11 @@ fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
                 || "none (raised is not Rgb)".to_owned(),
                 |lift| format!("{lift:?}"),
             );
-            // The report leads: the screen dump that closes `base` can outgrow
-            // the flaky-report limit and cut off anything placed after it.
-            panic!(
-                "last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}; {base}"
-            );
-        }
-    }
+            format!(
+                "last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}; "
+            )
+        },
+    )
 }
 
 /// The bg of a cell inside the named card's text rows: the cards start at
@@ -442,23 +429,6 @@ fn rail_focus_bolds_the_focused_card_without_colour() {
     reap(&hub);
 }
 
-/// The report comes before the wait's name, and the wait's name before the
-/// screen dump, so a report cut at a length limit keeps the report.
-fn assert_report_precedes_the_screen(message: &str) {
-    let at = |n: &str| {
-        message
-            .find(n)
-            .unwrap_or_else(|| panic!("{n:?} in {message:?}"))
-    };
-    let (report, wait, screen) = (
-        at("last check:"),
-        at("waited until the deadline for the hint and the lifted first card"),
-        at("screen:"),
-    );
-    assert!(report < wait, "the report precedes the wait: {message:?}");
-    assert!(wait < screen, "the wait precedes the screen: {message:?}");
-}
-
 /// The hint-and-lift wait names the false condition when its deadline is
 /// spent: an empty grid reports all three false, and a grid holding only
 /// the hint reports the hint true with both tints false, so the next
@@ -495,7 +465,14 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
         message.contains("the hint and the lifted first card"),
         "the failure names the wait: {message:?}"
     );
-    assert_report_precedes_the_screen(&message);
+    assert!(
+        message.starts_with("last check:"),
+        "the report leads: {message:?}"
+    );
+    assert!(
+        message.contains("screen:\n"),
+        "the screen dump follows: {message:?}"
+    );
     assert!(
         message.contains("hint present=false"),
         "the failure names the hint: {message:?}"
@@ -593,7 +570,7 @@ fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) 
 
 /// The report carries the first card's actual background beside `raised`
 /// and `lifted(raised)`, and survives a `raised` that cannot be lifted:
-/// the `lifted` panic inside the check no longer hides the card's tint.
+/// the check reads it as not lifted, so the card's tint stays in the report.
 #[test]
 fn hint_lift_report_shows_the_first_cards_actual_background() {
     let flat = Colour::Rgb(40, 50, 60);
@@ -610,8 +587,12 @@ fn hint_lift_report_shows_the_first_cards_actual_background() {
     );
     let message = spent_wait_message_with_a_painted_first_card(&Colour::Indexed(7), &flat);
     assert!(
-        message.contains("an Rgb tint, not Indexed(7)"),
-        "the original panic stays in the report: {message:?}"
+        message.contains("first card lifted=false"),
+        "a raised tint that cannot lift is a false check: {message:?}"
+    );
+    assert!(
+        message.starts_with("last check:") && message.contains("screen:\n"),
+        "the report still leads the wait and the screen: {message:?}"
     );
     assert!(
         message.contains(

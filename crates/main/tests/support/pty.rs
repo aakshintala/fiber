@@ -768,7 +768,23 @@ impl Run {
     /// the last check saw, never a fresh read, and names how much of the
     /// deadline remained when the wait began.
     #[track_caller]
-    pub(crate) fn wait_screen(&mut self, what: &str, mut done: impl FnMut(&Grid) -> bool) -> Grid {
+    pub(crate) fn wait_screen(&mut self, what: &str, done: impl FnMut(&Grid) -> bool) -> Grid {
+        self.wait_screen_leading(what, done, String::new)
+    }
+
+    /// [`Run::wait_screen`] whose failure panic starts with `lead()`, so a
+    /// caller's report comes before the wait's name and the screen dump
+    /// and survives a length limit on the captured output. It is the one
+    /// panic, so no earlier panic hook output can push the report out.
+    /// `lead` runs only on failure and supplies its own separator; the
+    /// predicate, the deadline and the fast-fail path are `wait_screen`'s.
+    #[track_caller]
+    pub(crate) fn wait_screen_leading(
+        &mut self,
+        what: &str,
+        mut done: impl FnMut(&Grid) -> bool,
+        lead: impl FnOnce() -> String,
+    ) -> Grid {
         let start_left = self.deadline.left();
         loop {
             let (grid, ended, snapshot_len) = {
@@ -790,13 +806,15 @@ impl Run {
             }
             if ended {
                 panic!(
-                    "the terminal ended while waiting for {what}; screen:\n{}",
+                    "{}the terminal ended while waiting for {what}; screen:\n{}",
+                    lead(),
                     grid.contents
                 );
             }
             if self.deadline.recv(&self.wakes).is_err() {
                 panic!(
-                    "waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
+                    "{}waited until the deadline for {what} (deadline had {start_left:?} left when the wait began); screen:\n{}",
+                    lead(),
                     grid.contents
                 );
             }
@@ -1308,6 +1326,47 @@ mod tests {
         assert!(
             fresh.contains("marker"),
             "a fresh read after the check sees the marker"
+        );
+    }
+
+    /// A led wait puts the caller's lead first and leaves the wait's name,
+    /// the remaining deadline and the screen dump after it; the same wait
+    /// with no lead still opens with the wait's own text. Both waits
+    /// start on a fake clock advanced past the bound, so they expire at
+    /// once (`docs/testing.md`, "Waits and timeouts").
+    #[test]
+    fn wait_screen_leading_puts_the_lead_before_the_wait_and_the_screen() {
+        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+        let deadline = Deadline::on(&**clock);
+        let terminal = open(80, 24);
+        let main = fs::File::from(terminal.main);
+        let mut run = Run::attach(main, 80, 24, deadline);
+        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+        clock.advance(fakes::deadline::WAITS);
+        let panic_text = |result: std::thread::Result<Grid>| {
+            result
+                .unwrap_err()
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default()
+        };
+        let led = panic_text(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || run.wait_screen_leading("the needle", |_| false, || "the lead; ".to_owned()),
+        )));
+        assert!(
+            led.starts_with("the lead; waited until the deadline for the needle (deadline had "),
+            "the lead comes first: {led:?}"
+        );
+        assert!(
+            led.contains("left when the wait began); screen:\n"),
+            "the deadline and the screen dump follow: {led:?}"
+        );
+        let plain = panic_text(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || run.wait_screen("the needle", |_| false),
+        )));
+        assert!(
+            plain.starts_with("waited until the deadline for the needle (deadline had "),
+            "a wait with no lead opens with its own text: {plain:?}"
         );
     }
 }
