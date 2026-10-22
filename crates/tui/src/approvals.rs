@@ -183,7 +183,7 @@ impl Queue {
             .saturating_add(1);
         let session = name(&request.session)
             .filter(|name| !name.is_empty())
-            .map(|name| text::clean(&name))
+            .map(|name| crate::text::controls_to_space(&name))
             .unwrap_or_else(|| request.session.0.clone());
         Some(match &request.ask {
             Ask::Approval(approval) => {
@@ -396,14 +396,15 @@ impl Queue {
                     // The main argument, never JSON: raw text that was not
                     // JSON shows as the model sent it.
                     let summary = match &call.arguments {
-                        Value::String(text) => text::clean(text),
+                        Value::String(text) => crate::text::controls_to_space(text),
                         Value::Null
                         | Value::Bool(_)
                         | Value::Number(_)
                         | Value::Array(_)
-                        | Value::Object(_) => {
-                            text::clean(&format::summary(&call.name, &call.arguments))
-                        }
+                        | Value::Object(_) => crate::text::controls_to_space(&format::summary(
+                            &call.name,
+                            &call.arguments,
+                        )),
                     };
                     self.calls
                         .insert((session.0.clone(), action), (call.name, summary));
@@ -425,7 +426,7 @@ impl Queue {
                             .clone()
                             .unwrap_or_default()
                             .iter()
-                            .map(|path| text::clean(path))
+                            .map(|path| crate::text::controls_to_space(path))
                             .collect(),
                         step: asked.step,
                         feedback: String::new(),

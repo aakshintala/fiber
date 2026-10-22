@@ -143,14 +143,14 @@ impl Draft {
             Edit::LineStart => self.line_start(),
             Edit::LineEnd => self.line_end(),
             Edit::Delete => self.delete(),
-            Edit::Paste(text) => self.paste(&text),
+            Edit::Paste(text) => self.insert_paste(text),
         }
     }
 
     /// Inserts `ch` at the cursor. A control character other than a tab
     /// is not inserted; a line break comes from [`Draft::line_break`].
     pub(crate) fn insert(&mut self, ch: char) {
-        if ch == '\t' || !ch.is_control() {
+        if ch == '\t' || crate::text::printable(ch) {
             self.put(Piece::Char(ch));
         }
     }
@@ -165,7 +165,12 @@ impl Draft {
     /// [`PASTE_LINES`] lines, not counting a trailing line break, become
     /// one token.
     pub(crate) fn paste(&mut self, text: &str) {
-        let text = clean(text);
+        self.insert_paste(crate::text::paste_clean(text));
+    }
+
+    /// Inserts `text`, already clean as [`crate::text::paste_clean`] leaves
+    /// it, as a paste.
+    fn insert_paste(&mut self, text: String) {
         if text.is_empty() {
             return;
         }
@@ -213,7 +218,7 @@ impl Draft {
         ) else {
             return;
         };
-        let text = clean(text);
+        let text = crate::text::paste_clean(text);
         if line_count(&text) > PASTE_LINES {
             if let Some(piece) = self.pieces.get_mut(at) {
                 *piece = token(number, text);
@@ -348,7 +353,7 @@ impl Draft {
     /// breaks read as a paste's do, and no token.
     pub(crate) fn set(&mut self, text: &str) {
         self.clear();
-        for ch in clean(text).chars() {
+        for ch in crate::text::paste_clean(text).chars() {
             self.put(Piece::Char(ch));
         }
     }
@@ -418,7 +423,7 @@ impl Draft {
             .collect();
         let mut used = vec![false; images.len()];
         let mut pieces = Vec::new();
-        let cleaned = clean(text);
+        let cleaned = crate::text::paste_clean(text);
         let mut rest = cleaned.as_str();
         while let Some(ch) = rest.chars().next() {
             if ch == '['
@@ -705,16 +710,6 @@ impl Piece {
 /// A word is a run of alphanumeric characters or `_`.
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
-}
-
-/// Pasted text as the draft holds it: `\r\n` and `\r` become line breaks,
-/// and control characters but line breaks and tabs go.
-fn clean(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-        .collect()
 }
 
 /// The lines of `text`, not counting a trailing line break.
