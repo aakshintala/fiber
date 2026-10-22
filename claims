@@ -24,3 +24,4 @@ docs/user/getting-help.md	docs/1254-doctor-user-page	grant	2026-10-21T00:37:11Z	
 crates/contract/src/provider.rs	box-3016	grant	2026-10-22T00:12:17Z	HOST:/home/aakshintala/work/fiber-worktrees/fix/3016-one-hour-cache-write-price	
 docs/prompt-cache.md	box-3016	grant	2026-10-22T00:21:37Z	HOST:/home/aakshintala/work/fiber-worktrees/fix/3016-one-hour-cache-write-price	
 crates/cli/src/model_lists.rs	fiber-3092	grant	2026-10-22T07:46:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/cli/3092-setup-login-hang-and-notices	
+crates/main/src/configure_tests.rs	1723	grant	2026-10-22T22:00:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
