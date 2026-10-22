@@ -1374,6 +1374,50 @@ fn editing_keys_do_nothing_while_the_key_map_is_open() {
     key(&mut app, '!');
     assert_eq!(app.draft(), "ab!");
 }
+/// The open import report is an overlay: strokes resolve through the
+/// overlay context while it is open, so nothing types into the draft,
+/// the chip row or the conversation behind it.
+#[test]
+fn the_open_report_is_an_overlay() {
+    let mut app = homed(80, 24);
+    assert_eq!(app.key_context(), Context::Input);
+    app.open_import_report(None, contract::events::ImportedNames::default(), Vec::new());
+    assert!(app.import_report_open());
+    assert_eq!(app.key_context(), Context::Overlay);
+}
+
+/// A paste and home-owned arrows change neither the draft nor the
+/// report while the report is open: the paste never reaches the draft
+/// behind it, and the arrows never reach the chip row or the draft.
+/// The draft is byte-identical after.
+#[test]
+fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
+    let mut app = home();
+    app.home.as_mut().expect("home").launch.model = Some("acme/m1".to_owned());
+    type_text(&mut app, "ab");
+    frame(&mut app);
+    assert_eq!(press(&mut app, "down"), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
+    );
+    app.open_import_report(None, contract::events::ImportedNames::default(), Vec::new());
+    assert!(app.import_report_open());
+    // A paste behind the report changes neither the draft nor the report.
+    assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
+    // Home-owned arrows through the bindings path change neither either.
+    assert_eq!(press(&mut app, "left"), Effect::None);
+    assert_eq!(press(&mut app, "right"), Effect::None);
+    assert_eq!(app.draft(), "ab");
+    let report = app.import_report().expect("the report stays open");
+    assert_eq!((report.copied_count(), report.left_count()), (0, 0));
+    assert_eq!(report.top(), 0);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Workspace))
+    );
+    assert!(app.notices().is_empty());
+}
 
 #[test]
 fn ctrl_u_deletes_the_draft_line_back_to_its_start() {
