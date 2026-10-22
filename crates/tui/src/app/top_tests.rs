@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
+use contract::clock::Clock;
+
 use super::{Surface, between};
 use crate::app::App;
 use crate::home::{Launch, Spot};
@@ -364,6 +366,39 @@ fn the_context_is_the_heads() {
     assert_eq!(app.key_context(), Context::Overlay);
     open(&mut app, Surface::Quit);
     assert_eq!(app.key_context(), Context::Overlay);
+}
+
+#[test]
+fn a_focused_chip_on_home_gives_the_input_context() {
+    let mut app = home_app();
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let now = fakes::clock::FakeClock::new().now();
+    // A row in the list is a stop of the conversation's kind.
+    app.on_key(Key::Up, now);
+    assert_eq!(app.top_surface(), Surface::Focus);
+    assert!(app.focused_chip().is_none());
+    assert_eq!(app.key_context(), Context::Conversation);
+    app.on_key(Key::Esc, now);
+    app.on_key(Key::BackTab, now);
+    assert!(app.focused_chip().is_some());
+    assert_eq!(app.top_surface(), Surface::Focus);
+    assert_eq!(app.key_context(), Context::Input);
+}
+
+#[test]
+fn esc_closes_the_completion_panel_above_the_notice_overlay_first() {
+    let mut app = session_app();
+    open(&mut app, Surface::Notice);
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Char('/'), now);
+    assert_eq!(app.top_surface(), Surface::Completion);
+    assert!(app.top_surfaces().contains(&Surface::Notice));
+    app.on_key(Key::Esc, now);
+    assert!(app.completions().is_none());
+    assert_eq!(app.top_surface(), Surface::Notice);
 }
 
 #[test]

@@ -753,3 +753,14 @@ fn a_paste_with_only_the_quit_question_open_reaches_no_draft() {
     assert_eq!(app.input().expand(), "");
     assert!(app.quit_open());
 }
+
+#[test]
+fn a_paste_with_the_key_map_open_reaches_no_draft() {
+    use crate::app::Surface;
+    use crate::app::top::tests::{open, session_app};
+    let mut app = session_app();
+    open(&mut app, Surface::Keymap);
+    assert_eq!(app.on_edit(Edit::Paste("pasted".to_owned())), Effect::None);
+    assert_eq!(app.input().expand(), "");
+    assert_eq!(app.top_surface(), Surface::Keymap);
+}

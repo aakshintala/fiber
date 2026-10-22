@@ -3258,6 +3258,18 @@ mod stacked {
     }
 
     #[test]
+    fn the_cross_closes_the_report_beneath_the_quit_question_and_keeps_the_question() {
+        use crate::mouse::TargetId;
+        let mut app = long_session();
+        open(&mut app, Surface::Report);
+        open(&mut app, Surface::Quit);
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Report), "{listed:?}");
+        assert!(listed.contains(&Surface::Quit), "{listed:?}");
+    }
+
+    #[test]
     fn the_cross_closes_the_notice_overlay_before_the_results_and_the_search_panel_before_both() {
         use crate::mouse::TargetId;
         let mut app = long_session();
@@ -3338,6 +3350,53 @@ mod stacked {
             assert!(!slab.is_empty(), "{frame:?}");
             app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
             assert_eq!(app.home_list_scroll(), 0, "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn a_notice_overlay_on_home_leaves_the_list_rows_below_it_to_the_wheel() {
+        // Thirteen rows put list rows under the notice rows' slab and
+        // inside what a whole-screen slab would cover.
+        let mut app = home_app();
+        app.set_size(60, 13);
+        open(&mut app, Surface::Notice);
+        let slab = crate::view::frame_of(&app, Surface::Notice);
+        assert!(
+            slab.bottom() <= 6,
+            "the slab sits in the notice rows: {slab:?}"
+        );
+        app.on_wheel(&wheel(30, 6, true));
+        assert!(app.home_list_scroll() > 0);
+    }
+
+    #[test]
+    fn a_swapped_view_on_home_gives_the_notice_frame_the_whole_screen() {
+        for kind in ["keys", "settings", "picker"] {
+            let mut app = short_home();
+            app.set_configure(Some(
+                std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]))
+                    as std::sync::Arc<dyn crate::Configure>,
+            ));
+            match kind {
+                "picker" => {
+                    app.on_key(Key::CtrlL, now());
+                }
+                _ => {
+                    for ch in format!("/{kind}").chars() {
+                        app.on_key(Key::Char(ch), now());
+                    }
+                    app.on_key(Key::Enter, now());
+                }
+            }
+            assert!(
+                app.keys_screen_open() || app.config_view_open() || app.model_picker_open(),
+                "{kind}"
+            );
+            open(&mut app, Surface::Notice);
+            let slab = crate::view::frame_of(&app, Surface::Notice);
+            // Centred on the 12 rows, not squeezed into the notice rows.
+            assert!(!slab.is_empty(), "{kind}");
+            assert_eq!(slab.y, (12 - slab.height) / 2, "{kind}: {slab:?}");
         }
     }
 

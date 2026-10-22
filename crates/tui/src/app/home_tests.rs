@@ -1827,6 +1827,22 @@ fn home_arrows_focus_the_list_and_entry_bar() {
 }
 
 #[test]
+fn up_on_a_home_with_nothing_open_focuses_the_last_row_and_esc_drops_it() {
+    let mut app = home();
+    two_rows(&mut app);
+    drawn(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.top_surface(), crate::app::Surface::Draft);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[1])))
+    );
+    assert_eq!(app.on_key(Key::Esc, now), Effect::None);
+    assert_eq!(app.focused(), None);
+}
+
+#[test]
 fn typing_into_the_empty_draft_inserts_text_with_rows_present() {
     // Printable keys reach the draft while the box has focus: only ↓
     // enters the list, and j and k move only while it has focus.
