@@ -389,6 +389,24 @@ fn shows(screen: &Grid, needle: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(needle))
 }
 
+/// Clicks the `✕` on the grid's `cache_rebuild` notice row: an SGR press
+/// then its release on the same cell. The notice fades only after ten
+/// seconds of real time, so a journey dismisses it instead.
+#[track_caller]
+fn dismiss_cache_rebuild(run: &mut Run, screen: &Grid) {
+    let y = screen
+        .rows
+        .iter()
+        .position(|row| row.contains("cache_rebuild"))
+        .unwrap_or_else(|| panic!("no cache_rebuild notice in {:?}", screen.rows));
+    let y = u16::try_from(y).expect("the notice fits the screen");
+    let (cols, _) = screen.size();
+    let x = (0..cols)
+        .find(|x| screen.cell(*x, y).symbol == "✕")
+        .unwrap_or_else(|| panic!("no ✕ on the notice row in {:?}", screen.rows));
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
 /// Installs a provider `fake` with models `alpha-1` (named
 /// "Claude Opus 5.5") and `beta-2` (no name) on `openai-responses` at the
 /// fake server, reading its key from `FIBER_TEST_FAKE_KEY`, and makes
@@ -502,6 +520,15 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     run.write(b"\r");
     run.wait_screen("the closed picker", |screen| {
         !shows(screen, "Type to search") && shows(screen, "›")
+    });
+    // The switch after a counted turn warns of a cache rebuild; click the
+    // notice away before the next prompt so no snapshot holds it.
+    let notice = run.wait_screen("the cache-rebuild notice", |screen| {
+        shows(screen, "cache_rebuild") && shows(screen, "✕")
+    });
+    dismiss_cache_rebuild(&mut run, &notice);
+    run.wait_screen("the dismissed notice", |screen| {
+        !shows(screen, "cache_rebuild")
     });
     // The next prompt is answered on the chosen model.
     let from = run.output().len();
