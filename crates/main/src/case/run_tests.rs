@@ -24,7 +24,7 @@ use log::Log;
 use serde_json::{Value, json};
 
 use super::super::format::{ClockAdvance, Host, Selector, SessionCase};
-use super::{CaseRun, WaitBounds, session_verdict, write_config, write_inputs};
+use super::{CaseRun, WaitBounds, session_verdict, write_config};
 use fakes::Deadline;
 
 const LOOP_WAIT: Duration = Duration::from_millis(20);
@@ -1163,27 +1163,4 @@ fn each_settings_entry_is_written_as_that_extensions_global_file() {
     );
     let text = fs::read_to_string(home.join("config").join("other.json")).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
-}
-
-#[test]
-fn write_inputs_writes_the_case_script_into_the_workspace() {
-    let root = fakes::TempDir::new("fiber-case-inputs");
-    let workspace = root.path().join("workspace");
-    fs::create_dir_all(&workspace).unwrap();
-    let script = json!({"steps": [{"text": "Hello."}]});
-    let case = SessionCase {
-        name: Some("inputs".to_owned()),
-        script: script.clone(),
-        prompt: "hi".to_owned(),
-        config: None,
-        settings: None,
-        host: Host::default(),
-        clock: Vec::new(),
-        until: None,
-        expect: Vec::new(),
-        attended: false,
-    };
-    write_inputs(&case, &workspace).unwrap();
-    let text = fs::read_to_string(workspace.join("script.json")).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), script);
 }

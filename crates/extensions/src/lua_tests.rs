@@ -2456,7 +2456,11 @@ fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
 #[test]
 fn hook_refusals_name_the_entry_when_given() {
     // Each refusal as the point expression, the spec's fields and the
-    // reason: emitted once without an entry and once declaring `fmt`.
+    // reason, emitted declaring `fmt`; one refusal without an entry pins
+    // today's unlabelled string. Rows that fail the same check the same
+    // way share one pin (`0` stands in for `-5`, `"100"` for `1.5`,
+    // `"maybe"` for `1`, `{[2] = ...}` for `{[1] = ..., [3] = ...}`); the
+    // numeric point guards nothing `after_call` does not, so it has none.
     let cases: &[(&str, &str, &str)] = &[
         (
             "\"after_tool\"",
@@ -2472,11 +2476,6 @@ fn hook_refusals_name_the_entry_when_given() {
             "\"after_call\"",
             "timeout = 100, on_failure = \"blocking\", run = run",
             "`after_call` is not a hook point",
-        ),
-        (
-            "7",
-            "timeout = 100, on_failure = \"blocking\", run = run",
-            "`7` is not a hook point",
         ),
         (
             "\"after_tool\"",
@@ -2500,27 +2499,12 @@ fn hook_refusals_name_the_entry_when_given() {
         ),
         (
             "\"after_tool\"",
-            "timeout = -5, on_failure = \"blocking\", run = run",
-            "`timeout` must be a whole number of milliseconds above 0",
-        ),
-        (
-            "\"after_tool\"",
-            "timeout = 1.5, on_failure = \"blocking\", run = run",
-            "`timeout` must be a whole number of milliseconds above 0",
-        ),
-        (
-            "\"after_tool\"",
             "timeout = \"100\", on_failure = \"blocking\", run = run",
             "`timeout` must be a whole number of milliseconds above 0",
         ),
         (
             "\"after_tool\"",
             "timeout = 100, on_failure = \"maybe\", run = run",
-            "`on_failure` must be `blocking` or `non-blocking`",
-        ),
-        (
-            "\"after_tool\"",
-            "timeout = 100, on_failure = 1, run = run",
             "`on_failure` must be `blocking` or `non-blocking`",
         ),
         (
@@ -2540,12 +2524,12 @@ fn hook_refusals_name_the_entry_when_given() {
         ),
         (
             "\"after_tool\"",
-            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[2] = \"read\"}",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {5}",
             "`tools` must be a list of tool names",
         ),
         (
             "\"after_tool\"",
-            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[1] = \"read\", [3] = \"write\"}",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[2] = \"read\"}",
             "`tools` must be a list of tool names",
         ),
         (
@@ -2562,16 +2546,16 @@ fn hook_refusals_name_the_entry_when_given() {
     let mut init = String::from("local run = function() end\n");
     let mut expected = Vec::new();
     for (point, fields, why) in cases {
-        init.push_str(&format!("fiber.hook({point}, {{ {fields} }})\n"));
-        let name = point.trim_matches('"');
-        expected.push(format!("`{name}` hook not registered: {why}"));
         init.push_str(&format!(
             "fiber.hook({point}, {{ entry = \"fmt\", {fields} }})\n"
         ));
+        let name = point.trim_matches('"');
         expected.push(format!(
             "`{name}` hook not registered for entry `fmt`: {why}"
         ));
     }
+    init.push_str("fiber.hook(\"after_tool\", { on_failure = \"blocking\", run = run })\n");
+    expected.push("`after_tool` hook not registered: missing `timeout`".to_owned());
     init.push_str("fiber.hook(\"after_tool\", \"no\")\n");
     expected.push(
         "`after_tool` hook not registered: it takes a table of `timeout`, `on_failure` and `run`"

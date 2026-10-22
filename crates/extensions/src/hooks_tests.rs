@@ -3463,78 +3463,66 @@ fn hooks_with_an_empty_hooks_key_loads_silently() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
 }
 
+/// `hooks_state` maps declarations to the gate's state: nothing declared
+/// or already loaded is `Ready`; any `blocking` (or missing or invalid
+/// `on_failure`) entry without the extension loaded is `MissingBlocking`;
+/// watcher entries never gate, and an empty `hooks` key loads silently.
 #[test]
-fn hooks_state_is_ready_without_declarations() {
+fn hooks_state_maps_declarations_to_a_gate_state() {
     let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&home.config(&[]), &[]).unwrap(),
-        super::HooksState::Ready
-    );
-}
-
-#[test]
-fn hooks_state_is_ready_when_the_extension_loaded() {
-    let home = Home::new();
-    let loaded = vec![config::full_name("hooks")];
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &loaded).unwrap(),
-        super::HooksState::Ready
-    );
-}
-
-#[test]
-fn hooks_state_is_missing_blocking_for_a_lone_on_failure_less_entry() {
-    let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, NO_ON_FAILURE_ENTRY), &[]).unwrap(),
-        super::HooksState::MissingBlocking
-    );
-}
-
-#[test]
-fn hooks_state_is_missing_blocking_beside_a_blocking_entry() {
-    let home = Home::new();
-    let entries = r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
-        super::HooksState::MissingBlocking
-    );
-}
-
-#[test]
-fn hooks_state_is_missing_blocking_for_an_unknown_on_failure() {
-    let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, UNKNOWN_ON_FAILURE_ENTRY), &[]).unwrap(),
-        super::HooksState::MissingBlocking
-    );
-}
-
-#[test]
-fn hooks_state_is_missing_blocking_for_a_non_string_on_failure() {
-    let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, NON_STRING_ON_FAILURE_ENTRY), &[]).unwrap(),
-        super::HooksState::MissingBlocking
-    );
-}
-
-#[test]
-fn hooks_state_skips_watcher_entries() {
-    let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, WATCHER_ENTRY), &[]).unwrap(),
-        super::HooksState::Ready
-    );
-}
-
-#[test]
-fn hooks_state_is_ready_for_an_empty_hooks_key() {
-    let home = Home::new();
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, "{}"), &[]).unwrap(),
-        super::HooksState::Ready
-    );
+    let hooks = config::full_name("hooks");
+    // (entries JSON, `None` for no `hooks` key; extension loaded; state)
+    let cases: &[(Option<&str>, bool, super::HooksState)] = &[
+        // No declarations: nothing to gate.
+        (None, false, super::HooksState::Ready),
+        // The extension loaded: declared entries can run.
+        (Some(BLOCKING_ENTRY), true, super::HooksState::Ready),
+        // A lone `on_failure`-less entry fails closed like `blocking`.
+        (
+            Some(NO_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // An `on_failure`-less entry beside a `blocking` one still gates.
+        (
+            Some(
+                r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#,
+            ),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // An unknown `on_failure` is not consent to fail open.
+        (
+            Some(UNKNOWN_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // A non-string `on_failure` is not consent either.
+        (
+            Some(NON_STRING_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // Watcher entries never gate the start.
+        (Some(WATCHER_ENTRY), false, super::HooksState::Ready),
+        // An empty `hooks` key loads silently.
+        (Some("{}"), false, super::HooksState::Ready),
+    ];
+    for (entries, is_loaded, expected) in cases {
+        let config = match entries {
+            Some(json) => hooks_config(&home, json),
+            None => home.config(&[]),
+        };
+        let loaded = is_loaded
+            .then(|| hooks.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            super::hooks_state(&config, &loaded).unwrap(),
+            *expected,
+            "entries: {entries:?}, loaded: {is_loaded}"
+        );
+    }
 }
 
 #[test]

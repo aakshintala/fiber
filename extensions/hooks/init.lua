@@ -106,8 +106,8 @@ local function register(name, entry)
   if type(entry) ~= "table" then
     error("entry `" .. name .. "` must be a table", 0)
   end
-  -- Watcher entries are not hooks yet (#565): refuse through `fiber.hook`
-  -- with a point that is not one, so the entry is unregistered with an
+  -- Watcher entries are not hooks: refuse through `fiber.hook` with a
+  -- point that is not one, so the entry is unregistered with an
   -- entry-labeled notice like an unknown point, and the rest register.
   if entry.watch ~= nil then
     fiber.hook("watch", { entry = name })

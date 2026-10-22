@@ -185,11 +185,33 @@ fn a_session_start_entry_sees_the_cached_workspace() {
     let (setup, _server) = hooked(
         vec![hello()],
         &json!({
-            "probe": entry("session_start", "hooks/capture.sh", json!(["probe.log"]), 30000, "blocking"),
+            "probe": entry("session_start", "/bin/sh", json!(["hooks/capture.sh", "probe.log"]), 30000, "blocking"),
         }),
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let lines = captured(&setup, "probe.log");
@@ -230,8 +252,8 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     write(
         &setup.home().join("config").join("hooks.json"),
         &json!({"hooks": {
-            "start": entry("session_start", "hooks/capture.sh", json!(["start.log"]), 30000, "blocking"),
-            "mark": entry("after_tool", "hooks/capture.sh", json!(["mark.log"]), 30000, "blocking"),
+            "start": entry("session_start", "/bin/sh", json!(["hooks/capture.sh", "start.log"]), 30000, "blocking"),
+            "mark": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "mark.log"]), 30000, "blocking"),
         }})
         .to_string(),
     );
@@ -246,28 +268,85 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    session_until(&client, "the first turn to complete", |line| {
+    let mut lines = session_until(&client, "the first turn to complete", |line| {
         line["kind"] == "turn_completed"
     });
     session_send(&client, r#"{"id":"c_reload","command":"reload"}"#);
-    session_until(&client, "the reload to land", |line| {
+    lines.extend(session_until(&client, "the reload to land", |line| {
         line["kind"] == "reloaded"
-    });
+    }));
     session_send(
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"read again"}]}}"#,
     );
-    session_until(&client, "the second turn to complete", |line| {
-        line["kind"] == "turn_completed"
-    });
+    lines.extend(session_until(
+        &client,
+        "the second turn to complete",
+        |line| line["kind"] == "turn_completed",
+    ));
     session_send(&client, r#"{"id":"c_close","command":"close"}"#);
-    let lines = until_session_close(&client);
+    lines.extend(until_session_close(&client));
     drop(client);
     let (status, _, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr} lines: {lines:?}");
 
     let starts = captured(&setup, "start.log");
     assert_eq!(starts.len(), 1);
+    assert_eq!(
+        support::kinds(&lines),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "reloaded",
+            "command_accepted",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
     let first: Value = serde_json::from_str(&starts[0]).unwrap();
     assert_eq!(first["reason"], "start");
     let marks = captured(&setup, "mark.log");
@@ -291,12 +370,41 @@ fn an_after_tool_stdin_line_pins_the_run_table_point_and_schema() {
             hello(),
         ],
         &json!({
-            "mark": entry("after_tool", "hooks/capture.sh", json!(["mark.log"]), 30000, "blocking"),
+            "mark": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "mark.log"]), 30000, "blocking"),
         }),
     );
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let lines = captured(&setup, "mark.log");
     assert_eq!(lines.len(), 1);
@@ -326,8 +434,8 @@ fn an_after_tool_entry_with_tools_runs_for_edits_but_not_reads() {
             "guard": json!({
                 "point": "after_tool",
                 "tools": ["edit"],
-                "command": "hooks/capture.sh",
-                "args": ["filter.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "filter.log"],
                 "timeout": 30000,
                 "on_failure": "blocking",
             }),
@@ -336,6 +444,42 @@ fn an_after_tool_entry_with_tools_runs_for_edits_but_not_reads() {
     fs::write(setup.workspace().join("note.txt"), "hello\n").unwrap();
     let run = setup.run(&["ask", "edit the note then read it"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert_eq!(
         run.first("tool_call_completed")["payload"]["status"],
         "completed"
@@ -364,12 +508,49 @@ fn an_entry_without_tools_runs_for_every_tool_call() {
             hello(),
         ],
         &json!({
-            "audit": entry("after_tool", "hooks/capture.sh", json!(["audit.log"]), 30000, "blocking"),
+            "audit": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "audit.log"]), 30000, "blocking"),
         }),
     );
     fs::write(setup.workspace().join("note.txt"), "hello\n").unwrap();
     let run = setup.run(&["ask", "edit the note then read it"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let lines = captured(&setup, "audit.log");
     assert_eq!(lines.len(), 2);
@@ -400,8 +581,8 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
             "quiet": json!({
                 "point": "after_tool",
                 "tools": [],
-                "command": "hooks/capture.sh",
-                "args": ["quiet.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "quiet.log"],
                 "timeout": 30000,
                 "on_failure": "non-blocking",
             }),
@@ -410,6 +591,35 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
@@ -437,12 +647,40 @@ fn a_before_tool_exit_two_refuses_with_the_stderr_reason() {
             hello(),
         ],
         &json!({
-            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log", "refuse"]), 30000, "blocking"),
+            "guard": entry("before_tool", "/bin/sh", json!(["hooks/capture.sh", "guard.log", "refuse"]), 30000, "blocking"),
         }),
     );
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let lines = captured(&setup, "guard.log");
     assert_eq!(lines.len(), 1);
@@ -464,11 +702,34 @@ fn session_start_plain_text_is_added_as_context() {
     let (setup, _server) = hooked(
         vec![hello()],
         &json!({
-            "ctx": entry("session_start", "hooks/capture.sh", json!(["ctx.log", "text"]), 30000, "blocking"),
+            "ctx": entry("session_start", "/bin/sh", json!(["hooks/capture.sh", "ctx.log", "text"]), 30000, "blocking"),
         }),
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "context_added",
+            "turn_started",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let added = run.first("context_added");
     assert_eq!(added["payload"]["text"], "plain hook context");
@@ -488,12 +749,41 @@ fn a_json_reply_replaces_the_after_tool_content() {
             hello(),
         ],
         &json!({
-            "rep": entry("after_tool", "hooks/capture.sh", json!(["rep.log", "json"]), 30000, "blocking"),
+            "rep": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "rep.log", "json"]), 30000, "blocking"),
         }),
     );
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     assert_eq!(captured(&setup, "rep.log").len(), 1);
     assert_eq!(
@@ -509,14 +799,36 @@ fn an_entry_missing_timeout_is_not_registered_and_names_the_field() {
         &json!({
             "bad": json!({
                 "point": "after_tool",
-                "command": "hooks/capture.sh",
-                "args": ["bad.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "bad.log"],
                 "on_failure": "non-blocking",
             }),
         }),
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
@@ -539,11 +851,11 @@ fn an_on_failure_less_entry_beside_a_blocking_one_fails_closed_when_removed() {
         &json!({
             "loose": json!({
                 "point": "after_tool",
-                "command": "hooks/capture.sh",
-                "args": ["loose.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "loose.log"],
                 "timeout": 1000,
             }),
-            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+            "guard": entry("before_tool", "/bin/sh", json!(["hooks/capture.sh", "guard.log"]), 1000, "blocking"),
         }),
     );
     setup.remove_hooks();
@@ -572,6 +884,26 @@ fn no_hooks_key_loads_no_hooks_vm() {
     setup.install_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
 }
@@ -581,6 +913,27 @@ fn empty_hooks_settings_load_silently() {
     let (setup, _server) = hooked(vec![hello()], &json!({}));
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
     assert!(run.all("notice").is_empty());
 }
@@ -590,7 +943,7 @@ fn a_removed_package_with_a_blocking_entry_fails_closed() {
     let (setup, _server) = hooked(
         vec![hello()],
         &json!({
-            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+            "guard": entry("before_tool", "/bin/sh", json!(["hooks/capture.sh", "guard.log"]), 1000, "blocking"),
         }),
     );
     setup.remove_hooks();
@@ -608,7 +961,7 @@ fn the_door_stays_closed_for_a_removed_blocking_guard() {
     let (setup, _server) = hooked(
         vec![hello()],
         &json!({
-            "guard": entry("before_tool", "hooks/capture.sh", json!(["guard.log"]), 1000, "blocking"),
+            "guard": entry("before_tool", "/bin/sh", json!(["hooks/capture.sh", "guard.log"]), 1000, "blocking"),
         }),
     );
     setup.remove_hooks();
@@ -647,12 +1000,33 @@ fn a_removed_package_with_only_non_blocking_entries_warns_and_runs() {
     let (setup, _server) = hooked(
         vec![hello()],
         &json!({
-            "note": entry("after_tool", "hooks/capture.sh", json!(["note.log"]), 1000, "non-blocking"),
+            "note": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "note.log"]), 1000, "non-blocking"),
         }),
     );
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let notices = run.all("notice");
     assert_eq!(notices.len(), 1);
@@ -671,8 +1045,8 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
         &json!({
             "seen": json!({
                 "watch": ["turn_completed"],
-                "command": "hooks/capture.sh",
-                "args": ["seen.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "seen.log"],
                 "timeout": 1000,
             }),
         }),
@@ -680,6 +1054,26 @@ fn a_removed_package_with_watcher_only_declarations_runs_quietly() {
     setup.remove_hooks();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(
         run.all("notice").is_empty(),
         "no missing notice: {:?}",
@@ -695,8 +1089,8 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
             "loud": json!({
                 "point": "session_start",
                 "tools": ["read"],
-                "command": "hooks/capture.sh",
-                "args": ["loud.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "loud.log"],
                 "timeout": 30000,
                 "on_failure": "non-blocking",
             }),
@@ -704,6 +1098,28 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
@@ -733,15 +1149,15 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
         &json!({
             "seen": json!({
                 "watch": ["turn_completed"],
-                "command": "hooks/capture.sh",
-                "args": ["seen.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "seen.log"],
                 "timeout": 10000,
             }),
             "note": json!({
                 "point": "after_tool",
                 "tools": ["read"],
-                "command": "hooks/capture.sh",
-                "args": ["note.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "note.log"],
                 "timeout": 30000,
                 "on_failure": "non-blocking",
             }),
@@ -750,6 +1166,36 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // The watch entry left its notice and never ran; the hook entry ran.
@@ -792,8 +1238,8 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
             "note": json!({
                 "point": "after_tool",
                 "tools": ["read"],
-                "command": "hooks/capture.sh",
-                "args": ["note.log"],
+                "command": "/bin/sh",
+                "args": ["hooks/capture.sh", "note.log"],
                 "timeout": 30000,
                 "on_failure": "non-blocking",
             }),
@@ -802,6 +1248,37 @@ fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "notice",
+            "notice",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     // Both bad entries left their notices and never ran; the good one ran.
@@ -839,12 +1316,42 @@ fn an_after_tool_exit_two_with_non_blocking_keeps_the_output() {
             hello(),
         ],
         &json!({
-            "soft": entry("after_tool", "hooks/capture.sh", json!(["soft.log", "refuse"]), 30000, "non-blocking"),
+            "soft": entry("after_tool", "/bin/sh", json!(["hooks/capture.sh", "soft.log", "refuse"]), 30000, "non-blocking"),
         }),
     );
     fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "extension_state_set",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "notice",
+            "tool_call_completed",
+            "step_started",
+            "extension_exec",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     assert_eq!(captured(&setup, "soft.log").len(), 1);
     let failure = run

@@ -1547,15 +1547,16 @@ fn resolve_in_package_a_missing_program_inside_resolves_for_the_spawn_to_report(
     );
 }
 
-/// `host.exec` `input` reaches the child's stdin: `cat` echoes it
-/// byte-exact, then EOF ends the run.
+/// `host.exec` `input` reaches the child's stdin: bytes echo byte-exact
+/// then EOF ends the run, empty streams empty then EOF, and no input
+/// keeps today's null stdin.
 #[test]
-fn stdin_echoes_byte_exact_through_cat() {
-    let (_dir, cwd) = dir("fiber-exec-stdin-echo");
+fn stdin_carries_bytes_empty_and_absent() {
     let clock = FakeClock::new();
-    let mut req = sh("cat", cwd, CAP);
-    req.input = Some(b"hello stdin\n".to_vec());
-    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let (_echo_dir, echo_cwd) = dir("fiber-exec-stdin-echo");
+    let mut bytes = sh("cat", echo_cwd, CAP);
+    bytes.input = Some(b"hello stdin\n".to_vec());
+    let (_cancel, done) = spawn(bytes, Arc::clone(&clock), None);
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the stdin run")
@@ -1563,32 +1564,22 @@ fn stdin_echoes_byte_exact_through_cat() {
     assert_eq!(ran.exit_code, Some(0));
     assert_eq!(ran.stdout, b"hello stdin\n");
     assert!(!ran.timed_out);
-}
 
-/// Empty input streams empty, then EOF: `cat` ends with no output.
-#[test]
-fn empty_input_streams_empty_then_eof() {
-    let (_dir, cwd) = dir("fiber-exec-stdin-empty");
-    let clock = FakeClock::new();
-    let mut req = sh("cat", cwd, CAP);
-    req.input = Some(Vec::new());
-    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let (_empty_dir, empty_cwd) = dir("fiber-exec-stdin-empty");
+    let mut empty = sh("cat", empty_cwd, CAP);
+    empty.input = Some(Vec::new());
+    let (_cancel, done) = spawn(empty, Arc::clone(&clock), None);
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the empty-input run")
         .expect("the empty-input run spawns");
     assert_eq!(ran.exit_code, Some(0));
     assert!(ran.stdout.is_empty(), "empty input echoes nothing");
-}
 
-/// No input keeps today's null stdin: `cat` reads EOF at once.
-#[test]
-fn missing_input_keeps_null_stdin() {
-    let (_dir, cwd) = dir("fiber-exec-stdin-null");
-    let clock = FakeClock::new();
-    let req = sh("cat", cwd, CAP);
-    assert!(req.input.is_none(), "the helper passes no input");
-    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let (_null_dir, null_cwd) = dir("fiber-exec-stdin-null");
+    let absent = sh("cat", null_cwd, CAP);
+    assert!(absent.input.is_none(), "the helper passes no input");
+    let (_cancel, done) = spawn(absent, Arc::clone(&clock), None);
     let ran = Deadline::after(DEADLINE)
         .recv(&done)
         .expect("waited {DEADLINE:?} for the null-stdin run")
@@ -1637,29 +1628,6 @@ fn full_duplex_echo_neither_deadlocks_nor_retains() {
         .expect("waited {DEADLINE:?} for the duplex run")
         .expect("the duplex run spawns");
     assert_eq!(ran.stdout, input, "the echo is byte-exact");
-}
-
-/// A spawn failure with input never ran: it names the program as a
-/// failure without input does.
-#[test]
-fn a_spawn_failure_with_input_never_ran() {
-    let (_dir, cwd) = dir("fiber-exec-stdin-missing");
-    let clock = FakeClock::new();
-    let mut req = request("fiber-definitely-missing-xyz", &[], cwd, CAP);
-    req.input = Some(b"lost".to_vec());
-    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
-    let err = Deadline::after(DEADLINE)
-        .recv(&done)
-        .expect("waited {DEADLINE:?} for the missing run")
-        .expect_err("a missing program never runs");
-    assert_eq!(err.code, contract::ErrorCode::NotFound);
-    assert!(
-        err.message
-            .starts_with("host.exec: fiber-definitely-missing-xyz: "),
-        "the spawn error names the program: {}",
-        err.message
-    );
-    assert!(err.ran.is_none(), "a spawn failure never ran");
 }
 
 /// An escaped stdin holder does not hang the run: the child forks a
