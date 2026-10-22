@@ -22,6 +22,7 @@ mod server_json;
 mod slot;
 mod sse;
 mod start;
+mod sync;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -39,5 +40,9 @@ pub use resources::{RESOURCES_TOOL, resources_definition};
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, Restarted, SecretError, SecretReader,
     ServerSpec, Servers, Started, StdioSpec, Transport, restart, start, start_observed,
+};
+pub use sync::{
+    Disposition, StagedSync, SyncInputs, SyncRow, Synced, apply_sync, classify_sync, plan_sync,
+    stage_sync,
 };
 pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};

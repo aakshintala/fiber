@@ -46,7 +46,6 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
     crate::mcp_servers::SessionServers {
         base_tools: Vec::new(),
         kept_infos: Vec::new(),
-        server_names: Vec::new(),
         failed: Vec::new(),
         servers: std::sync::Arc::clone(&servers),
         prompts: started.prompts,

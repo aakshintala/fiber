@@ -70,6 +70,23 @@ pub fn model_lists(
     run: config::Runner<'_>,
     clock: &dyn contract::clock::Clock,
 ) -> Result<(Providers, Config, Vec<String>), ModelListsError> {
+    let (providers, config, mut notices, unconfigured) =
+        model_lists_apart(home, workspace, read, load, run, clock)?;
+    notices.extend(unconfigured);
+    Ok((providers, config, notices))
+}
+
+/// [`model_lists`] with the notices of each model the placeholder fill
+/// leaves out (`model_unconfigured`) apart, as the fourth value in the
+/// fill's order: the third holds every other notice.
+pub(crate) fn model_lists_apart(
+    home: &Path,
+    workspace: &Path,
+    read: ModelLists,
+    load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
+    clock: &dyn contract::clock::Clock,
+) -> Result<(Providers, Config, Vec<String>, Vec<String>), ModelListsError> {
     let (mut providers, config, load_notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
     let mut notices: Vec<String> = load_notices
@@ -100,11 +117,13 @@ pub fn model_lists(
             );
         }
     }
-    for notice in providers.fill_placeholders(&config, &lookup)? {
-        notices.push(notice.message);
-    }
+    let unconfigured = providers
+        .fill_placeholders(&config, &lookup)?
+        .into_iter()
+        .map(|notice| notice.message)
+        .collect();
     providers.forget_lua();
-    Ok((providers, config, notices))
+    Ok((providers, config, notices, unconfigured))
 }
 
 /// Adds every cached-only provider's list: each cached name no provider

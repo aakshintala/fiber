@@ -1246,7 +1246,7 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
     let workspace = rig.workspace.clone();
     let fiber = rig.root.path().join("fiber-stub");
     let delegates = delegates();
-    let (_, _, _, session) = fakes::within(
+    let (tools, _, _, session) = fakes::within(
         "session with a failed optional server",
         Deadline::after(WIRING_WITHIN),
         move || {
@@ -1272,7 +1272,18 @@ fn reload_server_names_keep_successes_and_omit_failed_starts() {
             .unwrap()
         },
     );
-    assert_eq!(session.server_names, ["db"]);
+    assert!(
+        tools.iter().any(|(registered_by, tool)| {
+            registered_by == "db" && tool.definition().name == "mcp__db__echo"
+        }),
+        "the session keeps the successful server's tools",
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|(registered_by, _)| registered_by != "broken"),
+        "the session omits the failed server's tools",
+    );
     assert_eq!(
         session
             .failed
@@ -1290,7 +1301,6 @@ fn an_extension_replacement_keeps_the_original_mcp_info_for_reload() {
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     approve_db(&rig, &clock);
     let (tools, session) = wired(&rig, vec![pair("fiber.test/replacement", "mcp__db__echo")]);
-    assert_eq!(session.server_names, ["db"]);
     let row = session
         .kept_infos
         .iter()

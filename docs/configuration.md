@@ -614,7 +614,15 @@ declares") lists:
   Fiber stores: `names` is what a credential label names, `default` what
   the `default` label reads (`docs/model-routing.md`, "What a provider
   extension declares"). A file that declares it beside `login` or
-  `credential` is invalid.
+  `credential` is invalid. Its optional `credential_paths` lists the paths
+  that `credential()` draws secrets from, which the credential deny
+  protects (`docs/permissions.md`, "Credentials"). Each entry is
+  `{"path": "~/.aws/credentials", "env": "AWS_SHARED_CREDENTIALS_FILE",
+  "join": "<name>"}`: `path` is the location, a leading `~` read from
+  `HOME`; `env`, when that variable is set and not empty, replaces `path`;
+  `join`, one name, is appended after that choice, such as a file in a
+  directory the variable moves. `env` and `join` may be left out. A
+  relative path is read from the workspace.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag, and a flag that is absent is not set:
 

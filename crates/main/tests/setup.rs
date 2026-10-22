@@ -355,6 +355,24 @@ impl Setup {
     /// early.
     #[track_caller]
     fn run_on_terminal(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Output {
+        self.run_on_terminal_for(
+            args,
+            typed,
+            env,
+            &format!("`fiber {}` to exit", args.join(" ")),
+        )
+    }
+
+    /// [`Setup::run_on_terminal`], naming in `what` the event the run's
+    /// exit stands for, so a deadline expiry says what never happened.
+    #[track_caller]
+    fn run_on_terminal_for(
+        &self,
+        args: &[&str],
+        typed: &str,
+        env: &[(&str, &str)],
+        what: &str,
+    ) -> Output {
         let terminal = support::pty::open(120, 32);
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -375,17 +393,23 @@ impl Setup {
         let guard = support::KillGroup(group);
         let mut main = fs::File::from(terminal.main);
         main.write_all(typed.as_bytes()).unwrap();
+        // The terminal echoes what was typed, and the login's echo change
+        // waits for that output to drain: the master is read until the
+        // run ends.
+        let writer = std::sync::Arc::new(std::sync::Mutex::new(main.try_clone().unwrap()));
+        let reader = support::pty::Reader::start_on(
+            main,
+            std::sync::Arc::new(std::sync::Mutex::new(support::pty::Shared::new(120, 32))),
+            writer,
+            self.deadline,
+        );
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
-            Err(_) => support::expired(
-                self.deadline,
-                group,
-                &finished,
-                &format!("`fiber {}` to exit", args.join(" ")),
-            ),
+            Err(_) => support::expired(self.deadline, group, &finished, what),
         };
+        assert!(reader.stop(), "the terminal's reader stopped");
         assert!(
             !group_alive(self.deadline, group),
             "`fiber` left a process in its group behind"
@@ -632,4 +656,154 @@ fn without_providers_the_first_and_third_steps_skip_and_nothing_is_asked() {
     );
     assert!(!run.stderr.contains("[y/N]"), "{}", run.stderr);
     assert!(!run.stderr.contains("by number or name"), "{}", run.stderr);
+}
+
+/// The run's exit under the deadline stands for the login after the pick
+/// returning: a second lock of standard input never returns.
+const AFTER_THE_PICK: &str = "`fiber setup` login after the provider pick";
+
+#[test]
+fn picking_a_fresh_provider_in_the_first_question_logs_in_on_setups_reader() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    // Pick `fake`, type its key, keep the model.
+    let run = setup.run_on_terminal_for(
+        &["setup", "--no-hub", "--no-completions"],
+        "1\nsk-typed\n\n",
+        &[],
+        AFTER_THE_PICK,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("fiber: stored credentials/fake/default"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/fake/default")).unwrap(),
+        "sk-typed"
+    );
+    assert!(!run.stdout.contains("sk-typed"), "{}", run.stdout);
+    assert!(!run.stderr.contains("sk-typed"), "{}", run.stderr);
+    // The run went on past the login to the model question.
+    let stored = position(&run.stderr, "fiber: stored credentials/fake/default");
+    let asked = position(&run.stderr, "Default model (current: fake/m):");
+    assert!(stored < asked, "{}", run.stderr);
+}
+
+#[test]
+fn picking_a_provider_with_a_stored_credential_ends_with_the_logins_refusal() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &config::Secret::new("sk-seed".into()),
+    )
+    .unwrap();
+
+    let run = setup.run_on_terminal_for(
+        &["setup", "--no-hub", "--no-completions"],
+        "1\n",
+        &[],
+        AFTER_THE_PICK,
+    );
+    assert_ne!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("credentials/fake/default is already stored"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("fiber: setup providers failed"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/fake/default")).unwrap(),
+        "sk-seed"
+    );
+    // Setup ends with the code `fiber login fake` gives for the same home.
+    let login = setup.run_setup(&["login", "fake"], Some(""), &[]);
+    assert_ne!(login.code, Some(0), "stderr: {}", login.stderr);
+    assert_eq!(run.code, login.code, "{}", login.stderr);
+}
+
+#[test]
+fn the_provider_flag_on_a_terminal_reads_the_key_from_setups_reader() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_on_terminal_for(
+        &[
+            "setup",
+            "--provider",
+            "fake",
+            "--no-hub",
+            "--no-completions",
+        ],
+        "sk-flag\n\n",
+        &[],
+        "`fiber setup --provider fake` login on a terminal",
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/fake/default")).unwrap(),
+        "sk-flag"
+    );
+}
+
+#[test]
+fn setup_prints_no_model_unconfigured_notice_and_keeps_those_models_out() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "default",
+        &config::Secret::new("sk-seed".into()),
+    )
+    .unwrap();
+    // Vertex's models need the `project` setting, which nothing sets: the
+    // run's environment is cleared of `GOOGLE_CLOUD_PROJECT`.
+    let to = setup.root.path().join("pkg-vertex");
+    support::package::copy_package(
+        "vertex",
+        &to,
+        "https://aiplatform.googleapis.com",
+        "http://127.0.0.1:9",
+    );
+    let installed = setup.run_setup(&["extension", "install", to.to_str().unwrap()], None, &[]);
+    assert_eq!(installed.code, Some(0), "stderr: {}", installed.stderr);
+    config::store_credential(
+        &setup.home(),
+        "vertex",
+        "default",
+        &config::Secret::new("sk-vertex".into()),
+    )
+    .unwrap();
+
+    // Skip the providers, keep the model.
+    let run = setup.run_on_terminal(&["setup", "--no-hub", "--no-completions"], "\n\n", &[]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stderr.starts_with("Providers:"), "{}", run.stderr);
+    assert!(!run.stderr.contains("needs the setting"), "{}", run.stderr);
+    assert!(!run.stderr.contains("vertex/"), "{}", run.stderr);
+    assert!(run.stderr.contains("1) fake/m"), "{}", run.stderr);
+
+    // `fiber models` still prints the notice.
+    let models = setup.run_setup(&["models"], None, &[]);
+    assert!(
+        models.stderr.contains("needs the setting `project`"),
+        "{}",
+        models.stderr
+    );
 }

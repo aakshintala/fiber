@@ -1,12 +1,15 @@
 //! Reloading configuration without changing a running session's route
 //! (`docs/configuration.md`, "When Fiber reads configuration").
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{BlockLimits, Error, HandoffSettings, Loop, Retry, Reviewer};
 use contract::diag::Observe;
-use contract::events::{CacheLifetime, LoadedExtension, Notice};
+use contract::events::{
+    CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,
+};
 use contract::hook::Hooks;
 use contract::inbox::{Ack, Rejection};
 use contract::shapes::Failure;
@@ -81,6 +84,46 @@ pub struct ReloadSettings {
     pub warm_cap: Option<u32>,
 }
 
+/// One reload's MCP server sync, in `reloaded` order: the four-quadrant
+/// grouping, the server lines written before `reloaded`, the
+/// non-required failures for its `failed` entry, and the carried
+/// new-server prompt rows. Carried as one result from preparation
+/// through installation to the log, so the fields describing one sync
+/// never drift apart.
+pub struct ServerSync {
+    /// Kept, restarted, started and stopped, by name.
+    pub servers: ReloadedServers,
+    /// The `mcp_server_failed`/`mcp_server_ready` lines in sync order,
+    /// written before `reloaded`.
+    pub server_records: Vec<contract::tool::ServerRecord>,
+    /// Each non-required server failure, for `reloaded`'s `failed` entry.
+    pub server_failures: Vec<ReloadFailure>,
+    /// The shadow-started servers' runnable prompt rows with the fetch
+    /// answering them, for servers with no startup rows; `install`
+    /// appends them, keeping every startup row. Rows and fetch travel
+    /// as one value, so new rows without their fetch cannot be
+    /// represented: `None` when the sync carried no new rows.
+    pub new_prompts: Option<(Vec<CommandInfo>, crate::FetchPrompt)>,
+}
+
+impl ServerSync {
+    /// Appends `add` to `rows`, keeping the first of each tag-and-name:
+    /// every startup row stays, and a second reload keeps the first
+    /// reload's rows for kept servers. `main` preparation and `loop`
+    /// installation share this, so carried prompt rows merge the same
+    /// way on both sides of the reload.
+    pub fn merge_command_rows(rows: &mut Vec<CommandInfo>, add: &[CommandInfo]) {
+        for prompt in add {
+            if !rows
+                .iter()
+                .any(|row| row.tag == prompt.tag && row.name == prompt.name)
+            {
+                rows.push(prompt.clone());
+            }
+        }
+    }
+}
+
 /// A complete reload ready for an infallible field swap and installation.
 pub struct ReloadPrepared {
     /// The non-route preamble inputs.
@@ -91,8 +134,8 @@ pub struct ReloadPrepared {
     pub extensions: Vec<LoadedExtension>,
     /// Tolerated startup failures and other load notices.
     pub notices: Vec<Notice>,
-    /// Names of the running MCP servers.
-    pub servers: Vec<String>,
+    /// The reload's MCP server sync.
+    pub server_sync: ServerSync,
     /// Hooks over the session's one extension state registry.
     pub hooks: Option<Arc<dyn Hooks>>,
     /// The reviewer for the session's current model.
@@ -108,11 +151,24 @@ pub struct ReloadPrepared {
 }
 
 /// What an installation leaves for its caller to write: the prepared
-/// extensions, notices and servers.
+/// extensions and notices, with the reload's server sync for `reloaded`.
 struct Installed {
     extensions: Vec<LoadedExtension>,
     notices: Vec<Notice>,
-    servers: Vec<String>,
+    sync: ServerSync,
+}
+
+/// One server record as its log line: the reconnect driver and the reload
+/// installer write the same lines, in the same order.
+fn record_event(record: &contract::tool::ServerRecord) -> contract::events::Event {
+    match record {
+        contract::tool::ServerRecord::Failed(failed) => {
+            contract::events::Event::McpServerFailed(failed.clone())
+        }
+        contract::tool::ServerRecord::Ready(ready) => {
+            contract::events::Event::McpServerReady(ready.clone())
+        }
+    }
 }
 
 impl Loop {
@@ -131,7 +187,6 @@ impl Loop {
 
     pub(crate) fn take_reconnect(&mut self, server: String, ack: Ack) -> Result<(), Error> {
         use crate::inbox::{CLOSING, accept, reject};
-        use contract::events::Event;
         if self.closing {
             reject(ack, contract::ErrorCode::Closing, CLOSING);
             return Ok(());
@@ -157,15 +212,7 @@ impl Loop {
                     );
                 }
                 for record in &reconnected.records {
-                    let event = match record {
-                        contract::tool::ServerRecord::Failed(failed) => {
-                            Event::McpServerFailed(failed.clone())
-                        }
-                        contract::tool::ServerRecord::Ready(ready) => {
-                            Event::McpServerReady(ready.clone())
-                        }
-                    };
-                    self.write(&event, None, None)?;
+                    self.write(&record_event(record), None, None)?;
                 }
                 accept(ack);
                 Ok(())
@@ -231,50 +278,73 @@ impl Loop {
         crate::switch::deny_also(&mut self.credential_files, prepared.credential_files);
         (self.tools, self.replaced) = crate::calls::register(prepared.tools);
         self.hooks = prepared.hooks;
+        // New servers' prompts join the `/` list; every startup row stays.
+        // Their sources join the fetch too: the carried tags route to the
+        // carried fetch, so a new row answers through the same path as a
+        // startup row, while every other tag keeps its own. A replaced
+        // row keeps its metadata and is not appended again, but its tag
+        // still routes to the replacement source, so a kept `/name` row
+        // answers through the new slot.
+        let mut sync = prepared.server_sync;
+        if let Some((rows, extra)) = sync.new_prompts.take()
+            && let Some(prompts) = self.server_prompts.as_mut()
+        {
+            let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
+            ServerSync::merge_command_rows(&mut prompts.rows, &rows);
+            let old = Arc::clone(&prompts.fetch);
+            prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
+                if tags.contains(server) {
+                    extra(server, prompt, text, cancel)
+                } else {
+                    old(server, prompt, text, cancel)
+                }
+            });
+        }
         (prepared.installed)();
         Installed {
             extensions: prepared.extensions,
             notices: prepared.notices,
-            servers: prepared.servers,
+            sync,
         }
     }
 
     fn apply_reload(&mut self, prepared: ReloadPrepared, ack: Ack) -> Result<(), Error> {
-        use contract::events::{
-            Event, ExtensionsLoaded, PreambleReason, Reloaded, ReloadedServers,
-        };
+        use contract::events::{Event, ExtensionsLoaded, PreambleReason, Reloaded};
         let installed = self.install(prepared);
         #[cfg(test)]
         if tests::fail_reload_write() {
             return Err(crate::timing_tests::log_io_error());
         }
+        // The sync's records first, in sync order, then `reloaded`:
+        // program order on the loop thread is the edge for that line order.
+        let Installed {
+            extensions,
+            notices,
+            sync,
+        } = installed;
+        for record in &sync.server_records {
+            self.write(&record_event(record), None, None)?;
+        }
+        let failed = (!sync.server_failures.is_empty()).then_some(sync.server_failures);
         self.write(
             &Event::Reloaded(Reloaded {
-                servers: ReloadedServers {
-                    kept: installed.servers,
-                    restarted: Vec::new(),
-                    started: Vec::new(),
-                    stopped: Vec::new(),
-                },
-                extensions: installed
-                    .extensions
+                servers: sync.servers,
+                extensions: extensions
                     .iter()
                     .map(|extension| extension.name.clone())
                     .collect(),
-                failed: None,
+                failed,
             }),
             None,
             None,
         )?;
         crate::inbox::accept(ack);
         self.write(
-            &Event::ExtensionsLoaded(ExtensionsLoaded {
-                extensions: installed.extensions,
-            }),
+            &Event::ExtensionsLoaded(ExtensionsLoaded { extensions }),
             None,
             None,
         )?;
-        for notice in installed.notices {
+        for notice in notices {
             self.write(&Event::Notice(notice), None, None)?;
         }
         if let Some(hooks) = self.hooks.clone() {

@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use std::sync::mpsc;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -14,9 +15,9 @@ use serde_json::json;
 
 use crate::error::McpError;
 use crate::server_json::ListedTool;
-use crate::slot::{Run, Served, State};
+use crate::slot::{Relisted, Run, Served, Slot, State};
 use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started};
-use crate::test_support::{Setup, WITHIN, await_until};
+use crate::test_support::{Setup, WITHIN};
 
 impl Setup {
     /// Writes the cache for `spec` holding `tools` and no prompts, as a
@@ -51,16 +52,9 @@ impl Setup {
     /// Kills the running server of `started`'s only slot and waits until its
     /// reader has seen the exit.
     #[track_caller]
-    fn kill(&self, started: &Started) {
-        fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
+    pub(crate) fn kill(&self, started: &Started) {
         let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
-        await_until("the killed server to be gone", move || {
-            if let State::Running { server, .. } = &*super::lock(&slot.state) {
-                server.is_gone()
-            } else {
-                false
-            }
-        });
+        self.kill_slot(&slot);
     }
 
     fn cache_inode(&self) -> u64 {
@@ -88,7 +82,7 @@ impl Setup {
         .collect()
     }
 
-    fn cached_prompts(&self) -> Vec<crate::server_json::ListedPrompt> {
+    pub(crate) fn cached_prompts(&self) -> Vec<crate::server_json::ListedPrompt> {
         crate::cache::read(
             &self.cache(),
             "fx",
@@ -1110,6 +1104,51 @@ fn echo_call(req: &fakes::Request) -> fakes::Response {
     )
 }
 
+/// A remote fake answering every method through the caller's closures,
+/// beside `remote_server`: each list closure answers with the id-echoing
+/// `result` wrapper, so no test repeats the handshake framing. The
+/// `prompts` closure answers `prompts/list`; a test whose server
+/// advertises no prompts passes one that panics, since the re-list never
+/// asks an unadvertised section.
+fn remote_responding(
+    initialize: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    tools_list: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    prompts_list: impl Fn(&dyn Fn(serde_json::Value) -> fakes::Response) -> fakes::Response
+    + Send
+    + Sync
+    + 'static,
+    calls: impl Fn(&fakes::Request) -> fakes::Response + Send + Sync + 'static,
+) -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        let status = |payload: Value| fakes::Response::status(200, result(payload));
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => initialize(&status),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => tools_list(&status),
+            Some("prompts/list") => prompts_list(&status),
+            Some("tools/call") => calls(req),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
 #[test]
 fn a_mid_session_login_failure_is_a_tool_error_and_keeps_the_slot_running() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1300,48 +1339,35 @@ fn a_failed_renewal_after_a_restart_leaves_the_slot_dead() {
     let setup = Setup::new();
     let inits = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let server = fakes::ProviderServer::start_responding({
-        let inits = Arc::clone(&inits);
-        let calls = Arc::clone(&calls);
-        move |req: &fakes::Request| {
-            use serde_json::Value;
-            if req.method == "DELETE" {
-                return fakes::Response::status(200, "");
+    let server = remote_responding(
+        {
+            let inits = Arc::clone(&inits);
+            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| match inits
+                .fetch_add(1, Ordering::SeqCst)
+            {
+                0 | 1 => result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                }))
+                .header("mcp-session-id", "1868a90c"),
+                _ => fakes::Response::status(500, "down"),
             }
-            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-            let id = body.get("id").cloned().unwrap_or(Value::Null);
-            let result = |result: Value| {
-                json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
-            };
-            match body.get("method").and_then(Value::as_str) {
-                Some("initialize") => match inits.fetch_add(1, Ordering::SeqCst) {
-                    0 | 1 => fakes::Response::status(
-                        200,
-                        result(json!({
-                            "protocolVersion": "2025-06-18",
-                            "capabilities": {"tools": {}},
-                            "serverInfo": {"name": "remote", "version": "1"},
-                        })),
-                    )
-                    .header("mcp-session-id", "1868a90c"),
-                    _ => fakes::Response::status(500, "down"),
-                },
-                Some("notifications/initialized") | Some("notifications/cancelled") | None => {
-                    fakes::Response::status(202, "")
-                }
-                Some("tools/list") => fakes::Response::status(
-                    200,
-                    result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
-                ),
-                Some("tools/call") => match calls.fetch_add(1, Ordering::SeqCst) {
-                    0 => fakes::Response::drop_connection(),
-                    _ => fakes::Response::status(404, "ended"),
-                },
-                Some(other) => panic!("unexpected method {other}"),
+        },
+        |result| {
+            result(
+                json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+            )
+        },
+        |_| panic!("an unadvertised section is never asked"),
+        {
+            let calls = Arc::clone(&calls);
+            move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => fakes::Response::drop_connection(),
+                _ => fakes::Response::status(404, "ended"),
             }
-        }
-    })
-    .unwrap();
+        },
+    );
     let url = format!("{}/mcp", server.url());
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
     assert!(started.failed.is_empty());
@@ -1449,5 +1475,573 @@ fn call_asking_forwards_the_asker_without_leaving_the_seam() {
         .find(|line| line.contains("\"el-") && line.contains("\"action\":\"accept\""))
         .unwrap_or_else(|| panic!("the accept reaches the wire: {log}"));
     assert!(accept.contains(r#""name":"prod""#), "{accept}");
+    setup.stop(started.servers);
+}
+
+// Reload, continued: the re-list, the classification, the staged sync and
+// its commit. The re-list touches nothing: every assertion on shared
+// state (the cache bytes, the pid, the initialize count) reads the same
+// before and after, and the commit is the only writer.
+
+/// Runs one re-list on a thread and returns it through the wall-clock
+/// deadline: a wedged RPC parks the thread, never the test, and with the
+/// fake clock its bound expires only when the test advances it past the
+/// parked signal.
+fn relist_on_thread(slot: &std::sync::Arc<Slot>) -> Relisted {
+    let (done, result) = mpsc::channel();
+    let relisting = std::sync::Arc::clone(slot);
+    std::thread::spawn(move || {
+        done.send(relisting.relist()).expect("collected");
+    });
+    Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the re-list ends")
+}
+
+impl Setup {
+    /// The `fx` slot of `started`, served once so it runs.
+    pub(crate) fn running(&self, started: &Started) -> std::sync::Arc<Slot> {
+        let slot = started.servers.slot("fx").expect("the fx slot");
+        self.serve(&slot);
+        slot
+    }
+
+    /// The bytes of the `fx` cache file.
+    pub(crate) fn cache_bytes(&self) -> Vec<u8> {
+        std::fs::read(self.cache().join("fx.json")).expect("the cache file")
+    }
+
+    /// Kills the running server of `started`'s only slot and waits until its
+    /// reader has seen the exit: `Server::stop` signals the group and its
+    /// gone-wait returns on the reader's acknowledgement, never a poll —
+    /// the commit-after-death tests kill after staging, when the servers
+    /// already moved onto the stage thread.
+    #[track_caller]
+    pub(crate) fn kill_slot(&self, slot: &std::sync::Arc<Slot>) {
+        let server = match &*super::lock(&slot.state) {
+            State::Running { server, .. } => std::sync::Arc::clone(server),
+            State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
+                panic!("kill_slot needs a running server")
+            }
+        };
+        server.stop();
+    }
+}
+
+#[test]
+fn relist_picks_up_added_and_dropped_tools_without_reconnecting() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "old"}]));
+    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    assert_eq!(initializes(setup.dir.path()), 1);
+    let pid = setup.pid();
+    let cache_before = setup.cache_bytes();
+    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
+    let listed = match relist_on_thread(&slot) {
+        Relisted::Up { listed } => listed,
+        Relisted::Replace { .. } => panic!("a healthy server re-lists"),
+    };
+    let names: Vec<String> = listed.tools.iter().map(|tool| tool.name.clone()).collect();
+    assert_eq!(names, vec!["echo".to_owned(), "plus".to_owned()]);
+    assert_eq!(setup.pid(), pid, "the re-list reconnects nothing");
+    assert_eq!(
+        initializes(setup.dir.path()),
+        1,
+        "the re-list reconnects nothing"
+    );
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_returns_fresh_prompts_while_the_cache_waits_for_commit() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.prompts(&serde_json::json!([{"name": "old"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let cache_before = setup.cache_bytes();
+    setup.prompts(&serde_json::json!([{"name": "new"}]));
+    let listed = match relist_on_thread(&slot) {
+        Relisted::Up { listed } => listed,
+        Relisted::Replace { .. } => panic!("a healthy server re-lists"),
+    };
+    let names: Vec<String> = listed
+        .prompts
+        .iter()
+        .map(|prompt| prompt.name.clone())
+        .collect();
+    assert_eq!(names, vec!["new".to_owned()]);
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_with_errored_prompts_signals_replace_without_a_cache_write() {
+    // Bites the prompts/list error swallow: a JSON-RPC error from the
+    // re-list's prompts page falls back to the replace path, never an
+    // empty success that would rewrite the cache from a failed listing.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.prompts(&serde_json::json!([{"name": "old"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let cache_before = setup.cache_bytes();
+    setup.prompts_raw("error");
+    match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("an errored prompts list never re-lists empty"),
+        Relisted::Replace { .. } => {}
+    };
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "a failed listing writes no cache"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_with_failed_prompts_signals_replace_without_a_cache_write() {
+    // Bites the prompts/list error swallow: every prompts/list error
+    // shape (a login failure, an HTTP error, a JSON-RPC error) falls
+    // back to the replace path, never an empty success that would
+    // rewrite the cache from a failed listing.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // A login failure (401) and an HTTP error (500) over the remote
+    // transport.
+    for status in [401u16, 500u16] {
+        let setup = Setup::new();
+        let prompts_calls = Arc::new(AtomicUsize::new(0));
+        let server = remote_responding(
+            |result| {
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "prompts": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                }))
+                .header("mcp-session-id", "1868a90c")
+            },
+            |result| {
+                result(
+                    json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+                )
+            },
+            {
+                let counted = Arc::clone(&prompts_calls);
+                move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
+                    if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                        result(json!({"prompts": [{"name": "old", "description": "Old."}]}))
+                    } else {
+                        fakes::Response::status(status, "secret")
+                    }
+                }
+            },
+            |_| panic!("no call answers during a re-list"),
+        );
+        let started = setup.start(vec![
+            setup.remote_spec("fx", &format!("{}/mcp", server.url())),
+        ]);
+        assert!(started.failed.is_empty());
+        let slot = started.servers.slot("fx").expect("the fx slot");
+        let cache_before = setup.cache_bytes();
+        match relist_on_thread(&slot) {
+            Relisted::Up { .. } => panic!("a status-{status} prompts failure never re-lists empty"),
+            Relisted::Replace { .. } => {}
+        }
+        assert_eq!(
+            setup.cache_bytes(),
+            cache_before,
+            "a failed listing writes no cache"
+        );
+        setup.stop(started.servers);
+    }
+    // The JSON-RPC error shape rides the stdio fixture next door:
+    // `relist_with_errored_prompts` pins it to the same fallback.
+}
+
+#[test]
+fn relist_without_a_running_server_signals_replace_without_records() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.populate(setup.spec("fx"));
+    let started = setup.start(vec![setup.spec("fx")]);
+    assert!(!setup.spawned(), "the cache declares without spawning");
+    let slot = started.servers.slot("fx").expect("the fx slot");
+    match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("a lazy slot never re-lists"),
+        Relisted::Replace { record } => assert!(record.is_none()),
+    }
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_on_a_dead_server_carries_its_exit_and_moves_nothing() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let cache_before = setup.cache_bytes();
+    setup.kill(&started);
+    let record = match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("a dead server never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the exit rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, contract::events::ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_of_an_idle_expired_server_carries_the_same_restarting_death() {
+    // Bites the `!server.is_gone() && !server.is_expired()` with-true
+    // and `||` guards: an idle-expired server is already gone to the
+    // re-list, so it carries the same restartable Died record a dead
+    // server does; the mutants route it into the list path, where the
+    // expired session reads as an empty end with no records.
+    let setup = Setup::new();
+    let server = remote_server(|_| fakes::Response::status(404, "ended"));
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    // The running server, out from under its slot: a direct call latches
+    // the expiry, but the slot still runs it.
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+    let live = match &*super::lock(&slot.state) {
+        State::Running { server, .. } => Arc::clone(server),
+        State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
+            panic!("the server runs")
+        }
+    };
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arguments = serde_json::Map::new();
+        let params = crate::rpc::Named {
+            arguments: &arguments,
+            name: "echo",
+        };
+        let answer = live.call(
+            "tools/call",
+            &params,
+            std::time::Duration::from_secs(60),
+            &fakes::CancelToken::new(),
+        );
+        done.send(answer).expect("collected");
+    });
+    let answer = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the direct call answers within {WITHIN:?}"));
+    assert_eq!(answer, Err(crate::server::CallError::Expired));
+    // The expiry is a death the re-list is the first to see: the
+    // session ended out from under the slot, so the reload restarts it
+    // with the same record a dead server carries.
+    let record = match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("an expired server never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the expiry rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_dying_mid_tools_list_carries_the_same_restarting_death() {
+    // Pins the list-path Gone death to the idle death it must equal: a
+    // server alive at the re-list's entry that dies mid-list carries the
+    // same restartable Died record. Bites the `!restarted` flip on that
+    // path.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let lists = Arc::new(AtomicUsize::new(0));
+    // The handshake lists once; the re-list's list drops instead.
+    let server = remote_responding(
+        |result| {
+            result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "remote", "version": "1"},
+            }))
+            .header("mcp-session-id", "1868a90c")
+        },
+        {
+            let lists = Arc::clone(&lists);
+            move |result: &dyn Fn(serde_json::Value) -> fakes::Response| {
+                if lists.fetch_add(1, Ordering::SeqCst) == 0 {
+                    result(
+                        json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+                    )
+                } else {
+                    fakes::Response::drop_connection()
+                }
+            }
+        },
+        |_| panic!("an unadvertised section is never asked"),
+        echo_call,
+    );
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    let slot = setup.running(&started);
+    let record = match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("a death mid-list never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    assert_eq!(http_count(&server, "tools/list"), 2);
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the mid-list death rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_dying_mid_prompts_list_carries_the_same_restarting_death() {
+    // The prompts twin of the tools mid-list death: only a missed
+    // deadline, a death or an expiry falls back to the replace path, so
+    // a prompts death carries the same restartable Died record. Bites
+    // the `!restarted` flip on that path.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.prompts(&serde_json::json!([{"name": "old"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let cache_before = setup.cache_bytes();
+    // `prompts.json` becomes a FIFO no one writes: `prompts/list` hangs.
+    std::fs::remove_file(setup.dir.path().join("prompts.json")).expect("prompts.json");
+    let fifo = setup.dir.path().join("prompts.json");
+    fakes::fifo(&fifo);
+    // Opened on a thread: the open blocks until the fixture opens the
+    // FIFO to answer the re-list's `prompts/list`, so its return is the
+    // fixture's acknowledgement that the re-list is parked inside
+    // `prompts/list` — the kill below always lands mid-list. Held open,
+    // so the fixture's read stays blocked until the kill.
+    let (held_tx, held) = mpsc::channel();
+    std::thread::spawn(move || {
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fifo)
+            .expect("the fixture reads prompts/list");
+        held_tx.send(writer).expect("collected");
+    });
+    let (done, result) = mpsc::channel();
+    let relisting = Arc::clone(&slot);
+    std::thread::spawn(move || {
+        done.send(relisting.relist()).expect("collected");
+    });
+    let _held = Deadline::after(WITHIN)
+        .recv(&held)
+        .expect("the re-list reaches prompts/list");
+    setup.kill(&started);
+    let record = match Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the re-list ends")
+    {
+        Relisted::Up { .. } => panic!("a death mid-list never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the mid-list death rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_past_its_deadline_carries_the_deadline_and_touches_nothing() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.prompts(&serde_json::json!([{"name": "old"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let deadline = setup
+        .fake
+        .now()
+        .checked_add(crate::start::DEFAULT_STARTUP_TIMEOUT)
+        .expect("deadline");
+    // `prompts.json` becomes a FIFO no one writes: `prompts/list` hangs.
+    std::fs::remove_file(setup.dir.path().join("prompts.json")).expect("prompts.json");
+    fakes::fifo(setup.dir.path().join("prompts.json"));
+    let cache_before = setup.cache_bytes();
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(slot.relist()).expect("collected");
+    });
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        crate::start::DEFAULT_STARTUP_TIMEOUT,
+        &fakes::Deadline::after(WITHIN),
+    );
+    let record = match fakes::Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the re-list ends")
+    {
+        Relisted::Up { .. } => panic!("a wedged server never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the deadline rides a failed record")
+    };
+    assert_eq!(failed.reason, contract::events::ServerFailure::Deadline);
+    assert!(failed.will_restart);
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_pages_only_until_the_bound() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let deadline = setup
+        .fake
+        .now()
+        .checked_add(crate::start::DEFAULT_STARTUP_TIMEOUT)
+        .expect("deadline");
+    setup.write("cursor-forever", "tools/list");
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(slot.relist()).expect("collected");
+    });
+    setup.fake.advance_when_parked(
+        Some(deadline),
+        None,
+        crate::start::DEFAULT_STARTUP_TIMEOUT,
+        &fakes::Deadline::after(WITHIN),
+    );
+    let record = match fakes::Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the re-list ends")
+    {
+        Relisted::Up { .. } => panic!("an endless list never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the deadline rides a failed record")
+    };
+    assert_eq!(failed.reason, contract::events::ServerFailure::Deadline);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn relist_lists_an_advertised_empty_tool_section() {
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([]));
+    setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    // The handshake advertised tools with an empty list: the re-list
+    // still asks, so a tool added since shows up without a restart.
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let listed = match relist_on_thread(&slot) {
+        Relisted::Up { listed } => listed,
+        Relisted::Replace { .. } => panic!("an advertised section re-lists"),
+    };
+    let names: Vec<String> = listed.tools.iter().map(|tool| tool.name.clone()).collect();
+    assert_eq!(names, vec!["echo".to_owned()]);
+    setup.stop(started.servers);
+}
+
+// Reload, round 23: the re-list entry's guards and the idle-death read.
+
+#[test]
+fn relist_on_a_dead_server_advertising_nothing_carries_its_exit() {
+    // Bites the entry's `&&`→`||`: a dead server is gone but not
+    // expired, so the mutant routes it into the list path, where a pair
+    // of unadvertised lists reads as an empty success. The entry must
+    // take the replace path with the death instead.
+    let setup = Setup::new();
+    // No `tools.json` and no `prompts.json`: the handshake advertises
+    // neither section, so a list path would answer `Up` with empty lists.
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    assert!(slot.is_live(), "the tool-less server runs");
+    let cache_before = setup.cache_bytes();
+    setup.kill(&started);
+    let record = match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("a dead server never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the exit rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn idle_death_reports_only_a_gone_server() {
+    // Bites the `!` deletion in `idle_death`: a live server carries no
+    // death, while a server that died while idle carries its exit. The
+    // stage reads this to carry the old death into the replacement's
+    // records, so either polarity failing misfiles the commit.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    assert!(
+        slot.idle_death().is_none(),
+        "a live server carries no death"
+    );
+    setup.kill(&started);
+    let death = slot
+        .idle_death()
+        .expect("a server dead while idle carries its exit");
+    match death {
+        ServerRecord::Failed(failed) => {
+            assert_eq!(failed.server, "fx");
+            assert_eq!(failed.reason, ServerFailure::Died);
+            assert!(failed.will_restart, "a first death restarts");
+        }
+        ServerRecord::Ready(_) => panic!("a death never reads ready"),
+    }
     setup.stop(started.servers);
 }

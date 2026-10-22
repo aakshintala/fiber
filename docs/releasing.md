@@ -80,6 +80,12 @@ describes, while ceiling-lowering follow-up pull requests stay on stable
 releases, which key off `CHANGELOG.md` sections and version bumps that
 nightlies never write.
 
+### Rehearsing the publish path
+
+A rehearsal dispatch (`gh workflow run release.yml --ref main -f rehearse=true`)
+runs only the `rehearsal` job. `docs/ci.md`, "Releases", has what it proves
+and what it leaves out.
+
 ### The changelog
 
 `CHANGELOG.md` is public product copy. Each version's section describes what a

@@ -189,8 +189,6 @@ pub(crate) struct SessionServers {
     pub base_tools: Vec<(String, Arc<dyn Tool>)>,
     /// Built-in and MCP declarations before extension replacements.
     pub kept_infos: Vec<ToolInfo>,
-    /// Startup servers that did not fail, in specification order.
-    pub server_names: Vec<String>,
     /// One per server that failed to start or missed its deadline.
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
@@ -282,7 +280,6 @@ pub(crate) fn session_tools(
     let mut specs = specs;
     specs.extend(prepared.ready);
     let cache = config::mcp_cache_dir(home);
-    let mut server_names: Vec<_> = specs.iter().map(|spec| spec.name.clone()).collect();
     let started = mcp::start_observed(
         specs,
         workspace,
@@ -302,7 +299,6 @@ pub(crate) fn session_tools(
             provider: None,
         });
     }
-    server_names.retain(|name| !started.failed.iter().any(|failure| failure.server == *name));
     tools.extend(started.tools);
     infos.extend(started.infos);
     let base_tools = tools.clone();
@@ -333,7 +329,6 @@ pub(crate) fn session_tools(
     let servers = SessionServers {
         base_tools,
         kept_infos,
-        server_names,
         failed,
         servers,
         prompts: started.prompts,
@@ -840,6 +835,8 @@ fn reconnect_server(
                 message: failure.message,
             }
         })?;
+        // The declared rows, rejecting unknown and unapproved names:
+        // only the reconnect entry reads them, and only here.
         let Some(row) = declared.iter().find(|declared| declared.name == server) else {
             let failure = login_target_failure(cli::CliError::McpServerUnknown {
                 server: server.to_owned(),

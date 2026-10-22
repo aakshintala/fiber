@@ -56,7 +56,9 @@ pub struct Resumed {
     pub workspace: String,
     /// The model of the last `preamble_built` or `model_changed`; a
     /// `usage_recorded` names its call's model, which may be a delegate's
-    /// or a reviewer's. The session's model, beating `--model`
+    /// or a reviewer's. A resume that starts the process rebuilds the
+    /// conversation seeded from this reference, while the session runs on
+    /// the per-run `--model` when one was given
     /// (`docs/model-routing.md`, "Choosing the model"). `None` when the log
     /// holds none.
     pub model: Option<String>,
@@ -309,6 +311,7 @@ impl Loop {
             naming,
             fired,
             settings,
+            model: recorded_model,
             ..
         } = resumed;
         let mut lines = crate::history::read_window(&session.log, window, end)?;
@@ -323,8 +326,15 @@ impl Loop {
         // last `assistant_message_started`: the previous request's end, for
         // the cache markers. Notices the log holds behind the open batch
         // are released after its results, as the finishing turn writes them.
+        // The rebuild is seeded from the recorded model, so old reasoning
+        // keeps its producer's stamp and a later request sends it only to
+        // that model (`docs/loop.md`, "What the model is sent"); a log
+        // holding no model falls back to the session's, as a rewind does.
+        let replay = recorded_model
+            .as_deref()
+            .unwrap_or(session.model.reference.as_str());
         let (conversation, sent, held, carry) =
-            crate::conversation::rebuild_and_sent(&lines, &session.model.reference, &open, carry)?;
+            crate::conversation::rebuild_and_sent(&lines, replay, &open, carry)?;
         // Registered where a new loop registers: a `Tool::definition()`
         // may read the log.
         let (tools, replaced) = calls::register(std::mem::take(&mut session.tools));

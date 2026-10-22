@@ -193,7 +193,17 @@ fn prepared() -> ReloadPrepared {
         tools: Vec::new(),
         extensions: Vec::new(),
         notices: Vec::new(),
-        servers: Vec::new(),
+        server_sync: ServerSync {
+            servers: contract::events::ReloadedServers {
+                kept: Vec::new(),
+                restarted: Vec::new(),
+                started: Vec::new(),
+                stopped: Vec::new(),
+            },
+            server_records: Vec::new(),
+            server_failures: Vec::new(),
+            new_prompts: None,
+        },
         hooks: None,
         reviewer: Err(Failure {
             code: ErrorCode::NoModel,
@@ -561,4 +571,189 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
     assert!(w.looped.tools.contains_key("db__list"));
     assert!(!w.looped.tools.contains_key("db__old"));
     assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
+}
+
+#[test]
+fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
+    use contract::events::{McpServerFailed, McpServerReady, ReloadFailure, ServerFailure};
+    let mut w = world();
+    w.looped = w.looped.reloader(Arc::new(|_| {
+        let mut next = prepared();
+        next.server_sync.servers.kept = vec!["keep".into()];
+        next.server_sync.servers.restarted = vec!["changed".into()];
+        next.server_sync.servers.started = vec!["new".into()];
+        next.server_sync.servers.stopped = vec!["gone".into()];
+        next.server_sync.server_records = vec![
+            contract::tool::ServerRecord::Ready(McpServerReady {
+                server: "changed".into(),
+            }),
+            contract::tool::ServerRecord::Failed(McpServerFailed {
+                server: "flaky".into(),
+                reason: ServerFailure::StartFailed,
+                will_restart: false,
+                error: Failure {
+                    code: ErrorCode::McpServerUnavailable,
+                    message: "the start failed".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                },
+            }),
+        ];
+        next.server_sync.server_failures = vec![ReloadFailure {
+            server: "flaky".into(),
+            reason: ServerFailure::StartFailed,
+            error: Failure {
+                code: ErrorCode::McpServerUnavailable,
+                message: "the start failed".into(),
+                retry_after_ms: None,
+                provider: None,
+            },
+        }];
+        Ok(next)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().is_ok());
+    assert_eq!(
+        kinds(&w.looped),
+        [
+            "session_started",
+            "mcp_server_ready",
+            "mcp_server_failed",
+            "reloaded",
+            "extensions_loaded",
+            "preamble_built"
+        ]
+    );
+    let lines: Vec<_> = log::read(w.looped.log.dir())
+        .unwrap()
+        .into_iter()
+        .map(|line| {
+            contract::events::Event::from_envelope(&line)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    let mut found = None;
+    for event in &lines {
+        if let contract::events::Event::Reloaded(reloaded) = event {
+            found = Some(reloaded);
+            break;
+        }
+    }
+    let reloaded = found.unwrap();
+    assert_eq!(
+        reloaded.servers,
+        contract::events::ReloadedServers {
+            kept: vec!["keep".into()],
+            restarted: vec!["changed".into()],
+            started: vec!["new".into()],
+            stopped: vec!["gone".into()],
+        }
+    );
+    let failed = reloaded.failed.as_ref().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].server, "flaky");
+    assert_eq!(failed[0].reason, ServerFailure::StartFailed);
+}
+
+#[test]
+fn an_appended_prompt_row_fetches_through_the_carried_sources() {
+    use contract::events::CommandInfo;
+    use contract::shapes::ContentPart;
+    fn row(tag: &str, name: &str) -> CommandInfo {
+        CommandInfo {
+            name: name.into(),
+            description: "A prompt.".into(),
+            argument_hint: None,
+            tag: tag.into(),
+            extension: false,
+        }
+    }
+    let old: crate::FetchPrompt = Arc::new(|_, _, _, _| contract::tool::Output {
+        error: Some(Failure {
+            code: ErrorCode::InvalidArguments,
+            message: "the startup fetch".into(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..contract::tool::Output::default()
+    });
+    let extra: crate::FetchPrompt = Arc::new(|server, prompt, _, _| {
+        assert_eq!(server, "new");
+        assert_eq!(prompt, "greet");
+        contract::tool::Output {
+            content: vec![ContentPart::Text { text: "hi".into() }],
+            ..contract::tool::Output::default()
+        }
+    });
+    let mut w = world();
+    w.looped = w.looped.server_prompts(crate::ServerPrompts {
+        rows: vec![row("old", "before")],
+        fetch: old,
+    });
+    w.looped = w.looped.reloader(Arc::new(move |_| {
+        let mut p = prepared();
+        // Rows and fetch travel as one value: new rows without their
+        // fetch cannot be represented, so appended rows always answer
+        // through the carried sources.
+        p.server_sync.new_prompts = Some((vec![row("new", "greet")], Arc::clone(&extra)));
+        Ok(p)
+    }));
+    let (ack, rx) = ack();
+    w.looped.take_reload(ack).unwrap();
+    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    let prompts = w
+        .looped
+        .server_prompts
+        .as_ref()
+        .expect("prompts stay installed");
+    assert_eq!(
+        prompts.rows.len(),
+        2,
+        "the appended row joins, every startup row stays"
+    );
+    let cancel = crate::TurnCancel::default();
+    let fetched = (prompts.fetch)("new", "greet", "", &cancel);
+    assert!(fetched.error.is_none());
+    assert!(matches!(&fetched.content[..], [ContentPart::Text { text }] if text == "hi"));
+    let kept = (prompts.fetch)("old", "before", "", &cancel);
+    assert_eq!(
+        kept.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+}
+
+// Reload, round 23: every comparison of the prompt-row merge is
+// independently decisive — the first of each tag-and-name wins, and any
+// other combination appends.
+
+#[test]
+fn merge_command_rows_keeps_the_first_of_each_tag_and_name() {
+    // Bites the three merge-predicate mutants (`tag ==`→`!=`, `&&`→`||`,
+    // `name ==`→`!=`): an identical row appends nothing, while a row
+    // differing in either comparison appends. Each mutation misfiles at
+    // least one row below.
+    use contract::events::CommandInfo;
+    fn row(tag: &str, name: &str) -> CommandInfo {
+        CommandInfo {
+            name: name.into(),
+            description: "A prompt.".into(),
+            argument_hint: None,
+            tag: tag.into(),
+            extension: false,
+        }
+    }
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("old", "before")]);
+    assert_eq!(rows.len(), 1, "an identical row appends nothing");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("old", "after")]);
+    assert_eq!(rows.len(), 2, "the same tag with a new name appends");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("new", "before")]);
+    assert_eq!(rows.len(), 2, "a new tag with the same name appends");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("new", "after")]);
+    assert_eq!(rows.len(), 2, "a new tag with a new name appends");
 }
