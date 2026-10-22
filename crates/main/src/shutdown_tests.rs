@@ -1,9 +1,4 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "test code; a failure is the test's"
-)]
+#![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use std::cell::RefCell;
 use std::sync::{Arc, mpsc};
@@ -57,22 +52,19 @@ fn shutdown_cancels_reads_before_stopping_callbacks() {
         done_tx.send(outcome).unwrap_or(());
     });
     Deadline::after(DEADLINE).recv_or_fail(&entered, "the read to start");
-    let outcome = RefCell::new(None);
     super::shutdown_steps(
         1,
         |_| {},
         || reads.cancel(),
         || {
             open_tx.send(()).unwrap_or(());
-            *outcome.borrow_mut() =
-                Some(Deadline::after(DEADLINE).recv_or_fail(&done, "the run to return"));
+            let outcome = Deadline::after(DEADLINE).recv_or_fail(&done, "the run to return");
+            assert_eq!(
+                outcome.map_err(|failure| failure.code),
+                Err(ErrorCode::Closing)
+            );
         },
         || {},
     );
     thread.join().unwrap();
-    let outcome = outcome.into_inner().unwrap();
-    assert_eq!(
-        outcome.map_err(|failure| failure.code),
-        Err(ErrorCode::Closing)
-    );
 }
