@@ -14,14 +14,16 @@ pub(crate) const NO_WRITER: &str = "Feedback is not available here.";
 /// The loop is gone: the worker has no channel to answer on.
 pub(crate) const NO_CHANNEL: &str = "Feedback is not available: the terminal is closing.";
 
-/// Runs the writer off the loop thread and posts its answer: the path
-/// with the issue link, or why the report could not be written. Without
+/// Runs the writer off the loop thread, for the session on screen when
+/// there is one, and posts its answer: the path with the issue link, or
+/// why the report could not be written. Without
 /// a writer or a channel, answers nothing and returns the notice the
 /// loop lands instead, as a clipboard read with no reader does.
 pub(crate) fn start(
     writer: Option<WriteFeedback>,
     out: Option<&Sender<Input>>,
     description: String,
+    session: Option<String>,
 ) -> Option<String> {
     let Some(writer) = writer else {
         return Some(NO_WRITER.to_owned());
@@ -33,7 +35,7 @@ pub(crate) fn start(
     match thread::Builder::new()
         .name("tui-feedback".to_owned())
         .spawn(move || {
-            let done: Result<FeedbackDone, String> = writer(&description);
+            let done: Result<FeedbackDone, String> = writer(&description, session.as_deref());
             match out.send(Input::Feedback(done)) {
                 Ok(()) | Err(_) => {}
             }

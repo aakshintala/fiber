@@ -554,6 +554,7 @@ impl<B: Backend> Loop<B> {
                         self.app.feedback_writer(),
                         self.files_out.as_ref(),
                         description,
+                        self.app.session().map(|id| id.0.clone()),
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.
