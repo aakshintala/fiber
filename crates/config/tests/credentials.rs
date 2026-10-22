@@ -1101,7 +1101,11 @@ fn reading(dir: &std::path::Path, name: &str, entries: &str) -> ProviderData {
 fn one(entry: &str) -> config::CredentialPath {
     let setup = Setup::new();
     let data = reading(&setup.root().join("ext"), "p", &format!("[{entry}]"));
-    data.credential_from.credential_paths()[0].clone()
+    data.credential_from
+        .credential_paths()
+        .first()
+        .unwrap()
+        .clone()
 }
 
 #[test]
