@@ -75,9 +75,10 @@ permission denial, is tested at binary level: the call is refused, it never
 starts, and no protected bytes reach the output or an artifact.
 
 Tests read a repository file only by compiling it in. The exception is a
-first-party package under `providers/` or `extensions/`, which a crate the
-selector lists as a package reader may read at run time (`docs/ci.md`,
-"Selection"). The gate fails on any other run-time read.
+first-party package under `providers/` or `extensions/`: a test may read one
+at run time through a path joined onto `CARGO_MANIFEST_DIR`, and the selector
+then lists its crate as a package reader (`docs/ci.md`, "Selection"). The
+gate fails on any other run-time read.
 
 ### Event streams
 
