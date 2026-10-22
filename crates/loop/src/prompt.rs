@@ -28,6 +28,17 @@ pub struct Deferrals {
     pub full_servers: std::collections::BTreeSet<String>,
 }
 
+/// Where the session's docs line points (`docs/system-prompt.md`, "The
+/// docs line"): the installed `docs/` tree, or the website when it is
+/// missing from Fiber home.
+#[derive(Debug, Clone)]
+pub enum DocsPlace {
+    /// The installed `docs/` directory in Fiber home.
+    Installed(PathBuf),
+    /// The website's docs address when `docs/` is not installed.
+    Website(&'static str),
+}
+
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
 /// [`PromptInputs::new`] returns every optional input absent, and the
@@ -49,6 +60,8 @@ pub struct PromptInputs {
     pub home: PathBuf,
     /// The person's home; `~/.agents/skills` is under it.
     pub agents_home: Option<PathBuf>,
+    /// Where the docs line points; `None` renders no docs line.
+    pub docs: Option<DocsPlace>,
     /// Each loaded extension's name and package directory, for its
     /// `skills/` and `prompts/`.
     pub extension_dirs: Vec<(String, PathBuf)>,
@@ -100,6 +113,7 @@ impl PromptInputs {
             context_window,
             home,
             agents_home: None,
+            docs: None,
             extension_dirs: Vec::new(),
             extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
@@ -295,6 +309,18 @@ pub(crate) fn system_prompt(
     // Part 3: the session section.
     let session_template = message("session").to_owned();
     let mut third = fill(&session_template, &[("model", model)]);
+    if let Some(docs) = &inputs.docs {
+        let line = match docs {
+            DocsPlace::Installed(path) => {
+                fill(message("docs"), &[("path", &path.display().to_string())])
+            }
+            DocsPlace::Website(url) => fill(message("docs-website"), &[("url", url)]),
+        };
+        if !line.is_empty() {
+            third.push_str("\n\n");
+            third.push_str(&line);
+        }
+    }
     if unattended {
         let line = message("unattended").to_owned();
         if !line.is_empty() {
