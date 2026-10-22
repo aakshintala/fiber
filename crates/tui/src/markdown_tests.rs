@@ -130,6 +130,17 @@ fn inline_styles() {
 }
 
 #[test]
+fn each_run_of_one_style_is_one_span_and_a_style_change_starts_another() {
+    let rendered = render("a **b** c **d** e", 40);
+    let spans: Vec<&str> = rendered.lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(spans, ["a ", "b", " c ", "d", " e"]);
+}
+
+#[test]
 fn links_draw_in_accent_while_plain_text_stays_text() {
     let rendered = render("see [l](http://x) now", 40);
     let line = &rendered.lines[0];

@@ -166,14 +166,8 @@ pub(super) fn link_cols(
 ) -> Vec<(Range<u16>, String)> {
     let mut out = Vec::new();
     for (range, url) in links {
-        let mut first: Option<usize> = None;
-        let mut last: Option<usize> = None;
-        for (at, source) in indices.iter().enumerate() {
-            if range.contains(source) {
-                first.get_or_insert(at);
-                last = Some(at);
-            }
-        }
+        let first = indices.iter().position(|source| range.contains(source));
+        let last = indices.iter().rposition(|source| range.contains(source));
         if let (Some(first), Some(last)) = (first, last)
             && let Some(cells) = row.get(first..=last)
         {
@@ -197,15 +191,12 @@ pub(super) fn link_cols(
 
 /// Cells as spans, one per run of the same style.
 pub(super) fn spans_of(cells: &[Cell]) -> Vec<Span<'static>> {
-    let mut spans: Vec<(Style, String)> = Vec::new();
-    for &(ch, style) in cells {
-        match spans.last_mut() {
-            Some((last, text)) if *last == style => text.push(ch),
-            _ => spans.push((style, ch.to_string())),
-        }
-    }
-    spans
-        .into_iter()
-        .map(|(style, text)| Span::styled(text, style))
+    cells
+        .chunk_by(|a, b| a.1 == b.1)
+        .filter_map(|run| {
+            let &(_, style) = run.first()?;
+            let text: String = run.iter().map(|(ch, _)| *ch).collect();
+            Some(Span::styled(text, style))
+        })
         .collect()
 }
