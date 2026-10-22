@@ -607,7 +607,7 @@ pub fn old_diagnostics(dir: &Path, now: SystemTime) -> Vec<OldFile> {
             kept.push((at, path, len));
         }
     }
-    kept.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    kept.sort();
     let drop = kept.len().saturating_sub(KEEP);
     for (_, path, bytes) in kept.into_iter().take(drop) {
         old.push(OldFile { path, bytes });
