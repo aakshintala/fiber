@@ -269,14 +269,13 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            // The log is dropped once read, so this connection does not
-            // hold the session lock. Without a log the session is closing
-            // and the answer keeps its byte sizes.
-            let rate = conn.gate.log.upgrade().map(|log| {
-                let rate = log.rate();
-                drop(log);
-                rate
-            });
+            // Without a log the session is closing and the answer keeps
+            // its byte sizes.
+            let rate = conn
+                .gate
+                .log
+                .upgrade()
+                .map(|_| lock(&conn.gate.rate).rate());
             let tools = tools
                 .into_iter()
                 .map(|mut info| {

@@ -2,8 +2,6 @@
 //! WHATWG precedence: a BOM, then the `Content-Type` header's `charset`,
 //! then a `<meta>` in the first 1024 bytes, then UTF-8.
 
-#[cfg(test)]
-use std::borrow::Cow;
 use std::cell::RefCell;
 
 use encoding_rs::{CoderResult, Decoder, Encoding};
@@ -26,15 +24,6 @@ pub(crate) fn encoding(content_type: Option<&str>, head: &[u8]) -> &'static Enco
         .and_then(header_encoding)
         .or_else(|| meta_encoding(head))
         .unwrap_or(encoding_rs::UTF_8)
-}
-
-/// Decodes `bytes` whole by its declared character set ([`encoding`]),
-/// the BOM first. Never fails: unknown bytes become `�`. A BOM is removed.
-/// Borrows when UTF-8 is chosen and the bytes after any BOM are valid
-/// UTF-8. [`Decoding`] gives the same text piece by piece.
-#[cfg(test)]
-pub(crate) fn decode<'a>(content_type: Option<&str>, bytes: &'a [u8]) -> Cow<'a, str> {
-    encoding(content_type, bytes).decode(bytes).0
 }
 
 /// Decodes a page arriving in pieces. Whatever the pieces, the text handed

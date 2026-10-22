@@ -66,60 +66,47 @@ fn modified(code: Code, mods: Mods) -> Stroke {
     Stroke { code, mods }
 }
 
+/// One read holding several keys reads each key.
 #[test]
-fn printable_characters_become_chars() {
-    assert_eq!(
-        feed_all(&[b"hi"]),
-        vec![Event::Key(Key::Char('h')), Event::Key(Key::Char('i')),]
-    );
-}
-
-#[test]
-fn backspace_enter_ctrl_c_and_esc() {
-    assert_eq!(
-        feed_all(&[&[0x7fu8] as &[u8]]),
-        vec![Event::Key(Key::Backspace)]
-    );
-    assert_eq!(
-        feed_all(&[&[0x08u8] as &[u8]]),
-        vec![Event::Key(Key::Backspace)]
-    );
-    assert_eq!(feed_all(&[b"\r".as_slice()]), vec![Event::Key(Key::Enter)]);
-    assert_eq!(
-        feed_all(&[&[0x03u8] as &[u8]]),
-        vec![Event::Key(Key::CtrlC)]
-    );
-    assert_eq!(feed_all(&[&[0x1bu8] as &[u8]]), vec![Event::Key(Key::Esc)]);
-}
-
-#[test]
-fn ctrl_o_is_its_own_key() {
-    assert_eq!(
-        feed_all(&[&[0x0fu8, b'a'] as &[u8]]),
-        vec![Event::Key(Key::CtrlO), Event::Key(Key::Char('a'))]
-    );
-}
-
-#[test]
-fn page_up_page_down_and_end() {
-    assert_eq!(feed_all(&[b"\x1b[5~"]), vec![Event::Key(Key::PageUp)]);
-    assert_eq!(feed_all(&[b"\x1b[6~"]), vec![Event::Key(Key::PageDown)]);
-    assert_eq!(feed_all(&[b"\x1b[F"]), vec![Event::Key(Key::End)]);
-    assert_eq!(feed_all(&[b"\x1b[4~"]), vec![Event::Key(Key::End)]);
-    assert_eq!(feed_all(&[b"\x1bOF"]), vec![Event::Key(Key::End)]);
-}
-
-#[test]
-fn one_chunk_with_two_keys() {
-    assert_eq!(
-        feed_all(&[b"a\x1b[5~"]),
-        vec![Event::Key(Key::Char('a')), Event::Key(Key::PageUp),]
-    );
-}
-
-#[test]
-fn esc_followed_by_a_sequence_in_one_read_is_no_esc() {
-    assert_eq!(feed_all(&[b"\x1b[5~"]), vec![Event::Key(Key::PageUp)],);
+fn one_read_with_several_keys_reads_each_key() {
+    let cases: &[(&[u8], Vec<Event>)] = &[
+        (
+            b"a\x1b[5~",
+            vec![Event::Key(Key::Char('a')), Event::Key(Key::PageUp)],
+        ),
+        (
+            b"hi",
+            vec![Event::Key(Key::Char('h')), Event::Key(Key::Char('i'))],
+        ),
+        (
+            b"\x0fa",
+            vec![Event::Key(Key::CtrlO), Event::Key(Key::Char('a'))],
+        ),
+        (
+            b"\x1bab",
+            vec![Event::Key(Key::AltA), Event::Key(Key::Char('b'))],
+        ),
+        (
+            b"a\nb",
+            vec![
+                Event::Key(Key::Char('a')),
+                Event::Edit(Edit::CtrlJ),
+                Event::Key(Key::Char('b')),
+            ],
+        ),
+        (
+            b"a\x16b",
+            vec![
+                Event::Key(Key::Char('a')),
+                Event::Key(Key::CtrlV),
+                Event::Key(Key::Char('b')),
+            ],
+        ),
+        (b"\x1b[57441;2ua", vec![Event::Key(Key::Char('a'))]),
+    ];
+    for (bytes, want) in cases {
+        assert_eq!(feed_all(&[*bytes]), *want, "{bytes:?}");
+    }
 }
 
 #[test]
@@ -226,150 +213,20 @@ fn control_characters_are_dropped_whole() {
 }
 
 #[test]
-fn up_and_down_in_csi_and_ss3_forms() {
-    assert_eq!(feed_all(&[b"\x1b[A"]), vec![Event::Key(Key::Up)]);
-    assert_eq!(feed_all(&[b"\x1b[B"]), vec![Event::Key(Key::Down)]);
-    assert_eq!(feed_all(&[b"\x1bOA"]), vec![Event::Key(Key::Up)]);
-    assert_eq!(feed_all(&[b"\x1bOB"]), vec![Event::Key(Key::Down)]);
-    // A modified arrow is no plain Up.
-    assert!(feed_all(&[b"\x1b[1;2A"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;2B"]).is_empty());
-}
-
-#[test]
-fn esc_a_in_one_read_is_alt_a() {
-    assert_eq!(feed_all(&[b"\x1ba"]), vec![Event::Key(Key::AltA)]);
-    assert_eq!(
-        feed_all(&[b"\x1bab"]),
-        vec![Event::Key(Key::AltA), Event::Key(Key::Char('b'))]
-    );
-}
-
-#[test]
 fn esc_ending_a_read_then_a_is_esc_then_a() {
     assert_eq!(
         feed_all(&[b"\x1b", b"a"]),
         vec![Event::Key(Key::Esc), Event::Key(Key::Char('a'))]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b", b"x"]),
+        vec![Event::Key(Key::Esc), Event::Key(Key::Char('x'))]
     );
 }
 
 /// One edit event.
 fn edit(edit: Edit) -> Vec<Event> {
     vec![Event::Edit(edit)]
-}
-
-#[test]
-fn legacy_arrows_left_and_right() {
-    assert_eq!(feed_all(&[b"\x1b[D"]), edit(Edit::Left));
-    assert_eq!(feed_all(&[b"\x1b[C"]), edit(Edit::Right));
-    assert_eq!(feed_all(&[b"\x1bOD"]), edit(Edit::Left));
-    assert_eq!(feed_all(&[b"\x1bOC"]), edit(Edit::Right));
-    // An explicit "no modifiers" is the plain arrow.
-    assert_eq!(feed_all(&[b"\x1b[1;1D"]), edit(Edit::Left));
-}
-
-#[test]
-fn modified_arrows_move_by_word_or_line() {
-    // Alt is 1 + 2, Ctrl 1 + 4, Super 1 + 8.
-    assert_eq!(feed_all(&[b"\x1b[1;3D"]), edit(Edit::WordLeft));
-    assert_eq!(feed_all(&[b"\x1b[1;3C"]), edit(Edit::WordRight));
-    assert_eq!(feed_all(&[b"\x1b[1;5D"]), edit(Edit::WordLeft));
-    assert_eq!(feed_all(&[b"\x1b[1;5C"]), edit(Edit::WordRight));
-    assert_eq!(feed_all(&[b"\x1b[1;9D"]), edit(Edit::LineStart));
-    assert_eq!(feed_all(&[b"\x1b[1;9C"]), edit(Edit::LineEnd));
-    // Caps Lock (64) and Num Lock (128) do not change the key.
-    assert_eq!(feed_all(&[b"\x1b[1;67D"]), edit(Edit::WordLeft));
-    assert_eq!(feed_all(&[b"\x1b[1;133C"]), edit(Edit::WordRight));
-    // Shift, and modifiers together, bind nothing here.
-    assert!(feed_all(&[b"\x1b[1;2D"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;7D"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;11C"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;13C"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;17C"]).is_empty());
-    assert!(feed_all(&[b"\x1b[2;3C"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;+3C"]).is_empty());
-}
-
-#[test]
-fn delete_and_legacy_word_keys() {
-    assert_eq!(feed_all(&[b"\x1b[3~"]), edit(Edit::Delete));
-    assert!(feed_all(&[b"\x1b[3;5~"]).is_empty());
-    assert_eq!(feed_all(&[b"\x1bb"]), edit(Edit::WordLeft));
-    assert_eq!(feed_all(&[b"\x1bf"]), edit(Edit::WordRight));
-    assert_eq!(feed_all(&[b"\x1b\x7f"]), edit(Edit::DeleteWord));
-    // `ESC 0x08` is an unbound stroke, so it maps to nothing: the old
-    // parser dropped it.
-    assert!(feed_all(&[b"\x1b\x08"]).is_empty());
-}
-
-#[test]
-fn line_feed_is_ctrl_j() {
-    assert_eq!(feed_all(&[b"\n"]), edit(Edit::CtrlJ));
-    assert_eq!(
-        feed_all(&[b"a\nb"]),
-        vec![
-            Event::Key(Key::Char('a')),
-            Event::Edit(Edit::CtrlJ),
-            Event::Key(Key::Char('b')),
-        ]
-    );
-}
-
-#[test]
-fn kitty_keys_read_as_their_legacy_meaning() {
-    assert_eq!(feed_all(&[b"\x1b[13u"]), vec![Event::Key(Key::Enter)]);
-    assert_eq!(feed_all(&[b"\x1b[13;1u"]), vec![Event::Key(Key::Enter)]);
-    assert_eq!(feed_all(&[b"\x1b[13;2u"]), edit(Edit::ShiftEnter));
-    assert_eq!(feed_all(&[b"\x1b[27u"]), vec![Event::Key(Key::Esc)]);
-    assert_eq!(feed_all(&[b"\x1b[99;5u"]), vec![Event::Key(Key::CtrlC)]);
-    assert_eq!(feed_all(&[b"\x1b[111;5u"]), vec![Event::Key(Key::CtrlO)]);
-    assert_eq!(feed_all(&[b"\x1b[106;5u"]), edit(Edit::CtrlJ));
-    assert_eq!(feed_all(&[b"\x1b[127u"]), vec![Event::Key(Key::Backspace)]);
-    assert_eq!(feed_all(&[b"\x1b[127;3u"]), edit(Edit::DeleteWord));
-    assert_eq!(feed_all(&[b"\x1b[97;3u"]), vec![Event::Key(Key::AltA)]);
-    assert_eq!(feed_all(&[b"\x1b[98;3u"]), edit(Edit::WordLeft));
-    assert_eq!(feed_all(&[b"\x1b[102;3u"]), edit(Edit::WordRight));
-    assert_eq!(feed_all(&[b"\x1b[9u"]), vec![Event::Key(Key::Tab)]);
-    assert_eq!(feed_all(&[b"\x1b[9;2u"]), vec![Event::Key(Key::BackTab)]);
-    // A lock modifier, and an event type or alternate key after a colon,
-    // do not change the key.
-    assert_eq!(feed_all(&[b"\x1b[99;69u"]), vec![Event::Key(Key::CtrlC)]);
-    assert_eq!(
-        feed_all(&[b"\x1b[99:67;5:1u"]),
-        vec![Event::Key(Key::CtrlC)]
-    );
-}
-
-#[test]
-fn kitty_keys_with_other_modifiers_or_codes_drop_silently() {
-    for bytes in [
-        b"\x1b[13;3u".as_slice(),
-        b"\x1b[13;5u",
-        b"\x1b[13;9u",
-        b"\x1b[27;2u",
-        b"\x1b[99;3u",
-        b"\x1b[99;7u",
-        b"\x1b[99;13u",
-        b"\x1b[111;3u",
-        b"\x1b[106;3u",
-        b"\x1b[127;5u",
-        b"\x1b[127;2u",
-        b"\x1b[97;5u",
-        b"\x1b[97;7u",
-        b"\x1b[98;5u",
-        b"\x1b[9;3u",
-        b"\x1b[9;5u",
-        b"\x1b[57441u",
-        b"\x1b[:;5u",
-        b"\x1b[;5u",
-        b"\x1b[99;u",
-    ] {
-        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
-    }
-    assert_eq!(
-        feed_all(&[b"\x1b[57441;2ua"]),
-        vec![Event::Key(Key::Char('a'))]
-    );
 }
 
 #[test]
@@ -487,92 +344,7 @@ fn with_kitty_pushed_a_lone_esc_ending_a_read_is_held() {
 }
 
 #[test]
-fn tab_and_shift_tab() {
-    assert_eq!(feed_all(&[b"\t"]), vec![Event::Key(Key::Tab)]);
-    assert_eq!(feed_all(&[b"\x1b[Z"]), vec![Event::Key(Key::BackTab)]);
-    // A modified CSI Z is no plain Shift+Tab.
-    assert!(feed_all(&[b"\x1b[1;2Z"]).is_empty());
-}
-
-#[test]
-fn f1_in_its_three_forms() {
-    assert_eq!(feed_all(&[b"\x1bOP"]), vec![Event::Key(Key::F1)]);
-    assert_eq!(feed_all(&[b"\x1b[11~"]), vec![Event::Key(Key::F1)]);
-    assert_eq!(feed_all(&[b"\x1b[P"]), vec![Event::Key(Key::F1)]);
-    // Neighbours are not F1: F2 as `CSI 12~` and a modified `CSI P`.
-    assert!(feed_all(&[b"\x1b[12~"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1;2P"]).is_empty());
-    assert!(feed_all(&[b"\x1b[1~"]).is_empty());
-}
-
-#[test]
-fn ctrl_g_and_ctrl_r_in_legacy_and_kitty_forms() {
-    assert_eq!(feed_all(&[b"\x07"]), vec![Event::Key(Key::CtrlG)]);
-    assert_eq!(feed_all(&[b"\x12"]), vec![Event::Key(Key::CtrlR)]);
-    assert_eq!(feed_all(&[b"\x1b[103;5u"]), vec![Event::Key(Key::CtrlG)]);
-    assert_eq!(feed_all(&[b"\x1b[114;5u"]), vec![Event::Key(Key::CtrlR)]);
-    // A lock key changes nothing; another modifier or a plain code is no
-    // binding.
-    assert_eq!(feed_all(&[b"\x1b[114;69u"]), vec![Event::Key(Key::CtrlR)]);
-    for bytes in [b"\x1b[103;3u".as_slice(), b"\x1b[103;6u", b"\x1b[114;7u"] {
-        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
-    }
-}
-
-#[test]
-fn ctrl_v_in_legacy_and_kitty_forms() {
-    assert_eq!(
-        feed_all(&[&[0x16u8] as &[u8]]),
-        vec![Event::Key(Key::CtrlV)]
-    );
-    assert_eq!(feed_all(&[b"\x1b[118;5u"]), vec![Event::Key(Key::CtrlV)]);
-    // A lock key changes nothing; another modifier is no binding.
-    assert_eq!(feed_all(&[b"\x1b[118;69u"]), vec![Event::Key(Key::CtrlV)]);
-    for bytes in [b"\x1b[118;6u".as_slice(), b"\x1b[118;3u"] {
-        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
-    }
-    // Between characters the byte splits them.
-    assert_eq!(
-        feed_all(&[b"a\x16b"]),
-        vec![
-            Event::Key(Key::Char('a')),
-            Event::Key(Key::CtrlV),
-            Event::Key(Key::Char('b')),
-        ]
-    );
-}
-
-#[test]
-fn ctrl_l_in_legacy_and_kitty_forms() {
-    assert_eq!(
-        feed_all(&[&[0x0cu8] as &[u8]]),
-        vec![Event::Key(Key::CtrlL)]
-    );
-    assert_eq!(feed_all(&[b"\x1b[108;5u"]), vec![Event::Key(Key::CtrlL)]);
-    // A lock key changes nothing; another modifier is no binding.
-    assert_eq!(feed_all(&[b"\x1b[108;69u"]), vec![Event::Key(Key::CtrlL)]);
-    for bytes in [b"\x1b[108;6u".as_slice(), b"\x1b[108;3u"] {
-        assert!(feed_all(&[bytes]).is_empty(), "{bytes:?}");
-    }
-}
-
-#[test]
-fn esc_x_in_one_read_is_alt_x() {
-    assert_eq!(feed_all(&[b"\x1bx"]), vec![Event::Key(Key::AltX)]);
-    // With kitty's flags, Alt+X is `CSI 120;3u`.
-    assert_eq!(feed_all(&[b"\x1b[120;3u"]), vec![Event::Key(Key::AltX)]);
-    // A plain `x` through kitty reads as the stroke now, and types `x`.
-    assert_eq!(feed_all(&[b"\x1b[120u"]), vec![Event::Key(Key::Char('x'))]);
-    assert_eq!(
-        feed_all(&[b"\x1b", b"x"]),
-        vec![Event::Key(Key::Esc), Event::Key(Key::Char('x'))]
-    );
-}
-
-#[test]
 fn alt_arrows_in_their_csi_form() {
-    assert_eq!(feed_all(&[b"\x1b[1;3A"]), vec![Event::Key(Key::AltUp)]);
-    assert_eq!(feed_all(&[b"\x1b[1;3B"]), vec![Event::Key(Key::AltDown)]);
     // Split across reads, the sequence is held and still parses.
     assert_eq!(feed_all(&[b"\x1b[1;", b"3A"]), vec![Event::Key(Key::AltUp)]);
     assert_eq!(
@@ -583,8 +355,6 @@ fn alt_arrows_in_their_csi_form() {
 
 #[test]
 fn esc_then_an_arrow_in_one_read_is_the_alt_arrow() {
-    assert_eq!(feed_all(&[b"\x1b\x1b[A"]), vec![Event::Key(Key::AltUp)]);
-    assert_eq!(feed_all(&[b"\x1b\x1b[B"]), vec![Event::Key(Key::AltDown)]);
     assert_eq!(
         feed_all(&[b"\x1b\x1b[", b"A"]),
         vec![Event::Key(Key::AltUp)]
@@ -761,47 +531,6 @@ fn an_sgr_report_split_across_reads_is_one_event() {
     );
 }
 
-#[test]
-fn alt_p_r_and_digits_parse_in_legacy_and_kitty_forms() {
-    let mut cases: Vec<(Vec<u8>, Key)> = vec![
-        (b"\x1bp".to_vec(), Key::AltP),
-        (b"\x1b[112;3u".to_vec(), Key::AltP),
-        (b"\x1br".to_vec(), Key::AltR),
-        (b"\x1b[114;3u".to_vec(), Key::AltR),
-    ];
-    for digit in 1..=9u8 {
-        cases.push((vec![0x1b, b'0' + digit], Key::AltDigit(digit)));
-        cases.push((
-            format!("\x1b[{};3u", 48 + u32::from(digit)).into_bytes(),
-            Key::AltDigit(digit),
-        ));
-    }
-    for (bytes, key) in cases {
-        assert_eq!(feed_all(&[&bytes]), vec![Event::Key(key)], "{bytes:?}");
-    }
-}
-
-#[test]
-fn escape_zero_is_still_dropped() {
-    assert_eq!(feed_all(&[b"\x1b0"]), Vec::new());
-    // Kitty's ⌥0 and ⌥: are not digits one to nine.
-    assert_eq!(feed_all(&[b"\x1b[48;3u"]), Vec::new());
-    assert_eq!(feed_all(&[b"\x1b[58;3u"]), Vec::new());
-}
-
-#[test]
-fn ctrl_f_and_cmd_f_parse() {
-    assert_eq!(
-        feed_all(&[&[0x06u8] as &[u8]]),
-        vec![Event::Key(Key::CtrlF)]
-    );
-    assert_eq!(feed_all(&[b"\x1b[102;5u"]), vec![Event::Key(Key::CtrlF)]);
-    assert_eq!(feed_all(&[b"\x1b[102;9u"]), vec![Event::Key(Key::CtrlF)]);
-    // Alt+F stays a word move, and another modifier is no binding.
-    assert_eq!(feed_all(&[b"\x1b[102;3u"]), edit(Edit::WordRight));
-    assert!(feed_all(&[b"\x1b[102;13u"]).is_empty());
-}
-
 /// Legacy control bytes read as their strokes.
 #[test]
 fn legacy_control_bytes_name_strokes() {
@@ -871,6 +600,22 @@ fn esc_with_a_byte_names_alt_with_that_stroke() {
         (b"\x1b\x00", Some(modified(Code::Space, alt | Mods::CTRL))),
         (b"\x1b ", Some(modified(Code::Space, alt))),
         (b"\x1b0", Some(modified(Code::Char('0'), alt))),
+        (b"\x1bb", Some(modified(Code::Char('b'), alt))),
+        (b"\x1bf", Some(modified(Code::Char('f'), alt))),
+        (b"\x1bp", Some(modified(Code::Char('p'), alt))),
+        (b"\x1br", Some(modified(Code::Char('r'), alt))),
+        (b"\x1bx", Some(modified(Code::Char('x'), alt))),
+        (b"\x1b1", Some(modified(Code::Char('1'), alt))),
+        (b"\x1b2", Some(modified(Code::Char('2'), alt))),
+        (b"\x1b3", Some(modified(Code::Char('3'), alt))),
+        (b"\x1b4", Some(modified(Code::Char('4'), alt))),
+        (b"\x1b5", Some(modified(Code::Char('5'), alt))),
+        (b"\x1b6", Some(modified(Code::Char('6'), alt))),
+        (b"\x1b7", Some(modified(Code::Char('7'), alt))),
+        (b"\x1b8", Some(modified(Code::Char('8'), alt))),
+        (b"\x1b9", Some(modified(Code::Char('9'), alt))),
+        (b"\x1b\x1b[A", Some(modified(Code::Up, alt))),
+        (b"\x1b\x1b[B", Some(modified(Code::Down, alt))),
         (b"\x1b\xc3\xa9", Some(modified(Code::Char('\u{e9}'), alt))),
         // A modified arrow under the second ESC is no Alt arrow.
         (b"\x1b\x1b[1;5A", None),
@@ -886,7 +631,7 @@ fn esc_with_a_byte_names_alt_with_that_stroke() {
     }
 }
 
-/// `CSI` arrows, Home and End read plain and with `1;<modifiers>`.
+/// `CSI` arrows, Home, End, F1 and Shift+Tab read plain and with `1;<modifiers>`.
 #[test]
 fn csi_letters_name_strokes() {
     let (shift, alt, ctrl, super_) = (Mods::SHIFT, Mods::ALT, Mods::CTRL, Mods::SUPER);
@@ -942,6 +687,21 @@ fn csi_letters_name_strokes() {
         (b"\x1b[5A", None),
         // A modified `CSI P` reads as nothing.
         (b"\x1b[1;2P", None),
+        (b"\x1b[P", Some(plain(Code::F(1)))),
+        (b"\x1b[Z", Some(modified(Code::Tab, shift))),
+        (b"\x1b[1;2Z", None),
+        (b"\x1b[1;2B", Some(modified(Code::Down, shift))),
+        (b"\x1b[1;3B", Some(modified(Code::Down, alt))),
+        (b"\x1b[1;1D", Some(plain(Code::Left))),
+        (b"\x1b[1;2D", Some(modified(Code::Left, shift))),
+        (b"\x1b[1;3D", Some(modified(Code::Left, alt))),
+        (b"\x1b[1;5D", Some(modified(Code::Left, ctrl))),
+        (b"\x1b[1;7D", Some(modified(Code::Left, alt | ctrl))),
+        (b"\x1b[1;67D", Some(modified(Code::Left, alt))),
+        (b"\x1b[1;11C", Some(modified(Code::Right, alt | super_))),
+        (b"\x1b[1;13C", Some(modified(Code::Right, ctrl | super_))),
+        (b"\x1b[1;133C", Some(modified(Code::Right, ctrl))),
+        (b"\x1b[1;17C", None),
     ];
     for (bytes, want) in cases {
         assert_eq!(
@@ -1064,11 +824,80 @@ fn kitty_codes_name_strokes() {
         (b"\x1b[55296u", None),
         (b"\x1b[5u", None),
         (b"\x1b[15u", None),
+        (b"\x1b[13;3u", Some(modified(Code::Enter, alt))),
+        (b"\x1b[13;5u", Some(modified(Code::Enter, ctrl))),
+        (b"\x1b[13;9u", Some(modified(Code::Enter, super_))),
+        (b"\x1b[27;2u", Some(modified(Code::Esc, shift))),
+        (b"\x1b[9;3u", Some(modified(Code::Tab, alt))),
+        (b"\x1b[9;5u", Some(modified(Code::Tab, ctrl))),
+        (b"\x1b[127;2u", Some(modified(Code::Backspace, shift))),
+        (b"\x1b[127;5u", Some(modified(Code::Backspace, ctrl))),
+        (b"\x1b[97;5u", Some(modified(Code::Char('a'), ctrl))),
+        (b"\x1b[98;5u", Some(modified(Code::Char('b'), ctrl))),
+        (b"\x1b[102;5u", Some(modified(Code::Char('f'), ctrl))),
+        (b"\x1b[103;5u", Some(modified(Code::Char('g'), ctrl))),
+        (b"\x1b[106;5u", Some(modified(Code::Char('j'), ctrl))),
+        (b"\x1b[108;5u", Some(modified(Code::Char('l'), ctrl))),
+        (b"\x1b[111;5u", Some(modified(Code::Char('o'), ctrl))),
+        (b"\x1b[114;5u", Some(modified(Code::Char('r'), ctrl))),
+        (b"\x1b[118;5u", Some(modified(Code::Char('v'), ctrl))),
+        (b"\x1b[99;69u", Some(modified(Code::Char('c'), ctrl))),
+        (b"\x1b[108;69u", Some(modified(Code::Char('l'), ctrl))),
+        (b"\x1b[114;69u", Some(modified(Code::Char('r'), ctrl))),
+        (b"\x1b[118;69u", Some(modified(Code::Char('v'), ctrl))),
+        (b"\x1b[97;3u", Some(modified(Code::Char('a'), alt))),
+        (b"\x1b[98;3u", Some(modified(Code::Char('b'), alt))),
+        (b"\x1b[99;3u", Some(modified(Code::Char('c'), alt))),
+        (b"\x1b[102;3u", Some(modified(Code::Char('f'), alt))),
+        (b"\x1b[103;3u", Some(modified(Code::Char('g'), alt))),
+        (b"\x1b[106;3u", Some(modified(Code::Char('j'), alt))),
+        (b"\x1b[108;3u", Some(modified(Code::Char('l'), alt))),
+        (b"\x1b[111;3u", Some(modified(Code::Char('o'), alt))),
+        (b"\x1b[112;3u", Some(modified(Code::Char('p'), alt))),
+        (b"\x1b[114;3u", Some(modified(Code::Char('r'), alt))),
+        (b"\x1b[118;3u", Some(modified(Code::Char('v'), alt))),
+        (b"\x1b[120;3u", Some(modified(Code::Char('x'), alt))),
+        (b"\x1b[97;7u", Some(modified(Code::Char('a'), alt | ctrl))),
+        (b"\x1b[99;7u", Some(modified(Code::Char('c'), alt | ctrl))),
+        (b"\x1b[114;7u", Some(modified(Code::Char('r'), alt | ctrl))),
+        (
+            b"\x1b[99;13u",
+            Some(modified(Code::Char('c'), ctrl | super_)),
+        ),
+        (
+            b"\x1b[102;13u",
+            Some(modified(Code::Char('f'), ctrl | super_)),
+        ),
+        (
+            b"\x1b[103;6u",
+            Some(modified(Code::Char('g'), shift | ctrl)),
+        ),
+        (
+            b"\x1b[108;6u",
+            Some(modified(Code::Char('l'), shift | ctrl)),
+        ),
+        (
+            b"\x1b[118;6u",
+            Some(modified(Code::Char('v'), shift | ctrl)),
+        ),
+        (b"\x1b[58;3u", Some(modified(Code::Char(':'), alt))),
+        (b"\x1b[:;5u", None),
+        (b"\x1b[;5u", None),
+        (b"\x1b[99;u", None),
     ];
     for (bytes, want) in cases {
         assert_eq!(
             feed_strokes(&[*bytes]),
             (*want).into_iter().collect::<Vec<_>>(),
+            "{bytes:?}"
+        );
+    }
+    // Alt with each digit: `CSI 48..=57 ; 3 u`.
+    for d in 0..=9u8 {
+        let bytes = format!("\x1b[{};3u", 48 + d);
+        assert_eq!(
+            feed_strokes(&[bytes.as_bytes()]),
+            vec![modified(Code::Char((b'0' + d) as char), alt)],
             "{bytes:?}"
         );
     }
@@ -1196,6 +1025,33 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Char('+'), ctrl), None),
         // `ESC 0x08` reads as Ctrl+Alt+H, which no binding uses.
         (modified(Code::Char('h'), ctrl | alt), None),
+        (modified(Code::Up, shift), None),
+        (modified(Code::Down, shift), None),
+        (modified(Code::Left, shift), None),
+        (modified(Code::Left, alt | ctrl), None),
+        (modified(Code::Right, alt | super_), None),
+        (modified(Code::Right, ctrl | super_), None),
+        (modified(Code::Delete, ctrl), None),
+        (modified(Code::Enter, ctrl), None),
+        (modified(Code::Enter, super_), None),
+        (modified(Code::Esc, shift), None),
+        (modified(Code::Backspace, shift), None),
+        (modified(Code::Backspace, ctrl), None),
+        (modified(Code::Char('a'), alt | ctrl), None),
+        (modified(Code::Char('b'), ctrl), None),
+        (modified(Code::Char('c'), alt), None),
+        (modified(Code::Char('c'), alt | ctrl), None),
+        (modified(Code::Char('c'), ctrl | super_), None),
+        (modified(Code::Char('f'), ctrl | super_), None),
+        (modified(Code::Char('g'), alt), None),
+        (modified(Code::Char('g'), shift | ctrl), None),
+        (modified(Code::Char('j'), alt), None),
+        (modified(Code::Char('l'), alt), None),
+        (modified(Code::Char('l'), shift | ctrl), None),
+        (modified(Code::Char('r'), alt | ctrl), None),
+        (modified(Code::Char('v'), alt), None),
+        (modified(Code::Char('v'), shift | ctrl), None),
+        (modified(Code::Char(':'), alt), None),
     ];
     for (stroke, want) in cases {
         assert_eq!(&default_event(stroke), want, "{stroke:?}");
