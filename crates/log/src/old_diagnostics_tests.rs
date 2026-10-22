@@ -1,5 +1,5 @@
 //! Tests for the diagnostics selection: the 30-day and newest-100 rule,
-//! copied from the hub's pruning.
+//! shared by the hub's start-up pruning and `fiber sessions prune`.
 
 #![allow(
     clippy::unwrap_used,
@@ -9,11 +9,12 @@
 )]
 
 use std::fs::{self, File};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use contract::clock::Clock;
 
-use super::*;
+use super::{OldFile, old_diagnostics};
 
 fn wall() -> SystemTime {
     fakes::clock::FakeClock::new().wall()
@@ -51,7 +52,7 @@ fn paths(files: &[OldFile]) -> Vec<String> {
 
 #[test]
 fn files_older_than_30_days_are_selected_and_the_boundary_is_kept() {
-    let root = fakes::TempDir::new("cli-prune-diag");
+    let root = fakes::TempDir::new("log-old-diag");
     let dir = root.path().join("logs");
     fs::create_dir_all(&dir).unwrap();
     write(&dir, "old.log", b"old");
@@ -73,7 +74,7 @@ fn files_older_than_30_days_are_selected_and_the_boundary_is_kept() {
 
 #[test]
 fn the_newest_100_files_by_mtime_are_kept() {
-    let root = fakes::TempDir::new("cli-prune-diag-100");
+    let root = fakes::TempDir::new("log-old-diag-100");
     let dir = root.path().join("crashes");
     fs::create_dir_all(&dir).unwrap();
     for i in 0..101 {
@@ -90,7 +91,7 @@ fn the_newest_100_files_by_mtime_are_kept() {
 
 #[test]
 fn a_hundred_files_and_a_subdirectory_select_nothing() {
-    let root = fakes::TempDir::new("cli-prune-diag-sub");
+    let root = fakes::TempDir::new("log-old-diag-sub");
     let dir = root.path().join("logs");
     fs::create_dir_all(dir.join("sub")).unwrap();
     for i in 0..100 {
@@ -103,11 +104,14 @@ fn a_hundred_files_and_a_subdirectory_select_nothing() {
         );
     }
     assert!(old_diagnostics(&dir, wall()).is_empty());
+    write(&dir, "extra.log", b"x");
+    set_mtime(&dir, "extra.log", SystemTime::UNIX_EPOCH);
+    assert_eq!(paths(&old_diagnostics(&dir, wall())), ["extra.log"]);
 }
 
 #[test]
 fn a_symlink_is_never_selected() {
-    let root = fakes::TempDir::new("cli-prune-diag-link");
+    let root = fakes::TempDir::new("log-old-diag-link");
     let dir = root.path().join("logs");
     fs::create_dir_all(&dir).unwrap();
     write(&dir, "old.log", b"old");
@@ -122,13 +126,18 @@ fn a_symlink_is_never_selected() {
 
 #[test]
 fn a_missing_directory_gives_an_empty_list() {
-    let root = fakes::TempDir::new("cli-prune-diag-missing");
+    let root = fakes::TempDir::new("log-old-diag-missing");
+    let dir = root.path().join("logs");
+    fs::create_dir_all(&dir).unwrap();
+    write(&dir, "old.log", b"old");
+    set_mtime(&dir, "old.log", SystemTime::UNIX_EPOCH);
+    assert_eq!(paths(&old_diagnostics(&dir, wall())), ["old.log"]);
     assert!(old_diagnostics(&root.path().join("nope"), wall()).is_empty());
 }
 
 #[test]
 fn results_are_sorted_by_path() {
-    let root = fakes::TempDir::new("cli-prune-diag-sorted");
+    let root = fakes::TempDir::new("log-old-diag-sorted");
     let dir = root.path().join("logs");
     fs::create_dir_all(&dir).unwrap();
     for name in ["b.log", "a.log", "c.log"] {
@@ -151,7 +160,7 @@ fn results_are_sorted_by_path() {
 
 #[test]
 fn bytes_is_each_files_length() {
-    let root = fakes::TempDir::new("cli-prune-diag-bytes");
+    let root = fakes::TempDir::new("log-old-diag-bytes");
     let dir = root.path().join("logs");
     fs::create_dir_all(&dir).unwrap();
     write(&dir, "a.log", b"12345");
