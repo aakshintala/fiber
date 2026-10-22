@@ -14,7 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -29,6 +29,12 @@ mod support;
 /// wait (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
+/// How long the jig may take to print its listening line, process start
+/// included: the first exec of a freshly linked binary can stall under
+/// load. This is the bound `crates/loop/tests/review_jig.rs` gives a built
+/// binary's first start. The exchange after the line keeps [`DEADLINE`].
+const START_BOUND: Duration = Duration::from_secs(30);
+
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
 /// cargo and waits on no build lock.
@@ -41,14 +47,15 @@ fn example_path() -> PathBuf {
 
 /// Reads the jig's stdout: first its `listening on` line, then one request
 /// block, which ends at the blank line. Each send is best-effort: the test
-/// may already have failed its deadline and gone away.
+/// may already have failed its deadline and gone away. A jig that closes its
+/// stdout before the line drops the sender, so the wait fails at once.
 fn spawn_reader(stdout: ChildStdout, tx: mpsc::Sender<String>) {
     thread::spawn(move || {
         let mut lines = BufReader::new(stdout).lines();
-        let listening = lines
-            .next()
-            .map(|line| line.unwrap_or_default())
-            .unwrap_or_default();
+        let listening = match lines.next() {
+            Some(Ok(line)) => line,
+            Some(Err(_)) | None => return,
+        };
         match tx.send(listening) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
@@ -132,34 +139,27 @@ fn a_slow_process_start_still_prints_the_listening_line() {
     // The deadline is made here, before the jig starts, so the release
     // follows the listening wait's own bound. The sender stays alive, so the
     // receive ends at the deadline and not at a disconnect.
-    let hold = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    let hold = Deadline::after(fakes::MUST_SUCCEED_WITHIN + Duration::from_secs(1));
     thread::spawn(move || {
         let (_keep, never) = mpsc::channel::<()>();
-        let _ = hold.recv(&never);
-        let mut release = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&gate)
-            .unwrap();
+        match hold.recv(&never) {
+            Ok(()) | Err(_) => {}
+        }
+        let mut release = std::fs::OpenOptions::new().write(true).open(&gate).unwrap();
         release.write_all(b"go\n").unwrap();
     });
     serve_one_fixture(command);
 }
 
-/// Reads a killed jig's stderr to its end, under [`DEADLINE`]. A read that
-/// does not end names that in the failure instead of hanging the test.
-fn stderr_after_kill(mut stderr: ChildStderr) -> String {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut text = String::new();
-        stderr.read_to_string(&mut text).unwrap();
-        match tx.send(text) {
-            Ok(()) | Err(mpsc::SendError(_)) => {}
-        }
-    });
-    match Deadline::after(DEADLINE).recv(&rx) {
-        Ok(text) => text,
-        Err(_) => format!("(not closed within {DEADLINE:?})"),
-    }
+/// A jig that exits before its line fails the listening wait at once, and
+/// the failure names the stderr it wrote. The child exits, so its output is
+/// in the pipe before the wait fails: no timing decides the expected text.
+#[test]
+#[should_panic(expected = "its stderr: boom")]
+fn a_jig_that_exits_before_its_line_names_its_stderr() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("echo boom >&2");
+    serve_one_fixture(command);
 }
 
 /// Starts the jig through `command`, which runs it with its fixture, then
@@ -178,15 +178,23 @@ fn serve_one_fixture(mut command: Command) {
     spawn_reader(child.stdout.take().unwrap(), tx);
     let mut stderr = child.stderr.take().unwrap();
 
-    let printed = match Deadline::after(DEADLINE).recv(&rx) {
+    let printed = match Deadline::after(START_BOUND).recv(&rx) {
         Ok(printed) => printed,
         Err(err) => {
             // The group kill closes the jig's stderr, so its read ends.
             drop(watchdog);
-            let errors = stderr_after_kill(stderr);
+            let errors = fakes::within(
+                "the killed jig's stderr",
+                Deadline::after(DEADLINE),
+                move || {
+                    let mut text = String::new();
+                    stderr.read_to_string(&mut text).unwrap();
+                    text
+                },
+            );
             panic!(
                 "the provider-server jig printed its listening line: {err:?} \
-                 within {DEADLINE:?}\nits stderr: {errors}"
+                 within {START_BOUND:?}\nits stderr: {errors}"
             );
         }
     };
