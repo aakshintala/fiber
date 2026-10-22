@@ -61,7 +61,7 @@ its own. From the top:
    state's colour ("State glyphs") and joined by a dim " · ", leaving out a
    zero count, then the summed spend of the live sessions, dim: "2 waiting on
    you · 2 working · 1 retrying · 1 crashed · 2 ready · $5.78 live". With no
-   session it reads "no sessions yet", dim.
+   live session it reads "no live sessions", dim.
 2. the session list, filling the rows between the header and the input box
    ("The session list")
 3. the input box, at the bottom where a session's input box sits, so widening
