@@ -143,6 +143,7 @@ pub(crate) fn debug_pass(
         .map(|workload| entry(workload.name, run(workload)))
         .collect();
     head.metrics.insert("op_breakdown", entries);
+    head.metric_runs.insert("op_breakdown", 1);
 }
 
 /// One workload's debug run: the workload once, timed on `clock`, in a

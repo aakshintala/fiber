@@ -485,14 +485,13 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
-    # Pull request runs took a median of about 23 minutes over the 20 runs
-    # from 2026-10-13T21Z (#2293): the benchmarks' head and base passes take
-    # about 20, since #2206 paired the paging jig's scales, and a base that
-    # is a replaced backstop adds a 3-minute release build. The bound is
-    # twice the median (docs/ci.md, "Job time limits"). Push runs carry the
-    # 10-busy-turns workload, and the bound resets to twice the median
-    # after 20 backstop runs.
-    timeout-minutes: ${{ github.event_name == 'push' && 60 || 50 }}
+    # The existing PR figure is about 23 minutes over the 20 runs from
+    # 2026-10-13T21Z (#2293). PR run 39805368958 restored the Rust cache and
+    # took 22m47; its extra debug workloads took 2m07 in total. Add that
+    # pass to the existing figure: 25m07, twice rounded up to 55 minutes
+    # (docs/ci.md, "Job time limits"). Push runs carry the 10-busy-turns
+    # workload, and keep the existing 60-minute bound.
+    timeout-minutes: ${{ github.event_name == 'push' && 60 || 55 }}
     # The stored-results lookup lists another run's artifact, which needs
     # `actions: read` beyond the workflow's `contents: read`.
     permissions:

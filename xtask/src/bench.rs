@@ -362,12 +362,10 @@ fn breakdown_rows(metric: &Value) -> Result<(Vec<String>, Vec<String>), String> 
             .ok_or_else(|| format!("{workload} has no provider_request"))?;
         let requests = whole(provider, "count", workload)?;
         let total_ms = whole(provider, "total_ms", workload)?;
-        let mut ops: Vec<(&String, &Value)> = ops.iter().collect();
-        ops.sort_by(|a, b| a.0.cmp(b.0));
         if ops.is_empty() && requests == 0 {
             rows.push(format!("| {workload} | {ms:.1} | none recorded | — | — |"));
         } else {
-            for (op, value) in &ops {
+            for (op, value) in ops {
                 let count = whole(value, "count", workload)?;
                 let total = whole(value, "ms", workload)?;
                 rows.push(format!(

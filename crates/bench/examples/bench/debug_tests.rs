@@ -1,8 +1,10 @@
 use std::cell::Cell;
+use std::fs;
 
 use serde_json::{Value, json};
 
 use super::{Run, debug_pass, debug_workloads, tally};
+use crate::home::Home;
 use crate::idle;
 use crate::{Pass, Side};
 
@@ -201,8 +203,62 @@ fn debug_pass_has_one_entry_per_workload_in_selection_order() {
         .filter_map(|entry| entry.get("workload")?.as_str())
         .collect();
     assert_eq!(got, expected);
+    assert_eq!(head.metric_runs.get("op_breakdown"), Some(&1));
     assert_eq!(head.metrics.get("attach_stage_ms"), Some(&vec![json!(1)]));
     assert_eq!(head.metric_runs.get("attach_stage_ms"), Some(&5));
+}
+
+#[test]
+fn debug_pass_tallies_a_child_homes_diagnostic_log() {
+    let skip_rows = crate::timing_names()
+        .into_iter()
+        .filter(|name| *name != "session start")
+        .collect::<Vec<_>>()
+        .join(",");
+    let args = args(&[
+        "--only",
+        "all",
+        "--skip-ten-turns",
+        "--skip-rows",
+        &skip_rows,
+    ]);
+    let workloads = debug_workloads(&args);
+    assert_eq!(
+        names(&workloads),
+        ["session start", "busy turn", "web_fetch"]
+    );
+
+    let fiber = std::env::current_exe().unwrap();
+    let (home, logs) = Home::debug(&fiber).unwrap();
+    let mut head = Pass::new(Side::Head, args);
+    debug_pass(&mut head, |workload| {
+        if workload.name != "session start" {
+            return run(Ok(()), Vec::new(), Vec::new());
+        }
+        let child = home.child([]).unwrap();
+        let config: Value =
+            serde_json::from_slice(&fs::read(child.home().join("config.json")).unwrap()).unwrap();
+        assert_eq!(config["diagnostics"]["level"], "debug");
+
+        let dir = child.home().join("logs");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("session.log"), op("startup.config", 7)).unwrap();
+        drop(child);
+        run(Ok(()), Vec::new(), std::mem::take(&mut *logs.borrow_mut()))
+    });
+    assert_eq!(home.finish(), Ok(()));
+
+    let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["workload"], "session start");
+    assert_eq!(
+        entries[0]["ops"],
+        json!({"startup.config": {"count": 1, "ms": 7}})
+    );
+    assert_eq!(
+        entries[0]["provider_request"],
+        json!({"count": 0, "total_ms": 0})
+    );
 }
 
 #[test]
