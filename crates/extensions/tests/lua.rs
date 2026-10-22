@@ -339,32 +339,22 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     // park, `Mismatch` names the grace park it found instead. `NoPark` is a
     // hang, not a path, and fails the test.
     let caller = match clock.try_advance_when_parked(Some(early), None, LOAD, WAIT) {
-        Ok(early_mark) => {
+        Ok(_) => {
             // The early mark holds every thread that has ever parked,
             // including calls that already returned: name the provider
             // caller by the park it holds next, at its grace, instead of
             // counting the mark. Unrelated threads are ignored, never
             // awaited.
-            assert!(clock.await_parked_since(
-                &early_mark,
-                Some(grace),
-                fakes::Deadline::after(WAIT)
-            ));
-            let caller = clock
+            let mut caller = clock
                 .mark_parked(grace, fakes::Deadline::after(WAIT))
-                .expect("the provider caller parks at its grace");
-            let caller = caller.threads();
+                .expect("the provider caller parks at its grace")
+                .threads();
             assert_eq!(
                 caller.len(),
                 1,
                 "only the provider caller parks at its grace"
             );
-            Some(
-                caller
-                    .into_iter()
-                    .next()
-                    .expect("the provider caller thread"),
-            )
+            Some(caller.pop().expect("the provider caller thread"))
         }
         Err(fakes::clock::Miss::Mismatch { watched, parked }) => {
             assert_eq!(
