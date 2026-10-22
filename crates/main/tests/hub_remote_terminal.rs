@@ -222,7 +222,7 @@ fn await_hello(
         if left <= REPORT_MARGIN {
             give_up(setup, process, "waited for the installed hub's hello");
         }
-        let until = SystemClock.now() + (left - REPORT_MARGIN).min(HELLO_SLICE);
+        let until = SystemClock.now() + left.saturating_sub(REPORT_MARGIN).min(HELLO_SLICE);
         let home = setup.home();
         let slice = bounded(setup.deadline, "the installed hub's hello", move || {
             doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
