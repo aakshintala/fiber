@@ -10,7 +10,7 @@ use std::time::Duration;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 
-use super::{Loop, hub::Connection};
+use super::Loop;
 use crate::Input;
 use crate::app::{App, Effect, Target};
 use crate::link::Line;
@@ -81,31 +81,10 @@ fn loop_with_viewer(
         program.to_str().unwrap_or_default().to_owned(),
         marker.to_str().unwrap_or_default().to_owned(),
     ];
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: Some(out),
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer,
-        images_dir: images.clone(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
+    lp.files_out = out;
+    lp.programs.viewer = viewer;
+    lp.programs.images_dir = images.clone();
     lp.hub.store(ours);
     (lp, theirs, rx, images, marker, dir)
 }

@@ -1490,7 +1490,7 @@ fn a_link_click_runs_the_opener() {
     let out = dir.path().join("opened").display().to_string();
     let watchdog = fakes::Watchdog::matching(&out);
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.open_command = Some(
+    lp.programs.open = Some(
         ["/bin/sh", "-c", "printf %s \"$1\" > \"$0\"", &out]
             .map(str::to_owned)
             .to_vec(),
