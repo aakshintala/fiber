@@ -7,6 +7,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::events::ImportedNames;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -810,4 +811,35 @@ fn an_attached_busy_session_with_an_idle_row_is_not_counted_twice() {
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::Quit);
+}
+
+/// The quit question takes every key while the import report is open:
+/// Ctrl+C opens it over the report, Esc closes it with the report
+/// still open and no notices, and Enter answers it per its keys.
+#[test]
+fn the_quit_question_takes_every_key_over_the_open_report() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.open_import_report(None, ImportedNames::default(), Vec::new());
+    assert!(app.import_report_open());
+    // Ctrl+C twice opens the quit question over the report.
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    assert!(app.import_report_open());
+    // Esc closes the quit question with the report still open, and no
+    // notices: the report resumes behind the closed question.
+    assert_eq!(app.on_key(Key::Esc, clock.now()), Effect::None);
+    assert!(!app.quit_open());
+    assert!(app.import_report_open());
+    assert!(app.notices().is_empty());
+    // Enter answers the reopened question per its keys: leaving quits
+    // with the report still open behind it.
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::Quit);
+    assert!(app.import_report_open());
 }

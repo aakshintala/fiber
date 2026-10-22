@@ -114,6 +114,12 @@ pub(crate) fn slug(heading: &str) -> String {
 }
 
 pub(crate) fn anchors(markdown: &str) -> BTreeSet<String> {
+    heading_ids(markdown).into_iter().collect()
+}
+
+/// GitHub's anchor for each heading, in document order, with the same
+/// dedup suffixes `anchors` collects, so a rendered id never 404s.
+pub(crate) fn heading_ids(markdown: &str) -> Vec<String> {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     parse(markdown)
         .headings
@@ -151,7 +157,7 @@ fn cited_heading(after: &str) -> Option<String> {
     )
 }
 
-fn is_external(target: &str) -> bool {
+pub(crate) fn is_external(target: &str) -> bool {
     let scheme: String = target
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))

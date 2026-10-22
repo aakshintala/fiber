@@ -32,6 +32,7 @@
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
+//! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
 //!   regenerates and never committed
@@ -50,6 +51,7 @@ mod models_dev;
 mod models_dev_table;
 mod rules;
 mod select;
+mod site;
 mod ticket;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -261,6 +263,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             &rules::loop_tool_names(&rust_files(&workspace_members()?)?),
             "ok",
         ),
+        "site" => site::run(rest),
         "compiled-in" => {
             let members = workspace_members()?;
             let files = rust_files(&members)?;

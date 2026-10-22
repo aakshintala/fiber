@@ -702,7 +702,7 @@ const OPENCODE_ZEN: Package = Package {
 const VERTEX: Package = Package {
     path: "providers/vertex/providers/vertex.json",
     source: "google-vertex",
-    provider: r#"{"credential_label":{"default":"the active gcloud configuration, or Application Default Credentials","names":"gcloud configuration"},"name":"vertex","placeholders":{"project":{"env":"GOOGLE_CLOUD_PROJECT"}},"reviewer_model":"gemini-3.8-flash"}"#,
+    provider: r#"{"credential_label":{"credential_paths":[{"env":"CLOUDSDK_CONFIG","join":"access_tokens.db","path":"~/.config/gcloud"},{"env":"CLOUDSDK_CONFIG","join":"application_default_credentials.json","path":"~/.config/gcloud"},{"env":"CLOUDSDK_CONFIG","join":"credentials.db","path":"~/.config/gcloud"},{"env":"CLOUDSDK_CONFIG","join":"legacy_credentials","path":"~/.config/gcloud"}],"default":"the active gcloud configuration, or Application Default Credentials","names":"gcloud configuration"},"name":"vertex","placeholders":{"project":{"env":"GOOGLE_CLOUD_PROJECT"}},"reviewer_model":"gemini-3.8-flash"}"#,
     protocol: ProtocolRule::Fixed("google-generative-ai"),
     base_url: "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google",
     drop_deprecated: true,

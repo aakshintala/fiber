@@ -106,11 +106,13 @@ pub(crate) fn per_run(model: Option<String>, overrides: Vec<String>) -> Vec<Stri
 /// provider: everything a failure of which leaves no session. `overrides`
 /// is the per-run layer: `model=<m>` from `--model` first, then each `-c`,
 /// so a later entry wins. `recorded` is the resumed session's model, from the log's last
-/// `usage_recorded`, and `recorded_credential` its credential label:
-/// `--credential` on a resume, else the recorded one; each beats configuration
-/// (`docs/model-routing.md`, "Choosing the model"). A log with no
-/// `usage_recorded` uses `--model`, then the configured default. A recorded
-/// model or label that no longer resolves fails before any line is written.
+/// `preamble_built` or `model_changed`: the fallback when the per-run layer
+/// names no model, before configuration's default. `recorded_credential`
+/// is its credential label: `--credential` on a resume, else the recorded
+/// one; each beats configuration (`docs/model-routing.md`, "Choosing the
+/// model"). A log with no recorded model uses the per-run layer, then the
+/// configured default. A model or label that no longer resolves fails before
+/// any line is written.
 #[allow(
     clippy::too_many_arguments,
     reason = "one entry composition: the recorded model, credential, thinking, clock, host, reads and diagnostic process"
@@ -281,17 +283,23 @@ pub(crate) fn parts_in(
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
         .collect();
-    // Every `file` credential source configuration declares, after the Lua
-    // providers are added so their sources are protected too: a relative
-    // path joins the workspace the reader reads it from, an absolute one
-    // stands (`docs/permissions.md`, "Credentials").
+    // Every `file` credential source configuration declares, and every path
+    // a provider's data declares its `credential()` reads, after the Lua
+    // providers are added so theirs are protected too: a relative path
+    // joins the workspace the reader reads it from, an absolute one stands,
+    // and each resolves as a call's path does (`docs/permissions.md`,
+    // "Credentials").
     let credential_files: Vec<PathBuf> = config
         .credentials()
-        .credential_files(providers.names().filter_map(|name| providers.get(name)))
+        .credential_files(
+            providers.names().filter_map(|name| providers.get(name)),
+            &|name| std::env::var(name).ok(),
+        )
         .into_iter()
-        .map(|file| workspace.join(file))
+        .map(|file| config::resolve_declared(&workspace.join(file)))
         .collect();
-    // `recorded` first, then `--model` and configuration's `model`
+    // The per-run layer first (`--model`, then `-c model=`), then the
+    // recorded model, then configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
         .choose(recorded, &config)
@@ -507,9 +515,9 @@ pub(crate) fn parts_in(
         extensions,
         mcp,
         switching,
-        // The startup model's `:level` suffix, if any: a resumed session
-        // passes none with its recorded model, so the loop's seeded choice
-        // stands.
+        // The startup model's `:level` suffix, if any: a resume with
+        // `--model <m>:<level>` passes one with its per-run model, else the
+        // loop keeps its seeded choice, the recorded one.
         switchable: r#loop::Switchable {
             chosen: model.thinking,
         },

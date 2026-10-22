@@ -20,7 +20,7 @@ use contract::images::Images;
 use contract::provider::ToolDefinition;
 use contract::tool::{ServerRecord, Tool};
 
-use crate::cache;
+use crate::cache::{self, Cached};
 use crate::effects::Hints;
 use crate::error::McpError;
 use crate::prompt::{PromptSource, Prompts};
@@ -245,7 +245,7 @@ fn limits(spec: &ServerSpec) -> net::Limits {
 
 /// Starts one spec on its transport and runs the handshake: the only
 /// production caller of [`Server::start_observed`]. Session start
-/// ([`open_observed`]) and every lazy first start and restart
+/// ([`open_staged`]) and every lazy first start and restart
 /// ([`Slot::serve`]) both go through here, so the guard runs immediately
 /// before each spawn. One connection guard starts per attempt through
 /// `timing`: owned here and threaded to the tool-list boundary, which
@@ -399,6 +399,14 @@ impl Servers {
         self.resources_declared.store(true, Ordering::SeqCst);
     }
 
+    /// Aligns the marker with the installed tool set: set when the session
+    /// declares `mcp_resources`, cleared when it does not, so a later
+    /// in-session repository approval neither offers a second registration
+    /// scoped to its own servers nor suppresses the needed one.
+    pub fn set_resources_declared(&self, declared: bool) {
+        self.resources_declared.store(declared, Ordering::SeqCst);
+    }
+
     /// Whether [`Servers::mark_resources_declared`] has run.
     pub fn resources_declared(&self) -> bool {
         self.resources_declared.load(Ordering::SeqCst)
@@ -438,6 +446,24 @@ impl Servers {
     /// reading it starts no guard.
     pub fn timing(&self) -> Option<contract::diag::Timing> {
         self.timing.clone()
+    }
+
+    /// Stops the slot `name` runs on and drops it from the list, so a
+    /// re-added declaration finds `has_slot` false and starts fresh, exactly
+    /// as the reconnect path does for a slot-less name. A slot with an
+    /// in-flight start is stopped after that start returns, bounded by the
+    /// startup deadline: the stop takes the same lease the start holds. The
+    /// list lock is never held across the stop.
+    pub(crate) fn remove(&self, name: &str) {
+        let slot = {
+            let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+            let position = slots.iter().position(|slot| slot.spec().name == name);
+            match position {
+                Some(index) => slots.remove(index),
+                None => return,
+            }
+        };
+        slot.stop();
     }
 }
 
@@ -482,7 +508,7 @@ pub fn restart(
         .collect();
     let removed: Vec<String> = before.difference(&after).cloned().collect();
     let link = Arc::downgrade(&slot);
-    let used = declare(slot.spec(), &listed, &link, artifacts, images);
+    let used = declare(&slot.spec(), &listed, &link, artifacts, images);
     Some(Restarted {
         records,
         used,
@@ -594,8 +620,15 @@ pub(crate) fn start_observed_tracked(
         let name = spec.name.clone();
         let outstanding = outstanding.clone();
         thread::spawn(move || {
-            let opened = open_observed(
-                spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+            let required = spec.required;
+            let key = spec.key();
+            let staged = stage_and_write(
+                open_staged(
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+                ),
+                &cache,
+                &name,
+                &key,
             );
             if let Some(outstanding) = outstanding.as_ref() {
                 outstanding
@@ -603,25 +636,25 @@ pub(crate) fn start_observed_tracked(
                     .unwrap_or_else(PoisonError::into_inner)
                     .remove(&name);
             }
-            done.send((index, opened)).unwrap_or(());
+            done.send((index, required, staged)).unwrap_or(());
         });
     }
     drop(done);
-    let mut opened: Vec<(usize, Opened)> = results.into_iter().collect();
-    opened.sort_by_key(|(index, _)| *index);
+    let mut staged: Vec<(usize, bool, Shadowed)> = results.into_iter().collect();
+    staged.sort_by_key(|(index, _, _)| *index);
     let mut tools: Vec<(String, Arc<dyn Tool>, ToolInfo)> = Vec::new();
     let mut failed = Vec::new();
     let mut required_failed = None;
     let mut slots = Vec::new();
     let mut sources = Vec::new();
-    for (_, opened) in opened {
-        match opened {
-            Opened::Up(slot, declared, listed) => {
-                slots.push(Arc::clone(&slot));
-                sources.extend(listed);
-                tools.extend(declared);
+    for (_, required, staged) in staged {
+        match staged {
+            Shadowed::Up(opened) => {
+                slots.push(Arc::clone(&opened.slot));
+                sources.extend(opened.sources);
+                tools.extend(opened.declared);
             }
-            Opened::Down { failure, required } => {
+            Shadowed::Down { failure } => {
                 if required {
                     if required_failed.is_none() {
                         required_failed = Some(failure);
@@ -658,16 +691,8 @@ pub(crate) fn start_observed_tracked(
     let slots: Arc<Mutex<Vec<Arc<Slot>>>> = Arc::new(Mutex::new(slots));
     // One `mcp_resources` for every start with a server offering
     // resources, reaching the start's own slots, so it follows adoption.
-    if slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|slot| slot.offers_resources())
-    {
-        let definition = crate::resources_definition();
-        let tool: Arc<dyn Tool> =
-            Arc::new(crate::resources::Resources::new(&slots, artifacts, &images));
-        tools.push(("builtin".to_owned(), tool, resources_info(&definition)));
+    if let Some(declaration) = resources_declaration(&slots, artifacts, &images) {
+        tools.push(declaration);
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -704,12 +729,35 @@ fn resources_info(definition: &ToolDefinition) -> ToolInfo {
 
 pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
-pub(crate) enum Opened {
-    Up(Arc<Slot>, Vec<Declaration>, Vec<PromptSource>),
-    Down {
-        failure: McpServerFailed,
-        required: bool,
-    },
+/// One `mcp_resources` declaration when any post-sync slot offers
+/// resources, as at session start: `None` when none does, so the caller
+/// declares nothing.
+pub(crate) fn resources_declaration(
+    slots: &Arc<Mutex<Vec<Arc<Slot>>>>,
+    artifacts: &Path,
+    images: &Arc<dyn Images>,
+) -> Option<Declaration> {
+    let offering = slots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|slot| slot.offers_resources());
+    if !offering {
+        return None;
+    }
+    let definition = crate::resources_definition();
+    let tool: Arc<dyn Tool> = Arc::new(crate::resources::Resources::new(slots, artifacts, images));
+    Some(("builtin".to_owned(), tool, resources_info(&definition)))
+}
+
+/// Starts one spec and stages the outcome, writing the cache only when
+/// the start listed: one helper for the session-start thread and the
+/// direct-start test path.
+fn stage_and_write(staged: Shadowed, cache: &Path, name: &str, key: &str) -> Shadowed {
+    if let Shadowed::Up(ref opened) = staged {
+        cache::write(cache, name, key, &opened.listed);
+    }
+    staged
 }
 
 /// Session start without timing: direct-start tests only.
@@ -722,20 +770,48 @@ pub(crate) fn open(
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
-) -> Opened {
-    open_observed(
-        spec, workspace, artifacts, images, cache, clock, version, None,
+) -> Shadowed {
+    let name = spec.name.clone();
+    let key = spec.key();
+    stage_and_write(
+        open_staged(
+            spec, workspace, artifacts, images, cache, clock, version, None,
+        ),
+        cache,
+        &name,
+        &key,
     )
 }
 
-/// As [`open`], timing the attempt's connection through `timing`: the
-/// guard is consumed at the tool-list boundary, before prompt discovery.
-/// `None` stays untimed, as before.
+/// What a shadow start holds: the running slot, its declarations, the
+/// raw lists for the commit's cache write, and the prompt sources the
+/// session would list. The cache file is unwritten: the commit writes it
+/// only after every required start succeeds, so a required failure leaves
+/// the old caches byte-identical.
+pub(crate) struct StagedOpen {
+    pub(crate) slot: Arc<Slot>,
+    pub(crate) declared: Vec<Declaration>,
+    pub(crate) listed: Cached,
+    pub(crate) sources: Vec<PromptSource>,
+}
+
+/// What a shadow start stages: the running slot with its declarations
+/// and cache payload, or the start failure the caller files.
+pub(crate) enum Shadowed {
+    Up(StagedOpen),
+    Down { failure: McpServerFailed },
+}
+
+/// Starts one spec and stages the outcome without writing the cache:
+/// the caller writes it only after its required starts succeed, so a
+/// required failure leaves the old caches byte-identical. The guard is
+/// consumed at the tool-list boundary, before prompt discovery. `None`
+/// timing stays untimed, as before.
 #[allow(
     clippy::too_many_arguments,
-    reason = "the observed companion adds only the Timing"
+    reason = "one shadow's startup inputs, as at session start"
 )]
-pub(crate) fn open_observed(
+pub(crate) fn open_staged(
     spec: ServerSpec,
     workspace: &Path,
     artifacts: &Path,
@@ -744,7 +820,7 @@ pub(crate) fn open_observed(
     clock: &Arc<dyn Clock>,
     version: &str,
     timing: Option<contract::diag::Timing>,
-) -> Opened {
+) -> Shadowed {
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
@@ -752,21 +828,12 @@ pub(crate) fn open_observed(
     let open = match launch_observed(&spec, workspace, clock, version, timing.clone()) {
         Ok(open) => open,
         Err(error) => {
-            return if required {
-                Opened::Down {
-                    failure: not_started(&name, &error, timeout, true, remote).record,
-                    required: true,
-                }
-            } else {
-                Opened::Down {
-                    failure: not_started(&name, &error, timeout, false, remote).record,
-                    required: false,
-                }
+            return Shadowed::Down {
+                failure: not_started(&name, &error, timeout, required, remote).record,
             };
         }
     };
     let live = open.listed;
-    cache::write(cache, &name, &spec.key(), &live);
     let listed_prompts = live.prompts.clone();
     let tools = live.tools.clone();
     let slot = Slot::running_observed(
@@ -776,13 +843,20 @@ pub(crate) fn open_observed(
         clock,
         version,
         open.server,
-        live,
+        live.clone(),
+        open.advertises_tools,
+        open.advertises_prompts,
         timing,
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
-    let listed = sources_of(&name, &listed_prompts, &link, spec.call_timeout);
+    let sources = sources_of(&name, &listed_prompts, &link, spec.call_timeout);
     let declared = declare(&spec, &tools, &link, artifacts, images);
-    Opened::Up(slot, declared, listed)
+    Shadowed::Up(StagedOpen {
+        slot,
+        declared,
+        listed: live,
+        sources,
+    })
 }
 
 /// One prompt row source per listed prompt of `server`.

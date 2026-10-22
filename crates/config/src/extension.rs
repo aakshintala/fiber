@@ -180,6 +180,15 @@ impl CredentialFrom {
             Self::Function(_) => None,
         }
     }
+
+    /// The paths a `credential()` that reads nothing Fiber stores draws
+    /// secrets from; none for a stored credential.
+    pub fn credential_paths(&self) -> &[CredentialPath] {
+        match self {
+            Self::Stored { .. } => &[],
+            Self::Function(sources) => &sources.credential_paths,
+        }
+    }
 }
 
 /// The data's `credential`, `login` and `credential_label` as written.
@@ -216,6 +225,56 @@ pub struct CredentialLabelSources {
     pub names: String,
     /// What the `default` label reads, such as the environment.
     pub default: String,
+    /// The paths its `credential()` draws secrets from, which the
+    /// credential deny protects (`docs/permissions.md`, "Credentials").
+    #[serde(default)]
+    pub credential_paths: Vec<CredentialPath>,
+}
+
+/// One path a provider's `credential()` draws secrets from
+/// (`docs/configuration.md`, "A provider's data").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialPath {
+    /// The path, such as `~/.aws/credentials`.
+    pub path: String,
+    /// A variable whose value, when set and not empty, replaces `path`.
+    #[serde(default)]
+    pub env: Option<String>,
+    /// One name appended after that choice, such as a file in a directory
+    /// the variable moves.
+    #[serde(default)]
+    pub join: Option<String>,
+}
+
+impl CredentialPath {
+    /// The path this entry names under `lookup`'s environment: `env`'s
+    /// value when it is set and not empty, else `path`; a leading `~` or
+    /// `~/` read from `HOME`; then `join`. `None` when that names nothing:
+    /// an empty text, a `~` with `HOME` unset or empty, or a `join` that is
+    /// not one name. Nothing is collapsed and no file is read.
+    pub fn resolve(&self, lookup: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+        let set = |name: &str| lookup(name).filter(|value| !value.is_empty());
+        let text = self
+            .env
+            .as_deref()
+            .and_then(set)
+            .unwrap_or_else(|| self.path.clone());
+        let mut path = match text.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                PathBuf::from(format!("{}{rest}", set("HOME")?))
+            }
+            _ if text.is_empty() => return None,
+            _ => PathBuf::from(text),
+        };
+        if let Some(name) = &self.join {
+            if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+                return None;
+            }
+            path.push(name);
+        }
+        Some(path)
+    }
 }
 
 /// How `fiber login` signs in for a provider

@@ -1411,3 +1411,145 @@ fn draft_begin_prerelease_marks_the_release() {
         "{create}"
     );
 }
+
+/// `rehearsal-cleanup` deletes a published rehearsal release this execution
+/// created: the publish step marks creation only after its own `draft-begin`
+/// succeeds, and the published state holding the run's commit goes, with
+/// `--cleanup-tag` on the delete call.
+#[test]
+fn rehearsal_cleanup_deletes_the_runs_own_published_release() {
+    let pack = Pack::start();
+    let own = "a".repeat(40);
+    pack.wfile("state/published-1.2.3", own.as_bytes(), 0o644);
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &own],
+        &[("REHEARSAL_CREATED", "true")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(!pack.state().join("published-1.2.3").exists());
+    let delete = pack
+        .calls()
+        .lines()
+        .find(|line| line.starts_with("delete"))
+        .unwrap()
+        .to_owned();
+    assert!(delete.contains("--cleanup-tag"), "{delete}");
+}
+
+/// `rehearsal-cleanup` refuses a published release this execution did not
+/// create even when its target is the run's commit: a re-run carries the
+/// same version and commit, so the target alone proves nothing. The
+/// collision fails instead of being deleted, and no delete call runs.
+#[test]
+fn rehearsal_cleanup_refuses_a_published_release_from_a_rerun() {
+    let pack = Pack::start();
+    let own = "a".repeat(40);
+    pack.wfile("state/published-1.2.3", own.as_bytes(), 0o644);
+    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &own]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: v1.2.3 is already published; refusing to delete a release this run did not create.\n"
+    );
+    assert!(pack.state().join("published-1.2.3").exists());
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "the re-run release was touched: {}",
+        pack.calls()
+    );
+}
+
+/// `rehearsal-cleanup` refuses a published release created from another
+/// commit even when this execution created one: the collision fails instead
+/// of being deleted, and no delete call runs.
+#[test]
+fn rehearsal_cleanup_refuses_a_published_release_from_another_commit() {
+    let pack = Pack::start();
+    pack.wfile("state/published-1.2.3", "b".repeat(40).as_bytes(), 0o644);
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &"a".repeat(40)],
+        &[("REHEARSAL_CREATED", "true")],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: v1.2.3 is already published; refusing to delete a release this run did not create.\n"
+    );
+    assert!(pack.state().join("published-1.2.3").exists());
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "the foreign release was touched: {}",
+        pack.calls()
+    );
+}
+
+/// `rehearsal-cleanup` deletes a leftover draft, as the failure step
+/// does: drafts carry no published-release risk.
+#[test]
+fn rehearsal_cleanup_deletes_a_leftover_draft() {
+    let pack = Pack::start();
+    let own = "a".repeat(40);
+    pack.wfile("state/draft-1.2.3", own.as_bytes(), 0o644);
+    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &own]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(!pack.state().join("draft-1.2.3").exists());
+}
+
+/// `rehearsal-cleanup` no-ops when no release carries the name: only a
+/// confirmed not-found counts as absent.
+#[test]
+fn rehearsal_cleanup_noops_when_the_release_is_absent() {
+    let pack = Pack::start();
+    let run = pack.pack(&["rehearsal-cleanup", "1.2.3", &"a".repeat(40)]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout, "no rehearsal release v1.2.3 to delete.\n");
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "a delete ran with nothing to delete: {}",
+        pack.calls()
+    );
+}
+
+/// `rehearsal-cleanup` fails when the state lookup fails inconclusively,
+/// instead of skipping the delete.
+#[test]
+fn rehearsal_cleanup_fails_when_the_lookup_fails() {
+    let pack = Pack::start();
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &"a".repeat(40)],
+        &[("RELEASE_PACK_GH_FAIL", "API rate limited")],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("could not inspect the rehearsal release v1.2.3"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "a delete ran after an inconclusive lookup: {}",
+        pack.calls()
+    );
+}
+
+/// `rehearsal-cleanup` fails on an unexpected release state instead of
+/// guessing the delete.
+#[test]
+fn rehearsal_cleanup_refuses_an_unexpected_release_state() {
+    let pack = Pack::start();
+    let run = pack.pack_env(
+        &["rehearsal-cleanup", "1.2.3", &"a".repeat(40)],
+        &[("RELEASE_PACK_GH_VIEW", "maybe")],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: unexpected rehearsal release state: maybe.\n"
+    );
+    assert!(
+        !pack.calls().lines().any(|line| line.starts_with("delete")),
+        "a delete ran on an unexpected state: {}",
+        pack.calls()
+    );
+}

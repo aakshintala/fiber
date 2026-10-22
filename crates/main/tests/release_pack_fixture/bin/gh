@@ -15,6 +15,9 @@ if [ -z "$repo" ]; then
   printf 'gh: no repository: set GH_REPO\n' >&2
   exit 1
 fi
+# RELEASE_PACK_GH_FAIL fails every call with its text, so a test drives a
+# failing API without the network.
+if [ -n "${RELEASE_PACK_GH_FAIL:-}" ]; then printf 'gh: %s\n' "$RELEASE_PACK_GH_FAIL" >&2; exit 1; fi
 sub=${2:-}
 tag=
 for arg in "$@"; do
@@ -27,8 +30,24 @@ version=${tag#v}
 case $sub in
   view)
     printf 'view %s repo=%s\n' "$tag" "$repo" >> "$log"
+    # RELEASE_PACK_GH_VIEW replaces a successful view body, so a test
+    # drives an unexpected release state without the network.
+    if [ -n "${RELEASE_PACK_GH_VIEW:-}" ]; then printf '%s\n' "$RELEASE_PACK_GH_VIEW"; exit 0; fi
+    case $* in
+      # A target query prints the commit the release was created from,
+      # which create stores in the state file, as the real view prints
+      # targetCommitish.
+      *targetCommitish*)
+        if [ -f "$state/published-$version" ]; then cat "$state/published-$version"; exit 0; fi
+        if [ -f "$state/draft-$version" ]; then cat "$state/draft-$version"; exit 0; fi
+        printf 'gh: release %s not found\n' "$tag" >&2
+        exit 1 ;;
+    esac
     if [ -f "$state/published-$version" ]; then printf 'false\n'; exit 0; fi
     if [ -f "$state/draft-$version" ]; then printf 'true\n'; exit 0; fi
+    # Like the real view, a missing release says so, so the caller can
+    # tell absent from a failed lookup.
+    printf 'gh: release %s not found\n' "$tag" >&2
     exit 1 ;;
   create)
     printf 'create %s %s repo=%s\n' "$tag" "$*" "$repo" >> "$log"
@@ -66,7 +85,7 @@ case $sub in
       *--cleanup-tag*) ;;
       *) exit 1 ;;
     esac
-    [ -f "$state/draft-$version" ] || exit 1
-    rm "$state/draft-$version" ;;
+    [ -f "$state/draft-$version" ] || [ -f "$state/published-$version" ] || exit 1
+    rm -f "$state/draft-$version" "$state/published-$version" ;;
   *) exit 64 ;;
 esac

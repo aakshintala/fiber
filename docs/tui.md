@@ -82,7 +82,8 @@ On the first interactive run, with no import receipt yet
 another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+(`docs/mcp.md`, "Reload"). Accepting the offer opens one import report
+overlay ("Look", "Overlays") and adds no notices. A `1` or `2` pressed before the hub connects
 still imports once it does, so an early press is never lost. Over a
 remote hub connection the receipts are the hub machine's, where that
 import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
@@ -1151,9 +1152,14 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
 
-An accepted `/import` answer is one notice per `fiber import` line,
-naming what the import copied and left behind, plus a `/reload` reminder
-(`docs/configuration.md`, "Importing").
+An accepted `/import` answer opens one import report overlay ("Look",
+"Overlays") and adds no notices. The report is titled "Imported from
+Claude Code" or "Imported from Codex", or "Imported" for a bare `/import`
+covering both sources. It has two sections, "Copied · N" grouped by kind
+(MCP servers, skills, commands, instructions) and "Left behind · N" in the
+hub's order with each reason dim, and its foot reads "Imported items apply
+on the next /reload · Esc closes" (`docs/configuration.md`, "Importing").
+A failed import is one notice, as any failed command is.
 
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line
@@ -2069,7 +2075,7 @@ tui       212   9,804
 
 Every surface drawn over the screen shares one frame: the
 key map, the quit question, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,

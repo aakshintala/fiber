@@ -8,13 +8,16 @@
 //! row sits inside each edge. It is generic over its body, so each surface
 //! builds its rows and the frame places, pads, bars and clips them.
 
+use std::collections::VecDeque;
+
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use crate::format::{cut, width as cells};
+use crate::format::{cut, width as cells, wrap_joined};
 use crate::mouse::{Target, TargetId};
+use crate::rows::Join;
 use crate::theme::Role;
 
 /// The narrowest overlay, in columns.
@@ -91,6 +94,20 @@ pub(crate) fn width(content: u16, prefer: u16, area: u16) -> u16 {
 /// The text columns inside an overlay `width` wide.
 pub(crate) fn inner(width: u16) -> u16 {
     width.saturating_sub(4)
+}
+
+/// The question-class frame's wrap width in `area_w` columns: the
+/// frame's four blank columns off, kept where wrapping stays readable
+/// (67 content columns at the 71-column preference).
+pub(crate) fn question_inner(area_w: u16) -> usize {
+    usize::from(area_w.saturating_sub(4)).clamp(1, 67)
+}
+
+/// The question-class frame's body rows in `height` rows: two edges,
+/// two pad rows, the title and its gap, and the footer and its gap,
+/// leaving the rest, at least one row.
+pub(crate) fn question_capacity(height: u16) -> usize {
+    usize::from(height.saturating_sub(8)).max(1)
 }
 
 /// The overlay's full height in rows: two edges, two pad rows, the title
@@ -196,6 +213,91 @@ pub(crate) fn legend(items: &[(&str, &str)]) -> Row {
         targets: Vec::new(),
         barred: false,
     }
+}
+
+/// One `head` + `tail` + `dot` paragraph's rows at `inner` columns:
+/// the head in `head_style` (with `dot` closing it) and the tail in
+/// `tail_style`, wrapped as one paragraph. Each source char carries
+/// its segment's style in a queue: the wrap drops spaces and line
+/// breaks, so the styles follow the chars, not offsets into the
+/// combined text.
+pub(crate) fn head_tail_rows(
+    head: &str,
+    head_style: Style,
+    tail: &str,
+    tail_style: Style,
+    dot: &str,
+    inner: usize,
+) -> Vec<Row> {
+    let combined = format!("{head}{tail}{dot}");
+    let mut source: VecDeque<(char, bool)> = VecDeque::new();
+    source.extend(head.chars().map(|ch| (ch, false)));
+    source.extend(tail.chars().map(|ch| (ch, true)));
+    source.extend(dot.chars().map(|ch| (ch, false)));
+    let mut out = Vec::new();
+    for (row, join) in wrap_joined(&combined, inner.max(1)) {
+        // The wrap dropped one space or line break here; an empty
+        // row's only source char is this separator.
+        match join {
+            Join::WrapSpace => {
+                if matches!(source.front(), Some((' ', _))) {
+                    source.pop_front();
+                }
+            }
+            Join::Break => {
+                if matches!(source.front(), Some(('\n', _))) {
+                    source.pop_front();
+                }
+            }
+            Join::Wrap => {}
+        }
+        let mut styled: Vec<(char, bool)> = Vec::new();
+        for ch in row.chars() {
+            // Skip anything else the wrap dropped, such as the spaces
+            // before a row's first word, keeping each char with its
+            // source's style.
+            while matches!(source.front(), Some((next, _)) if *next != ch) {
+                source.pop_front();
+            }
+            let tailed = source.pop_front().is_some_and(|(_, tailed)| tailed);
+            styled.push((ch, tailed));
+        }
+        let mut spans = Vec::new();
+        let mut run = String::new();
+        let mut run_tail: Option<bool> = None;
+        for (ch, tailed) in styled {
+            if run_tail.is_none() {
+                run_tail = Some(tailed);
+            }
+            if run_tail == Some(tailed) {
+                run.push(ch);
+            } else {
+                spans.push(Span::styled(
+                    std::mem::take(&mut run),
+                    if run_tail == Some(true) {
+                        tail_style
+                    } else {
+                        head_style
+                    },
+                ));
+                run.push(ch);
+                run_tail = Some(tailed);
+            }
+        }
+        if let Some(tailed) = run_tail {
+            spans.push(Span::styled(
+                run,
+                if tailed { tail_style } else { head_style },
+            ));
+        }
+        out.push(Row {
+            spans,
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        });
+    }
+    out
 }
 
 /// One dim footer row.

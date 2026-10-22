@@ -1240,6 +1240,7 @@ fn a_session_start_whose_guard_refuses_reports_start_failed() {
         spec.stdio_mut().args = __declared.1;
     }
     spec.stdio_mut().run = Some(run_program(&setup, &gate));
+    let required = spec.required;
     let images: std::sync::Arc<dyn contract::images::Images> = FakeImages::ok();
     let opened = super::open(
         spec,
@@ -1250,7 +1251,7 @@ fn a_session_start_whose_guard_refuses_reports_start_failed() {
         &setup.clock(),
         "0.0.0",
     );
-    let super::Opened::Down { failure, required } = opened else {
+    let super::Shadowed::Down { failure } = opened else {
         panic!("a refused guard fails the start");
     };
     assert!(!required);
@@ -2091,4 +2092,27 @@ fn a_second_restart_mid_start_coalesces_on_the_first_attempt() {
         "one spawn serves both restarts"
     );
     setup.stop(servers);
+}
+
+// Reload, round 23: the resources marker follows every set.
+
+#[test]
+fn set_resources_declared_aligns_the_marker_both_ways() {
+    // Bites the `set_resources_declared`→`()` mutant: the marker follows
+    // the last set, both ways, so the install's alignment is visible to
+    // the next approval.
+    let setup = Setup::new();
+    let started = setup.start(vec![]);
+    assert!(!started.servers.resources_declared());
+    started.servers.set_resources_declared(true);
+    assert!(
+        started.servers.resources_declared(),
+        "setting the marker declares it"
+    );
+    started.servers.set_resources_declared(false);
+    assert!(
+        !started.servers.resources_declared(),
+        "clearing the marker removes it"
+    );
+    setup.stop(started.servers);
 }
