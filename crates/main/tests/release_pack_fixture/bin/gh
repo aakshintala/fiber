@@ -4,7 +4,7 @@
 # GitHub API, so no request reaches the network. RELEASE_PACK_STATE names
 # the directory; every invocation is appended to calls.log there. Like the
 # real gh outside a checkout, every call needs its repository: GH_REPO
-# wins, then -R/--repo, and a call with neither fails; each log line names
+# names it, and a call without it fails; each log line names
 # the repository the call carried.
 set -eu
 state=${RELEASE_PACK_STATE:?}
@@ -12,17 +12,7 @@ log=$state/calls.log
 [ "${1:-}" = release ] || exit 64
 repo=${GH_REPO:-}
 if [ -z "$repo" ]; then
-  prev=
-  for arg in "$@"; do
-    if [ "$prev" = -R ] || [ "$prev" = --repo ]; then repo=$arg; fi
-    case $arg in
-      -R=* | --repo=*) repo=${arg#*=} ;;
-    esac
-    prev=$arg
-  done
-fi
-if [ -z "$repo" ]; then
-  printf 'gh: no repository: set GH_REPO or pass -R/--repo\n' >&2
+  printf 'gh: no repository: set GH_REPO\n' >&2
   exit 1
 fi
 sub=${2:-}

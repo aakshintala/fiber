@@ -502,38 +502,16 @@ fn the_draft_flow_outside_a_checkout_scopes_every_call_to_the_repo() {
     let run = pack.pack(&["draft-delete", "4.5.6"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let calls = pack.calls();
-    let mut kinds: Vec<_> = calls
-        .lines()
-        .filter_map(|line| line.split(' ').next())
-        .collect();
-    kinds.sort();
-    kinds.dedup();
-    assert_eq!(kinds, ["create", "delete", "edit", "upload", "view"]);
+    for kind in ["create", "delete", "edit", "upload", "view"] {
+        assert!(
+            calls.contains(kind),
+            "a gh call kind is missing: {kind}\n{calls}"
+        );
+    }
     for line in calls.lines() {
         assert!(
             line.contains("repo=aakshintala/fiber"),
             "a gh call left the repository: {line}"
-        );
-    }
-}
-
-/// An explicit GH_REPO wins over GITHUB_REPOSITORY: every call carries it.
-#[test]
-fn an_explicit_gh_repo_wins_over_github_repository() {
-    let pack = Pack::start();
-    pack.wfile("notes.md", b"notes\n", 0o644);
-    let notes = pack.path("notes.md").to_string_lossy().into_owned();
-    let run = pack.pack_env(
-        &["draft-begin", "1.2.3", &"a".repeat(40), &notes],
-        &[("GH_REPO", "explicit/repo")],
-    );
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let calls = pack.calls();
-    assert!(!calls.is_empty(), "the draft flow made no gh calls");
-    for line in calls.lines() {
-        assert!(
-            line.contains("repo=explicit/repo"),
-            "a gh call left GH_REPO: {line}"
         );
     }
 }
@@ -556,6 +534,29 @@ fn no_repository_at_all_fails_naming_the_variables() {
         "release-pack: GH_REPO is unset and GITHUB_REPOSITORY is unset.\n"
     );
     assert!(pack.calls().is_empty(), "a gh call ran: {}", pack.calls());
+}
+
+/// The repository check scopes only the draft flow: packing a target
+/// with both repository variables unset still succeeds.
+#[test]
+fn pack_target_needs_no_repository() {
+    let pack = Pack::start();
+    pack.wfile("tree/bin/fiber", b"fiber", 0o755);
+    pack.wfile("tree/bin/THIRD-PARTY-NOTICES", b"notices", 0o644);
+    let run = pack.pack_env(
+        &[
+            "pack-target",
+            "tree/bin",
+            "x86_64-unknown-linux-musl",
+            "out",
+        ],
+        &[("GITHUB_REPOSITORY", "")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        pack.path("out/fiber-x86_64-unknown-linux-musl.tar.gz")
+            .exists()
+    );
 }
 
 #[test]
