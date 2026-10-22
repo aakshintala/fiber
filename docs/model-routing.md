@@ -123,7 +123,7 @@ AWS Bedrock's `credential()` returns a Bedrock API key, sent as
 `authorization: Bearer`, or AWS credentials, with which its `sign()` signs each
 request with SigV4 in place of that header. The session's credential label
 is the AWS profile name. Under any label but `default` it runs `aws configure
-export-credentials --profile <label> --format process`, so a profile, SSO or an
+export-credentials --format process --profile <label>`, so a profile, SSO or an
 assumed role works without an AWS SDK. A person picks the profile as any
 label is picked ("Which credential a session uses"), such as in the global
 file:
@@ -145,7 +145,12 @@ or name a profile. `fiber login bedrock` is not supported: it stores a key,
 and a provider with `credential()` reads none ("Which credential a session
 uses"), so a Bedrock API key comes from the environment only. The AWS region is the package's `region` setting,
 the per-account host its base URL names, read from `AWS_REGION` when unset
-("A per-account host").
+("A per-account host"). Its data declares the AWS CLI files that
+`credential()` draws secrets from, `$AWS_SHARED_CREDENTIALS_FILE` else
+`~/.aws/credentials`, `~/.aws/sso/cache/` and `~/.aws/cli/cache/`, and the
+credential deny refuses tool calls that touch them
+([Credentials](permissions.md#credentials)). A profile's
+`credential_process` in `AWS_CONFIG_FILE` is not covered.
 
 Google Vertex's `credential()` returns an OAuth access token from the Google
 Cloud CLI, sent as `authorization: Bearer`. The session's credential label
@@ -179,7 +184,13 @@ as `[redacted]`.
 `fiber login vertex` is not supported: it stores a key, and a provider with
 `credential()` reads none. The Google Cloud project is the package's
 `project` setting, which its base URL names, read from
-`GOOGLE_CLOUD_PROJECT` when unset ("A per-account host").
+`GOOGLE_CLOUD_PROJECT` when unset ("A per-account host"). Its data declares
+the gcloud credential files that `credential()` draws secrets from:
+`credentials.db`, `access_tokens.db`, `legacy_credentials/` and
+`application_default_credentials.json` in the gcloud configuration
+directory, `$CLOUDSDK_CONFIG` else `~/.config/gcloud`; the credential deny
+refuses tool calls that touch them
+([Credentials](permissions.md#credentials)).
 
 A provider Fiber cannot probe is left to the community: a vendor whose
 subscription Fiber does not hold, or a key vendor such as Groq, Mistral,
@@ -575,8 +586,10 @@ Most of a provider is data. For the provider:
   reading a key: `browser`, whose device-code form takes `--device`
 - `credential_label`, when that function supplies the credential and reads
   nothing Fiber stores, as AWS Bedrock's and Google Vertex's do: `names`,
-  what a credential label names, such as `AWS profile`, and `default`, what
-  the `default` label reads. Such a provider has no key for `fiber login` to
+  what a credential label names, such as `AWS profile`, `default`, what
+  the `default` label reads, and `credential_paths`, the paths it draws
+  secrets from, which the credential deny protects (`docs/permissions.md`,
+  "Credentials"). Such a provider has no key for `fiber login` to
   store, so `fiber doctor` shows its label as that source, unchecked
   (`docs/invocation.md`, "Commands and flags"), and no sentence advises
   `fiber login` (`docs/errors.md`, "The shape"). It is never declared beside
