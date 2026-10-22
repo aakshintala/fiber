@@ -3428,9 +3428,18 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
         .expect("the helper waits with nobody parked");
     // The pause holds the state lock, so the release goes first.
     release_waiter.send(()).expect("released the wait");
+    // The helper's next look is the one that sees the leaver's park, so
+    // this pause marks that look. Arm it before the leaver starts.
+    let (looked, release_look) = clock.pause_next_advance_wait();
     // A leaver parks at the named instant and exits: its arrival reaches
     // the observation log, then it is gone.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&looked)
+        .expect("waited for the helper's look at the leaver's park");
+    // The pause holds the state lock: release it before any thread that
+    // needs the lock can finish, such as the leaver's exit.
+    release_look.send(()).expect("released the look");
     Deadline::after(Duration::from_secs(5))
         .recv(&parked)
         .expect("waited for the leaver to park");
