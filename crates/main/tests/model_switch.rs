@@ -14,9 +14,8 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus};
 use std::sync::mpsc;
 use std::thread;
 
@@ -1135,22 +1134,6 @@ fn install_other(setup: &Setup, server: &ProviderServer, credential: &Value) {
     );
 }
 
-/// Makes a FIFO at `path` for a switch-read handshake: the credential
-/// command blocks opening it until the test opens the other end, so the
-/// rendezvous proves the read is in flight without reading the clock.
-#[track_caller]
-fn make_fifo(setup: &Setup, path: &Path) {
-    let mut mkfifo = Command::new("mkfifo");
-    mkfifo
-        .arg(path)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = run_to_exit(setup.deadline, "mkfifo", mkfifo);
-    assert!(made.status.success(), "mkfifo: {made:?}");
-}
-
 /// The bodies of the requests the fake server saw, with their
 /// `authorization` header.
 fn authorized(server: &ProviderServer) -> Vec<Option<String>> {
@@ -1486,7 +1469,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     install_switch_provider(&setup, &server);
     let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
-    make_fifo(&setup, &release);
+    fakes::fifo(&release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
         ready.path().display(),
@@ -1567,7 +1550,7 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     install_switch_provider(&setup, &server);
     let ready = Ready::new(setup.root.path());
     let release = setup.root.path().join("release");
-    make_fifo(&setup, &release);
+    fakes::fifo(&release);
     let script = format!(
         "echo $$ > '{}'; read line < '{}'; echo other-key",
         ready.path().display(),

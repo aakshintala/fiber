@@ -669,6 +669,10 @@ impl Provider for Quoted {
         self.inner.warms(request)
     }
 
+    fn defers(&self) -> bool {
+        self.inner.defers()
+    }
+
     fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
         self.inner.cost_lookup()
     }

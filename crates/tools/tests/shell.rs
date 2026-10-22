@@ -430,7 +430,7 @@ fn the_call_waits_until_the_group_is_empty() {
     let dir = fakes::TempDir::new("fiber-shell-group");
     let ready = Ready::new(dir.path());
     let hold = dir.path().join("hold");
-    Command::new("mkfifo").arg(&hold).status().unwrap();
+    fakes::fifo(&hold);
     let command = format!(
         "echo $$ > {ready}\n(read -r _ < {hold}) &\necho $! >> {ready}\n",
         ready = quote(ready.path()),
@@ -832,7 +832,7 @@ fn streamed(dir: PathBuf, command: String, timeout_ms: Option<u64>) -> Streamed 
 fn output_streams_before_the_call_returns() {
     let dir = fakes::TempDir::new("fiber-shell-stream");
     let fifo = dir.path().join("pipe");
-    Command::new("mkfifo").arg(&fifo).status().unwrap();
+    fakes::fifo(&fifo);
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let recorder = Arc::new(Recorder::default());
     let tapped = Arc::clone(&recorder);

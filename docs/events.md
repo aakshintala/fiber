@@ -1067,7 +1067,7 @@ generated from its payload.
 
 #### `reviewer_kept`
 
-Durable. The person's messages the reviewer keeps across a handoff, each with the reply it answered.
+Durable. The person's messages the reviewer keeps across a handoff, each with the reply it answered. The agent's new context gets the same messages, without the replies (`docs/handoff.md`, "What the model sees after a handoff").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|

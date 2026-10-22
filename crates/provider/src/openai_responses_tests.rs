@@ -1,9 +1,14 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 
 use std::collections::BTreeMap;
 
 use contract::events::CacheLifetime;
-use contract::provider::ModelRequest;
+use contract::provider::{Delta, ModelRequest, Reply, ReplyAction};
 use contract::shapes::Tokens;
 use serde_json::{Value, json};
 
@@ -196,4 +201,100 @@ fn a_failed_call_counts_its_write_under_five_minutes() {
 fn a_short_input_saturates_instead_of_wrapping() {
     assert_eq!(decoded(&usage(5, Some(3), 4, 1)).input, 0);
     assert_eq!(decoded(&usage(10, Some(6), 4, 1)).input, 0);
+}
+
+/// The reply of a stream of `events` ending in a completed response, and the
+/// deltas it passed on.
+fn replied(events: &[Value]) -> (Reply, Vec<Delta>) {
+    let mut events = events.to_vec();
+    events.push(json!({"type": "response.completed", "response": {
+        "id": "resp_1", "status": "completed", "usage": {"input_tokens": 1, "output_tokens": 1}
+    }}));
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    let mut deltas = Vec::new();
+    let reply = decode(body.as_bytes(), &mut |delta| deltas.push(delta)).unwrap();
+    (reply, deltas)
+}
+
+fn search_item(extra: Value) -> Value {
+    let mut item = json!({
+        "type": "tool_search_call", "id": "ts_1", "call_id": "call_1",
+        "execution": "client", "status": "completed",
+        "arguments": {"query": "echo"}
+    });
+    item.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    item
+}
+
+fn done(item: Value) -> Value {
+    json!({"type": "response.output_item.done", "item": item})
+}
+
+/// The one tool call a reply holds.
+fn only_call(reply: &Reply) -> &contract::events::ToolCallRequested {
+    let [ReplyAction::ToolCall(call)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    call
+}
+
+#[test]
+fn a_tool_search_call_that_arrives_only_when_done_is_a_tool_call_named_tool_search() {
+    let (reply, deltas) = replied(&[done(search_item(json!({})))]);
+    let call = only_call(&reply);
+    assert_eq!(call.name, "tool_search");
+    assert_eq!(call.arguments, json!({"query": "echo"}));
+    assert_eq!(call.provider_id.as_ref().unwrap().0, "call_1");
+    assert!(call.repair.is_none() && call.ran_by.is_none() && call.provider_item.is_none());
+    assert!(deltas.is_empty());
+}
+
+#[test]
+fn an_added_tool_search_call_is_numbered_so_a_later_calls_deltas_count_it() {
+    let (reply, deltas) = replied(&[
+        json!({"type": "response.output_item.added", "item": search_item(json!({}))}),
+        json!({"type": "response.output_item.added", "item": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_2", "name": "echo", "arguments": ""
+        }}),
+        json!({"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": "{}"}),
+        done(search_item(json!({}))),
+    ]);
+    let call = only_call(&reply);
+    assert_eq!(call.name, "tool_search");
+    assert_eq!(call.arguments, json!({"query": "echo"}));
+    let [Delta::ToolCallArguments(delta)] = deltas.as_slice() else {
+        panic!("{deltas:?}");
+    };
+    assert_eq!((delta.index, delta.name.as_deref()), (1, Some("echo")));
+}
+
+#[test]
+fn a_tool_search_calls_string_arguments_read_as_a_function_calls_do() {
+    for (arguments, expected) in [
+        (json!("{\"query\":\"echo\"}"), json!({"query": "echo"})),
+        (json!(""), json!({})),
+        (json!("not json"), json!("not json")),
+        (json!("[1]"), json!("[1]")),
+        (Value::Null, json!({})),
+    ] {
+        let (reply, _) = replied(&[done(search_item(json!({"arguments": arguments})))]);
+        assert_eq!(only_call(&reply).arguments, expected, "{arguments}");
+    }
+    let mut missing = search_item(json!({}));
+    missing.as_object_mut().unwrap().remove("arguments");
+    let (reply, _) = replied(&[done(missing)]);
+    assert_eq!(only_call(&reply).arguments, json!({}));
+}
+
+#[test]
+fn a_tool_search_call_without_a_call_id_has_no_provider_id() {
+    let mut item = search_item(json!({}));
+    item.as_object_mut().unwrap().remove("call_id");
+    let (reply, _) = replied(&[done(item)]);
+    assert!(only_call(&reply).provider_id.is_none());
 }

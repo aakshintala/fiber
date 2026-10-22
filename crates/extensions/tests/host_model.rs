@@ -171,33 +171,6 @@ fn line(model: &str, extension: Option<&str>) -> UsageRecorded {
     }
 }
 
-/// An [`Emit`](contract::emit::Emit) keeping every event it is given,
-/// and handing each one to the test as it arrives.
-struct Recorder {
-    events: Mutex<Vec<Event>>,
-    tx: mpsc::Sender<Event>,
-}
-
-impl Recorder {
-    fn new() -> (Self, mpsc::Receiver<Event>) {
-        let (tx, rx) = mpsc::channel();
-        (
-            Self {
-                events: Mutex::new(Vec::new()),
-                tx,
-            },
-            rx,
-        )
-    }
-}
-
-impl contract::emit::Emit for Recorder {
-    fn emit(&self, event: &Event) {
-        lock(&self.events).push(event.clone());
-        let _sent = self.tx.send(event.clone());
-    }
-}
-
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
@@ -392,8 +365,8 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     session.model_to(Arc::clone(&fake) as Arc<dyn HostModel>);
     let (inbox_tx, inbox_rx) = mpsc::channel();
     session.deliver_to(inbox_tx);
-    let (recorder, emitted) = Recorder::new();
-    session.emit_to(Arc::new(recorder) as Arc<dyn contract::emit::Emit>);
+    let (log, emitted) = fakes::EventLog::channel();
+    session.emit_to(Arc::new(log) as Arc<dyn contract::emit::Emit>);
     run(&session, "go");
     Deadline::after(WAIT)
         .recv(&entered_rx)
