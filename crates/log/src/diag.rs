@@ -576,11 +576,9 @@ pub struct OldFile {
 }
 
 /// Every file in `dir` that pruning deletes: the regular files older than
-/// 30 days, then all but the newest 100 of the rest by mtime, sorted by
-/// path. A missing directory holds nothing to delete, and a symlink or a
-/// subdirectory is never selected. A file whose metadata does not read
-/// counts as empty and as modified at the epoch, so it is never old but
-/// is the first to go past 100.
+/// 30 days, then all but the newest 100 of the rest by mtime, sorted by path.
+/// A missing directory, a symlink and a subdirectory select nothing; unreadable
+/// metadata counts as empty at the epoch.
 #[must_use]
 pub fn old_diagnostics(dir: &Path, now: SystemTime) -> Vec<OldFile> {
     let Ok(entries) = fs::read_dir(dir) else {

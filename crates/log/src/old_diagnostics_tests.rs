@@ -104,6 +104,9 @@ fn a_hundred_files_and_a_subdirectory_select_nothing() {
         );
     }
     assert!(old_diagnostics(&dir, wall()).is_empty());
+    write(&dir, "extra.log", b"x");
+    set_mtime(&dir, "extra.log", SystemTime::UNIX_EPOCH);
+    assert_eq!(paths(&old_diagnostics(&dir, wall())), ["extra.log"]);
 }
 
 #[test]
@@ -124,6 +127,11 @@ fn a_symlink_is_never_selected() {
 #[test]
 fn a_missing_directory_gives_an_empty_list() {
     let root = fakes::TempDir::new("log-old-diag-missing");
+    let dir = root.path().join("logs");
+    fs::create_dir_all(&dir).unwrap();
+    write(&dir, "old.log", b"old");
+    set_mtime(&dir, "old.log", SystemTime::UNIX_EPOCH);
+    assert_eq!(paths(&old_diagnostics(&dir, wall())), ["old.log"]);
     assert!(old_diagnostics(&root.path().join("nope"), wall()).is_empty());
 }
 
