@@ -455,7 +455,7 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
 }
 
 #[test]
-fn a_cache_write_is_counted_under_the_request_lifetime() {
+fn a_cache_write_is_counted_under_five_minutes_whatever_the_request_lifetime() {
     // The probe's warming block: 2,347 input tokens with 2,344 written.
     let warming = json!({"input_tokens": 2347, "input_tokens_details":
         {"cache_write_tokens": 2344, "cached_tokens": 0},
@@ -472,8 +472,8 @@ fn a_cache_write_is_counted_under_the_request_lifetime() {
     ])
     .unwrap();
     let protocol = Responses::new(endpoint(&server));
-    // The harness request runs an hour-lifetime cache; a five-minute one
-    // keys the same write `5m`.
+    // The harness request runs an hour-lifetime cache; the write still
+    // lands under `5m`, as it does for a five-minute request.
     let (hour, _) = run(protocol.call(&request()));
     let mut five_minutes = request();
     five_minutes.cache_lifetime = CacheLifetime::FiveMinutes;
@@ -484,7 +484,7 @@ fn a_cache_write_is_counted_under_the_request_lifetime() {
     assert_eq!(hour.tokens.cache_read, 0);
     assert_eq!(
         hour.tokens.cache_write,
-        BTreeMap::from([("1h".to_owned(), 2344)])
+        BTreeMap::from([("5m".to_owned(), 2344)])
     );
     assert_eq!(hour.tokens.output, 28);
     let short = short.unwrap();

@@ -566,11 +566,8 @@ fn with_the_setting_on_the_line_carries_hashes_and_reported_use() {
 }
 
 #[test]
-fn the_reported_write_is_keyed_by_the_request_lifetime() {
-    for (lifetime, key) in [
-        (CacheLifetime::OneHour, "1h"),
-        (CacheLifetime::FiveMinutes, "5m"),
-    ] {
+fn the_reported_write_is_keyed_five_minutes_whatever_the_request_lifetime() {
+    for lifetime in [CacheLifetime::OneHour, CacheLifetime::FiveMinutes] {
         let body = harness::responses_sse(&[serde_json::json!({
             "type": "response.completed",
             "response": {
@@ -594,14 +591,14 @@ fn the_reported_write_is_keyed_by_the_request_lifetime() {
         request.cache_lifetime = lifetime;
         let call = observed_flagged("opencode", &endpoint, &request, &log, &clock, 1);
         let (reply, _) = harness::run(call);
-        assert!(reply.is_ok(), "the completed stream reads for {key}");
+        assert!(reply.is_ok(), "the completed stream reads");
         let lines = log.lines();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].cache_read, Some(4));
         assert_eq!(
             lines[0].cache_write,
-            Some(std::collections::BTreeMap::from([(key.to_owned(), 7)])),
-            "the write is keyed {key}"
+            Some(std::collections::BTreeMap::from([("5m".to_owned(), 7)])),
+            "the write is keyed 5m"
         );
     }
 }

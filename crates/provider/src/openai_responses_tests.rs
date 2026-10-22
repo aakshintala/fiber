@@ -153,7 +153,26 @@ fn a_missing_write_counts_its_input_in_full() {
 }
 
 #[test]
-fn a_failed_call_counts_its_write_under_the_request_lifetime() {
+fn a_completed_call_counts_its_write_under_five_minutes_for_an_hour_request() {
+    let body = fakes::wire::stream_with_usage(&[], usage(2347, Some(2344), 0, 28)).body;
+    let mut deltas = Vec::new();
+    let reply = decode_tracked(body.as_slice(), &CacheLifetime::OneHour, &mut |delta| {
+        deltas.push(delta)
+    })
+    .unwrap();
+    assert_eq!(
+        reply.tokens,
+        Tokens {
+            input: 3,
+            cache_read: 0,
+            cache_write: BTreeMap::from([("5m".to_owned(), 2344)]),
+            output: 28,
+        }
+    );
+}
+
+#[test]
+fn a_failed_call_counts_its_write_under_five_minutes() {
     let usage = usage(2347, Some(2344), 0, 28);
     let event = json!({"type": "response.failed", "response": {"id": "resp_1",
         "status": "failed",

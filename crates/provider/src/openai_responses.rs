@@ -426,7 +426,7 @@ struct Decoder {
 impl Decoder {
     /// What the stream had seen: the generation once a response event named
     /// it, and the usage so far, with a reported cache write counted under
-    /// the request's cache lifetime.
+    /// `5m`, whatever the request's cache lifetime.
     fn partial(&self, lifetime: &CacheLifetime) -> CallUsage {
         CallUsage {
             generation_id: named(self.id.clone()),
@@ -717,23 +717,20 @@ fn web_search_call(item: &Value) -> HostedCall {
 
 /// `usage` as `tokens`: Responses counts cache reads inside
 /// `input_tokens`, and `tokens.input` excludes both reads and writes. A
-/// cache write is counted under the request's cache lifetime: `1h` for a
-/// 1-hour request, and five minutes for one without.
-fn tokens(usage: &Value, lifetime: &CacheLifetime) -> Tokens {
+/// cache write is always counted under `5m`: OpenAI keeps one 30-minute
+/// lifetime, priced at the 5-minute rate. The request's cache lifetime
+/// rides along unused.
+fn tokens(usage: &Value, _lifetime: &CacheLifetime) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let cached = count("/input_tokens_details/cached_tokens");
     let write = count("/input_tokens_details/cache_write_tokens");
-    let key = match lifetime {
-        CacheLifetime::FiveMinutes => "5m",
-        CacheLifetime::OneHour => "1h",
-    };
     Tokens {
         input: count("/input_tokens")
             .saturating_sub(cached)
             .saturating_sub(write),
         cache_read: cached,
         cache_write: if write > 0 {
-            BTreeMap::from([(key.to_owned(), write)])
+            BTreeMap::from([("5m".to_owned(), write)])
         } else {
             BTreeMap::new()
         },
