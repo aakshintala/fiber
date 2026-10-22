@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -308,20 +308,27 @@ impl Credentials {
     /// The path of every `file` credential source configuration declares,
     /// as written: each `providers."<name>".credentials."<label>"` that
     /// [`Credentials::credential_with`] would read, and each of `providers`' own
-    /// sources. Each appears once. The credential deny protects them
+    /// sources. Then each path `providers`' `credential()` draws secrets
+    /// from, as their data declares it under `lookup`'s environment. Each
+    /// appears once. The credential deny protects them
     /// (`docs/permissions.md`, "Credentials").
     pub fn credential_files<'a>(
         &self,
         providers: impl IntoIterator<Item = &'a ProviderData>,
-        _lookup: &dyn Fn(&str) -> Option<String>,
+        lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<PathBuf> {
+        let providers: Vec<&ProviderData> = providers.into_iter().collect();
         let names = self.providers.as_object().into_iter().flat_map(Map::keys);
         let labelled = names
             .flat_map(|name| sources_in(&self.providers, name))
             .map(|(_, declared)| declared);
         let own = providers
-            .into_iter()
+            .iter()
             .filter_map(|p| p.credential_from.credential().cloned());
+        let declared = providers
+            .iter()
+            .flat_map(|p| p.credential_from.credential_paths())
+            .filter_map(|path| path.resolve(lookup));
         let files: BTreeSet<PathBuf> = labelled
             .chain(own)
             .filter_map(|source| match source {
@@ -329,14 +336,37 @@ impl Credentials {
                 CredentialSource::File(file) => (!file.as_os_str().is_empty()).then_some(file),
                 CredentialSource::Env(_) | CredentialSource::Command { .. } => None,
             })
+            .chain(declared)
             .collect();
         files.into_iter().collect()
     }
 }
 
-/// `path`, absolute, with its longest existing ancestor canonicalised.
+/// `path`, absolute, with its longest existing ancestor canonicalised
+/// (symlinks resolved), then the rest applied by name: `.` skipped, `..`
+/// removing the name before it, never above the root. A call's path
+/// resolves through the same ancestor, so no spelling of a declared path
+/// escapes the credential deny (`docs/permissions.md`, "Credentials").
 pub fn resolve_declared(path: &Path) -> PathBuf {
-    path.to_path_buf()
+    let parts: Vec<Component<'_>> = path.components().collect();
+    let (mut real, rest) = (0..=parts.len())
+        .rev()
+        .find_map(|split| {
+            let (existing, rest) = parts.split_at(split);
+            let real = existing.iter().collect::<PathBuf>().canonicalize().ok()?;
+            Some((real, rest))
+        })
+        .unwrap_or((PathBuf::new(), &parts[..]));
+    for part in rest {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                real.pop();
+            }
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => real.push(part),
+        }
+    }
+    real
 }
 
 /// Every `(label, source)` pair `providers."<name>".credentials`

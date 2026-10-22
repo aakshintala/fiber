@@ -248,9 +248,32 @@ pub struct CredentialPath {
 }
 
 impl CredentialPath {
-    /// The path this entry names under `lookup`'s environment.
-    pub fn resolve(&self, _lookup: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
-        None
+    /// The path this entry names under `lookup`'s environment: `env`'s
+    /// value when it is set and not empty, else `path`; a leading `~` or
+    /// `~/` read from `HOME`; then `join`. `None` when that names nothing:
+    /// an empty text, a `~` with `HOME` unset or empty, or a `join` that is
+    /// not one name. Nothing is collapsed and no file is read.
+    pub fn resolve(&self, lookup: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+        let set = |name: &str| lookup(name).filter(|value| !value.is_empty());
+        let text = self
+            .env
+            .as_deref()
+            .and_then(set)
+            .unwrap_or_else(|| self.path.clone());
+        let mut path = match text.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                PathBuf::from(format!("{}{rest}", set("HOME")?))
+            }
+            _ if text.is_empty() => return None,
+            _ => PathBuf::from(text),
+        };
+        if let Some(name) = &self.join {
+            if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+                return None;
+            }
+            path.push(name);
+        }
+        Some(path)
     }
 }
 

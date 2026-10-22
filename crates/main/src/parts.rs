@@ -283,10 +283,12 @@ pub(crate) fn parts_in(
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
         .collect();
-    // Every `file` credential source configuration declares, after the Lua
-    // providers are added so their sources are protected too: a relative
-    // path joins the workspace the reader reads it from, an absolute one
-    // stands (`docs/permissions.md`, "Credentials").
+    // Every `file` credential source configuration declares, and every path
+    // a provider's data declares its `credential()` reads, after the Lua
+    // providers are added so theirs are protected too: a relative path
+    // joins the workspace the reader reads it from, an absolute one stands,
+    // and each resolves as a call's path does (`docs/permissions.md`,
+    // "Credentials").
     let credential_files: Vec<PathBuf> = config
         .credentials()
         .credential_files(
