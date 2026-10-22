@@ -21,6 +21,7 @@ use contract::{ErrorCode, SessionId};
 use fakes::Deadline;
 
 use super::*;
+use crate::testkit::await_true;
 use crate::{Environment, Environments, Started, Starter};
 
 /// One named deadline per wait: the drain finishes before it.
@@ -397,7 +398,12 @@ fn kill_returns_while_the_drain_still_holds_the_pipe_open() {
         .recv(&killed_rx)
         .expect("kill returns while the drain reads");
     // The kill ends `cat`: the drain sees EOF, reaps, and notifies.
-    let _ = spawned.wait_exited();
+    // Polled to a deadline, so a `kill` that never signals fails here
+    // instead of hanging the shard: `exited` is set only by the drain
+    // after it reaps.
+    await_true("the drain to reap the killed child", move || {
+        spawned.exited().is_some()
+    });
 }
 
 #[test]

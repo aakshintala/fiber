@@ -17,6 +17,7 @@
 use std::cell::RefCell;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -33,7 +34,9 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 use support::clock::System;
 
-use super::{STOP_WITHIN, on_stop_answered, run_local, run_remote, stop_local, stop_remote};
+use super::{
+    STOP_WITHIN, on_stop_answered, run_local, run_remote, stop_local, stop_remote, wait_for_close,
+};
 use crate::hub_service::{ManagerRun, Ran, manager};
 use crate::hub_unit::{Manager, name, unit_path};
 
@@ -868,6 +871,48 @@ fn advance_to_close_expiry(clock: &FakeClock, due: std::time::Instant) {
             &Deadline::after(DEADLINE),
         );
     }
+}
+
+/// A failed close read is lost, not late: `set_nonblocking` passes on a
+/// write-only fd, but the first read fails at once, so the real code
+/// never parks. The mutant's retry path parks in `wait_clock` until an
+/// advance, then expires as late instead.
+#[test]
+#[allow(unsafe_code, reason = "a write-only fd fails the close read by hand")]
+fn a_failed_close_read_is_lost_not_late() {
+    let dir = fakes::TempDir::new("cli-stop-lost");
+    let file = fs::File::create(dir.path().join("wronly")).unwrap();
+    // SAFETY: `file` is the open write-only file above, owned by no one
+    // after this: the stream below is its only owner, and the fd stays
+    // open through the check.
+    let stream = unsafe { UnixStream::from_raw_fd(file.into_raw_fd()) };
+    let clock = FakeClock::new();
+    let moved = Arc::clone(&clock);
+    let due = clock.origin() + STOP_WITHIN;
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        done_tx
+            .send(wait_for_close(&stream, due, &*moved))
+            .unwrap_or(());
+    });
+    // The real code answers at once; only a parked retry waits out the
+    // deadline, and then one advance past the bound ends it as late.
+    let result = match Deadline::after(DEADLINE).recv(&done_rx) {
+        Ok(result) => result,
+        Err(_) => {
+            clock.advance(STOP_WITHIN + Duration::from_secs(1));
+            Deadline::after(DEADLINE)
+                .recv(&done_rx)
+                .expect("the parked retry returns after the advance")
+        }
+    };
+    let error = result.expect_err("a failed close read is lost");
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        error.message.starts_with("the hub: "),
+        "the close read is lost, not late: {}",
+        error.message
+    );
 }
 
 #[test]

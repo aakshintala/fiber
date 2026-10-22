@@ -371,8 +371,27 @@ fn a_split_acknowledgement_parses_whole_after_its_tail_arrives() {
 }
 
 use std::io::Read as _;
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::os::fd::IntoRawFd as _;
+
+/// An expired bound with no stop is not ready: past `until` returns
+/// false before polling, even with data pending on the fd. Replacing the
+/// guard's `||` with `&&` polls instead, sees the readiness, and answers
+/// true.
+#[test]
+fn an_expired_bound_with_no_stop_returns_not_ready() {
+    let temp = Temp::new("ss-expired");
+    let starter = FakeStarter::exit_on_close(&temp.dir);
+    let hub = temp.hub(starter);
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    writer.write_all(b"x").unwrap();
+    // The origin is already past: the clock never moves backward, and no
+    // stop was requested, so the real code never reaches the poll.
+    assert!(
+        !wait_ready(reader.as_fd(), libc::POLLIN, &hub, temp.clock.origin()),
+        "an expired bound with no stop returns not ready"
+    );
+}
 
 /// A refused loopback port queues first, then reads its queued error:
 /// refused means gone, so the loop skips the session and continues.
@@ -600,6 +619,33 @@ fn a_path_only_fd_polls_ready() {
         poll_ready(held.as_fd(), libc::POLLIN),
         "a path-only fd polls ready through POLLNVAL"
     );
+}
+
+/// A bare error polls ready: a refused datagram surfaces as `POLLERR`
+/// with no readability, hangup or invalid marker beside it, which the
+/// mask still counts. Replacing the mask's first `+` with `-` drops
+/// exactly the error bit, so the error waits out the slice instead.
+#[test]
+fn a_bare_error_polls_ready() {
+    // Bind-then-drop leaves a port nothing answers: each datagram it
+    // refuses comes back as an error with nothing else queued.
+    let closed = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    socket.connect(format!("127.0.0.1:{port}")).unwrap();
+    // The refusal arrives after the send: each pass sends again and
+    // waits one readiness slice, so a consumed error is replaced by
+    // the next refusal until one is seen.
+    let mut ready = false;
+    for _ in 0..50 {
+        socket.send(b"x").unwrap_or(0);
+        if poll_ready(socket.as_fd(), libc::POLLIN) {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "a bare error polls ready");
 }
 
 /// A quiet socket polls not ready: replacing the poll with true would
