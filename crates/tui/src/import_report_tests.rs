@@ -346,6 +346,66 @@ fn the_report_close_click_closes_the_report() {
 }
 
 #[test]
+fn the_open_report_over_a_session_hides_the_conversation_targets() {
+    use crate::mouse::TargetId;
+
+    let mut app = attached();
+    app.set_size(80, 24);
+    // A failed login draws a clickable conversation line: the row a
+    // click landing behind the overlay would take.
+    let started = session_line(
+        "turn_started",
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    );
+    assert!(app.on_line(started).is_empty());
+    let failed = session_line(
+        "turn_completed",
+        json!({"outcome": "failed", "error": {"code": "authentication_failed",
+            "message": "The key was refused."}}),
+    );
+    assert!(app.on_line(failed).is_empty());
+    let (_, open) = painted(&mut app, 80, 24);
+    let line = open
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Line(_)))
+        .expect("a conversation line to hide");
+    let (col, row) = (line.rect.x, line.rect.y);
+    // The report opens over the session with its ✕, and no
+    // conversation-row target survives under it: the inverted retain
+    // would keep the rows and drop the ✕.
+    open_small_report(&mut app);
+    let (_, targets) = painted(&mut app, 80, 24);
+    let close = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the report draws its ✕")
+        .id;
+    assert!(
+        targets.iter().all(|target| !matches!(
+            target.id,
+            TargetId::Line(_)
+                | TargetId::Link { .. }
+                | TargetId::FindResult(_)
+                | TargetId::NewBelow
+                | TargetId::Turn(_)
+                | TargetId::Offer(_)
+        )),
+        "no conversation-row target survives under the report"
+    );
+    // A click on the conversation row's cell hits nothing behind the
+    // overlay, so nothing is selected and nowhere is navigated: the
+    // login view stays closed and the report stays open.
+    assert_eq!(crate::mouse::hit(&targets, col, row), None);
+    assert!(!app.config_view_open());
+    assert!(app.import_report().is_some());
+    // The ✕ click closes the report and leaves no notices behind.
+    assert_eq!(app.on_click(close), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
+#[test]
 fn home_paints_the_report_with_both_counts_and_a_swallow_target() {
     use crate::home::Spot;
     use crate::mouse::TargetId;
