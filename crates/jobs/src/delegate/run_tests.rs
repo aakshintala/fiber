@@ -2700,13 +2700,15 @@ fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
 /// arrived, after the run already reported: the watcher's forwards
 /// always follow on the inbox (the tap runs before each offer), so a
 /// Job that precedes them (see #3005) only delays this drain. The
-/// bound is the existing report deadline, loosened nowhere.
+/// bound is the plan's MUST_SUCCEED_WITHIN, the same bound the parked
+/// forward's release waits on: under saturation the watcher thread can
+/// go unscheduled past the old 3s report deadline (see #3001).
 fn drain_streamed_usages(
     rig: &Rig,
     mut usages: Vec<(SessionId, String)>,
     want: usize,
 ) -> Vec<(SessionId, String)> {
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     while usages.len() < want {
         match deadline.recv(&rig.inbox) {
             Ok(Delivery::DelegateUsage { session, line }) => {
