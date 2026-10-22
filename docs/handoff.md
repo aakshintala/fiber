@@ -109,12 +109,18 @@ In order:
    (`docs/system-prompt.md`, "After a handoff").
 3. The context `session_start` hooks add, run with reason `handoff`, each
    logged as `context_added` (`docs/extensions.md`, "The hook points").
-4. This turn's input from the person and any steering messages applied in this
+4. The person's earlier messages that still bind, verbatim, oldest first. They
+   are the `reviewer_kept` selection unchanged, and a context they leave over
+   the trigger is handled by "Triggers" and "Overflow", as this turn's input is
+   (`docs/permissions.md`, "At a handoff"). A kept message from this turn
+   appears once, as part of this turn's input. With no reviewer in the session
+   there is no selection, and nothing is carried here.
+5. This turn's input from the person and any steering messages applied in this
    turn, verbatim. A handoff between turns has none.
-5. The handoff note.
-6. A line Fiber writes listing the jobs still running, with each job's id and
+6. The handoff note.
+7. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
-7. The skills loaded in the previous context, each sent again as its current
+8. The skills loaded in the previous context, each sent again as its current
    text, in the order they were first loaded, once each
    (`docs/tools.md`, "Skills"). A skill sent again counts as loaded in the
    new context, so a later handoff sends it again too. An agent working under
@@ -178,6 +184,8 @@ The note is written so a fresh agent can continue the work. It:
 - refers to specs, issues, commits, files, artifacts and searches of the
   session log by path or URL instead of copying them
 - names the skills the next agent should load, where skills exist
+- quotes the person's standing orders and limits, such as "read-only", and says
+  which of the person's messages each came from
 - leaves out secrets
 
 Instructions given to `/handoff` or the `handoff` driver command say what the

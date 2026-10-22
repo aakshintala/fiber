@@ -39,6 +39,9 @@ mod switch;
 mod theme_setting;
 
 #[cfg(test)]
+#[path = "command_reference_tests.rs"]
+mod command_reference_tests;
+#[cfg(test)]
 #[path = "exit_state_tests.rs"]
 mod exit_state_tests;
 #[cfg(test)]

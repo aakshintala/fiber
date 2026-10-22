@@ -299,6 +299,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 extension_jobs: pass.running.extension_jobs.clone(),
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
+                person: pass.running.person.clone(),
                 ..Carry::default()
             };
             pass.starts
@@ -329,6 +330,15 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         // Only this turn can complete another handoff before its
         // next `turn_started`.
         pass.starts.retain(|started, _| Some(started) == turn);
+    }
+    // The person's messages the reviewer still holds, recorded after the
+    // chain so a `turn_started`'s snapshot holds them as they were before
+    // that line: the resume rebuild renders the line again from the seed.
+    if !summary {
+        crate::conversation::record_persons(&mut pass.running, &event, line.seq);
+    }
+    if let Event::ReviewerKept(kept) = &event {
+        pass.running.prune(&kept.kept);
     }
     Ok(())
 }

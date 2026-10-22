@@ -1011,3 +1011,171 @@ PERL
     );
     watchdog.stand_down(fakes::Deadline::after(MATCHING_EXIT_WAIT));
 }
+
+const CREDENTIAL_LUA: &str = "fiber.provider('NAME', { credential = { timeout = 1000, run = function() error('called') end } })\n";
+const MODELS_LUA: &str =
+    "fiber.provider('NAME', { models = { timeout = 1000, run = function() return {} end } })\n";
+
+/// Writes `providers/<name>.json` (the declaration plus the required model)
+/// and, when given, `providers/<name>.lua` with `NAME` replaced.
+fn provider(setup: &Setup, name: &str, declaration: serde_json::Value, lua: Option<&str>) {
+    let dir = setup.package.join("providers");
+    fs::create_dir_all(&dir).unwrap();
+    let mut data = json!({
+        "name": name,
+        "models": [{
+            "id": "m",
+            "protocol": "google-generative-ai",
+            "base_url": "https://example.test"
+        }]
+    });
+    data.as_object_mut()
+        .unwrap()
+        .extend(declaration.as_object().unwrap().clone());
+    fs::write(dir.join(format!("{name}.json")), data.to_string()).unwrap();
+    if let Some(lua) = lua {
+        fs::write(dir.join(format!("{name}.lua")), lua.replace("NAME", name)).unwrap();
+    }
+}
+
+fn stored_key() -> serde_json::Value {
+    json!({"credential": {"env": "ACME_KEY"}})
+}
+
+fn label() -> serde_json::Value {
+    json!({"credential_label": {"names": "profile", "default": "the environment"}})
+}
+
+/// Runs the runner with one case present and `/bin/false` as the binary, so
+/// a case that ran would print `FAIL` on stdout.
+fn run_with_case(setup: &Setup) -> (i32, String, String) {
+    setup.case("one.json");
+    let options = setup.options(fakes::clock::FakeClock::new(), Vec::new());
+    let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/false"), options);
+    Deadline::after(TEST_WAIT).recv_or_fail(&receive, "the extension test runner to finish")
+}
+
+#[test]
+fn credential_without_a_declaration_names_the_field_to_add() {
+    let setup = Setup::new();
+    provider(&setup, "acme", stored_key(), Some(CREDENTIAL_LUA));
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert_eq!(
+        err,
+        "fiber: provider `acme` registers credential() but its data declares neither `login` nor `credential_label`: add `credential_label` to providers/acme.json\n"
+    );
+}
+
+#[test]
+fn credential_label_without_credential_names_the_field_to_remove() {
+    let setup = Setup::new();
+    provider(&setup, "acme", label(), Some(MODELS_LUA));
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert_eq!(
+        err,
+        "fiber: provider `acme` declares `credential_label` but does not register credential(): remove `credential_label` from providers/acme.json\n"
+    );
+}
+
+#[test]
+fn credential_label_with_no_provider_script_names_the_field_to_remove() {
+    let setup = Setup::new();
+    provider(&setup, "acme", label(), None);
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert!(err.contains("remove `credential_label` from providers/acme.json"));
+}
+
+#[test]
+fn every_drift_prints_in_provider_order_before_any_case() {
+    let setup = Setup::new();
+    provider(&setup, "beta", label(), Some(MODELS_LUA));
+    provider(&setup, "alpha", stored_key(), Some(CREDENTIAL_LUA));
+    provider(&setup, "gamma", label(), Some(CREDENTIAL_LUA));
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(lines.len(), 2, "{err}");
+    assert!(
+        lines[0].starts_with("fiber: provider `alpha` registers credential()"),
+        "{err}"
+    );
+    assert!(
+        lines[1].starts_with("fiber: provider `beta` declares `credential_label`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn consistent_providers_and_a_lua_only_provider_reach_the_cases() {
+    let setup = Setup::new();
+    // Declared login with credential(), a label with credential(), no
+    // credential() with a stored key or a login, and a Lua-only provider with no data.
+    provider(
+        &setup,
+        "browser",
+        json!({"login": "browser"}),
+        Some(CREDENTIAL_LUA),
+    );
+    provider(&setup, "labelled", label(), Some(CREDENTIAL_LUA));
+    provider(&setup, "keyed", stored_key(), Some(MODELS_LUA));
+    provider(
+        &setup,
+        "loginonly",
+        json!({"login": "browser"}),
+        Some(MODELS_LUA),
+    );
+    fs::write(
+        setup.package.join("providers/luaonly.lua"),
+        CREDENTIAL_LUA.replace("NAME", "luaonly"),
+    )
+    .unwrap();
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(err, "");
+    assert_eq!(code, 1);
+    assert!(out.starts_with("FAIL "), "{out}");
+}
+
+#[test]
+fn malformed_provider_data_fails_before_any_case() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.package.join("providers")).unwrap();
+    fs::write(setup.package.join("providers/acme.json"), "{not json").unwrap();
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert!(err.starts_with("fiber: "), "{err}");
+    assert!(err.contains("acme.json"), "{err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+}
+
+#[test]
+fn a_provider_script_that_fails_to_load_fails_before_any_case() {
+    let setup = Setup::new();
+    provider(&setup, "acme", stored_key(), Some("this is not lua(\n"));
+
+    let (code, out, err) = run_with_case(&setup);
+
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+    assert!(err.starts_with("fiber: provider `acme`: "), "{err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
+}

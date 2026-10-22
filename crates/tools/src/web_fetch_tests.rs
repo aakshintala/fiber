@@ -41,6 +41,22 @@ fn arguments(url: &str) -> Map<String, Value> {
     map
 }
 
+/// Setup for a test's fetch. The fields these set are private to `web_fetch`,
+/// and this module is its child, so the setup reaches them and nothing else does.
+impl WebFetch {
+    /// Looks names up with `resolve`.
+    fn resolving_by(mut self, resolve: super::Resolve) -> Self {
+        self.resolve = resolve;
+        self
+    }
+
+    /// Writes each artifact through `wrap`'s writer around its file.
+    fn writing_artifacts_through(mut self, wrap: super::download::Wrap) -> Self {
+        self.wrap = Some(wrap);
+        self
+    }
+}
+
 fn response(status: u16, content_type: Option<&str>, body: impl Into<Vec<u8>>) -> Response {
     Response {
         status,
@@ -290,7 +306,7 @@ impl std::io::Write for FillsUp {
 
 /// Wraps each artifact in a writer that fills up after 1 MiB.
 fn fills_up_after_a_mib(tool: WebFetch) -> WebFetch {
-    tool.with_artifact_writer(Arc::new(|file| {
+    tool.writing_artifacts_through(Arc::new(|file| {
         Box::new(FillsUp {
             file,
             room: 1 << 20,
@@ -300,7 +316,7 @@ fn fills_up_after_a_mib(tool: WebFetch) -> WebFetch {
 
 /// Wraps each artifact in a writer that fills up after two download pieces.
 fn fills_up_after_two_pieces(tool: WebFetch) -> WebFetch {
-    tool.with_artifact_writer(Arc::new(|file| {
+    tool.writing_artifacts_through(Arc::new(|file| {
         Box::new(FillsUp {
             file,
             room: 2 * DOWNLOAD_PIECE,
@@ -827,7 +843,7 @@ fn a_name_the_resolver_maps_is_fetched_at_the_address_it_gave() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(resolver_for("mapped.test", IpAddr::V4(Ipv4Addr::LOCALHOST)))
+            .resolving_by(resolver_for("mapped.test", IpAddr::V4(Ipv4Addr::LOCALHOST)))
     });
     let url = format!("http://mapped.test:{port}/x");
     let output = rig.fetch(&url);
@@ -898,7 +914,7 @@ fn a_name_that_resolves_to_a_blocked_address_is_blocked_and_nothing_is_sent() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(resolver_for("evil.test", METADATA))
+            .resolving_by(resolver_for("evil.test", METADATA))
     });
     let output = rig.fetch(&format!("http://evil.test:{port}/"));
     assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
@@ -910,7 +926,7 @@ fn one_blocked_address_among_several_blocks_the_name() {
     let server = serve([ok("text/plain", "never")]);
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let rig = Rig::new().with(|tool| {
-        tool.with_proxy(None).with_resolver(Arc::new(|_, port| {
+        tool.with_proxy(None).resolving_by(Arc::new(|_, port| {
             Ok(vec![
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
                 SocketAddr::new(METADATA, port),
@@ -930,7 +946,7 @@ fn a_redirect_to_a_name_that_resolves_to_a_blocked_address_is_blocked() {
     ]);
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(resolver_for("evil.test", METADATA))
+            .resolving_by(resolver_for("evil.test", METADATA))
     });
     let output = rig.fetch(&server.url());
     assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
@@ -944,17 +960,16 @@ fn a_name_is_resolved_once_a_hop_so_a_second_answer_cannot_swap_the_address() {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&calls);
     let rig = Rig::new().with(|tool| {
-        tool.with_proxy(None)
-            .with_resolver(Arc::new(move |_, port| {
-                // The first answer passes; any later lookup would be the
-                // metadata address.
-                let ip = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
-                    IpAddr::V4(Ipv4Addr::LOCALHOST)
-                } else {
-                    METADATA
-                };
-                Ok(vec![SocketAddr::new(ip, port)])
-            }))
+        tool.with_proxy(None).resolving_by(Arc::new(move |_, port| {
+            // The first answer passes; any later lookup would be the
+            // metadata address.
+            let ip = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                IpAddr::V4(Ipv4Addr::LOCALHOST)
+            } else {
+                METADATA
+            };
+            Ok(vec![SocketAddr::new(ip, port)])
+        }))
     });
     let output = rig.fetch(&format!("http://rebind.test:{port}/"));
     assert_eq!(code(&output), None, "{}", fakes::text_of(&output));
@@ -965,7 +980,7 @@ fn a_name_is_resolved_once_a_hop_so_a_second_answer_cannot_swap_the_address() {
 fn loopback_and_internal_names_are_allowed() {
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(resolver_for("nothing", METADATA))
+            .resolving_by(resolver_for("nothing", METADATA))
     });
     for host in ["intranet.test", "localhost", "127.0.0.1"] {
         let server = serve([ok("text/plain", "y")]);
@@ -978,7 +993,7 @@ fn loopback_and_internal_names_are_allowed() {
 fn a_failed_lookup_is_connection_failed() {
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(Arc::new(|_, _| Err(std::io::Error::other("no such name"))))
+            .resolving_by(Arc::new(|_, _| Err(std::io::Error::other("no such name"))))
     });
     let output = rig.fetch("http://nowhere.test/");
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
@@ -993,7 +1008,7 @@ fn a_failed_lookup_is_connection_failed() {
 fn a_lookup_with_no_address_is_connection_failed() {
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(None)
-            .with_resolver(Arc::new(|_, _| Ok(Vec::new())))
+            .resolving_by(Arc::new(|_, _| Ok(Vec::new())))
     });
     let output = rig.fetch("http://empty.test/");
     assert_eq!(code(&output), Some(ErrorCode::ConnectionFailed));
@@ -1303,7 +1318,7 @@ fn a_blocked_address_is_refused_even_through_a_proxy() {
     let proxy = ConnectProxy::start().unwrap();
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(Some(proxy_through(&proxy)))
-            .with_resolver(resolver_for("evil.test", METADATA))
+            .resolving_by(resolver_for("evil.test", METADATA))
     });
     let output = rig.fetch(&format!("http://evil.test:{}/", port_of(&server)));
     assert_eq!(code(&output), Some(ErrorCode::BlockedHost));
@@ -1319,7 +1334,7 @@ fn a_redirect_to_a_blocked_name_is_refused_through_a_proxy() {
     let proxy = ConnectProxy::start().unwrap();
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(Some(proxy_through(&proxy)))
-            .with_resolver(resolver_for("evil.test", METADATA))
+            .resolving_by(resolver_for("evil.test", METADATA))
     });
     let target = format!("localhost:{}", port_of(&server));
     let output = rig.fetch(&format!("http://{target}/"));
@@ -1333,7 +1348,7 @@ fn the_metadata_name_is_refused_through_a_proxy_resolving_or_not() {
         let proxy = ConnectProxy::start().unwrap();
         let rig = Rig::new().with(|tool| {
             tool.with_proxy(Some(proxy_through(&proxy)))
-                .with_resolver(Arc::new(move |_, port| {
+                .resolving_by(Arc::new(move |_, port| {
                     if resolves {
                         Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)])
                     } else {
@@ -1353,7 +1368,7 @@ fn a_name_only_the_proxy_can_resolve_is_not_refused() {
     let proxy = ConnectProxy::start().unwrap();
     let rig = Rig::new().with(|tool| {
         tool.with_proxy(Some(proxy_through(&proxy)))
-            .with_resolver(Arc::new(|_, _| Err(std::io::Error::other("no local name"))))
+            .resolving_by(Arc::new(|_, _| Err(std::io::Error::other("no local name"))))
     });
     let target = format!("localhost:{}", port_of(&server));
     let output = rig.fetch(&format!("http://{target}/"));
@@ -1517,7 +1532,7 @@ fn held_download() -> HeldDownload {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
     let rig = Rig::new().with(move |tool| {
-        tool.with_artifact_writer(Arc::new(move |file| {
+        tool.writing_artifacts_through(Arc::new(move |file| {
             Box::new(HoldsFirst {
                 file,
                 first: true,
@@ -1674,7 +1689,7 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
     let rig = rig.with(move |tool| {
-        tool.with_artifact_writer(Arc::new(move |file| {
+        tool.writing_artifacts_through(Arc::new(move |file| {
             Box::new(HoldsOnSecondArtifactWrite {
                 file,
                 writes: Arc::clone(&observed_writes),

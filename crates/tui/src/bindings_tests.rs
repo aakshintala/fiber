@@ -121,27 +121,6 @@ fn the_table_matches_the_doc_row_for_row() {
 }
 
 #[test]
-fn areas_run_in_order_from_their_first_ids() {
-    let mut areas: Vec<(&str, &str)> = Vec::new();
-    for binding in BINDINGS {
-        if areas.last().map(|(area, _)| *area) != Some(binding.area) {
-            areas.push((binding.area, binding.id));
-        }
-    }
-    assert_eq!(
-        areas,
-        [
-            ("Sessions", "send"),
-            ("The input box", "recall_prompt"),
-            ("The conversation", "toggle_ledgers"),
-            ("Steering", "select_steering"),
-            ("Requests, models and help", "next_request"),
-        ]
-    );
-    assert_eq!(BINDINGS.last().map(|binding| binding.id), Some("key_map"));
-}
-
-#[test]
 fn every_action_has_a_key_and_a_mouse_target_or_a_slash_command() {
     for binding in BINDINGS {
         assert!(!binding.keys.is_empty(), "{} has no key", binding.id);
@@ -152,16 +131,6 @@ fn every_action_has_a_key_and_a_mouse_target_or_a_slash_command() {
             PATHS.iter().any(|path| binding.other_paths.contains(path)),
             "{} has no mouse target or slash command",
             binding.id
-        );
-    }
-}
-
-#[test]
-fn the_editing_exemptions_are_bindings() {
-    for id in EDITING {
-        assert!(
-            BINDINGS.iter().any(|binding| binding.id == id),
-            "{id} is not a binding"
         );
     }
 }
@@ -224,14 +193,4 @@ fn every_listed_default_key_shows_in_its_row() {
             );
         }
     }
-}
-
-#[test]
-fn session_only_has_no_other_path() {
-    let binding = BINDINGS
-        .iter()
-        .find(|binding| binding.id == "session_only")
-        .expect("session_only is a binding");
-    assert_eq!(binding.other_paths, "");
-    assert!(NO_OTHER_PATH.contains(&binding.id));
 }

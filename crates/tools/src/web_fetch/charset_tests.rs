@@ -1,11 +1,13 @@
-//! Tests beside [`super::decode`]: precedence first, then each source.
+//! Tests beside [`super::encoding`]: precedence first, then each source.
 //!
 //! `#![allow(..., reason = ...)]` header shared by the test modules in this
 //! crate: tests unwrap and index freely.
 #![allow(clippy::unwrap_used, reason = "tests unwrap")]
 #![allow(clippy::indexing_slicing, reason = "tests index")]
 
-use super::{Decoding, decode, encoding};
+use std::borrow::Cow;
+
+use super::{Decoding, encoding};
 use crate::web_fetch::download::Html;
 use crate::web_fetch::markdown::to_markdown;
 
@@ -13,11 +15,17 @@ use crate::web_fetch::markdown::to_markdown;
 const SHIFT_JIS_A: &[u8] = &[0x82, 0xa0];
 const LATIN1_E_ACUTE: &[u8] = &[0xe9];
 
+/// `bytes` decoded whole by its declared character set, the BOM first. Never
+/// fails: unknown bytes become `�`, and a BOM is removed.
+fn decoded<'a>(content_type: Option<&str>, bytes: &'a [u8]) -> Cow<'a, str> {
+    encoding(content_type, bytes).decode(bytes).0
+}
+
 #[test]
 fn a_bom_wins_over_the_header() {
     let mut bytes = b"\xef\xbb\xbf".to_vec();
     bytes.extend_from_slice(&[0xe9]);
-    let text = decode(Some("text/html; charset=shift_jis"), &bytes);
+    let text = decoded(Some("text/html; charset=shift_jis"), &bytes);
     assert_eq!(text.as_ref(), "�");
 }
 
@@ -25,15 +33,15 @@ fn a_bom_wins_over_the_header() {
 fn a_utf16_bom_decodes_as_utf16() {
     // "Hi" in UTF-16LE with its BOM.
     let bytes = [0xff, 0xfe, 0x48, 0x00, 0x69, 0x00];
-    assert_eq!(decode(None, &bytes).as_ref(), "Hi");
+    assert_eq!(decoded(None, &bytes).as_ref(), "Hi");
     // "Hi" in UTF-16BE with its BOM.
     let bytes = [0xfe, 0xff, 0x00, 0x48, 0x00, 0x69];
-    assert_eq!(decode(None, &bytes).as_ref(), "Hi");
+    assert_eq!(decoded(None, &bytes).as_ref(), "Hi");
 }
 
 #[test]
 fn the_header_charset_decodes_shift_jis() {
-    let text = decode(Some("text/html; charset=shift_jis"), SHIFT_JIS_A);
+    let text = decoded(Some("text/html; charset=shift_jis"), SHIFT_JIS_A);
     assert_eq!(text.as_ref(), "あ");
 }
 
@@ -46,7 +54,7 @@ fn the_header_charset_name_is_trimmed_case_insensitive_and_may_be_quoted() {
         "text/html; foo=bar; charset=shift_jis",
     ] {
         assert_eq!(
-            decode(Some(content_type), SHIFT_JIS_A).as_ref(),
+            decoded(Some(content_type), SHIFT_JIS_A).as_ref(),
             "あ",
             "{content_type}"
         );
@@ -58,7 +66,7 @@ fn the_headers_utf16_is_honoured() {
     // "Hi" in UTF-16LE without a BOM, named by the header.
     let bytes = [0x48, 0x00, 0x69, 0x00];
     assert_eq!(
-        decode(Some("text/html; charset=utf-16le"), &bytes).as_ref(),
+        decoded(Some("text/html; charset=utf-16le"), &bytes).as_ref(),
         "Hi"
     );
 }
@@ -67,7 +75,7 @@ fn the_headers_utf16_is_honoured() {
 fn an_unknown_header_label_falls_through_to_the_meta() {
     let mut page = b"<meta charset=\"shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    let text = decode(Some("text/html; charset=unknown-9"), &page);
+    let text = decoded(Some("text/html; charset=unknown-9"), &page);
     assert!(text.as_ref().contains("あ"));
 }
 
@@ -75,7 +83,7 @@ fn an_unknown_header_label_falls_through_to_the_meta() {
 fn a_meta_charset_decodes_the_page() {
     let mut page = b"<meta charset=\"shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 #[test]
@@ -83,7 +91,7 @@ fn a_meta_http_equiv_content_decodes_the_page() {
     let mut page =
         b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 #[test]
@@ -91,7 +99,7 @@ fn a_meta_with_a_quoted_charset_in_content_decodes() {
     let mut page =
         b"<meta http-equiv=\"content-type\" content='text/html; charset=\"shift_jis\"'>".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 #[test]
@@ -100,7 +108,7 @@ fn a_meta_past_1024_bytes_is_ignored() {
     page.extend_from_slice(b"<meta charset=\"shift_jis\">");
     page.extend_from_slice(SHIFT_JIS_A);
     // Falls back to UTF-8: the Shift-JIS bytes are invalid there.
-    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
+    assert_eq!(decoded(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -108,14 +116,14 @@ fn a_meta_just_inside_1024_bytes_counts() {
     let mut page = vec![b' '; 900];
     page.extend_from_slice(b"<meta charset=\"shift_jis\">");
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 #[test]
 fn a_meta_naming_utf16_means_utf8() {
     let page = b"<meta charset=\"utf-16le\">Hi".to_vec();
     assert_eq!(
-        decode(None, &page).as_ref(),
+        decoded(None, &page).as_ref(),
         "<meta charset=\"utf-16le\">Hi"
     );
 }
@@ -124,26 +132,26 @@ fn a_meta_naming_utf16_means_utf8() {
 fn a_meta_naming_x_user_defined_means_windows_1252() {
     let mut page = b"<meta charset=\"x-user-defined\">".to_vec();
     page.extend_from_slice(LATIN1_E_ACUTE);
-    assert!(decode(None, &page).as_ref().contains("é"));
+    assert!(decoded(None, &page).as_ref().contains("é"));
 }
 
 #[test]
 fn an_unknown_meta_label_falls_through_to_utf8() {
     let page = b"<meta charset=\"unknown-9\">Hi".to_vec();
     assert_eq!(
-        decode(None, &page).as_ref(),
+        decoded(None, &page).as_ref(),
         "<meta charset=\"unknown-9\">Hi"
     );
     // ... but a later known meta is still found.
     let page = b"<meta charset=\"unknown-9\"><meta charset=\"shift_jis\">\x82\xa0".to_vec();
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 #[test]
 fn a_meta_inside_a_comment_is_not_a_charset() {
     let mut page = b"<!-- <meta charset=\"shift_jis\"> -->".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
+    assert_eq!(decoded(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -151,26 +159,26 @@ fn the_header_wins_over_the_meta() {
     let mut page = b"<meta charset=\"shift_jis\">".to_vec();
     page.extend_from_slice(LATIN1_E_ACUTE);
     // windows-1252 reads 0xe9 as "é"; Shift-JIS would fail it.
-    let text = decode(Some("text/html; charset=windows-1252"), &page);
+    let text = decoded(Some("text/html; charset=windows-1252"), &page);
     assert!(text.as_ref().contains("é"));
 }
 
 #[test]
 fn nothing_known_is_utf8_lossy() {
-    assert_eq!(decode(None, b"hello").as_ref(), "hello");
-    assert_eq!(decode(Some("text/html"), b"a\xffb").as_ref(), "a�b");
+    assert_eq!(decoded(None, b"hello").as_ref(), "hello");
+    assert_eq!(decoded(Some("text/html"), b"a\xffb").as_ref(), "a�b");
 }
 
 #[test]
 fn utf8_borrows_when_valid() {
     let bytes = b"hello".to_vec();
-    let text = decode(None, &bytes);
+    let text = decoded(None, &bytes);
     assert!(matches!(text, std::borrow::Cow::Borrowed(_)));
 }
 
 #[test]
 fn a_header_charset_after_a_bare_parameter_still_decodes() {
-    let text = decode(Some("text/html; foo; charset=shift_jis"), SHIFT_JIS_A);
+    let text = decoded(Some("text/html; foo; charset=shift_jis"), SHIFT_JIS_A);
     assert_eq!(text.as_ref(), "あ");
 }
 
@@ -179,14 +187,14 @@ fn a_meta_content_without_an_equals_falls_back_to_utf8() {
     let mut page =
         b"<meta http-equiv=\"content-type\" content=\"text/html; charset shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
+    assert_eq!(decoded(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
 fn windows_1252_bytes_decode_to_their_text() {
     let mut page = b"<meta charset=\"windows-1252\">".to_vec();
     page.extend_from_slice(b"\x93quoted\x94");
-    assert!(decode(None, &page).as_ref().contains("“quoted”"));
+    assert!(decoded(None, &page).as_ref().contains("“quoted”"));
 }
 
 #[test]
@@ -205,7 +213,7 @@ fn a_non_meta_start_tag_is_not_a_charset() {
     // would decode the page as Shift-JIS.
     let mut page = b"<div charset=\"shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
+    assert_eq!(decoded(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -215,7 +223,7 @@ fn a_meta_content_with_a_single_quoted_charset_decodes() {
     let mut page =
         b"<meta http-equiv=\"content-type\" content=\"text/html; charset='shift_jis'\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(decode(None, &page).as_ref().contains("あ"));
+    assert!(decoded(None, &page).as_ref().contains("あ"));
 }
 
 /// The piece sizes every streaming test cuts its input into: every small
@@ -346,7 +354,7 @@ fn inputs() -> Vec<(&'static str, Option<&'static str>, Vec<u8>)> {
 #[test]
 fn decoding_in_pieces_gives_the_whole_decode() {
     for (name, content_type, bytes) in inputs() {
-        let whole = decode(content_type, &bytes);
+        let whole = decoded(content_type, &bytes);
         for split in SPLITS {
             assert!(
                 streamed(content_type, &bytes, split) == whole,
@@ -410,7 +418,7 @@ fn pages() -> Vec<(&'static str, Option<&'static str>, Vec<u8>)> {
 #[test]
 fn html_converted_in_pieces_gives_the_whole_conversion() {
     for (name, content_type, bytes) in pages() {
-        let whole = to_markdown(&decode(content_type, &bytes));
+        let whole = to_markdown(&decoded(content_type, &bytes));
         for split in SPLITS {
             assert!(
                 converted(content_type, &bytes, split) == whole,
