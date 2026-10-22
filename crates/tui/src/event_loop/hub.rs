@@ -75,14 +75,15 @@ pub(super) struct Connection {
     #[cfg(test)]
     answer_stash_peak: usize,
     /// The hub thread's permit to connect again (`docs/tui.md`, "A
-    /// dropped connection"); none in tests with no hub thread.
-    retry: Option<Arc<Retry>>,
+    /// dropped connection"), held by the connection: it quits the permit
+    /// when it drops.
+    retry: Arc<Retry>,
 }
 
 impl Connection {
     /// A disconnected connection holding nothing, with the hub thread's
-    /// permit when one is handed over.
-    pub(super) fn new(retry: Option<Arc<Retry>>) -> Self {
+    /// permit.
+    pub(super) fn new(retry: Arc<Retry>) -> Self {
         Self {
             hub: None,
             stash: VecDeque::new(),
@@ -97,7 +98,7 @@ impl Connection {
     /// starts its hub thread once it already holds a connection.
     #[cfg(test)]
     pub(super) fn set_retry(&mut self, retry: Arc<Retry>) {
-        self.retry = Some(retry);
+        self.retry = retry;
     }
 
     /// Whether a stream is connected.
@@ -360,8 +361,8 @@ impl Connection {
     /// Gives the hub thread its permit for one failure, after the delay
     /// the app names; none once the hub refused this terminal's schema.
     pub(super) fn retry_later(&mut self, app: &mut App) {
-        if let (Some(delay), Some(retry)) = (app.next_retry(), &self.retry) {
-            retry.give(delay);
+        if let Some(delay) = app.next_retry() {
+            self.retry.give(delay);
         }
     }
 
@@ -395,9 +396,7 @@ impl Connection {
     /// (#1877). Ending the tracked read before cancelling means a reader
     /// `Retry` stops is always a cancelled reader.
     pub(super) fn hang_up(&mut self) {
-        if let Some(retry) = &self.retry {
-            retry.end_read();
-        }
+        self.retry.end_read();
         self.credits.cancel();
         if let Some(hub) = self.hub.take() {
             hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
@@ -410,9 +409,7 @@ impl Connection {
 /// before the hang-up.
 impl Drop for Connection {
     fn drop(&mut self) {
-        if let Some(retry) = &self.retry {
-            retry.quit();
-        }
+        self.retry.quit();
         self.hang_up();
     }
 }

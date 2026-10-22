@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -19,6 +19,7 @@ use contract::shapes::Failure;
 use contract::tool::Cancel;
 use contract::tool::ServerRecord;
 use serde::Serialize;
+use support::lock;
 
 use crate::cache::{self, Cached};
 use crate::elicit::Asker;
@@ -157,12 +158,6 @@ impl Drop for LeaseGuard<'_> {
         *lock(self.lease) = false;
         self.wake.notify_all();
     }
-}
-
-/// Locks `state`, recovering from poison as the slot always has: a
-/// panicking attempt never wedges the next one.
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The running-server re-list: the slot entry extracts what the re-list

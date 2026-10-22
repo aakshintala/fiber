@@ -162,85 +162,79 @@ pub(crate) fn run_with(
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
-    let open_command = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
+    let open = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
         .map(|argv| argv.into_iter().map(str::to_owned).collect());
     // The viewer opens what an opener opens with: none over SSH or
     // with no opener on PATH, where a click says why.
-    let viewer = open_command
+    let viewer = open
         .as_ref()
         .map(|_| crate::viewer::command(cfg!(target_os = "macos")))
         .unwrap_or_default();
-    let mut terminal = Loop {
-        app,
-        parser: Parser::default(),
-        screen,
-        hub: Connection::new(Some(Arc::clone(&retry))),
-        tty: Some(tty),
-        on_attach,
-        clock,
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: catalogue::Reader::new(models),
-        pointer: Pointer::default(),
-        hover,
-        var: Box::new(|name| std::env::var(name).ok()),
-        copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
+    let programs = Programs {
+        copy: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
             .map(|argv| argv.into_iter().map(str::to_owned).collect()),
-        open_command,
+        open,
         viewer,
-        images_dir,
-        paste_reader: crate::paste_image::command(
+        paste: crate::paste_image::command(
             cfg!(target_os = "macos"),
             |name| std::env::var_os(name),
             clipboard::on_path,
         ),
-        title: osc::Title::default(),
-        shape: osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
+        images_dir,
     };
-    terminal.app.set_opener(terminal.open_command.is_some());
-    terminal
-        .app
-        .set_osc9(crate::attention::supported(&terminal.var));
+    app.set_opener(programs.open.is_some());
+    let var: Var = Box::new(|name| std::env::var(name).ok());
+    app.set_osc9(crate::attention::supported(&var));
     // Whether stripes draw is read once, before the first frame.
     crate::surface::init(&|name| std::env::var(name).ok());
     // The first frame's time: elapsed times and animation agree from it.
-    terminal.app.set_now(
-        terminal.clock.now(),
-        contract::clock::wall_ms(terminal.clock.wall()),
-    );
+    app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
     // The first frame waits on nothing: the queries are out, and nothing
     // reads the tty or the hub until it is drawn.
-    if terminal.screen.draw(&mut terminal.app, None).is_err() {
+    if screen.draw(&mut app, None).is_err() {
         return Ok(1);
     }
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
-    terminal.app.sweep_notices(terminal.clock.now());
-    terminal.write_title();
+    app.sweep_notices(clock.now());
+    // The title goes out before the reader starts, so a failed start
+    // still leaves it set.
+    let mut title = osc::Title::default();
+    if let Some(bytes) = title.next(app.title()) {
+        let mut out = &tty;
+        out.write_all(&bytes).unwrap_or(());
+    }
     let (tx, rx) = mpsc::channel();
-    terminal.files_out = Some(tx.clone());
     // The cached lists are asked after the first frame, so the first
     // frame draws at once and the picker lists them as soon as the read
     // answers. The ask bypasses the owed picker reads, so it counts as
     // owed, or its answer would clear a meanwhile taken read's mark.
-    terminal.app.note_catalogue_read();
-    terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
-    match terminal
-        .tty
-        .as_ref()
-        .map(|tty| spawn_reader(tty, tx.clone()))
-    {
-        Some(Ok(reader)) => terminal.reader = Some(reader),
-        // Without the reader no key reaches the loop: fail instead of
-        // running deaf. The guard's drop restores the terminal.
-        Some(Err(error)) => {
-            return Err(Error::from(error));
-        }
-        None => {}
-    }
+    app.note_catalogue_read();
+    let mut model_reader = catalogue::Reader::new(models);
+    model_reader.ask(catalogue::Refresh::Cached, &tx);
+    // Without the reader no key reaches the loop: fail instead of
+    // running deaf. The guard's drop restores the terminal.
+    let reader = spawn_reader(&tty, tx.clone())?;
+    let mut terminal = Loop {
+        app,
+        parser: Parser::default(),
+        screen,
+        hub: Connection::new(Arc::clone(&retry)),
+        tty,
+        on_attach,
+        clock,
+        files_out: tx.clone(),
+        search: None,
+        reader,
+        model_reader,
+        pointer: Pointer::default(),
+        hover,
+        var,
+        programs,
+        title,
+        shape: osc::Shape::default(),
+        tick: crate::tick::TickThread::idle(),
+    };
     spawn_hub(
         connect,
         Feed::new(tx.clone(), terminal.hub.credits()).routed(Arc::clone(&router)),
@@ -265,10 +259,9 @@ pub(crate) fn run_with(
     // blocked and end with the process.
     terminal.hub.hang_up();
     drop(restore);
-    if let Some(mut tty) = terminal.tty.take() {
-        for line in &lines {
-            writeln!(tty, "{line}").unwrap_or(());
-        }
+    let mut tty = &terminal.tty;
+    for line in &lines {
+        writeln!(tty, "{line}").unwrap_or(());
     }
     Ok(code)
 }
@@ -306,6 +299,25 @@ fn catch_interrupts() {
 /// Reads an environment variable by name.
 type Var = Box<dyn Fn(&str) -> Option<String> + Send>;
 
+/// The programs the loop runs for the person, each chosen once at startup.
+#[derive(Default)]
+struct Programs {
+    /// The system clipboard command a copy is piped to, beside OSC 52.
+    copy: Option<Vec<String>>,
+    /// The program a link click runs with the URL appended, or none over
+    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
+    open: Option<Vec<String>>,
+    /// The program a viewer worker runs with the copy appended, or none
+    /// where nothing opens (`docs/tui.md`, "Images").
+    viewer: Vec<String>,
+    /// The clipboard image command for this machine, or none where no
+    /// clipboard reads.
+    paste: Option<crate::paste_image::Reader>,
+    /// Where the viewer writes its copies: `cache/images` in Fiber home
+    /// (`docs/state.md`).
+    images_dir: PathBuf,
+}
+
 /// The loop's state.
 struct Loop<B: Backend> {
     app: App,
@@ -315,20 +327,15 @@ struct Loop<B: Backend> {
     /// thread's permit, reached only through its interface.
     hub: Connection,
     /// The tty, for its size on resize.
-    tty: Option<File>,
+    tty: File,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-    /// Inputs handled, for the idle test.
-    wakeups: u64,
     /// Where workers post their results.
-    files_out: Option<Sender<Input>>,
+    files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
-    /// The clipboard image command for this machine, chosen once at
-    /// startup, or none where no clipboard reads.
-    paste_reader: Option<crate::paste_image::Reader>,
     /// The tty's reader, paused while the editor has the terminal.
-    reader: Option<Reader>,
+    reader: Reader,
     /// The one model-list read at a time.
     model_reader: catalogue::Reader,
     /// The pointer's last cell and a pending click.
@@ -337,17 +344,8 @@ struct Loop<B: Backend> {
     hover: bool,
     /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
     var: Var,
-    /// The system clipboard command a copy is piped to, beside OSC 52.
-    copy_command: Option<Vec<String>>,
-    /// The program a link click runs with the URL appended, or none over
-    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
-    open_command: Option<Vec<String>>,
-    /// The program a viewer worker runs with the copy appended, or none
-    /// where nothing opens (`docs/tui.md`, "Images").
-    viewer: Vec<String>,
-    /// Where the viewer writes its copies: `cache/images` in Fiber home
-    /// (`docs/state.md`).
-    images_dir: PathBuf,
+    /// The programs this machine runs for the person.
+    programs: Programs,
     /// The window title last written.
     title: osc::Title,
     /// The pointer shape last written.
@@ -400,7 +398,6 @@ impl<B: Backend> Loop<B> {
                 }
                 for input in batch {
                     taken = taken.saturating_add(1);
-                    self.wakeups = self.wakeups.saturating_add(1);
                     if let Input::Bytes(bytes) = input {
                         let events = self.parser.feed(&bytes);
                         let wheel = Self::wheel_only(&events);
@@ -522,7 +519,7 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
-                    clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                    clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
@@ -537,9 +534,9 @@ impl<B: Backend> Loop<B> {
                 Effect::ListFiles => self.list_files(),
                 Effect::ReadImage(ticket) => {
                     if let Some(notice) = crate::paste_image::start(
-                        self.paste_reader.as_ref(),
+                        self.programs.paste.as_ref(),
                         &self.clock,
-                        self.files_out.as_ref(),
+                        Some(&self.files_out),
                         ticket,
                     ) {
                         // Nothing started, so the running ticket's
@@ -552,7 +549,7 @@ impl<B: Backend> Loop<B> {
                 Effect::Feedback { description } => {
                     if let Some(notice) = crate::feedback::start(
                         self.app.feedback_writer(),
-                        self.files_out.as_ref(),
+                        Some(&self.files_out),
                         description,
                     ) {
                         // Nothing started, so no answer can arrive:
@@ -561,16 +558,14 @@ impl<B: Backend> Loop<B> {
                     }
                 }
                 Effect::FindPause { generation, after } => {
-                    if let Some(out) = &self.files_out {
-                        let clock = Arc::clone(&self.clock);
-                        let out = out.clone();
-                        // A pause thread outliving the loop finds
-                        // the channel closed and returns.
-                        drop(crate::sources::builder("tui-find-pause").spawn(move || {
-                            clock.sleep(after);
-                            drop(out.send(Input::FindDue(generation)));
-                        }));
-                    }
+                    let clock = Arc::clone(&self.clock);
+                    let out = self.files_out.clone();
+                    // A pause thread outliving the loop finds
+                    // the channel closed and returns.
+                    drop(crate::sources::builder("tui-find-pause").spawn(move || {
+                        clock.sleep(after);
+                        drop(out.send(Input::FindDue(generation)));
+                    }));
                 }
                 Effect::Search { generation, query } => {
                     if let Some(search) = &self.search {
@@ -608,15 +603,14 @@ impl<B: Backend> Loop<B> {
             self.search = None;
         }
         // The model-list read the picker owes, if one is owed.
-        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
-            self.model_reader.ask(refresh, &out.clone());
+        if let Some(refresh) = self.app.take_reads() {
+            self.model_reader.ask(refresh, &self.files_out);
         }
         // The browser login the input asked for, if one waits: its
         // progress and its end arrive as `Input::Login`.
-        if let Some(out) = self.files_out.clone()
-            && let Some(start) = self.app.take_login_start()
-        {
-            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
+        if let Some(start) = self.app.take_login_start() {
+            let worker =
+                crate::login_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
             self.app.login_started(worker);
         }
         self.save_shares();
@@ -664,10 +658,8 @@ impl<B: Backend> Loop<B> {
             Input::Models(result) => {
                 self.app.on_models(result);
                 // The queued read, if one waits, starts on the loop's
-                // channel; without one there is no loop to answer.
-                if let Some(out) = self.files_out.clone() {
-                    self.model_reader.done(&out);
-                }
+                // channel.
+                self.model_reader.done(&self.files_out);
             }
             Input::Image { ticket, result } => self.app.on_image(ticket, result),
             Input::Feedback(result) => self.app.on_feedback(result),
@@ -692,7 +684,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Resize => {
-                if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
+                if let Ok((width, height)) = term::size(&self.tty) {
                     self.app.set_size(width, height);
                     if self.screen.resize(width, height).is_err() {
                         return Some(1);
@@ -720,10 +712,10 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
-            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
         }
         if let Some(text) = self.app.take_owed_copy() {
-            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
         }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
@@ -768,14 +760,15 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Opens the queued viewer copies: one worker per view, each
-    /// answering once with `Input::Viewed`. Nothing is queued while
-    /// the loop has no channel to answer on.
+    /// answering once with `Input::Viewed`.
     fn drain_images(&mut self) {
-        let Some(out) = self.files_out.clone() else {
-            return;
-        };
         for view in self.app.take_image_out().view {
-            crate::viewer::spawn(&self.viewer, &self.images_dir, view, &out);
+            crate::viewer::spawn(
+                &self.programs.viewer,
+                &self.programs.images_dir,
+                view,
+                &self.files_out,
+            );
         }
     }
 
@@ -789,9 +782,8 @@ impl<B: Backend> Loop<B> {
 
     /// Writes the app's window title when it changed since the last write.
     fn write_title(&mut self) {
-        if let Some(bytes) = self.title.next(self.app.title())
-            && let Some(mut tty) = self.tty.as_ref()
-        {
+        if let Some(bytes) = self.title.next(self.app.title()) {
+            let mut tty = &self.tty;
             tty.write_all(&bytes).unwrap_or(());
         }
     }
@@ -803,9 +795,8 @@ impl<B: Backend> Loop<B> {
         if !self.hover {
             return;
         }
-        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at))
-            && let Some(mut tty) = self.tty.as_ref()
-        {
+        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at)) {
+            let mut tty = &self.tty;
             tty.write_all(bytes).unwrap_or(());
         }
     }
@@ -814,9 +805,8 @@ impl<B: Backend> Loop<B> {
     /// "Getting the person's attention"). A failed write is dropped.
     fn write_alerts(&mut self) {
         let bytes = self.app.take_alerts();
-        if let Some(mut tty) = self.tty.as_ref() {
-            tty.write_all(&bytes).unwrap_or(());
-        }
+        let mut tty = &self.tty;
+        tty.write_all(&bytes).unwrap_or(());
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need
@@ -827,9 +817,8 @@ impl<B: Backend> Loop<B> {
             return;
         }
         self.app.set_kitty();
-        if let Some(mut tty) = self.tty.as_ref()
-            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
-        {
+        let mut tty = &self.tty;
+        if io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok() {
             self.parser.set_kitty();
         }
     }
@@ -837,15 +826,16 @@ impl<B: Backend> Loop<B> {
     /// Starts the `@` panel's search worker on a listing of the workspace,
     /// searching for an empty query at the current generation.
     fn list_files(&mut self) {
-        let Some(out) = &self.files_out else {
-            return;
-        };
         // With no local workspace there is no directory to list.
         let Some(workspace) = self.app.workspace() else {
             return;
         };
         let roots = files::Roots::new(workspace.clone(), std::env::var_os("HOME"));
-        let search = files::Search::spawn(move || files::list(&workspace), roots, out.clone());
+        let search = files::Search::spawn(
+            move || files::list(&workspace),
+            roots,
+            self.files_out.clone(),
+        );
         search.search(self.app.generation(), String::new());
         self.search = Some(search);
     }
@@ -907,7 +897,7 @@ impl<B: Backend> Loop<B> {
     /// the URL is drawn either way and the flow completes when it is
     /// visited (`docs/tui.md`, "Links").
     fn open_link(&self, url: String) {
-        if let Some(argv) = self.open_command.clone() {
+        if let Some(argv) = self.programs.open.clone() {
             let mut argv = argv;
             argv.push(url);
             drop(clipboard::pipe(argv, String::new()));
@@ -1001,9 +991,7 @@ impl<B: Backend> Loop<B> {
     /// back and the whole screen repainted at the size read again. `Some(1)`
     /// when the terminal cannot be taken back.
     fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
-        if let Some(reader) = &mut self.reader {
-            reader.pause();
-        }
+        self.reader.pause();
         // A failed suspend still runs the program: the terminal may be
         // left part set up, and resume sets it up whole.
         term::suspend().unwrap_or(());
@@ -1012,9 +1000,7 @@ impl<B: Backend> Loop<B> {
         // terminal is gone. The reader still resumes, so its thread ends
         // with the test instead of parking past it.
         if let Some(code) = program() {
-            if let Some(reader) = &self.reader {
-                reader.resume();
-            }
+            self.reader.resume();
             return Some(code);
         }
         if term::resume(self.parser.kitty(), self.hover).is_err() {
@@ -1025,13 +1011,9 @@ impl<B: Backend> Loop<B> {
         // The restore put the default pointer back: the next frame writes
         // the shape again.
         self.shape.reset();
-        if let Some(reader) = &self.reader {
-            reader.resume();
-        }
-        let (width, height) = match self.tty.as_ref().map(term::size) {
-            Some(Ok(size)) => size,
-            Some(Err(_)) | None => (self.screen.area().width, self.screen.area().height),
-        };
+        self.reader.resume();
+        let (width, height) = term::size(&self.tty)
+            .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)
     }
