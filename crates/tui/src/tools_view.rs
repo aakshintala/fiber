@@ -10,7 +10,6 @@ use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, reload_text};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
-pub(crate) use crate::text::fit;
 
 /// A tool name's column.
 const NAME: usize = 20;
@@ -403,7 +402,11 @@ impl Tools {
             ),
         };
         vec![
-            (format!("  {}", fit(&row.name, NAME)), None, Ink::Plain),
+            (
+                format!("  {}", crate::text::fit(&row.name, NAME)),
+                None,
+                Ink::Plain,
+            ),
             (project.0, project.1, Ink::Plain),
             ("  ".to_owned(), None, Ink::Plain),
             (everywhere.0, everywhere.1, Ink::Plain),
@@ -427,7 +430,7 @@ fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Opti
     vec![(
         format!(
             "{}{:^12}  {:^10}  {:<8}  {}",
-            fit(&heading_of(group), NAME + 2),
+            crate::text::fit(&heading_of(group), NAME + 2),
             project,
             everywhere,
             "state",

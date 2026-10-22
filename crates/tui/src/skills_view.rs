@@ -14,7 +14,8 @@ use crate::format::{cut, width, wrap};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, applies_text};
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
-use crate::tools_view::{fit, mark};
+use crate::text::fit;
+use crate::tools_view::mark;
 
 /// A skill name's column.
 const NAME: usize = 18;
