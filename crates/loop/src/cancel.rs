@@ -2,13 +2,14 @@
 //! "Cancellation"): shared across threads, armed while a turn runs.
 
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, atomic::AtomicI32};
+use std::sync::{Arc, Mutex, Weak, atomic::AtomicI32};
 
 use contract::clock::Wake;
 use contract::diag::Op;
 use contract::events::{CallStatus, ToolCallCompleted, TurnCompleted, TurnOutcome};
 use contract::provider::{CallError, Delta, ModelCall, Reply};
 use contract::tool::Cancel as _;
+use support::lock;
 
 /// The cancel signal for one session's running turn. The loop arms it
 /// before it writes `turn_started` and disarms it just before it writes
@@ -186,10 +187,6 @@ impl contract::tool::Cancel for TurnCancel {
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         lock(&self.inner).subscribers.push(waker);
     }
-}
-
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl crate::Loop {

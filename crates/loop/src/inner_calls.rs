@@ -1,13 +1,14 @@
 //! Inner calls run inside their anchor on the loop's step machinery.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 use contract::ActionId;
 use contract::clock::Wake;
 use contract::events::{CallStatus, ToolCallCompleted};
 use contract::tool::{Cancel, InnerCalls};
 use serde_json::Value;
+use support::lock;
 
 use crate::TurnCancel;
 use crate::progress::{SharedWake, Stream};
@@ -228,10 +229,6 @@ impl Cancel for InnerCancel {
             inner.1.push(waker);
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// A started inner call, held until its own inner calls have completed.

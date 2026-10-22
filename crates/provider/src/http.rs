@@ -8,7 +8,7 @@
 
 use std::io::{self, Read};
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use contract::clock::Clock;
@@ -67,7 +67,7 @@ impl Cancel {
 
     fn lock(&self) -> MutexGuard<'_, CancelState> {
         // Release builds abort on panic, so no holder can poison the lock.
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.state)
     }
 }
 

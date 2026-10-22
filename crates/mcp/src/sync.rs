@@ -9,7 +9,7 @@
 mod tests;
 
 use std::path::Path;
-use std::sync::{Arc, PoisonError, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::clock::Clock;
@@ -111,11 +111,7 @@ impl Disposition {
 /// slot and a name with no slot start fresh. Any other difference rebuilds at declare
 /// time with no restart.
 pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncRow> {
-    let slots = servers
-        .slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    let slots = support::lock(&servers.slots).clone();
     let mut by_name = std::collections::HashMap::new();
     for slot in &slots {
         by_name.insert(slot.spec().name.clone(), slot.clone());
@@ -521,7 +517,7 @@ pub fn plan_sync(staged: &StagedSync, servers: &Servers, inputs: &SyncInputs) ->
         }
     }
     if !offers_resources {
-        let slots = servers.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        let slots = support::lock(&servers.slots);
         offers_resources = slots
             .iter()
             .any(|slot| !dropped.contains(&slot.spec().name) && slot.offers_resources());
@@ -618,11 +614,7 @@ pub fn apply_sync(mut staged: StagedSync, servers: &Servers, inputs: &SyncInputs
                 // `NotStarted` or failed slot with the same name never
                 // serves again once the apply installs the new one.
                 servers.remove(&name);
-                servers
-                    .slots
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(slot);
+                support::lock(&servers.slots).push(slot);
                 cache::write(inputs.cache, &name, &spec.key(), &listed);
             }
             StagedRow::ShadowFailed { spec, .. } => {

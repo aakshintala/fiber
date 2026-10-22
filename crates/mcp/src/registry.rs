@@ -3,7 +3,7 @@
 //! list instead, signalled as groups;
 //! [`stop_every_start`] is what stays here.
 
-use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Mutex, Weak};
 
 use contract::clock::Wake;
 use contract::tool::Cancel;
@@ -63,6 +63,4 @@ pub(crate) fn before_lock(which: &'static str) {
 #[cfg(not(test))]
 pub(crate) fn before_lock(_which: &'static str) {}
 
-pub(crate) fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
+pub(crate) use support::lock;

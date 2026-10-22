@@ -16,7 +16,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -43,15 +43,12 @@ use fakes::clock::FakeClock;
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use log::Log;
 use serde_json::{Map, Value, json};
+use support::lock;
 
 use crate::{BlockLimits, Error, Loop, Model, Reviewer};
 
 /// The idle delay a suspending turn waits out.
 const IDLE: Duration = Duration::from_secs(60);
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 /// Fails the next `permission_resolved` write once with `Error::Log`.
 static FAIL_DECISION_WRITE: Mutex<bool> = Mutex::new(false);

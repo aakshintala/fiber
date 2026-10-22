@@ -148,36 +148,60 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
-    let lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty,
-        on_attach: Box::new(move |session| {
-            if let Ok(mut held) = seen.lock() {
-                held.push(session.0.clone());
-            }
-        }),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
+    if let Some(tty) = tty {
+        lp.tty = tty;
+    }
+    lp.on_attach = Box::new(move |session| {
+        if let Ok(mut held) = seen.lock() {
+            held.push(session.0.clone());
+        }
+    });
     (lp, attached)
+}
+
+/// A retry permit no hub thread waits on, for a test of a connection alone.
+pub(super) fn idle_retry() -> Arc<crate::retry::Retry> {
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    crate::retry::Retry::new(&clock)
+}
+
+impl<B: Backend> Loop<B> {
+    /// A loop on `screen` at today's test defaults: a fake clock, a read-only
+    /// `/dev/null` for a tty (every write to it fails and it has no size) and
+    /// a reader on it, hover on and no environment. A test sets
+    /// any other value by assigning the field.
+    pub(super) fn for_test(app: App, screen: Screen<B>) -> Self {
+        // The receiver is dropped: a worker's answer finds the channel
+        // closed and is lost, and the channel `run` reads is the test's own.
+        let (files_out, _) = mpsc::channel();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("/dev/null: {err}"));
+        // Its thread reads the end of the file at once and ends, so a pause
+        // returns and a resume does nothing.
+        let reader = super::Reader::spawn(&tty, files_out.clone())
+            .unwrap_or_else(|err| panic!("the reader started: {err}"));
+        Self {
+            app,
+            parser: crate::keys::Parser::default(),
+            screen,
+            hub: Connection::new(crate::retry::Retry::new(&clock)),
+            tty,
+            on_attach: Box::new(|_| {}),
+            clock,
+            files_out,
+            search: None,
+            reader,
+            model_reader: crate::catalogue::Reader::new(None),
+            pointer: crate::mouse::Pointer::default(),
+            hover: true,
+            var: Box::new(|_| None),
+            programs: super::Programs::default(),
+            title: crate::osc::Title::default(),
+            shape: crate::osc::Shape::default(),
+            tick: crate::tick::TickThread::idle(),
+        }
+    }
 }
 
 /// Runs `lp` over `inputs`, then with every sender gone. With no inputs it
@@ -185,12 +209,21 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
 /// input first.
 #[track_caller]
 pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
+    taken(lp, inputs).0
+}
+
+/// Runs `lp` over `inputs` as [`feed`] does (which wraps this), and returns
+/// the exit code with how many of the inputs `run` took off the channel.
+#[track_caller]
+fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
     let (tx, rx) = mpsc::channel();
+    let sent = inputs.len();
     for input in inputs {
         tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
     }
     drop(tx);
-    lp.run(&rx)
+    let code = lp.run(&rx);
+    (code, sent - rx.try_iter().count())
 }
 
 pub(super) fn hello() -> contract::HubLine {
@@ -260,12 +293,10 @@ fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
         Input::Bytes(b"\x1b[?62;22c".to_vec()),
     ];
     // Every sender gone, the loop's `recv` returns: it was parked there.
-    assert_eq!(feed(&mut lp, quiet), 0);
-    assert_eq!(lp.wakeups, 3);
+    assert_eq!(taken(&mut lp, quiet), (0, 3));
     assert_eq!(sink.len(), first);
     // A key that changes a row writes it.
-    assert_eq!(feed(&mut lp, vec![Input::Bytes(b"a".to_vec())]), 0);
-    assert_eq!(lp.wakeups, 4);
+    assert_eq!(taken(&mut lp, vec![Input::Bytes(b"a".to_vec())]), (0, 1));
     assert!(sink.len() > first);
 }
 
@@ -338,7 +369,7 @@ fn ctrl_c_twice_quits_with_zero() {
     // The sender stays: the loop returns on the quit, not on a closed
     // channel.
     assert_eq!(lp.run(&rx), 0);
-    assert_eq!(lp.wakeups, 2);
+    assert_eq!(rx.try_iter().count(), 0);
     drop(tx);
 }
 
@@ -783,7 +814,7 @@ fn failed_reader_start_returns_io_failed() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher drains what the first frame writes, so no write blocks.
-    let _frames = watch(&pair.main, Vec::new());
+    let title = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -817,6 +848,10 @@ fn failed_reader_start_returns_io_failed() {
         "the message names the terminal: {:?}",
         error.to_string()
     );
+    // The title was written before the reader failed to start.
+    Deadline::after(DEADLINE)
+        .recv(&title)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the title: {err}"));
     // The failure return restores the terminal: the slave is cooked again.
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
@@ -1204,10 +1239,8 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     let (tx, rx) = mpsc::channel();
-    lp.reader = Some(
-        super::Reader::spawn(&pair.slave, tx)
-            .unwrap_or_else(|error| panic!("the reader started: {error}")),
-    );
+    lp.reader = super::Reader::spawn(&pair.slave, tx)
+        .unwrap_or_else(|error| panic!("the reader started: {error}"));
     lp.parser.set_kitty();
     let slave = pair
         .slave
@@ -1547,7 +1580,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     let ready_path = ready.path().display().to_string();
-    lp.copy_command = Some(
+    lp.programs.copy = Some(
         [
             "/bin/sh",
             "-c",
@@ -2215,32 +2248,10 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     let mut app = App::new(dir.path().to_path_buf());
     app.set_size(60, 12);
     let (out, rx) = mpsc::channel();
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen: Screen::new(TestBackend::new(60, 12), 60, 12)
-            .unwrap_or_else(|err| panic!("screen: {err}")),
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: Some(out),
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop::for_test(app, screen);
+    lp.files_out = out;
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
@@ -2330,7 +2341,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     let (hub, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     lp.hub.store(hub);
     let (found, due) = mpsc::channel();
-    lp.files_out = Some(found);
+    lp.files_out = found;
     let (_, main) = mpsc::channel::<Input>();
     // Ctrl+F and three keystrokes in one read: three pauses, one
     // generation each.
@@ -2674,7 +2685,7 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     });
     lp.model_reader = crate::catalogue::Reader::new(Some(read));
     let (tx, rx) = mpsc::channel();
-    lp.files_out = Some(tx);
+    lp.files_out = tx;
     let (_, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
     assert!(lp.app.model_picker_open());
