@@ -226,10 +226,9 @@ fn the_bedrock_package_prints_one_line() {
         setup.fiber(&["extension", "install", to.to_str().unwrap()]),
     );
     assert_eq!(installed.status.code(), Some(0), "{installed:?}");
-    let data: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../providers/bedrock/providers/bedrock.json"
-    ))
-    .unwrap();
+    let data: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(to.join("providers/bedrock.json")).unwrap())
+            .unwrap();
     let count = data["models"].as_array().unwrap().len();
     let (stdout, stderr) = models_output(&setup, &["models"]);
     assert_eq!(stdout, "");

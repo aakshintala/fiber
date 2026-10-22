@@ -103,9 +103,13 @@ fn expected_message(model: &str) -> String {
 /// hub's environment leaves out: the package's model count, with the
 /// per-model message's clauses and remedies.
 fn expected_list_notice() -> String {
-    let data: Value = serde_json::from_str(include_str!(
-        "../../../providers/databricks/providers/databricks.json"
-    ))
+    let data: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../providers/databricks/providers/databricks.json"),
+        )
+        .unwrap(),
+    )
     .unwrap();
     let count = data.get("models").and_then(Value::as_array).unwrap().len();
     let subject = if count == 1 {
