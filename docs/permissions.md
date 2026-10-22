@@ -232,8 +232,9 @@ message answers is the model's text directly before it, marked as the agent's.
 A tool call between that text and the human message breaks the link, so no reply is shown.
 The model's other prose and every tool result are stripped before the prompt
 is built. The
-reviewer also gets the call under review, its declared effects, the
-workspace root, and the person's own notes about their environment ("What the
+reviewer also gets the call under review, its declared effects, for a shell
+call the commands in it that were not shown read-only (`docs/tools.md`,
+"Shell", "Effects"), the workspace root, and the person's own notes about their environment ("What the
 person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
@@ -479,8 +480,8 @@ its rule matches the tool by name. A call a rule cannot safely match, such as
 a shell command with more than one part, returns no subject, and no rule or
 session grant matches it, a deny or an ask included. A shell rule matches a
 command's text, not what it does: a deny on `rm -rf ~/` misses `rm -fr ~`,
-and a command of more than one part, or one the classifier cannot read
-plainly, is matched by no rule: unless every part is read-only, which takes
+and a command of more than one part, or one the classifier does not
+accept, is matched by no rule: unless every part is read-only, which takes
 the fast path, it reaches the reviewer, which judges what it does.
 
 Approving `npm test -- --watch` can remember the subject, or the prefix
