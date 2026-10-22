@@ -665,6 +665,7 @@ fn credential_label_reads_alone_and_is_invalid_beside_login_or_a_key_source() {
         CredentialFrom::Function(CredentialLabelSources {
             names: "AWS profile".into(),
             default: "the environment".into(),
+            credential_paths: Vec::new(),
         })
     );
     assert_eq!(data.credential_from.credential(), None);

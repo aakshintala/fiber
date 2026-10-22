@@ -626,7 +626,7 @@ fn a_bare_secret_named_like_the_provider_is_not_read_as_a_key() {
 }
 
 fn files(config: &Config, providers: &[ProviderData]) -> Vec<std::path::PathBuf> {
-    let mut files = config.credentials().credential_files(providers);
+    let mut files = config.credentials().credential_files(providers, &|_| None);
     files.sort();
     files
 }
@@ -997,4 +997,250 @@ fn a_command_still_running_at_its_timeout_is_credential_missing_and_runs_again()
         .unwrap();
     assert_eq!(read.secret.expose(), "sk-marker-arg");
     assert_eq!(runs.get(), 2);
+}
+
+/// A lookup that reads `vars` alone, never the process environment.
+fn env_of<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+    move |name| {
+        vars.iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| (*value).to_owned())
+    }
+}
+
+/// The shipped first-party package `providers/<name>`'s providers.
+fn shipped(name: &str) -> Vec<ProviderData> {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../providers")
+        .join(name);
+    config::read_providers(&dir).unwrap()
+}
+
+fn declared(providers: &[ProviderData], vars: &[(&str, &str)]) -> Vec<std::path::PathBuf> {
+    let config = Setup::new().load(&[]).unwrap();
+    config
+        .credentials()
+        .credential_files(providers, &env_of(vars))
+}
+
+fn paths<const N: usize>(paths: [&str; N]) -> Vec<std::path::PathBuf> {
+    paths.map(std::path::PathBuf::from).to_vec()
+}
+
+#[test]
+fn the_shipped_bedrock_package_declares_the_aws_cli_files_as_credential_files() {
+    let bedrock = shipped("bedrock");
+    assert_eq!(
+        declared(&bedrock, &[("HOME", "/h")]),
+        paths([
+            "/h/.aws/cli/cache",
+            "/h/.aws/credentials",
+            "/h/.aws/sso/cache"
+        ])
+    );
+    // `AWS_SHARED_CREDENTIALS_FILE` moves the credentials file; the caches
+    // stay under the home.
+    assert_eq!(
+        declared(
+            &bedrock,
+            &[("HOME", "/h"), ("AWS_SHARED_CREDENTIALS_FILE", "/x/creds")]
+        ),
+        paths(["/h/.aws/cli/cache", "/h/.aws/sso/cache", "/x/creds"])
+    );
+}
+
+#[test]
+fn the_shipped_vertex_package_declares_the_gcloud_credential_files() {
+    let vertex = shipped("vertex");
+    let at_home = declared(&vertex, &[("HOME", "/h")]);
+    assert_eq!(
+        at_home,
+        paths([
+            "/h/.config/gcloud/access_tokens.db",
+            "/h/.config/gcloud/application_default_credentials.json",
+            "/h/.config/gcloud/credentials.db",
+            "/h/.config/gcloud/legacy_credentials",
+        ])
+    );
+    // The configurations hold properties, not credentials: no entry is,
+    // holds or sits above them.
+    for beside in [
+        "/h/.config/gcloud/configurations/config_default",
+        "/h/.config/gcloud/default_configs.db",
+    ] {
+        let beside = std::path::Path::new(beside);
+        assert!(
+            at_home
+                .iter()
+                .all(|p| !beside.starts_with(p) && !p.starts_with(beside)),
+            "{}",
+            beside.display()
+        );
+    }
+    assert_eq!(
+        declared(&vertex, &[("HOME", "/h"), ("CLOUDSDK_CONFIG", "/g")]),
+        paths([
+            "/g/access_tokens.db",
+            "/g/application_default_credentials.json",
+            "/g/credentials.db",
+            "/g/legacy_credentials",
+        ])
+    );
+}
+
+/// A provider whose `credential()` reads `entries` (a JSON array).
+fn reading(dir: &std::path::Path, name: &str, entries: &str) -> ProviderData {
+    let text = format!(
+        r#"{{"name":"{name}","credential_label":{{"names":"profile","default":"the environment","credential_paths":{entries}}},"models":[]}}"#
+    );
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(dir.join(format!("providers/{name}.json")), text).unwrap();
+    config::read_providers(dir).unwrap().remove(0)
+}
+
+fn one(entry: &str) -> config::CredentialPath {
+    let setup = Setup::new();
+    let data = reading(&setup.root().join("ext"), "p", &format!("[{entry}]"));
+    data.credential_from
+        .credential_paths()
+        .first()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_declared_path_takes_a_set_variable_and_expands_the_home() {
+    let entry = one(r#"{"env":"P_FILE","path":"~/.p/key"}"#);
+    let home = [("HOME", "/h")];
+    assert_eq!(entry.resolve(&env_of(&home)), Some("/h/.p/key".into()));
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h"), ("P_FILE", "")])),
+        Some("/h/.p/key".into()),
+        "an empty variable counts as unset"
+    );
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h"), ("P_FILE", "/x/key")])),
+        Some("/x/key".into())
+    );
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h"), ("P_FILE", "~/moved")])),
+        Some("/h/moved".into()),
+        "a variable's value expands the home too"
+    );
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h"), ("P_FILE", "../keys")])),
+        Some("../keys".into()),
+        "a relative value stays relative"
+    );
+    assert_eq!(
+        one(r#"{"path":"~"}"#).resolve(&env_of(&home)),
+        Some("/h".into())
+    );
+    assert_eq!(
+        one(r#"{"path":"~user/key"}"#).resolve(&env_of(&home)),
+        Some("~user/key".into()),
+        "only `~` and `~/` name the home"
+    );
+    assert_eq!(
+        one(r#"{"path":"/abs/key"}"#).resolve(&env_of(&[])),
+        Some("/abs/key".into())
+    );
+    assert_eq!(entry.resolve(&env_of(&[])), None, "HOME unset");
+    assert_eq!(entry.resolve(&env_of(&[("HOME", "")])), None, "HOME empty");
+    assert_eq!(one(r#"{"path":""}"#).resolve(&env_of(&home)), None);
+}
+
+#[test]
+fn a_declared_join_is_one_name_after_the_chosen_directory() {
+    let entry = one(r#"{"env":"P_DIR","join":"key.db","path":"~/.p"}"#);
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h")])),
+        Some("/h/.p/key.db".into())
+    );
+    assert_eq!(
+        entry.resolve(&env_of(&[("HOME", "/h"), ("P_DIR", "/g")])),
+        Some("/g/key.db".into())
+    );
+    for join in ["a/b", "..", ".", "", "/abs", "a/"] {
+        let entry = one(&format!(r#"{{"join":"{join}","path":"/p"}}"#));
+        assert_eq!(entry.resolve(&env_of(&[])), None, "join {join:?}");
+    }
+}
+
+#[test]
+fn declared_paths_join_the_configured_files_once() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {"work": {"file": "/h/.p/key"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let first = reading(
+        &setup.root().join("one"),
+        "p",
+        r#"[{"path":"~/.p/key"},{"path":"~/.p/cache"}]"#,
+    );
+    let second = reading(&setup.root().join("two"), "q", r#"[{"path":"~/.p/cache"}]"#);
+    let unknown = std::fs::write(
+        setup.root().join("one/providers/p.json"),
+        r#"{"name":"p","credential_label":{"names":"n","default":"d","credential_paths":[{"path":"/x","other":1}]},"models":[]}"#,
+    );
+    unknown.unwrap();
+    let err = config::read_providers(&setup.root().join("one")).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid, "an unknown field");
+    assert_eq!(
+        config
+            .credentials()
+            .credential_files(&[first, second, acme(None)], &env_of(&[("HOME", "/h")])),
+        paths(["/h/.p/cache", "/h/.p/key"])
+    );
+    assert_eq!(
+        files(&config, &[]),
+        paths(["/h/.p/key"]),
+        "a `file` source lists as before"
+    );
+}
+
+#[test]
+fn a_declared_path_resolves_as_a_call_path_does() {
+    use config::resolve_declared;
+    let setup = Setup::new();
+    let tmp = std::fs::canonicalize(setup.root()).unwrap();
+    setup.write(&tmp.join("other/sub/file"), "x");
+    symlink(tmp.join("other/sub"), tmp.join("link")).unwrap();
+    // An existing path through a link names its target.
+    assert_eq!(
+        resolve_declared(&tmp.join("link/file")),
+        tmp.join("other/sub/file")
+    );
+    assert_eq!(
+        resolve_declared(&tmp.join("other/sub/file")),
+        tmp.join("other/sub/file")
+    );
+    // A path that does not exist: its longest existing ancestor, then the rest.
+    assert_eq!(
+        resolve_declared(&tmp.join("link/new/key")),
+        tmp.join("other/sub/new/key")
+    );
+    // A `..` after a link leaves the link's target, not the link.
+    assert_eq!(
+        resolve_declared(&tmp.join("link/../keys")),
+        tmp.join("other/keys")
+    );
+    // A `..` after a name that does not exist removes that name.
+    assert_eq!(resolve_declared(&tmp.join("new/../keys")), tmp.join("keys"));
+    assert_eq!(resolve_declared(&tmp.join("new/./b")), tmp.join("new/b"));
+    let above = tmp.join(format!("new{}", "/..".repeat(64)));
+    assert_eq!(
+        resolve_declared(&above.join("x")),
+        std::path::Path::new("/x")
+    );
+    // A relative variable joins the workspace before any `..` resolves.
+    let workspace = tmp.join("proj");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let entry = one(r#"{"env":"AWS_SHARED_CREDENTIALS_FILE","path":"~/.aws/credentials"}"#);
+    let chosen = entry
+        .resolve(&env_of(&[("AWS_SHARED_CREDENTIALS_FILE", "../keys")]))
+        .unwrap();
+    assert_eq!(resolve_declared(&workspace.join(chosen)), tmp.join("keys"));
 }
