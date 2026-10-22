@@ -502,10 +502,21 @@ cold-cache rule; Linux stays at 20.
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror
 fails the step, not the job. A mirror that trickles bytes never goes silent, so
-the "Install zsh and fish" steps run `scripts/install-shells`: each download
-attempt (`apt-get update` and `apt-get install --download-only`) is bounded at
-90 s and retried once after 5 s, and the install from the downloaded archives is
-not bounded, because killing dpkg mid-unpack leaves the dpkg lock held.
+the "Install zsh and fish" steps run `scripts/install-shells`. In `ci.yml` and
+`mutants-scheduled.yml` each of them restores the `.deb` archives for zsh,
+zsh-common, fish, fish-common and xsel, with any dependencies downloaded beside
+them, from an Actions cache. The key holds the runner image (`ImageOS` and
+`ImageVersion`), the architecture and the package list; the install step clears
+the cache directory unless the restore reports an exact hit. On a hit the
+archives are installed with dpkg from the cached archives, with no network call;
+a dpkg failure fails the step, with no fallback to the network. On a miss each
+download attempt (`apt-get update` and `apt-get install --download-only`) is
+bounded at 90 s and retried after 5 s until it succeeds, apt resuming its
+partial downloads, and the step's 5-minute bound ends the retries. After the
+install passes, a save step stores the archives. Pull requests save this cache
+as well as `main`, unlike the build cache. The `release.yml` steps restore no
+cache and always download, with the same retry. The install is not bounded,
+because killing dpkg mid-unpack leaves the dpkg lock held.
 
 ## Waiting on CI
 
