@@ -36,31 +36,9 @@
           "args": [],
           "timeout": 10000,
           "on_failure": "blocking"
-        },
-        "says-hi": {
-          "point": "session_start",
-          "command": "probe",
-          "args": [],
-          "timeout": 10000,
-          "on_failure": "blocking"
         }
       }
     }
-  },
-  "host": {
-    "exec": [
-      {
-        "request": {
-          "program": "probe",
-          "args": []
-        },
-        "reply": {
-          "code": 0,
-          "stdout": "",
-          "stderr": ""
-        }
-      }
-    ]
   },
   "expect": [
     {
@@ -90,9 +68,6 @@
     },
     {
       "kind": "step_started"
-    },
-    {
-      "kind": "extension_exec"
     },
     {
       "kind": "assistant_message_started"
