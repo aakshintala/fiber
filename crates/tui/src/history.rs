@@ -4,6 +4,7 @@
 //! the hub's `prompt_history`, page by page (`docs/state.md`, "Prompt
 //! history").
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 use contract::SessionId;
@@ -44,6 +45,18 @@ struct Search {
     selected: usize,
 }
 
+/// The recall list built for one attached session: the entries and each
+/// one's lowercase form, in the same order.
+#[derive(Debug)]
+struct Recall {
+    /// The session the list was built for.
+    session: Option<SessionId>,
+    entries: Vec<String>,
+    /// `entries[i].to_lowercase()`, kept so a search never lowercases an
+    /// entry again.
+    lower: Vec<String>,
+}
+
 /// The recall list's sources, the paging state, browsing and search.
 #[derive(Debug, Default)]
 pub(super) struct History {
@@ -73,6 +86,9 @@ pub(super) struct History {
     cover: Option<Cover>,
     /// The Ctrl+R panel, while open.
     search: Option<Search>,
+    /// The recall list as last built; every write to `own` or `hub`
+    /// clears it, and a draw fills it from `&self`.
+    recall: RefCell<Option<Recall>>,
 }
 
 impl History {
@@ -81,6 +97,7 @@ impl History {
         if self.project != project {
             self.project = project;
             self.hub.clear();
+            *self.recall.get_mut() = None;
             self.pending = None;
             self.started = false;
             self.before = None;
@@ -100,14 +117,29 @@ impl History {
                 && sender.origin == Origin::Driver
             {
                 self.own.push((session.clone(), text(content)));
+                *self.recall.get_mut() = None;
             }
         }
     }
 
-    /// The recall list with `session` attached: its prompts newest first,
-    /// then the hub's lines from other sessions newest first. No empty
-    /// entry, and no text twice.
-    fn entries(&self, session: Option<&SessionId>) -> Vec<String> {
+    /// Reads the recall list with `session` attached, building it when none
+    /// is cached or the cached one is for another session: its prompts
+    /// newest first, then the hub's lines from other sessions newest first.
+    /// No empty entry, and no text twice. `read` must not call `recall`.
+    fn recall<T>(&self, session: Option<&SessionId>, read: impl FnOnce(&Recall) -> T) -> T {
+        let mut cache = self.recall.borrow_mut();
+        let list = cache
+            .take()
+            .filter(|list| list.session.as_ref() == session)
+            .unwrap_or_else(|| self.build(session));
+        let out = read(&list);
+        *cache = Some(list);
+        out
+    }
+
+    /// The recall list for `session`, built from `own` and `hub`.
+    fn build(&self, session: Option<&SessionId>) -> Recall {
+        crate::work::add(|work| work.recall_builds += 1);
         let own = self
             .own
             .iter()
@@ -120,10 +152,22 @@ impl History {
             .filter(|(from, _)| session.is_none_or(|attached| attached.0 != *from))
             .map(|(_, text)| text);
         let mut seen = HashSet::new();
-        own.chain(hub)
+        let entries: Vec<String> = own
+            .chain(hub)
             .filter(|text| !text.is_empty() && seen.insert(text.as_str()))
             .cloned()
-            .collect()
+            .collect();
+        let lower = entries.iter().map(|entry| entry.to_lowercase()).collect();
+        Recall {
+            session: session.cloned(),
+            entries,
+            lower,
+        }
+    }
+
+    /// The recall entry at `at` with `session` attached.
+    fn entry(&self, session: Option<&SessionId>, at: usize) -> Option<String> {
+        self.recall(session, |list| list.entries.get(at).cloned())
     }
 
     /// The search panel's matches: entries holding the query, ignoring
@@ -133,10 +177,14 @@ impl History {
             return Vec::new();
         };
         let query = search.query.to_lowercase();
-        self.entries(session)
-            .into_iter()
-            .filter(|entry| entry.to_lowercase().contains(&query))
-            .collect()
+        self.recall(session, |list| {
+            list.entries
+                .iter()
+                .zip(&list.lower)
+                .filter(|(_, lower)| lower.contains(&query))
+                .map(|(entry, _)| entry.clone())
+                .collect()
+        })
     }
 
     /// The next `prompt_history` line, when one may go out: the link is up,
@@ -197,6 +245,7 @@ impl History {
             return false;
         }
         self.pending = None;
+        *self.recall.get_mut() = None;
         let prompts = result
             .and_then(|result| result.get("prompts"))
             .and_then(Value::as_array);
@@ -432,10 +481,9 @@ impl App {
             lines.extend(self.history.fetch(up));
         }
         let next = self.history.browse.as_ref().map_or(0, |(at, _)| at + 1);
-        let entries = self.history.entries(self.session());
-        if let Some(entry) = entries.get(next) {
-            self.draft.set(entry);
-            self.history.browse = Some((next, entry.clone()));
+        if let Some(entry) = self.history.entry(self.session(), next) {
+            self.draft.set(&entry);
+            self.history.browse = Some((next, entry));
         } else {
             lines.extend(self.history.fetch(up));
             self.history.waiting = self.history.pending.is_some();
@@ -449,11 +497,10 @@ impl App {
         match self.history.browse.take() {
             Some((0, _)) | None => self.draft.clear(),
             Some((at, _)) => {
-                let entries = self.history.entries(self.session());
                 let at = at.saturating_sub(1);
-                if let Some(entry) = entries.get(at) {
-                    self.draft.set(entry);
-                    self.history.browse = Some((at, entry.clone()));
+                if let Some(entry) = self.history.entry(self.session(), at) {
+                    self.draft.set(&entry);
+                    self.history.browse = Some((at, entry));
                 } else {
                     self.draft.clear();
                 }

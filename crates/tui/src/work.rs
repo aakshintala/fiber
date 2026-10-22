@@ -1,11 +1,12 @@
 //! How much work folding and drawing did, counted on the calling thread:
 //! reply renders, row builds and page counts, with the index's page
-//! walks and the usage lines' turn lookups. The `paging` jig prints
-//! them beside its fold time, and tests assert them: a test of how much
-//! work something does counts the work (`docs/testing.md`). Each count
-//! is one thread-local add, nothing beside the work it counts, and every
-//! count has a test asserting its exact number, so no count survives
-//! that no test can tell apart.
+//! walks, the usage lines' turn lookups, the prompt recall lists built
+//! and the workspace paths lowercased for file search. The `paging` jig
+//! prints them beside its fold time, and tests assert them: a test of how
+//! much work something does counts the work (`docs/testing.md`). Each
+//! count is one thread-local add, nothing beside the work it counts, and
+//! every count has a test asserting its exact number, so no count
+//! survives that no test can tell apart.
 
 use std::cell::Cell;
 
@@ -38,6 +39,12 @@ pub struct Work {
     pub shell_visits: usize,
     /// Renderer calls: one per cache miss that called the renderer.
     pub renderer_calls: usize,
+    /// Prompt recall lists built: one per rebuild of the deduplicated list
+    /// and its lowercase keys.
+    pub recall_builds: usize,
+    /// Workspace listing paths lowercased for file search: one per path,
+    /// when the listing arrives.
+    pub path_lowercases: usize,
 }
 
 thread_local! {
