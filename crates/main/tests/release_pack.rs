@@ -104,6 +104,10 @@ impl Pack {
             .env("HOME", self.root.path())
             .env("TMPDIR", self.path("tmp"))
             .env("RELEASE_PACK_STATE", self.state())
+            // The publish job runs the draft flow from the asset directory
+            // outside any checkout, so the script learns the repository
+            // from GITHUB_REPOSITORY; GH_REPO stays unset (env_clear).
+            .env("GITHUB_REPOSITORY", "aakshintala/fiber")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         match stdin {
@@ -450,6 +454,45 @@ fn the_draft_flow_publishes_last() {
         .to_owned();
     assert!(create.contains("--draft"), "{create}");
     assert!(create.contains(&"a".repeat(40)), "{create}");
+}
+
+/// The draft flow works from outside any checkout: the run's directory is
+/// the test's temporary root, never a git repository, and `GH_REPO` is
+/// unset, so every `gh` call carries the repository from
+/// `GITHUB_REPOSITORY` instead of a git-remote lookup. The second version
+/// covers the delete kind, so every call kind carries the repository.
+#[test]
+fn the_draft_flow_outside_a_checkout_scopes_every_call_to_the_repo() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    let run = pack.pack(&["draft-begin", "1.2.3", &"a".repeat(40), &notes]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let asset = pack.wfile("out/fiber-docs.tar.gz", b"docs", 0o644);
+    let asset_name = asset.to_string_lossy().into_owned();
+    let run = pack.pack(&["draft-upload", "1.2.3", &asset_name]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let run = pack.pack(&["draft-publish", "1.2.3"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(pack.state().join("published-1.2.3").exists());
+    let run = pack.pack(&["draft-begin", "4.5.6", &"b".repeat(40), &notes]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let run = pack.pack(&["draft-delete", "4.5.6"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = pack.calls();
+    let mut kinds: Vec<_> = calls
+        .lines()
+        .filter_map(|line| line.split(' ').next())
+        .collect();
+    kinds.sort();
+    kinds.dedup();
+    assert_eq!(kinds, ["create", "delete", "edit", "upload", "view"]);
+    for line in calls.lines() {
+        assert!(
+            line.contains("repo=aakshintala/fiber"),
+            "a gh call left the repository: {line}"
+        );
+    }
 }
 
 #[test]

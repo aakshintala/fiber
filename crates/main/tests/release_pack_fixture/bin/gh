@@ -2,11 +2,29 @@
 # Stands in for gh in crates/main/tests/release_pack.rs: the test drives
 # the draft-publish-last flow against a state directory instead of the
 # GitHub API, so no request reaches the network. RELEASE_PACK_STATE names
-# the directory; every invocation is appended to calls.log there.
+# the directory; every invocation is appended to calls.log there. Like the
+# real gh outside a checkout, every call needs its repository: GH_REPO
+# wins, then -R/--repo, and a call with neither fails; each log line names
+# the repository the call carried.
 set -eu
 state=${RELEASE_PACK_STATE:?}
 log=$state/calls.log
 [ "${1:-}" = release ] || exit 64
+repo=${GH_REPO:-}
+if [ -z "$repo" ]; then
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = -R ] || [ "$prev" = --repo ]; then repo=$arg; fi
+    case $arg in
+      -R=* | --repo=*) repo=${arg#*=} ;;
+    esac
+    prev=$arg
+  done
+fi
+if [ -z "$repo" ]; then
+  printf 'gh: no repository: set GH_REPO or pass -R/--repo\n' >&2
+  exit 1
+fi
 sub=${2:-}
 tag=
 for arg in "$@"; do
@@ -18,12 +36,12 @@ done
 version=${tag#v}
 case $sub in
   view)
-    printf 'view %s\n' "$tag" >> "$log"
+    printf 'view %s repo=%s\n' "$tag" "$repo" >> "$log"
     if [ -f "$state/published-$version" ]; then printf 'false\n'; exit 0; fi
     if [ -f "$state/draft-$version" ]; then printf 'true\n'; exit 0; fi
     exit 1 ;;
   create)
-    printf 'create %s %s\n' "$tag" "$*" >> "$log"
+    printf 'create %s %s repo=%s\n' "$tag" "$*" "$repo" >> "$log"
     [ ! -f "$state/published-$version" ] || exit 1
     target=
     notes=
@@ -36,7 +54,7 @@ case $sub in
     printf '%s\n' "$target" > "$state/draft-$version"
     if [ -n "$notes" ]; then cp "$notes" "$state/notes-$version"; fi ;;
   upload)
-    printf 'upload %s %s\n' "$tag" "$*" >> "$log"
+    printf 'upload %s %s repo=%s\n' "$tag" "$*" "$repo" >> "$log"
     [ -f "$state/draft-$version" ] || exit 1
     for arg in "$@"; do
       case $arg in
@@ -49,11 +67,11 @@ case $sub in
       esac
     done ;;
   edit)
-    printf 'edit %s %s\n' "$tag" "$*" >> "$log"
+    printf 'edit %s %s repo=%s\n' "$tag" "$*" "$repo" >> "$log"
     [ -f "$state/draft-$version" ] || exit 1
     mv "$state/draft-$version" "$state/published-$version" ;;
   delete)
-    printf 'delete %s %s\n' "$tag" "$*" >> "$log"
+    printf 'delete %s %s repo=%s\n' "$tag" "$*" "$repo" >> "$log"
     case $* in
       *--cleanup-tag*) ;;
       *) exit 1 ;;
