@@ -88,6 +88,11 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         "ABSENT",
         ABSENT,
     ),
+    kept(
+        "crates/net/src/websocket/tls_tests.rs",
+        "NO_DATA_AFTER_REJECTION",
+        ABSENT,
+    ),
     held("crates/cli/src/extension_test_tests.rs", "held by #3103"),
     held("crates/extensions/src/hooks_tests.rs", "held by #3028"),
     held("crates/extensions/src/host_tests.rs", "held by #3028"),
