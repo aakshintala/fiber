@@ -111,7 +111,7 @@ groups, then the flags and examples.
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
-| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. |
+| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one notice per provider and missing setting on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;

@@ -219,7 +219,22 @@ fn run(
     // and the process environment serves, as before.
     let lookup = crate::hub_env::placeholder_lookup(home, &providers, clock.as_ref());
     notices.extend(providers.add_session(&extensions, &config, run, &lookup));
-    notices.extend(providers.fill_placeholders(&config, &lookup)?);
+    // A search selects rows and counts the models a placeholder with no
+    // value leaves out by the one rule: an ASCII-case-insensitive
+    // substring of `provider/model`.
+    let needle = search.map(|search| search.to_ascii_lowercase());
+    let listed = |reference: &str| {
+        needle
+            .as_ref()
+            .is_none_or(|needle| reference.to_ascii_lowercase().contains(needle))
+    };
+    let (not_hosts, unconfigured) = providers.fill_placeholders_grouped(&config, &lookup)?;
+    notices.extend(not_hosts);
+    notices.extend(
+        unconfigured
+            .iter()
+            .filter_map(|group| group.notice(&listed)),
+    );
     crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:
@@ -239,7 +254,6 @@ fn run(
         writeln!(err, "{NO_PROVIDER}").map_err(CliError::StandardError)?;
         return Ok(());
     }
-    let needle = search.map(|search| search.to_ascii_lowercase());
     let default = config
         .get("model", None)
         .and_then(|(value, _)| value.as_str().map(str::to_owned))
@@ -253,9 +267,7 @@ fn run(
         };
         for model in &provider.models {
             let reference = format!("{name}/{}", model.id);
-            if let Some(needle) = &needle
-                && !reference.to_ascii_lowercase().contains(needle)
-            {
+            if !listed(&reference) {
                 continue;
             }
             let is_default = !marked && default.as_ref().is_some_and(|d| d == &reference);

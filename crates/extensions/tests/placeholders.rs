@@ -873,3 +873,137 @@ fn the_first_bad_placeholder_in_template_order_is_reported() {
         notices[0].message
     );
 }
+
+/// Installs three providers: `a` with one model on its unset `zone`; `b`
+/// with models on its unset `workspace` and `region`, one on both (region
+/// first), one plain, and one on `host`, whose value is not a host; and
+/// `c`, whose `zone` is set. Returns the loaded providers and the
+/// configuration.
+fn grouped_fixture() -> (Setup, config::Config) {
+    let setup = Setup::new();
+    let a = provider_with(
+        "a",
+        json!([model("m", "https://{zone}/v1")]),
+        json!({"zone": {}}),
+    );
+    let b = provider_with(
+        "b",
+        json!([
+            model("m1", "https://{workspace}/v1"),
+            model("plain", "http://127.0.0.1:1/v1"),
+            model("m2", "https://{workspace}/v1"),
+            model("r1", "https://{region}/v1"),
+            model("both", "https://{region}.{workspace}/v1"),
+            model("bad", "https://{host}/v1"),
+        ]),
+        json!({"workspace": {}, "region": {}, "host": {}}),
+    );
+    let c = provider_with(
+        "c",
+        json!([model("m", "https://{zone}/v1")]),
+        json!({"zone": {}}),
+    );
+    for (name, data) in [("a", a), ("b", b), ("c", c)] {
+        let source = setup.source(name, &manifest(name), &[data]);
+        install(&setup.home(), &source, "0.1.0").unwrap();
+    }
+    write(&setup.home().join("config/b.json"), r#"{"host":"x/y"}"#);
+    write(
+        &setup.home().join("config/c.json"),
+        r#"{"zone":"c.example"}"#,
+    );
+    let cfg = config(&setup, &[]);
+    (setup, cfg)
+}
+
+/// Each provider's kept model ids, by provider.
+fn kept(providers: &Providers) -> Vec<(String, Vec<String>)> {
+    providers
+        .names()
+        .map(|name| {
+            let ids = providers
+                .get(name)
+                .unwrap()
+                .models
+                .iter()
+                .map(|model| model.id.clone())
+                .collect();
+            (name.to_owned(), ids)
+        })
+        .collect()
+}
+
+#[test]
+fn grouped_fill_gives_one_entry_per_provider_and_unset_setting() {
+    let (setup, cfg) = grouped_fixture();
+    let (mut providers, _) = Providers::load(&setup.home()).unwrap();
+    let env = env_of(&[]);
+    let (notices, groups) = providers
+        .fill_placeholders_grouped(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    let entries: Vec<(&str, &str, &[String])> = groups
+        .iter()
+        .map(|group| (group.provider(), group.setting(), group.models()))
+        .collect();
+    let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        entries,
+        [
+            ("a", "zone", ids(&["m"]).as_slice()),
+            ("b", "region", ids(&["r1", "both"]).as_slice()),
+            ("b", "workspace", ids(&["m1", "m2"]).as_slice()),
+        ]
+    );
+    // Only the value that is not a host keeps its per-model notice.
+    let messages: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            "The model `b/bad` needs the setting `host` for its base URL, \
+          whose value is not a host."
+        ]
+    );
+    assert_eq!(
+        kept(&providers),
+        [
+            ("a".to_owned(), vec![]),
+            ("b".to_owned(), ids(&["plain"])),
+            ("c".to_owned(), ids(&["m"])),
+        ]
+    );
+}
+
+#[test]
+fn grouped_fill_leaves_out_and_records_what_the_per_model_fill_does() {
+    let (setup, cfg) = grouped_fixture();
+    let env = env_of(&[]);
+    let (mut grouped, _) = Providers::load(&setup.home()).unwrap();
+    grouped
+        .fill_placeholders_grouped(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    let (mut each, _) = Providers::load(&setup.home()).unwrap();
+    let notices = each
+        .fill_placeholders(&cfg, &|name| env.get(name).cloned())
+        .unwrap();
+    assert_eq!(notices.len(), 6, "{notices:?}");
+    assert_eq!(kept(&grouped), kept(&each));
+    for reference in ["a/m", "b/m1", "b/m2", "b/r1", "b/both", "b/bad"] {
+        let from_grouped = grouped.resolve(reference).unwrap_err();
+        let from_each = each.resolve(reference).unwrap_err();
+        assert_eq!(from_grouped.code(), ErrorCode::ModelUnconfigured);
+        assert_eq!(from_grouped.to_string(), from_each.to_string());
+        assert!(
+            from_grouped.to_string().contains(&format!("`{reference}`")),
+            "{from_grouped}"
+        );
+    }
+    assert_eq!(
+        grouped.resolve("b/m1").unwrap_err().to_string(),
+        "The model `b/m1` needs the setting `workspace` for its base URL, \
+         which has no value. Run `fiber login b`, or set `workspace` in \
+         `config/b.json` in Fiber home."
+    );
+}
