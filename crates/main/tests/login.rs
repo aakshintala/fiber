@@ -346,6 +346,9 @@ struct Screen {
     chunks: Receiver<String>,
     typed: fs::File,
     seen: String,
+    /// The end of the last match: the next wait searches from here, so
+    /// text read past a match stays for the next wait.
+    consumed: usize,
     deadline: Deadline,
 }
 
@@ -365,16 +368,21 @@ impl Screen {
             chunks,
             typed: fs::File::from(terminal.main.try_clone().unwrap()),
             seen: String::new(),
+            consumed: 0,
             deadline,
         }
     }
 
-    /// Reads until `text` has appeared, and returns everything read since
-    /// the last wait.
+    /// Reads until `text` has appeared after the last match, and returns
+    /// everything read since the last wait. Bytes read past this match stay
+    /// for the next wait.
     #[track_caller]
     fn wait_for(&mut self, text: &str) -> String {
-        let mark = self.seen.len();
-        while !self.seen[mark..].contains(text) {
+        let mark = self.consumed;
+        let end = loop {
+            if let Some(at) = self.seen[mark..].find(text) {
+                break mark + at + text.len();
+            }
             // Each chunk has the deadline: a terminal that goes quiet fails.
             match self.deadline.recv(&self.chunks) {
                 Ok(chunk) => self.seen.push_str(&chunk),
@@ -391,7 +399,8 @@ impl Screen {
                     )
                 }
             }
-        }
+        };
+        self.consumed = end;
         self.seen[mark..].to_owned()
     }
 
@@ -1694,6 +1703,34 @@ fn list_models(setup: &Setup) -> Output {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     setup.run_piped(&mut command, &["models"], "")
+}
+
+#[test]
+fn screen_wait_for_keeps_trailing_text_for_the_next_wait() {
+    // One read holds both prompts. The second wait must find its text
+    // already received, with no further chunk: the sender stays open, so a
+    // wait for bytes that never come times out instead of disconnecting.
+    let terminal = Terminal::open();
+    let (send, chunks) = mpsc::channel();
+    send.send("fiber: stored credentials/acme/default\r\nReviewer, by number or name: ".to_owned())
+        .unwrap();
+    let mut screen = Screen {
+        chunks,
+        typed: fs::File::from(terminal.main.try_clone().unwrap()),
+        seen: String::new(),
+        consumed: 0,
+        deadline: Deadline::after(std::time::Duration::from_secs(5)),
+    };
+    let first = screen.wait_for("fiber: stored credentials/acme/default");
+    assert!(
+        first.contains("fiber: stored credentials/acme/default"),
+        "{first:?}"
+    );
+    let second = screen.wait_for("Reviewer, by number or name: ");
+    assert!(
+        second.contains("Reviewer, by number or name: "),
+        "{second:?}"
+    );
 }
 
 #[test]
