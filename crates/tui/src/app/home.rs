@@ -267,16 +267,6 @@ impl App {
             .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
     }
 
-    /// Whether a home modal holds the keyboard: the quit question, the
-    /// delete question, the import offer, or the workspace picker.
-    #[cfg(test)]
-    pub(crate) fn home_modal(&self) -> bool {
-        self.on_home()
-            && self.home.as_ref().is_some_and(|home| {
-                home.questions.prompt().is_some() || home.chooser.picker().is_some()
-            })
-    }
-
     /// The session list's scroll offset: what the frame's window
     /// starts at, after clamping it to the rows past the window.
     pub(crate) fn home_list_scroll(&self) -> usize {
@@ -828,19 +818,6 @@ impl App {
                 .home
                 .as_ref()
                 .is_some_and(|home| home.chooser.picker().is_some())
-    }
-
-    /// A key for home's open question: it takes every key first.
-    pub(in crate::app) fn home_question_key(&mut self, key: &Key) -> Option<Effect> {
-        self.question_key(key)
-    }
-
-    /// A key for home's open workspace picker: typing, completing,
-    /// moving, choosing and closing it, while Ctrl+C passes through and
-    /// anything else is swallowed so the draft keeps nothing typed into
-    /// the picker.
-    pub(in crate::app) fn home_picker_key(&mut self, key: &Key) -> Option<Effect> {
-        self.picker_key(key)
     }
 
     /// A key for home's own screen, once no question or picker holds

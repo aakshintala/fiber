@@ -3023,21 +3023,6 @@ mod stacked {
         }
     }
 
-    /// The surface Esc closes with `first` and `second` open: the head,
-    /// except that the notice overlay closes ahead of the offer, the search
-    /// results and the search bar.
-    fn esc_closes(first: Surface, second: Surface) -> Surface {
-        let head = first.min(second);
-        let other = first.max(second);
-        if other == Surface::Notice
-            && matches!(head, Surface::Offer | Surface::Results | Surface::Find)
-        {
-            Surface::Notice
-        } else {
-            head
-        }
-    }
-
     /// Every ordered pair of `set`, with a fresh app from `make` holding
     /// both open.
     fn pairs(set: &[Surface], make: fn() -> App) -> Vec<(Surface, Surface, App)> {
@@ -3099,7 +3084,15 @@ mod stacked {
             (&ON_HOME[..], home_app as fn() -> App),
         ] {
             for (first, second, mut app) in pairs(set, make) {
-                let closes = esc_closes(first, second);
+                // The head, except that the notice overlay closes ahead of
+                // a head that yields its Esc to it.
+                let head = first.min(second);
+                let closes = if first.max(second) == Surface::Notice && head.yields_esc_to_notice()
+                {
+                    Surface::Notice
+                } else {
+                    head
+                };
                 assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
                 let listed = app.top_surfaces();
                 assert!(
@@ -3190,6 +3183,27 @@ mod stacked {
     }
 
     #[test]
+    fn the_report_draws_above_a_swapped_view_on_home() {
+        let mut app = home_app();
+        for ch in "/keys".chars() {
+            app.on_key(Key::Char(ch), now());
+        }
+        app.on_key(Key::Enter, now());
+        assert!(app.keys_screen_open());
+        open(&mut app, Surface::Report);
+        assert_eq!(app.top_surface(), Surface::Report);
+        let title = app
+            .import_report()
+            .map(|report| report.title().to_owned())
+            .unwrap_or_default();
+        assert!(!title.is_empty());
+        let text = shown(&app);
+        assert!(text.contains(&title), "{text}");
+        open(&mut app, Surface::Quit);
+        assert!(shown(&app).contains("leave them running"));
+    }
+
+    #[test]
     fn the_wheel_over_the_notice_frame_leaves_the_conversation_and_beside_it_scrolls() {
         let mut app = long_session();
         open(&mut app, Surface::Notice);
@@ -3277,9 +3291,15 @@ mod stacked {
 
     #[test]
     fn a_frame_not_open_has_no_slab() {
-        let app = long_session();
+        let mut app = long_session();
         assert!(crate::view::frame_of(&app, Surface::Quit).is_empty());
         assert!(crate::view::frame_of(&app, Surface::Notice).is_empty());
+        // Open, each frame has a slab, so the empty ones above are not a
+        // frame that never gets found.
+        open(&mut app, Surface::Quit);
+        open(&mut app, Surface::Notice);
+        assert!(!crate::view::frame_of(&app, Surface::Quit).is_empty());
+        assert!(!crate::view::frame_of(&app, Surface::Notice).is_empty());
     }
 
     /// A home app on a short screen, so its list has rows past its window.

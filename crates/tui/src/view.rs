@@ -169,11 +169,15 @@ pub(crate) fn render(
         notice_rows::overlay(app, area, buf, &mut targets);
         let mut rows_bottom = area.bottom();
         notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);
-        // The quit question takes every key over these views, so it
-        // draws over them too: without it Enter would quit while the
-        // choices never show.
-        if app.top_surface() == Surface::Quit {
-            quit::draw(app, area, buf, &mut targets);
+        // The import report and the quit question take every key over
+        // these views, so they draw over them too, the quit question
+        // last: without it Enter would quit while the choices never show.
+        for surface in app.top_surfaces().into_iter().rev() {
+            if surface == Surface::Report {
+                crate::import_report::draw_report(app, area, buf, &mut targets);
+            } else if surface == Surface::Quit {
+                quit::draw(app, area, buf, &mut targets);
+            }
         }
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {

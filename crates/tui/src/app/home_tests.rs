@@ -2329,7 +2329,7 @@ fn ctrl_c_passes_through_the_picker() {
     let mut app = home();
     three_workspaces(&mut app);
     open_on_recents(&mut app);
-    assert_eq!(app.home_picker_key(&Key::CtrlC), None);
+    assert_eq!(app.picker_key(&Key::CtrlC), None);
     assert!(picker(&app).is_some());
 }
 

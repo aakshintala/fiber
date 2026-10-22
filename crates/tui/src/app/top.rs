@@ -58,7 +58,7 @@ impl Surface {
     /// The `/keys` screen yields the same way in `on_press`, and the
     /// conversation's focus inside its own arm, because it runs
     /// `cancel_pending_turn` after the overlay closes.
-    fn yields_esc_to_notice(self) -> bool {
+    pub(in crate::app) fn yields_esc_to_notice(self) -> bool {
         matches!(self, Surface::Offer | Surface::Results | Surface::Find)
     }
 }
@@ -191,8 +191,8 @@ impl App {
                 .or_else(|| self.config_view_key(key)),
             Surface::ConfigView => self.config_view_key(key),
             Surface::SessionView => self.session_view_key(key),
-            Surface::DeleteQuestion => self.home_question_key(key),
-            Surface::WorkspacePicker => self.home_picker_key(key),
+            Surface::DeleteQuestion => self.question_key(key),
+            Surface::WorkspacePicker => self.picker_key(key),
             Surface::Panel => match self.queue.on_key(key) {
                 Some(PanelKey::Handled) => Some(Effect::None),
                 Some(PanelKey::Answer) => Some(self.answer()),
