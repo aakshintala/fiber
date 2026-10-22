@@ -557,7 +557,7 @@ jobs:
           sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools time
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: release
+          shared-key: release-cold-probe-1212-20261022
           save-if: ${{ github.event_name == 'push' }}
       - name: Find the base commit
         if: github.event_name == 'pull_request'
@@ -570,7 +570,7 @@ jobs:
           # cache service takes 10 keys, so the base's own and 9 of these.
           {
             echo "ancestors<<EOF"
-            git rev-list --first-parent --skip=1 -n 9 "$commit" | sed 's/^/release-musl-/'
+            git rev-list --first-parent --skip=1 -n 9 "$commit" | sed 's/^/release-musl-cold-probe-1212-20261022-/'
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       # The base's own key first, then its ancestors' in order, each a full
@@ -583,7 +583,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/release/cache
-          key: release-musl-${{ steps.base.outputs.commit }}
+          key: release-musl-cold-probe-1212-20261022-${{ steps.base.outputs.commit }}
           restore-keys: ${{ steps.base.outputs.ancestors }}
       - name: scripts/release-size
         env:
