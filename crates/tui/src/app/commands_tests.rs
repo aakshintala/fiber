@@ -278,41 +278,220 @@ fn other_session_line(kind: &str, payload: Value) -> Line {
     line
 }
 
+/// A valid import `result`: one copied server, nothing left behind.
+fn import_result() -> Value {
+    json!({
+        "imported": {
+            "mcp_servers": ["alpha"],
+            "skills": [],
+            "commands": [],
+            "instructions": [],
+        },
+        "left_behind": [],
+    })
+}
+
 #[test]
-fn an_accept_for_another_session_settles_the_import_silently() {
+fn an_accept_for_another_session_opens_the_report() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
     let report = || {
         json!({
             "command_id": id,
-            "result": {
-                "imported": {
-                    "mcp_servers": ["alpha"],
-                    "skills": [],
-                    "commands": [],
-                    "instructions": [],
-                },
-                "left_behind": [],
-            },
+            "result": import_result(),
         })
     };
-    // An accept arriving after leaving the session opens no report
-    // and adds no notice; its source entry goes with its pending
-    // entry, so a later duplicate back in the session changes
-    // nothing either.
+    // An accept arriving on another session opens the report there:
+    // the answer settles the pending entry whatever surface shows.
     assert!(
         app.on_line(other_session_line("command_accepted", report()))
             .is_empty()
     );
-    assert!(app.import_report().is_none());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
     assert!(app.notices().is_empty());
+    // Esc closes the report; a duplicate accept back in the session
+    // finds no pending entry, so it opens nothing and adds no notice.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
     assert!(
         app.on_line(session_line("command_accepted", report()))
             .is_empty()
     );
     assert!(app.import_report().is_none());
     assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_malformed_accepted_import_adds_one_notice_and_opens_no_report() {
+    // Each `result` below carries no import report: a missing result,
+    // a null one, a valid other command's result, and a shape no
+    // command answers with (which fails the typed accept parse).
+    let stubs = [
+        json!({}),
+        json!({"result": null}),
+        json!({"result": {"tools": []}}),
+        json!({"result": {"unrelated": true}}),
+    ];
+    for stub in &stubs {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, "/import codex"));
+        let id = lines[0]["id"].clone();
+        let mut payload = stub.clone();
+        payload["command_id"] = id.clone();
+        if payload["result"] == json!({"unrelated": true}) {
+            // The foreign shape fails the typed accept parse, so the
+            // settle reads the raw payload.
+            assert!(
+                serde_json::from_value::<contract::events::CommandAccepted>(payload.clone())
+                    .is_err()
+            );
+        }
+        assert!(
+            app.on_line(session_line("command_accepted", payload))
+                .is_empty()
+        );
+        // One notice naming the refusal, no report, and the pending
+        // entry closes: a later valid accept for the id changes
+        // nothing and adds nothing.
+        assert_eq!(app.notices().len(), 1);
+        assert_eq!(app.notice(), Some("rejected"));
+        assert!(app.import_report().is_none());
+        assert!(app.outbox.pending.is_empty());
+        let late = session_line(
+            "command_accepted",
+            json!({"command_id": id, "result": import_result()}),
+        );
+        assert!(app.on_line(late).is_empty());
+        assert!(app.import_report().is_none());
+        assert_eq!(app.notices().len(), 1);
+    }
+}
+
+#[test]
+fn a_malformed_accept_for_another_session_adds_one_notice() {
+    let stubs = [
+        json!({}),
+        json!({"result": null}),
+        json!({"result": {"tools": []}}),
+        json!({"result": {"unrelated": true}}),
+    ];
+    for stub in &stubs {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, "/import codex"));
+        let id = lines[0]["id"].clone();
+        let mut payload = stub.clone();
+        payload["command_id"] = id.clone();
+        assert!(
+            app.on_line(other_session_line("command_accepted", payload))
+                .is_empty()
+        );
+        assert_eq!(app.notices().len(), 1);
+        assert_eq!(app.notice(), Some("rejected"));
+        assert!(app.import_report().is_none());
+        assert!(app.outbox.pending.is_empty());
+    }
+}
+
+#[test]
+fn an_accept_after_going_home_opens_the_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    app.go_home();
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.notices().is_empty());
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn opening_the_report_closes_the_slash_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    // Esc closes the report and leaves no panel behind; the draft
+    // is untouched.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "/");
+}
+
+#[test]
+fn opening_the_report_closes_the_at_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    app.on_files(app.generation(), Ok(vec!["a.rs".to_owned()]));
+    assert!(app.completions().is_some());
+    assert!(app.files_open());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "@");
+}
+
+#[test]
+fn opening_the_report_closes_the_theme_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    type_text(&mut app, "/theme ");
+    assert!(app.completions().is_some());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "/theme ");
 }
 
 #[test]
