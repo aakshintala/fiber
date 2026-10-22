@@ -374,3 +374,49 @@ fn an_allowance_for_a_file_outside_the_scan_is_ignored() {
         "{failures:?}"
     );
 }
+
+#[test]
+fn a_method_only_name_as_a_free_call_is_not_flagged() {
+    for call in [
+        "set_read_timeout(Some(Duration::from_secs(2)))",
+        "set_write_timeout(Some(Duration::from_secs(2)))",
+        "wait_timeout(guard, Duration::from_secs(5))",
+        "wait_timeout_while(guard, Duration::from_secs(5), |_| false)",
+    ] {
+        assert!(!flagged(&format!("fn a() {{ {call}; }}")), "{call}");
+    }
+}
+
+#[test]
+fn a_from_call_on_another_type_or_not_parenthesised_is_not_a_duration() {
+    assert!(!flagged("fn a() { Deadline::after(Other::from_secs(5)); }"));
+    assert!(!flagged(
+        "fn a() { Deadline::after(Other::from_millis(1_500)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(Duration::from_secs[5]); }"
+    ));
+}
+
+#[test]
+fn a_bound_with_an_integer_suffix_is_its_value_and_a_float_is_not() {
+    assert!(flagged(
+        "fn a() { Deadline::after(Duration::from_secs(5u64)); }"
+    ));
+    assert!(flagged(
+        "fn a() { Deadline::after(Duration::from_millis(1_500i32)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(Duration::from_secs(5.0)); }"
+    ));
+}
+
+#[test]
+fn a_prefix_that_is_not_ident_double_colon_segments_is_not_a_path() {
+    assert!(!flagged(
+        "fn a() { Deadline::after(a.b.c.Duration::from_secs(5)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(a:b Duration::from_secs(5)); }"
+    ));
+}

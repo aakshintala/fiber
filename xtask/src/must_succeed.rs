@@ -317,7 +317,7 @@ fn const_site(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
     if !is_ident(trees.get(eq - 1), "Duration") {
         return None;
     }
-    let end = (eq + 1..trees.len())
+    let end = (eq..trees.len())
         .find(|&j| is_punct(trees.get(j), ';'))
         .unwrap_or(trees.len());
     let ms = duration_ms(trees.get(eq + 1..end)?)?;
