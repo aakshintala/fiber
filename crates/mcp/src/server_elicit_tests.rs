@@ -108,7 +108,15 @@ fn await_response(shared: &super::Shared, id: u64) {
             .wait_timeout_while(state, wait.left(), |state| state.seq == view.seq)
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(state);
-        assert!(!timeout.timed_out(), "a response lands within {WITHIN:?}");
+        if timeout.timed_out() {
+            // The slot can fill between the timeout and the relock, so the
+            // slot, not the timeout, decides.
+            assert!(
+                shared.view(id, &super::NoCancel).response.is_some(),
+                "a response lands within {WITHIN:?}"
+            );
+            return;
+        }
     }
 }
 
