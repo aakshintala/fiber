@@ -340,6 +340,38 @@ fn the_model_is_chosen_resumed_first_then_configuration() {
 }
 
 #[test]
+fn a_persistent_default_does_not_beat_the_recorded_model() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("openai", provider("openai", &["a", "b", "c"]))]);
+    write(
+        &setup.home().join("config.json"),
+        r#"{"model": "openai/a"}"#,
+    );
+    let global = config(&setup, &[]);
+    assert_eq!(
+        providers
+            .choose(Some("openai/c"), &global)
+            .unwrap()
+            .reference(),
+        "openai/c"
+    );
+}
+
+#[test]
+fn a_per_run_model_beats_the_recorded_model() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("openai", provider("openai", &["a", "b", "c"]))]);
+    let flag = config(&setup, &["model=openai/b"]);
+    assert_eq!(
+        providers
+            .choose(Some("openai/c"), &flag)
+            .unwrap()
+            .reference(),
+        "openai/b"
+    );
+}
+
+#[test]
 fn nothing_choosing_a_model_is_no_model() {
     let setup = Setup::new();
     let providers = installed(&setup, &[("openai", provider("openai", &["a"]))]);

@@ -451,7 +451,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
 }
 
 #[test]
-fn the_logs_last_model_beats_the_flag_and_the_default() {
+fn resume_flag_beats_the_logs_last_model() {
     let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_models(&server, &["m1", "m2"], "fake/m1");
@@ -508,11 +508,123 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
             "fiber_exited",
         ]
     );
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "fake/m1");
+    assert_eq!(built["payload"]["reason"], "resume");
+
+    let requests: Vec<Request> = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("\"model\":\"m1\""), "{body}");
+}
+
+#[test]
+fn resume_without_flag_keeps_recorded_model() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_models(&server, &["m1", "m2"], "fake/m1");
+    hand_built(&setup, "s_model1", vec![]);
+    // The session used `fake/m2` before the crash.
+    {
+        let sessions = setup.sessions();
+        let log = log::Log::open(
+            &sessions,
+            SessionId("s_model1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
+        log.append(
+            &Event::ModelChanged(contract::events::ModelChanged {
+                before: contract::events::ModelSettings {
+                    model: "fake/m1".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
+                },
+                after: contract::events::ModelSettings {
+                    model: "fake/m2".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
+                },
+                source: contract::events::SwitchSource::Driver,
+            }),
+            Some(t()),
+            Some(a("a_1")),
+        )
+        .unwrap();
+    }
+
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_model1", "two"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "fake/m2");
 
     let requests: Vec<Request> = server.requests();
     assert_eq!(requests.len(), 1);
     let body = String::from_utf8_lossy(&requests[0].body);
     assert!(body.contains("\"model\":\"m2\""), "{body}");
+}
+
+#[test]
+fn resume_with_c_model_beats_the_logs_last_model() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_models(&server, &["m1", "m2"], "fake/m1");
+    hand_built(&setup, "s_model1", vec![]);
+    // The session used `fake/m2` before the crash.
+    {
+        let sessions = setup.sessions();
+        let log = log::Log::open(
+            &sessions,
+            SessionId("s_model1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
+        log.append(
+            &Event::ModelChanged(contract::events::ModelChanged {
+                before: contract::events::ModelSettings {
+                    model: "fake/m1".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
+                },
+                after: contract::events::ModelSettings {
+                    model: "fake/m2".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
+                },
+                source: contract::events::SwitchSource::Driver,
+            }),
+            Some(t()),
+            Some(a("a_1")),
+        )
+        .unwrap();
+    }
+
+    let run =
+        setup.run_in_workspace(&["ask", "--resume", "s_model1", "-c", "model=fake/m1", "two"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "fake/m1");
+
+    let requests: Vec<Request> = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("\"model\":\"m1\""), "{body}");
 }
 
 #[test]
