@@ -3118,3 +3118,25 @@ fn a_plain_up_with_an_item_open_leaves_a_focused_card_alone() {
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
     assert!(app.item_open());
 }
+
+#[test]
+fn down_moves_a_focused_rail_with_nothing_on_top() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    let before = rail_focus(&app);
+    assert!(before.is_some(), "the rail has focus");
+    assert_eq!(press(&mut app, Key::Down), Effect::None);
+    assert_ne!(rail_focus(&app), before, "the focus moved to the next stop");
+}
+
+#[test]
+fn down_leaves_a_focused_rail_alone_with_the_approval_panel_open() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    app.on_line(permission(A, "r_1"));
+    assert_eq!(app.top_surface(), crate::app::Surface::Panel);
+    let before = rail_focus(&app);
+    assert!(before.is_some(), "the rail keeps its focus");
+    press(&mut app, Key::Down);
+    assert_eq!(rail_focus(&app), before);
+}

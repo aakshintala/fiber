@@ -2961,3 +2961,447 @@ fn an_older_chunk_ending_at_the_named_point_is_accepted() {
         "the crossing lands on the ancestor's first line"
     );
 }
+
+/// The surfaces on top: two open in either order give the same keys,
+/// Esc, wheel and drawn top frame (`docs/tui.md`, "Keys", "Overlays").
+mod stacked {
+    use super::{id, rendered, turn};
+    use crate::app::top::tests::{
+        ON_HOME, ON_SESSION, SESSION, home_app, open, session_app, stacked,
+    };
+    use crate::app::{App, Effect, Surface};
+    use crate::keys::{Key, Mouse, MouseKind};
+    use crate::stroke::Stroke;
+    use contract::clock::Clock;
+
+    /// A session app with a conversation long enough to scroll.
+    fn long_session() -> App {
+        let mut app = session_app();
+        let mut seq = 0;
+        for at in 0..40 {
+            for next in turn(&mut seq, &format!("a_m{at}"), "a one-line reply") {
+                app.on_line(next);
+            }
+        }
+        assert_eq!(app.top(), None, "following the bottom");
+        assert_eq!(app.session(), Some(&id(SESSION)));
+        app
+    }
+
+    fn now() -> std::time::Instant {
+        fakes::clock::FakeClock::new().now()
+    }
+
+    fn wheel(col: u16, row: u16, down: bool) -> Mouse {
+        Mouse {
+            kind: if down {
+                MouseKind::WheelDown
+            } else {
+                MouseKind::WheelUp
+            },
+            col,
+            row,
+        }
+    }
+
+    /// Presses the stroke `name` names, the way the terminal's keys arrive.
+    fn press(app: &mut App, name: &str) -> Effect {
+        let stroke = Stroke::parse(name).unwrap_or_else(|err| panic!("{name}: {err}"));
+        app.on_press(stroke, now())
+    }
+
+    #[test]
+    fn a_character_reaches_the_draft_only_through_the_notice_overlay_and_completions() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, mut app) in stacked(set, make) {
+                let head = app.top_surface();
+                let before = app.draft();
+                press(&mut app, "x");
+                // A completion panel leaves the character to a tty job below it.
+                let types = matches!(head, Surface::Notice | Surface::Completion)
+                    && !app.top_surfaces().contains(&Surface::Job);
+                assert_eq!(app.draft() != before, types, "{first:?} then {second:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn no_other_key_closes_the_notice_overlay() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, mut app) in stacked(set, make) {
+                if first != Surface::Notice && second != Surface::Notice {
+                    continue;
+                }
+                for key in ["up", "down", "pageup", "enter", "tab"] {
+                    press(&mut app, key);
+                    assert!(
+                        app.top_surfaces().contains(&Surface::Notice),
+                        "{first:?} then {second:?} after {key}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn esc_closes_one_surface_in_either_order_on_a_session_and_on_home() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, mut app) in stacked(set, make) {
+                // The head, except that the notice overlay closes ahead of
+                // the heads that yield their Esc to it.
+                let head = first.min(second);
+                let yields = matches!(
+                    head,
+                    Surface::KeysScreen
+                        | Surface::Offer
+                        | Surface::Results
+                        | Surface::Find
+                        | Surface::Focus
+                );
+                // A tty job's view sends every key but Esc to the program, so
+                // Esc falls through it to what lies below.
+                let closes = if head == Surface::Job {
+                    first.max(second)
+                } else if first.max(second) == Surface::Notice && yields {
+                    Surface::Notice
+                } else {
+                    head
+                };
+                assert_eq!(press(&mut app, "esc"), Effect::None);
+                let listed = app.top_surfaces();
+                assert!(
+                    !listed.contains(&closes),
+                    "{first:?} then {second:?} leaves {closes:?} open: {listed:?}"
+                );
+                let kept = if closes == first { second } else { first };
+                assert!(
+                    listed.contains(&kept),
+                    "{first:?} then {second:?} closes {kept:?} too: {listed:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_report_whatever_else_is_open() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, mut app) in stacked(set, make) {
+                if first != Surface::Report && second != Surface::Report {
+                    continue;
+                }
+                let top = |app: &App| app.import_report().map(|report| report.top());
+                assert_eq!(top(&app), Some(0));
+                app.on_wheel(&wheel(40, 12, true));
+                assert_eq!(top(&app), Some(3), "{first:?} then {second:?}");
+                app.on_wheel(&wheel(0, 0, true));
+                assert_eq!(top(&app), Some(6), "{first:?} then {second:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_quit_frame_draws_last_over_every_other_surface() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            let mut alone = make();
+            open(&mut alone, Surface::Quit);
+            let slab = crate::view::frame_of(&alone, Surface::Quit);
+            assert!(!slab.is_empty());
+            let reference = rendered(&alone);
+            for (first, second, app) in stacked(set, make) {
+                if first != Surface::Quit && second != Surface::Quit {
+                    continue;
+                }
+                let buf = rendered(&app);
+                // The frame's text is whole; a cell may keep a colour from
+                // the text beneath it.
+                for y in slab.top()..slab.bottom() {
+                    for x in slab.left()..slab.right() {
+                        assert_eq!(
+                            buf[(x, y)].symbol(),
+                            reference[(x, y)].symbol(),
+                            "{first:?} then {second:?} at {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_report_frame_draws_above_every_surface_below_the_quit_question() {
+        for (set, make) in [
+            (&ON_SESSION[..], session_app as fn() -> App),
+            (&ON_HOME[..], home_app as fn() -> App),
+        ] {
+            for (first, second, app) in stacked(set, make) {
+                if first != Surface::Report && second != Surface::Report {
+                    continue;
+                }
+                let text = crate::view::text(&rendered(&app));
+                let title = app.import_report().map(|report| report.title().to_owned());
+                let title = title.unwrap_or_default();
+                if app.top_surface() == Surface::Report {
+                    assert!(text.contains(&title), "{first:?} then {second:?}\n{text}");
+                    assert!(!text.contains("leave them running"));
+                } else {
+                    assert!(text.contains("leave them running"), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_report_draws_above_a_swapped_view_on_home() {
+        let mut app = home_app();
+        for ch in "/keys".chars() {
+            app.on_key(Key::Char(ch), now());
+        }
+        app.on_key(Key::Enter, now());
+        assert!(app.keys_screen_open());
+        open(&mut app, Surface::Report);
+        assert_eq!(app.top_surface(), Surface::Report);
+        let title = app
+            .import_report()
+            .map(|report| report.title().to_owned())
+            .unwrap_or_default();
+        assert!(!title.is_empty());
+        let text = crate::view::text(&rendered(&app));
+        assert!(text.contains(&title), "{text}");
+        insta::assert_snapshot!("report_over_keys_screen_on_home", text);
+        open(&mut app, Surface::Quit);
+        let text = crate::view::text(&rendered(&app));
+        assert!(text.contains("leave them running"), "{text}");
+        insta::assert_snapshot!("quit_over_report_over_keys_screen_on_home", text);
+    }
+
+    #[test]
+    fn the_wheel_over_the_notice_frame_leaves_the_conversation_and_beside_it_scrolls() {
+        let mut app = long_session();
+        open(&mut app, Surface::Notice);
+        let slab = crate::view::frame_of(&app, Surface::Notice);
+        assert!(!slab.is_empty());
+        // Over the frame the wheel moves nothing, beneath rows included.
+        app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
+        assert_eq!(app.top(), None);
+        app.on_wheel(&wheel(
+            slab.right().saturating_sub(1),
+            slab.bottom() - 1,
+            false,
+        ));
+        assert_eq!(app.top(), None);
+        // One cell past each edge is the conversation's again.
+        let beside = slab.right();
+        assert!(beside < 80, "room beside the frame: {slab:?}");
+        app.on_wheel(&wheel(beside, slab.y + 1, false));
+        assert!(app.top().is_some(), "{slab:?}");
+    }
+
+    #[test]
+    fn the_wheel_over_the_quit_frame_scrolls_nothing() {
+        let mut app = long_session();
+        open(&mut app, Surface::Quit);
+        let slab = crate::view::frame_of(&app, Surface::Quit);
+        assert!(!slab.is_empty());
+        app.on_wheel(&wheel(slab.x + 1, slab.y + 1, false));
+        assert_eq!(app.top(), None);
+        let above = slab.y.checked_sub(1).expect("rows above the frame");
+        app.on_wheel(&wheel(slab.x + 1, above, false));
+        assert!(app.top().is_some(), "{slab:?}");
+    }
+
+    #[test]
+    fn the_cross_closes_only_the_head() {
+        use crate::mouse::TargetId;
+        let mut app = long_session();
+        open(&mut app, Surface::Notice);
+        open(&mut app, Surface::Keymap);
+        open(&mut app, Surface::Report);
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Report), "{listed:?}");
+        assert!(listed.contains(&Surface::Keymap) && listed.contains(&Surface::Notice));
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Keymap), "{listed:?}");
+        assert!(listed.contains(&Surface::Notice));
+        app.on_click(TargetId::CloseOverlay);
+        assert_eq!(app.top_surfaces(), vec![Surface::Draft]);
+    }
+
+    #[test]
+    fn the_cross_closes_the_report_beneath_the_quit_question_and_keeps_the_question() {
+        use crate::mouse::TargetId;
+        let mut app = long_session();
+        open(&mut app, Surface::Report);
+        open(&mut app, Surface::Quit);
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Report), "{listed:?}");
+        assert!(listed.contains(&Surface::Quit), "{listed:?}");
+    }
+
+    #[test]
+    fn the_cross_closes_the_notice_overlay_before_the_results_and_the_search_panel_before_both() {
+        use crate::mouse::TargetId;
+        let mut app = long_session();
+        open(&mut app, Surface::Results);
+        open(&mut app, Surface::Notice);
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Notice), "{listed:?}");
+        assert!(listed.contains(&Surface::Results));
+        open(&mut app, Surface::Notice);
+        open(&mut app, Surface::Search);
+        app.on_click(TargetId::CloseOverlay);
+        let listed = app.top_surfaces();
+        assert!(!listed.contains(&Surface::Search), "{listed:?}");
+        assert!(listed.contains(&Surface::Notice) && listed.contains(&Surface::Results));
+    }
+
+    #[test]
+    fn a_surface_covering_the_conversation_takes_the_wheel_over_its_rows() {
+        // Nothing open: the wheel over the rows scrolls the conversation.
+        let mut app = long_session();
+        app.on_wheel(&wheel(10, 5, false));
+        assert!(app.top().is_some());
+        for covering in [Surface::Keymap, Surface::Offer, Surface::Results] {
+            let mut app = long_session();
+            open(&mut app, covering);
+            app.on_wheel(&wheel(10, 5, false));
+            assert_eq!(app.top(), None, "{covering:?}");
+        }
+    }
+
+    #[test]
+    fn a_frame_not_open_has_no_slab() {
+        let mut app = long_session();
+        assert!(crate::view::frame_of(&app, Surface::Quit).is_empty());
+        assert!(crate::view::frame_of(&app, Surface::Notice).is_empty());
+        // Open, each frame has a slab, so the empty ones above are not a
+        // frame that never gets found.
+        open(&mut app, Surface::Quit);
+        open(&mut app, Surface::Notice);
+        assert!(!crate::view::frame_of(&app, Surface::Quit).is_empty());
+        assert!(!crate::view::frame_of(&app, Surface::Notice).is_empty());
+    }
+
+    /// A home app on a short screen, so its list has rows past its window.
+    fn short_home() -> App {
+        let mut app = home_app();
+        app.set_size(60, 12);
+        app
+    }
+
+    #[test]
+    fn a_home_question_or_picker_takes_the_wheel_over_the_list() {
+        let mut app = short_home();
+        app.on_wheel(&wheel(2, 5, true));
+        assert!(
+            app.home_list_scroll() > 0,
+            "the list scrolls with nothing open"
+        );
+        for covering in [Surface::DeleteQuestion, Surface::WorkspacePicker] {
+            let mut app = short_home();
+            open(&mut app, covering);
+            app.on_wheel(&wheel(2, 5, true));
+            assert_eq!(app.home_list_scroll(), 0, "{covering:?}");
+        }
+    }
+
+    #[test]
+    fn the_wheel_off_the_quit_frame_on_home_still_scrolls_the_list() {
+        let mut app = short_home();
+        open(&mut app, Surface::Quit);
+        let slab = crate::view::frame_of(&app, Surface::Quit);
+        assert!(
+            !slab.contains(ratatui::layout::Position::new(2, 5)),
+            "{slab:?}"
+        );
+        app.on_wheel(&wheel(2, 5, true));
+        assert!(app.home_list_scroll() > 0, "{slab:?}");
+    }
+
+    #[test]
+    fn the_wheel_over_the_quit_or_notice_frame_on_home_moves_nothing() {
+        for frame in [Surface::Quit, Surface::Notice] {
+            let mut app = short_home();
+            open(&mut app, frame);
+            let slab = crate::view::frame_of(&app, frame);
+            assert!(!slab.is_empty(), "{frame:?}");
+            app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+            assert_eq!(app.home_list_scroll(), 0, "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn a_notice_overlay_on_home_leaves_the_list_rows_below_it_to_the_wheel() {
+        // Thirteen rows put list rows under the notice rows' slab and
+        // inside what a whole-screen slab would cover.
+        let mut app = home_app();
+        app.set_size(60, 13);
+        open(&mut app, Surface::Notice);
+        let slab = crate::view::frame_of(&app, Surface::Notice);
+        assert!(
+            slab.bottom() <= 6,
+            "the slab sits in the notice rows: {slab:?}"
+        );
+        app.on_wheel(&wheel(30, 6, true));
+        assert!(app.home_list_scroll() > 0);
+    }
+
+    #[test]
+    fn a_swapped_view_on_home_gives_the_notice_frame_the_whole_screen() {
+        for kind in ["keys", "settings", "picker"] {
+            let mut app = short_home();
+            app.set_configure(Some(
+                std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]))
+                    as std::sync::Arc<dyn crate::Configure>,
+            ));
+            match kind {
+                "picker" => {
+                    app.on_key(Key::CtrlL, now());
+                }
+                _ => {
+                    for ch in format!("/{kind}").chars() {
+                        app.on_key(Key::Char(ch), now());
+                    }
+                    app.on_key(Key::Enter, now());
+                }
+            }
+            assert!(
+                app.keys_screen_open() || app.config_view_open() || app.model_picker_open(),
+                "{kind}"
+            );
+            open(&mut app, Surface::Notice);
+            let slab = crate::view::frame_of(&app, Surface::Notice);
+            // Centred on the 12 rows, not squeezed into the notice rows.
+            assert!(!slab.is_empty(), "{kind}");
+            assert_eq!(slab.y, (12 - slab.height) / 2, "{kind}: {slab:?}");
+        }
+    }
+
+    #[test]
+    fn the_report_takes_the_wheel_over_the_quit_frame() {
+        let mut app = session_app();
+        open(&mut app, Surface::Report);
+        open(&mut app, Surface::Quit);
+        let slab = crate::view::frame_of(&app, Surface::Quit);
+        app.on_wheel(&wheel(slab.x + 1, slab.y + 1, true));
+        assert_eq!(app.import_report().map(|report| report.top()), Some(3));
+    }
+}

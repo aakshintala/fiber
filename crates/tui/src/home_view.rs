@@ -293,6 +293,24 @@ fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &
     }
 }
 
+/// The rows over which home's notice overlay draws, in `area`.
+fn notice_area(placed: &Placed, area: Rect) -> Rect {
+    Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        placed
+            .box_top
+            .saturating_sub(super::to_u16(placed.blockers.len()))
+            .saturating_sub(area.y),
+    )
+}
+
+/// The rows of `area` over which home's notice overlay draws.
+pub(crate) fn notice_rows_area(app: &App, screen: &HomeScreen, area: Rect) -> Rect {
+    notice_area(&layout(app, screen, area), area)
+}
+
 /// The session list's window in `area`: the rows' rect, and the
 /// highest first row the window shows, the rows past the window.
 /// The wheel over the rect scrolls the list.
@@ -880,15 +898,7 @@ pub(super) fn render(
         };
         buf.set_line(at, placed.foot, foot, area.width);
     }
-    let rows = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        placed
-            .box_top
-            .saturating_sub(super::to_u16(placed.blockers.len()))
-            .saturating_sub(area.y),
-    );
+    let rows = notice_area(&placed, area);
     bottom = rows.bottom();
     super::notice_rows::overlay(app, rows, buf, &mut targets);
     // The rows sit above the banner, unreserved, over the area's bottom
@@ -923,20 +933,21 @@ pub(super) fn render(
     // delete frames: one overlay with both counts, no notices
     // (`docs/tui.md`, "Overlays"). The slab swallows the clicks landing
     // on it, as the question frames do.
-    let before = targets.len();
-    let slab = crate::import_report::draw_report(app, area, buf, &mut targets);
-    if !slab.is_empty() {
-        targets.insert(
-            before.min(targets.len()),
-            Target {
-                id: TargetId::Home(Spot::Question),
-                rect: slab,
-            },
-        );
-    }
-    if app.quit_open() {
-        super::quit::draw(app, area, buf, &mut targets);
-    }
+    // The surfaces that draw a frame go up bottom first, so the quit
+    // question draws above the report.
+    super::draw_framed(app, area, buf, &mut targets, |targets, buf| {
+        let before = targets.len();
+        let slab = crate::import_report::draw_report(app, area, buf, targets);
+        if !slab.is_empty() {
+            targets.insert(
+                before.min(targets.len()),
+                Target {
+                    id: TargetId::Home(Spot::Question),
+                    rect: slab,
+                },
+            );
+        }
+    });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row))
         && !matches!(id, TargetId::Home(Spot::Question))
     {

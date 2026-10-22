@@ -53,7 +53,7 @@ impl App {
     /// sessions running, `c` closes them all now, Esc stays, and
     /// anything else, Ctrl+C included, does nothing. `None` unless the
     /// quit question is open.
-    pub(in crate::app::home) fn quit_key(&mut self, key: &Key) -> Option<Effect> {
+    pub(in crate::app) fn quit_key(&mut self, key: &Key) -> Option<Effect> {
         if !self.quit_open() {
             return None;
         }

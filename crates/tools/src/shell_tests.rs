@@ -13,6 +13,7 @@ use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
 
 use super::{Mode, Shell, bare_wait, exit_line, from_spawn, observed, parse, timeout_line};
+use crate::error::ShellError;
 
 fn shell() -> Shell {
     Shell::new(std::env::temp_dir(), FakeClock::new())
@@ -99,25 +100,27 @@ fn nullable_optional_arguments_parse_as_absent() {
         assert_eq!(parsed.mode, mode);
         assert_eq!(parsed.timeout_ms, timeout);
     }
-    for (overrides, error) in [
-        (json!({"monitor": true, "tty": true}), super::MONITOR_ALONE),
-        (
-            json!({"monitor": true, "run_in_background": true}),
-            super::MONITOR_ALONE,
-        ),
-        (
-            json!({"monitor": true, "timeout_ms": 0}),
-            super::MONITOR_TIMEOUT,
-        ),
-        (json!({"deadline_ms": 0}), super::DEADLINE_WITHOUT_MONITOR),
-    ] {
+    let refused = |overrides: Value| {
         let mut args = arguments.clone();
         args.extend(overrides.as_object().unwrap().clone());
-        assert_eq!(
-            parse(&args, dir.path(), 600_000).err().as_deref(),
-            Some(error)
-        );
-    }
+        parse(&args, dir.path(), 600_000).err()
+    };
+    assert!(matches!(
+        refused(json!({"monitor": true, "tty": true})),
+        Some(ShellError::MonitorAlone)
+    ));
+    assert!(matches!(
+        refused(json!({"monitor": true, "run_in_background": true})),
+        Some(ShellError::MonitorAlone)
+    ));
+    assert!(matches!(
+        refused(json!({"monitor": true, "timeout_ms": 0})),
+        Some(ShellError::MonitorTimeout)
+    ));
+    assert!(matches!(
+        refused(json!({"deadline_ms": 0})),
+        Some(ShellError::DeadlineWithoutMonitor)
+    ));
 }
 
 #[test]

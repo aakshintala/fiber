@@ -299,13 +299,7 @@ impl App {
     /// rows and PgUp/PgDn by pages, Ctrl+C passes through to quit,
     /// and anything else is swallowed so nothing reaches the draft,
     /// the list or the conversation behind it. `None` while closed.
-    /// While the quit question is open every key passes through to
-    /// it: it draws above the report and takes every key first, so
-    /// the report resumes when the question closes.
     pub(crate) fn report_key(&mut self, key: &Key) -> Option<Effect> {
-        if self.quit_open() {
-            return None;
-        }
         self.import_report.as_ref()?;
         match key {
             Key::Esc => {

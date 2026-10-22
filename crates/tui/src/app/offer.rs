@@ -9,7 +9,7 @@ use crate::offer::{FileAction, OfferKey, Row, Spot};
 
 impl App {
     /// A key for the open offer, after the key map and the approval panel:
-    /// Esc closes the notice list when it is open, else puts the offer
+    /// Esc closes the source view when it is open, else puts the offer
     /// aside. `None` while the offer is closed, and for the keys it passes
     /// on.
     pub(super) fn offer_key(&mut self, key: &Key) -> Option<Effect> {
@@ -17,7 +17,7 @@ impl App {
             return None;
         }
         if *key == Key::Esc {
-            if !self.notices.close() && !self.offer.close_source() {
+            if !self.offer.close_source() {
                 self.offer.put_aside();
             }
             return Some(Effect::None);

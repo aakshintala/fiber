@@ -28,6 +28,7 @@ use contract::clock::Clock;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 
+pub(crate) mod journey;
 pub(crate) mod package;
 pub(crate) mod pty;
 pub(crate) mod repo_provider;

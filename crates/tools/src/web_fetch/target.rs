@@ -8,6 +8,8 @@ use std::net::{IpAddr, Ipv6Addr};
 use ureq::http::Uri;
 use ureq::http::uri::Scheme;
 
+use crate::error::UrlError;
+
 /// The addresses of a cloud metadata server that are not link-local, as the
 /// name check cannot see them: AWS's IPv6 one.
 const AWS_METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
@@ -22,18 +24,29 @@ fn without_fragment(url: &str) -> &str {
 
 /// Parses what the model wrote: an `http` or `https` URL with a host. The
 /// fragment is dropped, since it is never sent.
-pub(super) fn parse(url: &str) -> Result<Uri, String> {
-    let refused = |why: &str| format!("`{url}` is not a URL to fetch: {why}.");
+pub(super) fn checked(url: &str) -> Result<Uri, UrlError> {
     let uri: Uri = without_fragment(url)
         .parse()
-        .map_err(|error| refused(&format!("{error}")))?;
+        .map_err(|source| UrlError::Malformed {
+            url: url.to_owned(),
+            source,
+        })?;
     if uri.scheme() != Some(&Scheme::HTTP) && uri.scheme() != Some(&Scheme::HTTPS) {
-        return Err(refused("the scheme must be `http` or `https`"));
+        return Err(UrlError::WrongScheme {
+            url: url.to_owned(),
+        });
     }
     if uri.host().is_none_or(str::is_empty) {
-        return Err(refused("it names no host"));
+        return Err(UrlError::NoHost {
+            url: url.to_owned(),
+        });
     }
     Ok(uri)
+}
+
+/// [`checked`] with its refusal as text, for the effects' `String` argument.
+pub(super) fn parse(url: &str) -> Result<Uri, String> {
+    checked(url).map_err(|error| error.to_string())
 }
 
 fn scheme(uri: &Uri) -> &str {
