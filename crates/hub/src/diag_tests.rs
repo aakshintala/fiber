@@ -9,14 +9,13 @@
 )]
 
 use std::fs::{self, File};
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
 use log::diag::Severity;
-
-use super::*;
 
 /// `FakeClock::new` reads the process clock once for its monotonic origin;
 /// its wall time is fixed: 2023-11-14T22:13:20Z.
