@@ -154,6 +154,25 @@ one of them is refused too. It refuses, the same way, every tool call
 whose declared paths touch the resolved path of a configured `file`
 credential source.
 
+It refuses, the same way, every tool call whose declared paths touch a path
+a provider package declares its `credential()` draws secrets from, when that
+function reads nothing Fiber stores (`credential_paths`,
+[A provider's data](configuration.md#a-providers-data)). The loop names no
+provider: the paths are the package's data. AWS Bedrock declares
+`$AWS_SHARED_CREDENTIALS_FILE`, else `~/.aws/credentials`, and the
+directories `~/.aws/sso/cache/` and `~/.aws/cli/cache/`. Google Vertex
+declares `credentials.db`, `access_tokens.db`, `legacy_credentials/` and
+`application_default_credentials.json` in the gcloud configuration
+directory, `$CLOUDSDK_CONFIG`, else `~/.config/gcloud`. A declared path
+that is a directory contains its files, and a path that contains a
+declared one touches it, as for the credential directory: a read of
+`~/.aws`, `~/.config/gcloud`, `$HOME` or `/` is refused, while a read of a
+file beside the declared ones, such as gcloud's `configurations/`, is not.
+The paths and their variables are read when the session starts, so a
+changed variable needs a restart. A `credential_process` that
+`AWS_CONFIG_FILE`'s profiles name is not covered, nor is gcloud's Windows
+directory.
+
 Fiber does not confine tools ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
 alternative protection: any process running as the person can read a keychain

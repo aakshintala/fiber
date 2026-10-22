@@ -15,7 +15,8 @@ use contract::files::PathLock;
 use extensions::{Providers, SessionExtensions};
 use serde_json::Value;
 
-use crate::{CliError, ModelLists, ModelListsError, login_targets, model_lists};
+use crate::model_lists::model_lists_apart;
+use crate::{CliError, ModelLists, ModelListsError, login_targets};
 
 /// `fiber setup [provider...] [--model <model>] [--thinking <level>]
 /// [--import <source>...] [--completions <shell> | --no-completions]
@@ -239,9 +240,12 @@ fn run(
     }
 }
 
-/// One cached model-list read serves the provider and model questions:
-/// its notices print once on standard error, as `fiber models` prints
-/// them (one line each), before the first question.
+/// One cached model-list read serves the provider and model questions.
+/// The notices of models left out for a missing per-account host
+/// (`model_unconfigured`) are not printed: those models are out of the
+/// model question, and a provider's login asks for the missing value.
+/// Every other notice prints once on standard error, as `fiber models`
+/// prints it (one line each), before the first question.
 #[allow(
     clippy::too_many_arguments,
     reason = "one call of the terminal run: inputs, writers and the effects' context"
@@ -259,8 +263,8 @@ fn run_terminal(
     let load = |config: &Config| {
         SessionExtensions::load(home, config, Arc::clone(clock), Arc::clone(locks), None)
     };
-    let (providers, _config, notices) =
-        model_lists(home, workspace, ModelLists::Cached, &load, run, &**clock).map_err(
+    let (providers, _config, notices, _unconfigured) =
+        model_lists_apart(home, workspace, ModelLists::Cached, &load, run, &**clock).map_err(
             |error| match error {
                 ModelListsError::Load(error) => error,
                 ModelListsError::Config(error) => CliError::Config(error),
@@ -299,12 +303,18 @@ fn step_providers(
     providers: Option<&Providers>,
     flags: &SetupFlags,
     clock: &Arc<dyn Clock>,
-    stdin: Option<&mut dyn BufRead>,
+    mut stdin: Option<&mut dyn BufRead>,
     err: &mut dyn Write,
 ) -> Result<i32, CliError> {
+    // Each login reads setup's reader: on a terminal setup holds the
+    // standard input lock, and a second lock never returns.
     if !flags.provider.is_empty() {
         for name in &flags.provider {
-            let code = crate::run_login(Some(name), None, false, Arc::clone(clock));
+            let reader = stdin
+                .as_mut()
+                .map(|reader| &mut **reader as &mut dyn BufRead);
+            let code =
+                crate::login::run_login_with(Some(name), None, false, Arc::clone(clock), reader);
             if code != 0 {
                 writeln!(err, "fiber: setup providers failed").map_err(CliError::StandardError)?;
                 return Ok(code);
@@ -339,7 +349,13 @@ fn step_providers(
         "Sign in to providers by number or name, separated by commas (blank skips): ",
         &names,
     )? {
-        let code = crate::run_login(Some(&name), None, false, Arc::clone(clock));
+        let code = crate::login::run_login_with(
+            Some(&name),
+            None,
+            false,
+            Arc::clone(clock),
+            Some(&mut *stdin),
+        );
         if code != 0 {
             writeln!(err, "fiber: setup providers failed").map_err(CliError::StandardError)?;
             return Ok(code);

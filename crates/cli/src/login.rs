@@ -923,26 +923,46 @@ fn home_providers_and_set(
 }
 
 /// `fiber login [<name>] [--as <label>] [--device]`.
-// Exempted from mutation testing: telling `&&` from `||` here needs
-// exactly one of the real stdin or stderr to be a terminal, which no test
-// controls without a production hook.
-#[cfg_attr(false, mutants::skip)]
 pub fn run_login(
     name: Option<&str>,
     label: Option<&str>,
     device: bool,
     clock: Arc<dyn Clock>,
 ) -> i32 {
+    run_login_with(name, label, device, clock, None)
+}
+
+/// [`run_login`] reading its answers from `stdin` when given, so a caller
+/// already holding the standard input lock (`fiber setup` on a terminal)
+/// does not lock it a second time; `None` locks standard input here.
+// Exempted from mutation testing: telling `&&` from `||` here needs
+// exactly one of the real stdin or stderr to be a terminal, which no test
+// controls without a production hook.
+#[cfg_attr(false, mutants::skip)]
+pub(crate) fn run_login_with(
+    name: Option<&str>,
+    label: Option<&str>,
+    device: bool,
+    clock: Arc<dyn Clock>,
+    stdin: Option<&mut dyn BufRead>,
+) -> i32 {
     let ran =
         home_providers_and_set(Arc::clone(&clock)).and_then(|(home, providers, _set, loading)| {
-            let stdin = io::stdin();
-            let on_terminal = stdin.is_terminal();
+            let on_terminal = io::stdin().is_terminal();
             let mut err = io::stderr();
             let terminal = on_terminal && err.is_terminal();
             let mut keys: Box<dyn KeyReader> = if on_terminal {
                 Box::new(NoEcho)
             } else {
                 Box::new(Plain)
+            };
+            let mut locked;
+            let stdin: &mut dyn BufRead = match stdin {
+                Some(reader) => reader,
+                None => {
+                    locked = io::stdin().lock();
+                    &mut locked
+                }
             };
             login_with_notices(
                 name,
@@ -951,7 +971,7 @@ pub fn run_login(
                     home: &home,
                     providers: &providers,
                     terminal,
-                    stdin: &mut stdin.lock(),
+                    stdin,
                     err: &mut err,
                     keys: keys.as_mut(),
                     device,

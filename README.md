@@ -31,6 +31,7 @@ Both reach the same sessions through one background process, the hub
 
 ## Docs
 
+- Using Fiber: https://aakshintala.com/fiber/ (source in docs/user/)
 - How Fiber works, one page per area: [`docs/`](docs/). Start with
   [`docs/architecture.md`](docs/architecture.md).
 - Vocabulary: [`GLOSSARY.md`](GLOSSARY.md).
