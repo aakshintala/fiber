@@ -331,10 +331,9 @@ pub(crate) fn run(
             source,
         ));
     }
-    // The stdin writer starts after the readers and before the waiter
-    // handoff below moves the child: only the waiter arms and the two
-    // supervising tails below own its teardown.
-    let stdin_stop = match start_stdin_writer(req, &mut child) {
+    // The stdin writer's sender lives until this scope ends: every return
+    // below drops it, which tells the writer the run ended.
+    let _stdin_stop = match start_stdin_writer(req, &mut child) {
         Ok(writer) => writer,
         Err(source) => {
             return Err(abort_startup(
@@ -362,7 +361,6 @@ pub(crate) fn run(
                 }
             })
         {
-            drop(stdin_stop);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -374,7 +372,6 @@ pub(crate) fn run(
             ));
         }
         if let Err(send) = wait_tx.send(child) {
-            drop(stdin_stop);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -386,7 +383,7 @@ pub(crate) fn run(
             ));
         }
         // The stdin writer started before the handoff above moved the
-        // child, so only the two supervising tails below own its teardown.
+        // child.
         let outcome = supervise(
             req,
             &shared,
@@ -397,15 +394,12 @@ pub(crate) fn run(
             StopTarget::Group(pgid),
             listing.take(),
         );
-        drop(stdin_stop);
         return outcome;
     }
     // Without its own group no waiter thread starts: the supervising thread
     // below reaps the child itself, so a reaped pid, which the system may
     // reuse, is never signalled.
     let mut child = child;
-    // The child stays here in pid mode, but the writer started above, so
-    // this tail owns its teardown as the group tail does.
     let outcome = supervise(
         req,
         &shared,
@@ -419,7 +413,6 @@ pub(crate) fn run(
     // The child is reaped, or dead or dying after the stop: `wait` returns
     // at once then, instead of leaving a zombie.
     let _reaped = child.wait();
-    drop(stdin_stop);
     outcome
 }
 

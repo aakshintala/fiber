@@ -187,7 +187,9 @@ local function hook(point, spec)
   if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
   -- Declared entries filter tool points through `tools`; a `tools` the
   -- entry cannot run on refuses like any other bad field, naming the
-  -- entry, so the entry is not registered and the script goes on.
+  -- entry, so the entry is not registered and the script goes on. The
+  -- table must be a proper list: `init.lua` reads it with `ipairs`, so a
+  -- keyed or sparse table would silently drop tools.
   if spec.tools ~= nil then
     if point ~= "before_tool" and point ~= "after_tool" then
       return refuse("`tools` is only allowed at `before_tool` and `after_tool`")
@@ -196,14 +198,19 @@ local function hook(point, spec)
       return refuse("`tools` must be a list of tool names")
     end
     local count = 0
-    for _, tool in pairs(spec.tools) do
-      if type(tool) ~= "string" then
+    local max = 0
+    for key, tool in pairs(spec.tools) do
+      if type(tool) ~= "string" or math.type(key) ~= "integer" or key < 1 then
         return refuse("`tools` must be a list of tool names")
       end
       count = count + 1
+      if key > max then max = key end
     end
     if count == 0 then
       return refuse("`tools` must name at least one tool")
+    end
+    if max ~= count then
+      return refuse("`tools` must be a list of tool names")
     end
   end
   local list = hooks[point] or {}

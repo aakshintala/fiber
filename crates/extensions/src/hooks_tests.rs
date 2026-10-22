@@ -3467,7 +3467,7 @@ fn hooks_with_an_empty_hooks_key_loads_silently() {
 fn hooks_state_is_ready_without_declarations() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&home.config(&[]), &[]),
+        super::hooks_state(&home.config(&[]), &[]).unwrap(),
         super::HooksState::Ready
     );
 }
@@ -3477,7 +3477,7 @@ fn hooks_state_is_ready_when_the_extension_loaded() {
     let home = Home::new();
     let loaded = vec![config::full_name("hooks")];
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &loaded),
+        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &loaded).unwrap(),
         super::HooksState::Ready
     );
 }
@@ -3486,7 +3486,7 @@ fn hooks_state_is_ready_when_the_extension_loaded() {
 fn hooks_state_is_missing_blocking_for_a_lone_on_failure_less_entry() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, NO_ON_FAILURE_ENTRY), &[]),
+        super::hooks_state(&hooks_config(&home, NO_ON_FAILURE_ENTRY), &[]).unwrap(),
         super::HooksState::MissingBlocking
     );
 }
@@ -3496,7 +3496,7 @@ fn hooks_state_is_missing_blocking_beside_a_blocking_entry() {
     let home = Home::new();
     let entries = r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, entries), &[]),
+        super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
         super::HooksState::MissingBlocking
     );
 }
@@ -3505,7 +3505,7 @@ fn hooks_state_is_missing_blocking_beside_a_blocking_entry() {
 fn hooks_state_is_missing_blocking_for_an_unknown_on_failure() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, UNKNOWN_ON_FAILURE_ENTRY), &[]),
+        super::hooks_state(&hooks_config(&home, UNKNOWN_ON_FAILURE_ENTRY), &[]).unwrap(),
         super::HooksState::MissingBlocking
     );
 }
@@ -3514,7 +3514,7 @@ fn hooks_state_is_missing_blocking_for_an_unknown_on_failure() {
 fn hooks_state_is_missing_blocking_for_a_non_string_on_failure() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, NON_STRING_ON_FAILURE_ENTRY), &[]),
+        super::hooks_state(&hooks_config(&home, NON_STRING_ON_FAILURE_ENTRY), &[]).unwrap(),
         super::HooksState::MissingBlocking
     );
 }
@@ -3523,7 +3523,7 @@ fn hooks_state_is_missing_blocking_for_a_non_string_on_failure() {
 fn hooks_state_skips_watcher_entries() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, WATCHER_ENTRY), &[]),
+        super::hooks_state(&hooks_config(&home, WATCHER_ENTRY), &[]).unwrap(),
         super::HooksState::Ready
     );
 }
@@ -3532,7 +3532,7 @@ fn hooks_state_skips_watcher_entries() {
 fn hooks_state_is_ready_for_an_empty_hooks_key() {
     let home = Home::new();
     assert_eq!(
-        super::hooks_state(&hooks_config(&home, "{}"), &[]),
+        super::hooks_state(&hooks_config(&home, "{}"), &[]).unwrap(),
         super::HooksState::Ready
     );
 }
@@ -3540,7 +3540,7 @@ fn hooks_state_is_ready_for_an_empty_hooks_key() {
 #[test]
 fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
     let home = Home::new();
-    match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]) {
+    match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]).unwrap() {
         super::HooksState::MissingNotice { notice } => {
             assert_eq!(notice.code, ErrorCode::ExtensionMissing);
             assert_eq!(
@@ -3585,7 +3585,7 @@ fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
 }
 
 #[test]
-fn unreadable_hooks_settings_skip_the_load_and_fail_closed() {
+fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     let home = Home::new();
     install_hooks(&home, "-- no hooks registered\n");
     let file = home.home().join("config").join("hooks.json");
@@ -3597,10 +3597,10 @@ fn unreadable_hooks_settings_skip_the_load_and_fail_closed() {
         "{:?}",
         loaded_names(&session)
     );
-    assert_eq!(
-        super::hooks_state(&home.config(&[]), &[]),
-        super::HooksState::MissingBlocking
-    );
+    // Malformed settings are not a missing extension: the read's error
+    // propagates, and the gate fails the start with its code.
+    let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid);
 }
 
 #[test]

@@ -2540,7 +2540,22 @@ fn hook_refusals_name_the_entry_when_given() {
         ),
         (
             "\"after_tool\"",
-            "timeout = 100, on_failure = \"blocking\", run = run, tools = {5}",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[2] = \"read\"}",
+            "`tools` must be a list of tool names",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[1] = \"read\", [3] = \"write\"}",
+            "`tools` must be a list of tool names",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {[0] = \"read\"}",
+            "`tools` must be a list of tool names",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {read = \"yes\"}",
             "`tools` must be a list of tool names",
         ),
     ];

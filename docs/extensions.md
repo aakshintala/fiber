@@ -367,11 +367,13 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   containing `/` that is not absolute resolves against the extension's
   directory and must stay inside it; a path that leaves the directory is an
   error naming the path. A bare name resolves on `PATH`, and an absolute path
-  is used as written. `opts` takes `cwd` and `env`. The child's working
+  is used as written. `opts` takes `cwd`, `env`, and `input`. The child's working
   directory is unchanged: the workspace, by default. `env` is a table of
   string names to string values added to the inherited environment,
   overriding a variable of the same name; there is no unset. A name must
-  be non-empty and free of `=` and NUL, and a value free of NUL.
+  be non-empty and free of `=` and NUL, and a value free of NUL. `input`
+  is a string streamed to the child's standard input, which closes (EOF)
+  once written; without `input` stdin stays null.
   `extension_exec` does not log it. Inside a
   tool call, the tool's declared `executes` effect is what the permission
   decision judges. Outside one, in a hook, watcher, timer, command or provider callback, it runs

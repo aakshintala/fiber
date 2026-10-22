@@ -31,21 +31,26 @@ end
 -- A bare name runs on `PATH`, a relative path with a `/` joins onto the
 -- cached workspace, an absolute path runs as written
 -- (`docs/extensions.md`, "Hooks declared in configuration").
-local function resolve(name, command)
+local function resolve(command)
   if command:find("/", 1, true) == nil then
     return command
   end
   if command:sub(1, 1) == "/" then
     return command
   end
-  if workspace == nil then
-    error("entry `" .. name .. "`: no workspace cached yet", 0)
-  end
   return workspace .. "/" .. command
 end
 
 local function run_entry(name, point, command, args, tools_set)
   return function(given)
+    -- The workspace lands in `cwd` and under `/`-programs: a hook that
+    -- fires with none cached fails via `on_failure` instead of running in
+    -- the wrong directory (`docs/extensions.md`, "Hooks declared in
+    -- configuration"). The cache hook below runs first, so this fires
+    -- only if that hook never ran.
+    if workspace == nil then
+      error("entry `" .. name .. "`: no workspace cached yet", 0)
+    end
     if tools_set ~= nil then
       local tool = given.tool
       if tool == nil or not tools_set[tool] then
@@ -59,7 +64,7 @@ local function run_entry(name, point, command, args, tools_set)
     payload.point = point
     payload.schema_version = SCHEMA_VERSION
     local line = json.encode(payload) .. "\n"
-    local result = host.exec(resolve(name, command), args, { cwd = workspace, input = line })
+    local result = host.exec(resolve(command), args, { cwd = workspace, input = line })
     if result.signal ~= nil then
       error("entry `" .. name .. "`: command ended on signal " .. tostring(result.signal), 0)
     end
@@ -101,13 +106,19 @@ local function register(name, entry)
   if type(entry) ~= "table" then
     error("entry `" .. name .. "` must be a table", 0)
   end
-  -- Watcher entries are not hooks: the gate reads them, this package
-  -- only registers hooks.
+  -- Watcher entries are not hooks yet (#565): refuse through `fiber.hook`
+  -- with a point that is not one, so the entry is unregistered with an
+  -- entry-labeled notice like an unknown point, and the rest register.
   if entry.watch ~= nil then
+    fiber.hook("watch", { entry = name })
     return
   end
+  -- No command to run: refuse the same way, so the entry is unregistered
+  -- with a notice naming the entry and `command` instead of aborting the
+  -- entries after it, and the rest register.
   if type(entry.command) ~= "string" then
-    error("entry `" .. name .. "`: `command` must be a string", 0)
+    fiber.hook("command", { entry = name })
+    return
   end
   -- `phase`, `timeout`, `on_failure`, `check` placement and `tools` are
   -- validated by `fiber.hook`, whose entry-labeled refusal names the entry

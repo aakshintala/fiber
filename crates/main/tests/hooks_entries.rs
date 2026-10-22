@@ -70,21 +70,8 @@ impl Setup {
 
     /// Removes the installed `hooks` package, leaving its settings behind.
     fn remove_hooks(&self) {
-        let root = self.home().join("extensions");
-        for item in fs::read_dir(&root).unwrap() {
-            let dir = item.unwrap().path();
-            let Ok(text) = fs::read_to_string(dir.join("extension.json")) else {
-                continue;
-            };
-            let Ok(value): Result<Value, _> = serde_json::from_str(&text) else {
-                continue;
-            };
-            if value.get("name").and_then(Value::as_str) == Some(HOOKS_NAME) {
-                fs::remove_dir_all(&dir).unwrap();
-                return;
-            }
-        }
-        panic!("the hooks package was not installed");
+        fs::remove_dir_all(config::extensions_dir(&self.home()).join(config::dir_name(HOOKS_NAME)))
+            .unwrap();
     }
 
     /// Runs `fiber` in its own process group, waits for it under the
@@ -730,6 +717,114 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
         !setup.workspace().join("loud.log").exists(),
         "the entry never ran"
     );
+}
+
+#[test]
+fn a_watch_entry_is_not_registered_and_names_the_entry() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "seen": json!({
+                "watch": ["turn_completed"],
+                "command": "hooks/capture.sh",
+                "args": ["seen.log"],
+                "timeout": 10000,
+            }),
+            "note": json!({
+                "point": "after_tool",
+                "tools": ["read"],
+                "command": "hooks/capture.sh",
+                "args": ["note.log"],
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    // The watch entry left its notice and never ran; the hook entry ran.
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "extension_failed");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("seen"), "{message}");
+    assert!(message.contains("watch"), "{message}");
+    assert!(
+        !setup.workspace().join("seen.log").exists(),
+        "the watch entry never ran"
+    );
+    assert_eq!(captured(&setup, "note.log").len(), 1);
+}
+
+#[test]
+fn entries_without_a_string_command_are_not_registered_and_name_the_entry() {
+    let (setup, _server) = hooked(
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
+        &json!({
+            "missing": json!({
+                "point": "after_tool",
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+            "shapeless": json!({
+                "point": "after_tool",
+                "command": 42,
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+            "note": json!({
+                "point": "after_tool",
+                "tools": ["read"],
+                "command": "hooks/capture.sh",
+                "args": ["note.log"],
+                "timeout": 30000,
+                "on_failure": "non-blocking",
+            }),
+        }),
+    );
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+
+    // Both bad entries left their notices and never ran; the good one ran.
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice["payload"]["code"], "extension_failed");
+        let message = notice["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("command"), "{message}");
+    }
+    let messages: Vec<&str> = notices
+        .iter()
+        .map(|notice| notice["payload"]["message"].as_str().unwrap())
+        .collect();
+    assert!(
+        messages.iter().any(|m| m.contains("missing")),
+        "{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("shapeless")),
+        "{messages:?}"
+    );
+    assert_eq!(captured(&setup, "note.log").len(), 1);
 }
 
 #[test]

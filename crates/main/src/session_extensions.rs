@@ -83,23 +83,22 @@ pub(crate) fn required(
 
 /// `extension_missing` naming `fiber extension install hooks` when declared
 /// hooks have no extension to run them and any entry is `blocking` (or its
-/// `on_failure` is missing, invalid, or unreadable), so a guard never fails
-/// open (`docs/extensions.md`, "Hooks declared in configuration").
+/// `on_failure` is missing or invalid), so a guard never fails
+/// open (`docs/extensions.md`, "Hooks declared in configuration"). A
+/// settings read that fails is not a missing extension: the read's error
+/// (`config_invalid`, `io_failed`) fails the start instead.
 pub(crate) fn missing_hooks(
     config: &config::Config,
     extensions: &extensions::SessionExtensions,
 ) -> Result<(), contract::shapes::Failure> {
     use crate::failed;
 
-    let loaded: Vec<String> = extensions
-        .loaded()
-        .iter()
-        .map(|loaded| loaded.name.clone())
-        .collect();
-    if !matches!(
-        extensions::hooks_state(config, &loaded),
-        extensions::HooksState::MissingBlocking
-    ) {
+    let loaded = extensions.loaded_names();
+    let state = match extensions::hooks_state(config, &loaded) {
+        Ok(state) => state,
+        Err(error) => return Err(failed(error.code(), error)),
+    };
+    if !matches!(state, extensions::HooksState::MissingBlocking) {
         return Ok(());
     }
     Err(failed(
@@ -368,7 +367,8 @@ mod tests {
 mod hooks_gate_tests {
     //! `missing_hooks` fails the start closed when declared hooks have no
     //! extension to run them and any entry is `blocking` (or its `on_failure`
-    //! is missing, invalid, or unreadable).
+    //! is missing or invalid); a settings read that fails carries its own
+    //! error instead.
 
     #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
@@ -418,5 +418,19 @@ mod hooks_gate_tests {
             "{}",
             failure.message
         );
+    }
+
+    #[test]
+    fn missing_hooks_reports_malformed_settings_as_config_invalid() {
+        let rig = Rig::new("fiber-hooks-gate-malformed");
+        let file = rig.home.join("config").join("hooks.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{not json").unwrap();
+        let config = load(&rig.home, &rig.workspace, "test", &[] as &[&str]);
+        let extensions = session_extensions(&rig, &config);
+        // Malformed settings are not a missing extension: the read's
+        // error fails the start with its own code.
+        let failure = missing_hooks(&config, &extensions).unwrap_err();
+        assert_eq!(failure.code, contract::ErrorCode::ConfigInvalid);
     }
 }

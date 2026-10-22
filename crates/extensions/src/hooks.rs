@@ -643,15 +643,12 @@ impl SessionExtensions {
             .sort_by(|a, b| (&a.name, a.index).cmp(&(&b.name, b.index)));
         // Declared hooks with no extension to run them are not silently
         // dropped: all-`non-blocking` leaves one notice naming the
-        // extension (`MissingBlocking` fails the start at the gate).
-        if let HooksState::MissingNotice { notice } = hooks_state(
-            config,
-            &session
-                .loaded
-                .iter()
-                .map(|loaded| loaded.name.clone())
-                .collect::<Vec<_>>(),
-        ) {
+        // extension (`MissingBlocking` fails the start at the gate). A
+        // settings read that fails leaves no notice here: the gate fails
+        // the start with the read's error instead.
+        if let Ok(HooksState::MissingNotice { notice }) =
+            hooks_state(config, &session.loaded_names())
+        {
             session.notices.push(notice);
         }
         session
@@ -750,6 +747,15 @@ impl SessionExtensions {
     /// (`docs/events.md`).
     pub fn loaded(&self) -> Vec<LoadedExtension> {
         self.loaded.clone()
+    }
+
+    /// The loaded extensions' names, in load order: what the removed-`hooks`
+    /// gate reads (`docs/extensions.md`, "Hooks declared in configuration").
+    pub fn loaded_names(&self) -> Vec<String> {
+        self.loaded
+            .iter()
+            .map(|loaded| loaded.name.clone())
+            .collect()
     }
 
     /// Each loaded extension's name and package directory, as listed:
@@ -1105,11 +1111,7 @@ impl SessionExtensions {
         for extension in &self.lua {
             extension.set_delegate(Arc::clone(&delegate));
         }
-        let loaded: Vec<String> = self
-            .loaded
-            .iter()
-            .map(|loaded| loaded.name.clone())
-            .collect();
+        let loaded: Vec<String> = self.loaded_names();
         delegate.retain(&loaded);
     }
 
@@ -1522,28 +1524,26 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
 /// not load (`docs/extensions.md`, "Hooks declared in configuration"):
 /// nothing, a notice, or a failed start, so a guard never fails open.
 /// Entries with `watch` keys are watcher entries (#565) and never trip
-/// this gate.
-pub fn hooks_state(config: &Config, loaded: &[String]) -> HooksState {
+/// this gate. A settings read that fails is not a missing extension:
+/// the error propagates, so malformed settings fail as `config_invalid`
+/// and unreadable ones as `io_failed` (`docs/errors.md`).
+pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, config::ConfigError> {
     let name = config::full_name("hooks");
-    let declared = match config.extensions().get(&name, &["hooks"], "hooks") {
-        Ok(declared) => declared,
-        // Unreadable settings fail closed: the guard's fate is unknown.
-        Err(_) => return HooksState::MissingBlocking,
-    };
+    let declared = config.extensions().get(&name, &["hooks"], "hooks")?;
     let Some(declared) = declared else {
-        return HooksState::Ready;
+        return Ok(HooksState::Ready);
     };
     let Value::Object(entries) = declared else {
-        return HooksState::MissingBlocking;
+        return Ok(HooksState::MissingBlocking);
     };
     if entries.is_empty() {
-        return HooksState::Ready;
+        return Ok(HooksState::Ready);
     }
     let mut blocking = false;
     let mut hooks = false;
     for entry in entries.values() {
         let Value::Object(entry) = entry else {
-            return HooksState::MissingBlocking;
+            return Ok(HooksState::MissingBlocking);
         };
         if entry.contains_key("watch") {
             continue;
@@ -1557,22 +1557,22 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> HooksState {
         }
     }
     if !hooks {
-        return HooksState::Ready;
+        return Ok(HooksState::Ready);
     }
     if loaded.contains(&name) {
-        return HooksState::Ready;
+        return Ok(HooksState::Ready);
     }
     if blocking {
-        return HooksState::MissingBlocking;
+        return Ok(HooksState::MissingBlocking);
     }
-    HooksState::MissingNotice {
+    Ok(HooksState::MissingNotice {
         notice: notice(
             ErrorCode::ExtensionMissing,
             "The `hooks` extension is not installed, so its declared hooks will not run. Run `fiber extension install hooks`."
                 .to_owned(),
             Some(&name),
         ),
-    }
+    })
 }
 
 /// What a session with declared hooks owes them when the `hooks`
@@ -1589,9 +1589,8 @@ pub enum HooksState {
         /// The notice the load pushes, naming the missing extension.
         notice: Notice,
     },
-    /// Declared-but-unloaded hooks with any `blocking` entry, a missing
-    /// or invalid `on_failure`, or unreadable settings: the start fails
-    /// with `extension_missing`.
+    /// Declared-but-unloaded hooks with any `blocking` entry or a missing
+    /// or invalid `on_failure`: the start fails with `extension_missing`.
     MissingBlocking,
 }
 
