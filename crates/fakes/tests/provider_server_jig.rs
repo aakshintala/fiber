@@ -12,9 +12,8 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -30,16 +29,6 @@ mod support;
 /// wait (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
-/// How long the stub holds the jig back before it starts: one second past
-/// [`DEADLINE`], so the listening line is due after the old bound expires.
-const SLOW_START: Duration = Duration::from_secs(fakes::MUST_SUCCEED_WITHIN.as_secs() + 1);
-
-/// How long the jig may take to print its listening line, process start
-/// included: the first exec of a freshly linked binary can stall under
-/// load. This is the bound `crates/loop/tests/review_jig.rs` gives a built
-/// binary's first start. The exchange after the line keeps [`DEADLINE`].
-const START_BOUND: Duration = Duration::from_secs(30);
-
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
 /// cargo and waits on no build lock.
@@ -48,17 +37,6 @@ fn example_path() -> PathBuf {
     path.pop();
     path.pop();
     path.join("examples").join("provider-server")
-}
-
-/// A stub that sleeps `delay` and then runs its arguments, so the jig starts
-/// only after `delay`. The sleep is the stub's own: the test waits on the
-/// jig's line under its deadline, never on the clock.
-fn slow_start_stub(dir: &Path, delay: Duration) -> PathBuf {
-    let path = dir.join("slow-start");
-    let script = format!("#!/bin/sh\nsleep {}\nexec \"$@\"\n", delay.as_secs());
-    std::fs::write(&path, script).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
 }
 
 /// Reads the jig's stdout: first its `listening on` line, then one request
@@ -134,15 +112,36 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
 }
 
 /// The reported flake: the built binary's first start outlasts the wait for
-/// its listening line. The stub delays the jig's start past that wait.
+/// its listening line. `/bin/sh` holds the jig on a FIFO until the test
+/// releases it. The release comes after the old bound, so the wait for the
+/// line expires first.
 #[test]
 fn a_slow_process_start_still_prints_the_listening_line() {
     let dir = fakes::TempDir::new("provider-server-jig");
     let fixture = dir.path().join("reply.sse");
     std::fs::write(&fixture, "data: hi\n\n").unwrap();
-    let stub = slow_start_stub(dir.path(), SLOW_START);
-    let mut command = Command::new(stub);
-    command.arg(example_path()).arg(&fixture);
+    let gate = dir.path().join("start");
+    fakes::fifo(&gate);
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("read line < \"$0\"; exec \"$@\"")
+        .arg(&gate)
+        .arg(example_path())
+        .arg(&fixture);
+    // The deadline is made here, before the jig starts, so the release
+    // follows the listening wait's own bound. The sender stays alive, so the
+    // receive ends at the deadline and not at a disconnect.
+    let hold = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN + Duration::from_secs(1));
+    thread::spawn(move || {
+        let (_keep, never) = mpsc::channel::<()>();
+        let _ = hold.recv(&never);
+        let mut release = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&gate)
+            .unwrap();
+        release.write_all(b"go\n").unwrap();
+    });
     serve_one_fixture(command);
 }
 
@@ -179,7 +178,7 @@ fn serve_one_fixture(mut command: Command) {
     spawn_reader(child.stdout.take().unwrap(), tx);
     let mut stderr = child.stderr.take().unwrap();
 
-    let printed = match Deadline::after(START_BOUND).recv(&rx) {
+    let printed = match Deadline::after(DEADLINE).recv(&rx) {
         Ok(printed) => printed,
         Err(err) => {
             // The group kill closes the jig's stderr, so its read ends.
@@ -187,7 +186,7 @@ fn serve_one_fixture(mut command: Command) {
             let errors = stderr_after_kill(stderr);
             panic!(
                 "the provider-server jig printed its listening line: {err:?} \
-                 within {START_BOUND:?}\nits stderr: {errors}"
+                 within {DEADLINE:?}\nits stderr: {errors}"
             );
         }
     };
