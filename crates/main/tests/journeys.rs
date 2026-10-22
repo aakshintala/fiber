@@ -92,6 +92,10 @@ fn a_framed_closing_row_reads_the_same_whatever_the_duration_width() {
     let absent_two = "⋮  ▣ completed · 13 tokens       ⋮";
     let narrow_two = "⋮  ▣ completed · 5s · 13 tokens  ⋮";
     assert_eq!(one(narrow_two, &[]), one(absent_two, &[]));
+    // The frame-adjacent edge: one padding space takes five back.
+    let absent_one = "⋮  ▣ completed · 13 tokens      ⋮";
+    let narrow_one = "⋮  ▣ completed · 5s · 13 tokens ⋮";
+    assert_eq!(one(narrow_one, &[]), one(absent_one, &[]));
 }
 
 #[test]

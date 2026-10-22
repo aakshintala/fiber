@@ -121,29 +121,15 @@ fn closing_row(row: &str) -> String {
         .unwrap_or((after, 0));
     // The drawn row gave the padding after the duration n + 3 fewer
     // columns while the duration was present, so hand them back at the
-    // first wide space run. A bare row holds no wide run and reads on
-    // unchanged.
+    // first wide space run. A frame-adjacent run counts even as one
+    // space, since the fill before `⋮` shrinks to one. A bare row holds
+    // no wide run and no frame, and reads on unchanged.
     let mut kept = kept.to_owned();
-    let mut wide: Option<usize> = None;
-    {
-        let bytes = kept.as_bytes();
-        let mut at = 0;
-        while at < bytes.len() && wide.is_none() {
-            if bytes[at] == b' ' {
-                let from = at;
-                while at < bytes.len() && bytes[at] == b' ' {
-                    at += 1;
-                }
-                if at - from >= 2 {
-                    wide = Some(from);
-                }
-            } else {
-                at += 1;
-            }
-        }
-    }
-    if let Some(from) = wide {
+    if let Some(from) = kept.find("  ") {
         kept.insert_str(from, &" ".repeat(pad));
+    } else if let Some(body) = kept.strip_suffix("⋮") {
+        let trimmed = body.trim_end_matches(' ');
+        kept.insert_str(trimmed.len(), &" ".repeat(pad));
     }
     format!("{head} · [duration]{kept}")
 }
