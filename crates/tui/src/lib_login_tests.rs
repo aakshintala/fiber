@@ -73,7 +73,7 @@ fn loop_with(
     lp.app.set_size(60, 12);
     let (tx, rx) = mpsc::channel();
     lp.files_out = Some(tx);
-    lp.open_command = open;
+    lp.programs.open = open;
     let dir = fakes::TempDir::new("tui-login");
     let out = dir.path().join("opened").display().to_string();
     (lp, rx, dir, out)
@@ -135,7 +135,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     let (mut lp, rx, dir, out) = loop_with(&seam, None);
     let _dir = dir;
     let watchdog = fakes::Watchdog::matching(&out);
-    lp.open_command = Some(
+    lp.programs.open = Some(
         ["/bin/sh", "-c", "printf %s \"$1\" > \"$0\"", &out]
             .map(str::to_owned)
             .to_vec(),

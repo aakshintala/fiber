@@ -2571,31 +2571,7 @@ fn the_raise_is_written_after_the_frame_draws() {
         release,
     };
     let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let lp = super::super::Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: std::path::PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let lp = super::super::Loop::for_test(app, screen);
     let (ours, theirs) = pair();
     theirs
         .set_read_timeout(Some(DEADLINE))
@@ -2855,31 +2831,8 @@ fn tail_open(
         release: mpsc::channel().1,
     };
     let screen = super::Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let mut lp = super::super::Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: false,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: std::path::PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = super::super::Loop::for_test(app, screen);
+    lp.hover = false;
     let (ours, hub_end) = pair();
     let (tx, rx) = mpsc::channel();
     let read_end = ours

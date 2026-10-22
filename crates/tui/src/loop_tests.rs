@@ -137,31 +137,7 @@ fn opened() -> (
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let screen =
         Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
     lp.hub.store(ours);
     let (tx, rx) = mpsc::channel();
     (lp, theirs, tx, rx)
@@ -725,31 +701,8 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let screen =
         Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: clock.clone(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
+    lp.clock = clock.clone();
     lp.hub.store(ours);
     drop(theirs);
     let (_tx, rx) = mpsc::channel();
@@ -1020,31 +973,7 @@ fn counting() -> (
         flushes: std::rc::Rc::clone(&flushes),
     };
     let screen = Screen::new(backend, 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let lp = Loop::for_test(app, screen);
     let (tx, rx) = mpsc::channel();
     (lp, flushes, tx, rx)
 }
@@ -1650,31 +1579,7 @@ fn resume_open_replays_the_log_to_the_tail() {
     app.set_size(60, 12);
     let screen =
         Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
     let (tx, rx) = mpsc::channel();
     let (tui_end, hub_end) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let read_end = tui_end

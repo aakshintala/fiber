@@ -27,7 +27,7 @@ fn screen(lp: &super::Loop<TestBackend>) -> String {
 fn ctrl_v_without_a_clipboard_draws_the_notice() {
     // L1: no reader, so Ctrl+V shows why and leaves the draft.
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    assert!(lp.paste_reader.is_none());
+    assert!(lp.programs.paste.is_none());
     assert_eq!(feed(&mut lp, vec![Input::Bytes(vec![0x16])]), 0);
     let shown = screen(&lp);
     assert!(shown.contains("No clipboard to read"));
@@ -75,7 +75,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     // L2: the worker posts the read, stepping it draws "[Image #1]", and
     // Enter sends a prompt with the image part.
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.paste_reader = Some(pixel_reader());
+    lp.programs.paste = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
     lp.files_out = Some(out);
     let (ours, theirs) = UnixStream::pair().unwrap();
@@ -127,13 +127,13 @@ fn a_second_press_after_a_synchronous_failure_starts_a_read() {
     // P1: a read that never starts lands its failure, so the gate clears:
     // the notice shows and the next press reads.
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    assert!(lp.paste_reader.is_none());
+    assert!(lp.programs.paste.is_none());
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
     assert!(screen(&lp).contains("No clipboard to read"));
     assert_eq!(lp.app.input().expand(), "");
     // With a reader, the next press starts a read instead of dying quiet.
-    lp.paste_reader = Some(pixel_reader());
+    lp.programs.paste = Some(pixel_reader());
     let (out, worker) = mpsc::channel();
     lp.files_out = Some(out);
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);

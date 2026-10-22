@@ -148,36 +148,43 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
-    let lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen,
-        hub: Connection::new(None),
-        tty,
-        on_attach: Box::new(move |session| {
-            if let Ok(mut held) = seen.lock() {
-                held.push(session.0.clone());
-            }
-        }),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: None,
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let mut lp = Loop::for_test(app, screen);
+    lp.tty = tty;
+    lp.on_attach = Box::new(move |session| {
+        if let Ok(mut held) = seen.lock() {
+            held.push(session.0.clone());
+        }
+    });
     (lp, attached)
+}
+
+impl<B: Backend> Loop<B> {
+    /// A loop on `screen` at today's test defaults: a fake clock, no tty, no
+    /// reader, no worker channel, hover on and no environment. A test sets
+    /// any other value by assigning the field.
+    pub(super) fn for_test(app: App, screen: Screen<B>) -> Self {
+        Self {
+            app,
+            parser: crate::keys::Parser::default(),
+            screen,
+            hub: Connection::new(None),
+            tty: None,
+            on_attach: Box::new(|_| {}),
+            clock: fakes::clock::FakeClock::new(),
+            wakeups: 0,
+            files_out: None,
+            search: None,
+            reader: None,
+            model_reader: crate::catalogue::Reader::new(None),
+            pointer: crate::mouse::Pointer::default(),
+            hover: true,
+            var: Box::new(|_| None),
+            programs: super::Programs::default(),
+            title: crate::osc::Title::default(),
+            shape: crate::osc::Shape::default(),
+            tick: crate::tick::TickThread::idle(),
+        }
+    }
 }
 
 /// Runs `lp` over `inputs`, then with every sender gone. With no inputs it
@@ -1547,7 +1554,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     let ready_path = ready.path().display().to_string();
-    lp.copy_command = Some(
+    lp.programs.copy = Some(
         [
             "/bin/sh",
             "-c",
@@ -2215,32 +2222,10 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     let mut app = App::new(dir.path().to_path_buf());
     app.set_size(60, 12);
     let (out, rx) = mpsc::channel();
-    let mut lp = Loop {
-        app,
-        parser: crate::keys::Parser::default(),
-        screen: Screen::new(TestBackend::new(60, 12), 60, 12)
-            .unwrap_or_else(|err| panic!("screen: {err}")),
-        hub: Connection::new(None),
-        tty: None,
-        on_attach: Box::new(|_| {}),
-        clock: fakes::clock::FakeClock::new(),
-        wakeups: 0,
-        files_out: Some(out),
-        search: None,
-        reader: None,
-        model_reader: crate::catalogue::Reader::new(None),
-        paste_reader: None,
-        pointer: crate::mouse::Pointer::default(),
-        hover: true,
-        var: Box::new(|_| None),
-        copy_command: None,
-        open_command: None,
-        viewer: Vec::new(),
-        images_dir: PathBuf::new(),
-        title: crate::osc::Title::default(),
-        shape: crate::osc::Shape::default(),
-        tick: crate::tick::TickThread::idle(),
-    };
+    let screen =
+        Screen::new(TestBackend::new(60, 12), 60, 12).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop::for_test(app, screen);
+    lp.files_out = Some(out);
     // No hub: a frame fetches no history, so nothing arrives here.
     let (_hub, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);

@@ -162,14 +162,26 @@ pub(crate) fn run_with(
     }
     app.set_size(width, height);
     let retry = Retry::new(&clock);
-    let open_command = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
+    let open = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
         .map(|argv| argv.into_iter().map(str::to_owned).collect());
     // The viewer opens what an opener opens with: none over SSH or
     // with no opener on PATH, where a click says why.
-    let viewer = open_command
+    let viewer = open
         .as_ref()
         .map(|_| crate::viewer::command(cfg!(target_os = "macos")))
         .unwrap_or_default();
+    let programs = Programs {
+        copy: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
+            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
+        open,
+        viewer,
+        paste: crate::paste_image::command(
+            cfg!(target_os = "macos"),
+            |name| std::env::var_os(name),
+            clipboard::on_path,
+        ),
+        images_dir,
+    };
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -186,21 +198,12 @@ pub(crate) fn run_with(
         pointer: Pointer::default(),
         hover,
         var: Box::new(|name| std::env::var(name).ok()),
-        copy_command: clipboard::command(|name| std::env::var_os(name), clipboard::on_path)
-            .map(|argv| argv.into_iter().map(str::to_owned).collect()),
-        open_command,
-        viewer,
-        images_dir,
-        paste_reader: crate::paste_image::command(
-            cfg!(target_os = "macos"),
-            |name| std::env::var_os(name),
-            clipboard::on_path,
-        ),
+        programs,
         title: osc::Title::default(),
         shape: osc::Shape::default(),
         tick: crate::tick::TickThread::idle(),
     };
-    terminal.app.set_opener(terminal.open_command.is_some());
+    terminal.app.set_opener(terminal.programs.open.is_some());
     terminal
         .app
         .set_osc9(crate::attention::supported(&terminal.var));
@@ -306,6 +309,25 @@ fn catch_interrupts() {
 /// Reads an environment variable by name.
 type Var = Box<dyn Fn(&str) -> Option<String> + Send>;
 
+/// The programs the loop runs for the person, each chosen once at startup.
+#[derive(Default)]
+struct Programs {
+    /// The system clipboard command a copy is piped to, beside OSC 52.
+    copy: Option<Vec<String>>,
+    /// The program a link click runs with the URL appended, or none over
+    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
+    open: Option<Vec<String>>,
+    /// The program a viewer worker runs with the copy appended, or none
+    /// where nothing opens (`docs/tui.md`, "Images").
+    viewer: Vec<String>,
+    /// The clipboard image command for this machine, or none where no
+    /// clipboard reads.
+    paste: Option<crate::paste_image::Reader>,
+    /// Where the viewer writes its copies: `cache/images` in Fiber home
+    /// (`docs/state.md`).
+    images_dir: PathBuf,
+}
+
 /// The loop's state.
 struct Loop<B: Backend> {
     app: App,
@@ -324,9 +346,6 @@ struct Loop<B: Backend> {
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
-    /// The clipboard image command for this machine, chosen once at
-    /// startup, or none where no clipboard reads.
-    paste_reader: Option<crate::paste_image::Reader>,
     /// The tty's reader, paused while the editor has the terminal.
     reader: Option<Reader>,
     /// The one model-list read at a time.
@@ -337,17 +356,8 @@ struct Loop<B: Backend> {
     hover: bool,
     /// Reads an environment variable: `$VISUAL` and `$EDITOR` for Ctrl+G.
     var: Var,
-    /// The system clipboard command a copy is piped to, beside OSC 52.
-    copy_command: Option<Vec<String>>,
-    /// The program a link click runs with the URL appended, or none over
-    /// SSH or with no opener on `PATH` (`docs/tui.md`, "Links").
-    open_command: Option<Vec<String>>,
-    /// The program a viewer worker runs with the copy appended, or none
-    /// where nothing opens (`docs/tui.md`, "Images").
-    viewer: Vec<String>,
-    /// Where the viewer writes its copies: `cache/images` in Fiber home
-    /// (`docs/state.md`).
-    images_dir: PathBuf,
+    /// The programs this machine runs for the person.
+    programs: Programs,
     /// The window title last written.
     title: osc::Title,
     /// The pointer shape last written.
@@ -522,7 +532,7 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
-                    clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                    clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
@@ -537,7 +547,7 @@ impl<B: Backend> Loop<B> {
                 Effect::ListFiles => self.list_files(),
                 Effect::ReadImage(ticket) => {
                     if let Some(notice) = crate::paste_image::start(
-                        self.paste_reader.as_ref(),
+                        self.programs.paste.as_ref(),
                         &self.clock,
                         self.files_out.as_ref(),
                         ticket,
@@ -720,10 +730,10 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
-            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+            clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
         }
         if let Some(text) = self.app.take_owed_copy() {
-            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+            clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
         }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
@@ -775,7 +785,7 @@ impl<B: Backend> Loop<B> {
             return;
         };
         for view in self.app.take_image_out().view {
-            crate::viewer::spawn(&self.viewer, &self.images_dir, view, &out);
+            crate::viewer::spawn(&self.programs.viewer, &self.programs.images_dir, view, &out);
         }
     }
 
@@ -907,7 +917,7 @@ impl<B: Backend> Loop<B> {
     /// the URL is drawn either way and the flow completes when it is
     /// visited (`docs/tui.md`, "Links").
     fn open_link(&self, url: String) {
-        if let Some(argv) = self.open_command.clone() {
+        if let Some(argv) = self.programs.open.clone() {
             let mut argv = argv;
             argv.push(url);
             drop(clipboard::pipe(argv, String::new()));
