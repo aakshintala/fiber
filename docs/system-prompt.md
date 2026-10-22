@@ -408,6 +408,10 @@ line and the skills it had loaded (`docs/handoff.md`). The cache
 already misses after the tools at a handoff, so the fresh message costs nothing
 extra.
 
+When the session has a reviewer, the person's earlier messages that still bind
+come verbatim before the turn's input (`docs/handoff.md`, "What the model sees
+after a handoff").
+
 ## Delegates, forks and rewinds
 
 - A delegate that is a new session writes its own opening message, from its own

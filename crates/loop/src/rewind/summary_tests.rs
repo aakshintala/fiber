@@ -148,6 +148,7 @@ fn summary_rendering_preserves_the_persons_input_and_last_step() {
             "model",
             &mut had,
             &mut carry,
+            None,
         );
     }
     let saved = carry.clone();
@@ -177,6 +178,7 @@ fn summary_rendering_preserves_the_persons_input_and_last_step() {
             "model",
             &mut had,
             &mut carry,
+            None,
         );
     }
     assert_eq!(carry, saved);
