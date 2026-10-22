@@ -197,6 +197,13 @@ pub(crate) fn run_with(
     // Startup pushes (config reads, session restores) gain births and
     // wakes before the first arm, so they fade like every other event.
     app.sweep_notices(clock.now());
+    // The title goes out before the reader starts, so a failed start
+    // still leaves it set.
+    let mut title = osc::Title::default();
+    if let Some(bytes) = title.next(app.title()) {
+        let mut out = &tty;
+        out.write_all(&bytes).unwrap_or(());
+    }
     let (tx, rx) = mpsc::channel();
     // The cached lists are asked after the first frame, so the first
     // frame draws at once and the picker lists them as soon as the read
@@ -224,11 +231,10 @@ pub(crate) fn run_with(
         hover,
         var,
         programs,
-        title: osc::Title::default(),
+        title,
         shape: osc::Shape::default(),
         tick: crate::tick::TickThread::idle(),
     };
-    terminal.write_title();
     spawn_hub(
         connect,
         Feed::new(tx.clone(), terminal.hub.credits()).routed(Arc::clone(&router)),

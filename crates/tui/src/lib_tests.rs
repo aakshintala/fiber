@@ -209,16 +209,11 @@ impl<B: Backend> Loop<B> {
 /// input first.
 #[track_caller]
 pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
-    let (tx, rx) = mpsc::channel();
-    for input in inputs {
-        tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
-    }
-    drop(tx);
-    lp.run(&rx)
+    taken(lp, inputs).0
 }
 
-/// Runs `lp` over `inputs` as [`feed`] does, and returns the exit code with
-/// how many of the inputs `run` took off the channel.
+/// Runs `lp` over `inputs` as [`feed`] does (which wraps this), and returns
+/// the exit code with how many of the inputs `run` took off the channel.
 #[track_caller]
 fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
     let (tx, rx) = mpsc::channel();
@@ -374,7 +369,7 @@ fn ctrl_c_twice_quits_with_zero() {
     // The sender stays: the loop returns on the quit, not on a closed
     // channel.
     assert_eq!(lp.run(&rx), 0);
-    assert_eq!(2 - rx.try_iter().count(), 2);
+    assert_eq!(rx.try_iter().count(), 0);
     drop(tx);
 }
 
@@ -819,7 +814,7 @@ fn failed_reader_start_returns_io_failed() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The watcher drains what the first frame writes, so no write blocks.
-    let _frames = watch(&pair.main, Vec::new());
+    let title = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
@@ -853,6 +848,10 @@ fn failed_reader_start_returns_io_failed() {
         "the message names the terminal: {:?}",
         error.to_string()
     );
+    // The title was written before the reader failed to start.
+    Deadline::after(DEADLINE)
+        .recv(&title)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the title: {err}"));
     // The failure return restores the terminal: the slave is cooked again.
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
