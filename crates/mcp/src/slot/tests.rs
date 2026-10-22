@@ -1679,7 +1679,7 @@ fn relist_without_a_running_server_signals_replace_without_records() {
     let slot = started.servers.slot("fx").expect("the fx slot");
     match relist_on_thread(&slot) {
         Relisted::Up { .. } => panic!("a lazy slot never re-lists"),
-        Relisted::Replace { records } => assert!(records.is_empty()),
+        Relisted::Replace { record } => assert!(record.is_none()),
     }
     setup.stop(started.servers);
 }
@@ -1692,12 +1692,11 @@ fn relist_on_a_dead_server_carries_its_exit_and_moves_nothing() {
     let slot = setup.running(&started);
     let cache_before = setup.cache_bytes();
     setup.kill(&started);
-    let records = match relist_on_thread(&slot) {
+    let record = match relist_on_thread(&slot) {
         Relisted::Up { .. } => panic!("a dead server never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
-    assert_eq!(records.len(), 1);
-    let contract::tool::ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the exit rides a failed record")
     };
     assert_eq!(failed.server, "fx");
@@ -1755,12 +1754,11 @@ fn relist_of_an_idle_expired_server_carries_the_same_restarting_death() {
     // The expiry is a death the re-list is the first to see: the
     // session ended out from under the slot, so the reload restarts it
     // with the same record a dead server carries.
-    let records = match relist_on_thread(&slot) {
+    let record = match relist_on_thread(&slot) {
         Relisted::Up { .. } => panic!("an expired server never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
-    assert_eq!(records.len(), 1);
-    let ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the expiry rides a failed record")
     };
     assert_eq!(failed.server, "fx");
@@ -1808,13 +1806,12 @@ fn relist_dying_mid_tools_list_carries_the_same_restarting_death() {
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
     assert!(started.failed.is_empty());
     let slot = setup.running(&started);
-    let records = match relist_on_thread(&slot) {
+    let record = match relist_on_thread(&slot) {
         Relisted::Up { .. } => panic!("a death mid-list never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
     assert_eq!(http_count(&server, "tools/list"), 2);
-    assert_eq!(records.len(), 1);
-    let ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the mid-list death rides a failed record")
     };
     assert_eq!(failed.server, "fx");
@@ -1862,15 +1859,14 @@ fn relist_dying_mid_prompts_list_carries_the_same_restarting_death() {
         .recv(&held)
         .expect("the re-list reaches prompts/list");
     setup.kill(&started);
-    let records = match Deadline::after(WITHIN)
+    let record = match Deadline::after(WITHIN)
         .recv(&result)
         .expect("the re-list ends")
     {
         Relisted::Up { .. } => panic!("a death mid-list never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
-    assert_eq!(records.len(), 1);
-    let ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the mid-list death rides a failed record")
     };
     assert_eq!(failed.server, "fx");
@@ -1911,15 +1907,14 @@ fn relist_past_its_deadline_carries_the_deadline_and_touches_nothing() {
         crate::start::DEFAULT_STARTUP_TIMEOUT,
         &fakes::Deadline::after(WITHIN),
     );
-    let records = match fakes::Deadline::after(WITHIN)
+    let record = match fakes::Deadline::after(WITHIN)
         .recv(&result)
         .expect("the re-list ends")
     {
         Relisted::Up { .. } => panic!("a wedged server never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
-    assert_eq!(records.len(), 1);
-    let contract::tool::ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the deadline rides a failed record")
     };
     assert_eq!(failed.reason, contract::events::ServerFailure::Deadline);
@@ -1954,15 +1949,14 @@ fn relist_pages_only_until_the_bound() {
         crate::start::DEFAULT_STARTUP_TIMEOUT,
         &fakes::Deadline::after(WITHIN),
     );
-    let records = match fakes::Deadline::after(WITHIN)
+    let record = match fakes::Deadline::after(WITHIN)
         .recv(&result)
         .expect("the re-list ends")
     {
         Relisted::Up { .. } => panic!("an endless list never re-lists"),
-        Relisted::Replace { records } => records,
+        Relisted::Replace { record } => record,
     };
-    assert_eq!(records.len(), 1, "the bound is the one deadline");
-    let contract::tool::ServerRecord::Failed(failed) = &records[0] else {
+    let Some(ServerRecord::Failed(failed)) = record else {
         panic!("the deadline rides a failed record")
     };
     assert_eq!(failed.reason, contract::events::ServerFailure::Deadline);

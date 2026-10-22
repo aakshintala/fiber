@@ -8,7 +8,8 @@
 mod tests;
 
 use std::path::Path;
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, PoisonError, mpsc};
+use std::thread;
 
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, McpServerReady, ReloadedServers, ToolInfo};
@@ -99,8 +100,9 @@ impl Disposition {
 }
 
 /// Classifies the person's new specs against the live slots, required
-/// operations first (program order on the prepare thread is the edge),
-/// each partition in new-spec order, removals last in slot-list order.
+/// operations first (program order on the prepare thread is the edge):
+/// required new-spec rows in new-spec order, then removals in slot-list
+/// order, then optional new-spec rows.
 /// A key mismatch or a `startup_timeout`/`call_timeout`/`required`
 /// difference takes the replace path; a running slot with a matching
 /// key and timeouts keeps; a running slot that died or expired replaces;
@@ -244,71 +246,38 @@ fn required_failed(failure: &McpServerFailed) -> contract::shapes::Failure {
     }
 }
 
-/// Shadow-starts one fresh server for a shadow row, without touching the
-/// live slots or the cache files: `disposition` names the quadrant the
-/// commit files it under, and the failure stages the old deaths beside
-/// the start failure when the shadow fails. A required failure stops every
-/// shadow started so far and propagates, so no replacement child outlives
-/// the rejected reload.
-fn stage_shadow(
-    shadows: &mut Vec<Arc<Slot>>,
-    servers: &Servers,
+/// One deferred shadow start: the row's spec with the old deaths the
+/// commit writes before the ready, and the quadrant the commit files it
+/// under. Shadows run on per-server threads and join below, so the
+/// assembly restores row order no matter which shadow answers first.
+struct ShadowJob {
+    /// The new spec to shadow-start fresh.
     spec: ServerSpec,
+    /// The old deaths the commit writes before the ready.
     records: Vec<contract::tool::ServerRecord>,
+    /// Which quadrant the commit files the shadow under.
     disposition: Disposition,
-    inputs: &SyncInputs,
-) -> Result<StagedRow, contract::shapes::Failure> {
-    match open_staged(
-        spec.clone(),
-        inputs.workspace,
-        inputs.artifacts,
-        inputs.images,
-        inputs.cache,
-        inputs.clock,
-        inputs.version,
-        servers.timing(),
-    ) {
-        Shadowed::Up(opened) => {
-            shadows.push(Arc::clone(&opened.slot));
-            Ok(StagedRow::ShadowUp {
-                spec,
-                slot: opened.slot,
-                listed: opened.listed,
-                used: opened.declared,
-                records,
-                disposition,
-                sources: opened.sources,
-            })
-        }
-        Shadowed::Down { failure } => {
-            if spec.required {
-                for shadow in shadows.iter() {
-                    shadow.stop();
-                }
-                return Err(required_failed(&failure));
-            }
-            Ok(StagedRow::ShadowFailed {
-                spec,
-                failure,
-                records,
-                disposition,
-            })
-        }
-    }
 }
 
-/// Stages the classified rows: required rows come first, so a required
-/// failure returns before any non-required row runs — and the staged
-/// outcomes are dropped, so the old slots keep serving and the old
-/// caches stay byte-identical.
-///
+/// Stages the classified rows in row order — required rows first, as
+/// `classify_sync` emits them. Keeps re-list inline: the re-list only
+/// reads the live slots and the declaration builds no child, so no keep
+/// disturbs another row. Shadows start on per-server threads and join
+/// over the done-channel, as `start_observed` does, so the shadow phase
+/// is bounded by the slowest new spec; a required failure stops every
+/// shadow and drops every staged outcome, so the old slots keep serving
+/// and the old caches stay byte-identical.
 pub fn stage_sync(
     rows: Vec<SyncRow>,
     servers: &Servers,
     inputs: &SyncInputs,
 ) -> Result<StagedSync, contract::shapes::Failure> {
-    let mut staged = Vec::new();
-    let mut shadows: Vec<Arc<Slot>> = Vec::new();
+    enum Planned {
+        Ready(Box<StagedRow>),
+        Job(usize),
+    }
+    let mut planned = Vec::new();
+    let mut jobs: Vec<ShadowJob> = Vec::new();
     for row in rows {
         match row {
             SyncRow::Keep { spec } => {
@@ -323,17 +292,19 @@ pub fn stage_sync(
                         let link = Arc::downgrade(&slot);
                         let used =
                             declare(&spec, &listed.tools, &link, inputs.artifacts, inputs.images);
-                        staged.push(StagedRow::Keep { spec, listed, used });
-                    }
-                    Relisted::Replace { records } => {
-                        staged.push(stage_shadow(
-                            &mut shadows,
-                            servers,
+                        planned.push(Planned::Ready(Box::new(StagedRow::Keep {
                             spec,
-                            records,
-                            Disposition::Restarted,
-                            inputs,
-                        )?);
+                            listed,
+                            used,
+                        })));
+                    }
+                    Relisted::Replace { record } => {
+                        planned.push(Planned::Job(jobs.len()));
+                        jobs.push(ShadowJob {
+                            spec,
+                            records: record.into_iter().collect(),
+                            disposition: Disposition::Restarted,
+                        });
                     }
                 }
             }
@@ -352,17 +323,88 @@ pub fn stage_sync(
                     } else {
                         Vec::new()
                     };
-                staged.push(stage_shadow(
-                    &mut shadows,
-                    servers,
+                planned.push(Planned::Job(jobs.len()));
+                jobs.push(ShadowJob {
                     spec,
                     records,
                     disposition,
-                    inputs,
-                )?);
+                });
             }
             SyncRow::Remove { name } => {
-                staged.push(StagedRow::Remove { name });
+                planned.push(Planned::Ready(Box::new(StagedRow::Remove { name })));
+            }
+        }
+    }
+    let mut answered: std::collections::HashMap<usize, Shadowed> = std::collections::HashMap::new();
+    if !jobs.is_empty() {
+        let (done, results) = mpsc::channel();
+        for (index, job) in jobs.iter().enumerate() {
+            let done = done.clone();
+            let spec = job.spec.clone();
+            let workspace = inputs.workspace.to_path_buf();
+            let artifacts = inputs.artifacts.to_path_buf();
+            let images = Arc::clone(inputs.images);
+            let cache = inputs.cache.to_path_buf();
+            let clock = Arc::clone(inputs.clock);
+            let version = inputs.version.to_owned();
+            let timing = servers.timing();
+            thread::spawn(move || {
+                let opened = open_staged(
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version, timing,
+                );
+                done.send((index, opened)).unwrap_or(());
+            });
+        }
+        drop(done);
+        for (index, opened) in results {
+            answered.insert(index, opened);
+        }
+    }
+    debug_assert_eq!(answered.len(), jobs.len(), "every shadow answers");
+    // A required failure stops every shadow and propagates with the
+    // start's code, so no replacement child outlives the rejected
+    // reload; every staged outcome is dropped with the return.
+    if let Some(failure) =
+        jobs.iter()
+            .enumerate()
+            .find_map(|(index, job)| match answered.get(&index) {
+                Some(Shadowed::Down { failure }) if job.spec.required => Some(failure),
+                _ => None,
+            })
+    {
+        for index in 0..jobs.len() {
+            if let Some(Shadowed::Up(opened)) = answered.get(&index) {
+                opened.slot.stop();
+            }
+        }
+        return Err(required_failed(failure));
+    }
+    let mut staged = Vec::new();
+    for item in planned {
+        match item {
+            Planned::Ready(row) => staged.push(*row),
+            Planned::Job(index) => {
+                let Some(job) = jobs.get(index) else {
+                    unreachable!("every planned job classifies before the join");
+                };
+                match answered.remove(&index) {
+                    Some(Shadowed::Up(opened)) => staged.push(StagedRow::ShadowUp {
+                        spec: job.spec.clone(),
+                        slot: opened.slot,
+                        listed: opened.listed,
+                        used: opened.declared,
+                        records: job.records.clone(),
+                        disposition: job.disposition,
+                        sources: opened.sources,
+                    }),
+                    Some(Shadowed::Down { failure }) => staged.push(StagedRow::ShadowFailed {
+                        spec: job.spec.clone(),
+                        failure,
+                        records: job.records.clone(),
+                        disposition: job.disposition,
+                    }),
+                    None => unreachable!("every shadow answers before the assembly"),
+                }
             }
         }
     }

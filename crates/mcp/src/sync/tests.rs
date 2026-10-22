@@ -2,8 +2,8 @@
 //! stage and commit entries: keeps install staged lists, replacements
 //! swap the slot, and failures file under the right quadrant.
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Barrier};
 
 use contract::events::ServerFailure;
 use contract::tool::ServerRecord;
@@ -507,4 +507,87 @@ fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
         );
         setup.stop(servers);
     }
+}
+
+#[test]
+fn stage_sync_starts_shadows_in_parallel() {
+    // Two shadow starts each park in their spawn guard until both have
+    // entered: serial staging parks the first guard forever and never
+    // sends the second, so the wall-clock Deadline on the entered wait
+    // below is the proving signal; parallel staging releases both.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let empty = setup.start(vec![]);
+    let (entered_tx, entered) = mpsc::channel::<String>();
+    let gate = Arc::new(Barrier::new(3));
+    let mut specs = Vec::new();
+    for name in ["aa", "bb"] {
+        let base = setup.spec(name);
+        let (command, args, env, secrets, reader) = match &base.transport {
+            crate::Transport::Stdio(stdio) => (
+                stdio.command.clone(),
+                stdio.args.clone(),
+                stdio.env.clone(),
+                stdio.secrets.clone(),
+                stdio.reader.clone(),
+            ),
+            crate::Transport::Http { .. } => panic!("the fixture specs are stdio"),
+        };
+        let tag = name.to_owned();
+        let report = entered_tx.clone();
+        let gate = Arc::clone(&gate);
+        // The guard runs immediately before the spawn: parking here
+        // proves the shadow started without launching anything yet.
+        let guard = Arc::new(move || {
+            report.send(tag.clone()).expect("collected");
+            gate.wait();
+            Ok(())
+        });
+        specs.push(crate::ServerSpec {
+            transport: crate::Transport::Stdio(crate::StdioSpec {
+                command: command.clone(),
+                args: args.clone(),
+                env,
+                secrets,
+                reader,
+                run: Some(crate::Program {
+                    command,
+                    args,
+                    guard,
+                }),
+            }),
+            ..base
+        });
+    }
+    let rows = classify_sync(specs, &empty.servers);
+    assert!(matches!(
+        rows.as_slice(),
+        [SyncRow::Shadow { .. }, SyncRow::Shadow { .. }]
+    ));
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
+    // Both shadows enter before either launches: on serial code the
+    // second send never comes and this Deadline fails the test.
+    let mut entered_names = Vec::new();
+    for _ in 0..2 {
+        entered_names.push(
+            Deadline::after(WITHIN)
+                .recv(&entered)
+                .expect("both shadows enter before either launches"),
+        );
+    }
+    entered_names.sort();
+    assert_eq!(entered_names, vec!["aa".to_owned(), "bb".to_owned()]);
+    gate.wait();
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("fresh starts stage");
+    let owned = setup.owned_inputs(&images);
+    let synced = commit_sync(staged, &servers, &owned.inputs());
+    assert_eq!(
+        synced.servers.started,
+        vec!["aa".to_owned(), "bb".to_owned()]
+    );
+    setup.stop(servers);
 }

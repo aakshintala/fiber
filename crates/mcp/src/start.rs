@@ -715,7 +715,7 @@ pub(crate) fn start_observed_tracked(
 
 /// One `mcp_resources` row: listed as built in, in full, like
 /// `main`'s `builtin::registered` builds its rows.
-pub(crate) fn resources_info(definition: &ToolDefinition) -> ToolInfo {
+fn resources_info(definition: &ToolDefinition) -> ToolInfo {
     let bytes =
         u64::try_from(serde_json::to_vec(definition).unwrap_or_default().len()).unwrap_or(u64::MAX);
     ToolInfo {

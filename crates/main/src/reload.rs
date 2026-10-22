@@ -89,7 +89,7 @@ pub(crate) fn record_load(
 /// extension-approval preparation skips it, so no slot starts and the
 /// grouping, records, failures and carried prompt sources stay empty.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Preparation {
+enum Preparation {
     /// An explicit reload: run the MCP sync.
     Explicit,
     /// The late extension-approval preparation: skip the MCP sync.
@@ -382,7 +382,7 @@ impl State {
                 // other server: changed takes the replace path, same-spec
                 // healthy re-lists in place, and a server approved
                 // in-session starts with its prompt sources joining the
-                // `/` list. Unapproved stay skipped exactly as before.
+                // `/` list. Repository-unapproved servers are skipped.
                 let prepared = crate::mcp_servers::repository_servers::prepare(
                     &self.sources.home,
                     &self.sources.project,
