@@ -972,6 +972,18 @@ fn delete_word_clears_the_key() {
 }
 
 #[test]
+fn delete_to_line_start_clears_the_key() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "abc");
+    login.edit_key(&Edit::DeleteToLineStart);
+    let screen = drawn(&login, 80, 24);
+    let dots = screen.lines().find(|row| row.contains('█')).unwrap_or("");
+    assert!(!dots.contains('•'), "{dots:?}");
+}
+
+#[test]
 fn other_edits_leave_the_key() {
     for edit in [
         Edit::Left,

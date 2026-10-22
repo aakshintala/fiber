@@ -1595,6 +1595,9 @@ search box and the draft shows without a cursor.
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
   the screen, then scrolls.
+- Ctrl+U deletes from the start of the cursor's line to the cursor, the
+  line ending at a line break, not at the box's wrap; at a line's start it
+  deletes nothing.
 - ↑ in an empty box recalls earlier prompts: from this session, then the
   project's earlier sessions, newest first. Ctrl+R searches them. They come
   from the project's prompt history (`docs/state.md`), read through the hub,
@@ -1635,6 +1638,7 @@ search box and the draft shows without a cursor.
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
 | Delete a word | `delete_word` | ⌥Backspace | |
+| Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | ⌘← ⌘→, where the terminal passes them | |
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
@@ -1666,7 +1670,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("34 actions, 24 with
+binding by area, with its other paths." and the counts ("38 actions, 26 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
@@ -1715,7 +1719,7 @@ A global action acts in all six. The rest act only where they are listed:
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
-  `delete_word`, `line_start_end`, `paste_image`.
+  `delete_word`, `delete_to_line_start`, `line_start_end`, `paste_image`.
 - Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,

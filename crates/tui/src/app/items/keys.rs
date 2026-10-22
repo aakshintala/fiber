@@ -63,6 +63,7 @@ pub(super) fn encode_edit(edit: &Edit) -> String {
         Edit::ShiftEnter => "\r".to_owned(),
         Edit::CtrlJ => "\n".to_owned(),
         Edit::DeleteWord => "\x1b\x7f".to_owned(),
+        Edit::DeleteToLineStart => "\x15".to_owned(),
         Edit::Paste(text) => text.replace('\n', "\r"),
     }
 }

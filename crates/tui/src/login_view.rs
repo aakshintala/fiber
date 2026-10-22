@@ -1125,6 +1125,7 @@ impl Login {
                 | Edit::WordLeft
                 | Edit::WordRight
                 | Edit::DeleteWord
+                | Edit::DeleteToLineStart
                 | Edit::LineStart
                 | Edit::LineEnd
                 | Edit::Delete => host.typed.edit(edit.clone()),
@@ -1137,7 +1138,8 @@ impl Login {
         match panel.focus {
             Focus::Key => match edit {
                 Edit::Paste(text) => panel.key.push_str(text),
-                Edit::DeleteWord => panel.key.clear(),
+                // The masked key has no cursor to move: both clear it.
+                Edit::DeleteWord | Edit::DeleteToLineStart => panel.key.clear(),
                 Edit::Left
                 | Edit::Right
                 | Edit::ShiftEnter
@@ -1157,6 +1159,7 @@ impl Login {
                 | Edit::WordLeft
                 | Edit::WordRight
                 | Edit::DeleteWord
+                | Edit::DeleteToLineStart
                 | Edit::LineStart
                 | Edit::LineEnd
                 | Edit::Delete => panel.label.edit(edit.clone()),

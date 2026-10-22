@@ -1,6 +1,7 @@
 //! Tests for the draft editor.
 
 use super::{Draft, Piece};
+use crate::keys::Edit;
 
 /// A draft holding `text`, typed: characters and line breaks.
 fn typed(text: &str) -> Draft {
@@ -159,6 +160,24 @@ fn delete_word_stops_at_the_line_start_unless_it_is_there() {
     draft.line_start();
     draft.delete_word();
     assert_eq!(shown(&draft), "one |three");
+}
+
+#[test]
+fn delete_to_line_start_takes_the_line_before_the_cursor_only() {
+    // On the second line, from inside it: only that line's text before
+    // the cursor goes, and the line break above it stays.
+    let mut draft = typed("first\nsecond line");
+    draft.left();
+    draft.left();
+    draft.edit(Edit::DeleteToLineStart);
+    assert_eq!(shown(&draft), "first\n|ne");
+    // At the line's start there is nothing before it on the line.
+    draft.edit(Edit::DeleteToLineStart);
+    assert_eq!(shown(&draft), "first\n|ne");
+    // A single line goes whole up to the cursor.
+    let mut draft = typed("one two");
+    draft.edit(Edit::DeleteToLineStart);
+    assert_eq!(shown(&draft), "|");
 }
 
 #[test]

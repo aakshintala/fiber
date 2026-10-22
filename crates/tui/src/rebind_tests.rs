@@ -348,7 +348,7 @@ fn clashing_with_two_actions_prompts_twice_then_applies() {
 fn reset_applies_the_defaults_removing_the_entry() {
     let keys = person(&[("copy_focused", json!(["c"]))]);
     let mut screen = keys_screen();
-    select(&mut screen, 20);
+    select(&mut screen, 21);
     match press(&mut screen, &keys, &["r"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),
@@ -413,7 +413,7 @@ fn reset_through_a_clash_prompts_and_swaps() {
 fn delete_and_backspace_unbind() {
     let keys = keys();
     let mut screen = keys_screen();
-    select(&mut screen, 16);
+    select(&mut screen, 17);
     match press(&mut screen, &keys, &["delete"]) {
         Outcome::Apply(next) => assert_eq!(
             next.edits(&keys),

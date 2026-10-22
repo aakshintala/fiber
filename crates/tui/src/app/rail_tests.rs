@@ -2499,7 +2499,7 @@ fn esc_goes_to_an_open_search_bar_first() {
 fn unset_arrows_still_move_a_focused_rail_with_rebound_recall() {
     let mut app = opened(&[A, B], A);
     app.set_keys(crate::KeysSetup {
-        user: [("recall_prompt".to_owned(), json!("ctrl+u"))]
+        user: [("recall_prompt".to_owned(), json!("ctrl+t"))]
             .into_iter()
             .collect(),
     });
@@ -2533,7 +2533,7 @@ fn a_focus_rail_key_rebound_to_up_moves_a_focused_rail() {
     // `up` alone would clash with the default recall and revert: move the
     // recall aside so `focus_rail` holds it.
     app.set_keys(keyed_setup(&[
-        ("recall_prompt", json!("ctrl+u")),
+        ("recall_prompt", json!("ctrl+t")),
         ("focus_rail", json!("up")),
     ]));
     // Entry still reaches the rail from the input box, not the recall.
