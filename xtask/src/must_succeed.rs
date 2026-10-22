@@ -121,6 +121,7 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     held("crates/jobs/src/registry_tests.rs", "held by #3001"),
     held("crates/jobs/src/timing_tests.rs", "held by #3001"),
     held("crates/loop/src/inbox_tests.rs", "held by #3001"),
+    held("crates/loop/src/jobs_tests.rs", "held by #3001"),
     held("crates/loop/tests/support/mod.rs", "held by #3001"),
     held("crates/main/tests/delegates.rs", "held by #3001"),
     held("crates/extensions/src/lua_cost_tests.rs", "held by #3116"),
