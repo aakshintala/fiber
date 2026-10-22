@@ -158,6 +158,12 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     (lp, attached)
 }
 
+/// A retry permit no hub thread waits on, for a test of a connection alone.
+pub(super) fn idle_retry() -> Arc<crate::retry::Retry> {
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    crate::retry::Retry::new(&clock)
+}
+
 impl<B: Backend> Loop<B> {
     /// A loop on `screen` at today's test defaults: a fake clock, no tty, no
     /// reader, hover on and no environment. A test sets
@@ -166,14 +172,15 @@ impl<B: Backend> Loop<B> {
         // The receiver is dropped: a worker's answer finds the channel
         // closed and is lost, and the channel `run` reads is the test's own.
         let (files_out, _) = mpsc::channel();
+        let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         Self {
             app,
             parser: crate::keys::Parser::default(),
             screen,
-            hub: Connection::new(None),
+            hub: Connection::new(crate::retry::Retry::new(&clock)),
             tty: None,
             on_attach: Box::new(|_| {}),
-            clock: fakes::clock::FakeClock::new(),
+            clock,
             files_out,
             search: None,
             reader: None,

@@ -2085,7 +2085,7 @@ fn a_closed_answer_channel_ends_the_wait_hung_up() {
 #[test]
 fn an_answer_missing_its_final_seq_is_dropped() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::tests::idle_retry());
     hub.store(ours);
     let mut app = App::new(PathBuf::from("/w"));
     let tick = crate::tick::TickThread::idle();
@@ -2151,7 +2151,7 @@ fn an_empty_fetch_range_asks_nothing() {
     theirs
         .set_nonblocking(true)
         .unwrap_or_else(|err| panic!("nonblocking: {err}"));
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::tests::idle_retry());
     hub.store(ours);
     let mut app = App::new(PathBuf::from("/w"));
     let tick = crate::tick::TickThread::idle();
@@ -2185,7 +2185,7 @@ fn an_empty_fetch_range_asks_nothing() {
 
 #[test]
 fn a_fetch_with_no_stream_is_lost_at_once() {
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::tests::idle_retry());
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
@@ -2221,7 +2221,7 @@ fn an_empty_send_keeps_the_connection_and_writes_nothing() {
     theirs
         .set_nonblocking(true)
         .unwrap_or_else(|err| panic!("nonblocking: {err}"));
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::tests::idle_retry());
     hub.store(ours);
     let mut app = App::new(PathBuf::from("/w"));
     hub.send(&[], &mut app);
@@ -2236,7 +2236,7 @@ fn an_empty_send_keeps_the_connection_and_writes_nothing() {
 }
 
 #[test]
-fn dropping_the_loop_with_no_retry_ends_the_read() {
+fn dropping_the_loop_ends_the_read() {
     let (lp, mut theirs, _tx, _rx) = opened();
     theirs
         .set_read_timeout(Some(DEADLINE))
@@ -2258,7 +2258,7 @@ fn dropping_the_loop_with_no_retry_ends_the_read() {
 fn hanging_up_twice_clears_the_stream() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     drop(theirs);
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::tests::idle_retry());
     hub.store(ours);
     // The peer is gone: the shutdown still holds nothing back and clears
     // the stream, and hanging up with nothing held stays quiet.
@@ -2333,7 +2333,7 @@ fn a_failed_write_grants_no_retry_until_the_reader_disconnects() {
 
 #[test]
 fn an_empty_batch_with_no_senders_ends_the_loop() {
-    let mut conn = Connection::new(None);
+    let mut conn = Connection::new(super::tests::idle_retry());
     let (tx, rx) = mpsc::channel::<Input>();
     drop(tx);
     assert!(conn.take_batch(&rx).is_none());

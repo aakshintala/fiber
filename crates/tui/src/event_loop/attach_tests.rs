@@ -117,7 +117,7 @@ fn attach_bounded_reader_stops_at_the_queue_cap() {
     // The connection owns the credits the reader takes at, so the
     // plateau below is exactly the queue's: dropping it ends the
     // reader with one `Disconnected`.
-    let hub = Connection::new(None);
+    let hub = Connection::new(super::super::tests::idle_retry());
     let feed = Feed::new(tx.clone(), hub.credits());
     let (hand_tx, hand_rx) = mpsc::channel();
     let first_seq = session().len() as u64;
@@ -378,7 +378,7 @@ fn a_resize_behind_a_full_queue_keeps_its_own_frame() {
 /// hub input sent after it runs in the batch after it, never before.
 #[track_caller]
 fn key_behind_a_full_queue(probe: Input) {
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     for seq in 0..128u64 {
         tx.send(hub_line(seq))
@@ -457,7 +457,7 @@ fn a_key_among_128_plus_64_lines_draws_its_own_frame() {
 
 #[test]
 fn quit_while_full_ends_the_reader() {
-    let hub = Connection::new(None);
+    let hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     let feed = Feed::new(tx.clone(), hub.credits());
     let (mut client, end) = pair();
@@ -494,7 +494,7 @@ fn quit_while_full_ends_the_reader() {
 
 #[test]
 fn hang_up_while_full_then_reconnect() {
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     let feed = Feed::new(tx.clone(), hub.credits());
     // The first stream hands out far more lines than the queue holds.
@@ -636,7 +636,7 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
         let d = Deadline::start();
         let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let retry = Retry::new(&clock);
-        let hub = Connection::new(Some(Arc::clone(&retry)));
+        let hub = Connection::new(Arc::clone(&retry));
         let router = crate::remote::Router::new();
         let (tx, rx) = mpsc::channel();
         let feed = Feed::new(tx, hub.credits()).routed(Arc::clone(&router));
@@ -758,7 +758,7 @@ fn routed_loop_wait_lends_one_queue_then_parks_or_reconnects_at_the_bound() {
 fn spawn_hub_full_queue_hang_up_then_reconnect() {
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let retry = Retry::new(&clock);
-    let mut hub = Connection::new(Some(Arc::clone(&retry)));
+    let mut hub = Connection::new(Arc::clone(&retry));
     let (tx, rx) = mpsc::channel();
     let feed = Feed::new(tx.clone(), hub.credits());
     let (ours1, theirs1) = pair();
@@ -863,7 +863,7 @@ fn spawn_hub_full_queue_hang_up_then_reconnect() {
 fn dropping_the_connection_ends_a_full_reader() {
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let retry = Retry::new(&clock);
-    let hub = Connection::new(Some(Arc::clone(&retry)));
+    let hub = Connection::new(Arc::clone(&retry));
     let (tx, rx) = mpsc::channel();
     let feed = Feed::new(tx.clone(), hub.credits());
     let (ours1, theirs1) = pair();
@@ -907,7 +907,7 @@ fn spawn_hub_overlapping_reconnect_while_full() {
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let retry = Retry::new(&clock);
     retry.give(Duration::ZERO);
-    let mut hub = Connection::new(Some(Arc::clone(&retry)));
+    let mut hub = Connection::new(Arc::clone(&retry));
     let (tx, rx) = mpsc::channel();
     let feed = Feed::new(tx.clone(), hub.credits());
     let (ours1, theirs1) = pair();
@@ -1231,7 +1231,7 @@ fn logical_batch_4095_4096_4097() {
         (4096, vec![64; 64]),
         (4097, vec![64; 64]),
     ] {
-        let mut hub = Connection::new(None);
+        let mut hub = Connection::new(super::super::tests::idle_retry());
         let (tx, rx) = mpsc::channel();
         for seq in 0..count as u64 {
             tx.send(hub_line(seq))
@@ -1264,7 +1264,7 @@ fn logical_batch_4095_4096_4097() {
 fn logical_batch_with_a_tick_at_4096() {
     // The 4096th input a tick: it joins the hub batch, and the logical
     // batch still holds 4096.
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     for seq in 0..4095u64 {
         tx.send(hub_line(seq))
@@ -1286,7 +1286,7 @@ fn logical_batch_with_a_key_inside() {
     // A key at position 64 ends the logical hub batch at the chunk
     // boundary and draws on its own frame: the hub inputs that arrived
     // before it fold first, in order.
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     for seq in 0..64u64 {
         tx.send(hub_line(seq))
@@ -1311,7 +1311,7 @@ fn logical_batch_with_a_key_inside() {
     assert_eq!(kinds_got, want);
     // A key after a full 4096 ends the batch receiving nothing: the key
     // waits in the channel for its own batch.
-    let mut hub = Connection::new(None);
+    let mut hub = Connection::new(super::super::tests::idle_retry());
     let (tx, rx) = mpsc::channel();
     for seq in 0..4096u64 {
         tx.send(hub_line(seq))

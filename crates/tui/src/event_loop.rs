@@ -187,7 +187,7 @@ pub(crate) fn run_with(
         app,
         parser: Parser::default(),
         screen,
-        hub: Connection::new(Some(Arc::clone(&retry))),
+        hub: Connection::new(Arc::clone(&retry)),
         tty: Some(tty),
         on_attach,
         clock,
