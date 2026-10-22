@@ -60,6 +60,16 @@ pub(crate) struct Hub {
     conns: Mutex<Conns>,
     /// Woken on every clock move, every change to `conns` and every signal.
     pub(crate) tick: Arc<Tick>,
+    /// Set while a `stop` with `sessions` runs: admission refuses new
+    /// binds with `the hub is stopping.` No store without the exit after
+    /// it: only the serving thread sets it, and the hub exits after
+    /// answering.
+    pub(crate) sessions_stopping: AtomicBool,
+    /// Binds in flight: incremented before the `sessions_stopping` load
+    /// in admission, decremented after the bind lands or the starter is
+    /// killed. The sessions stop waits for zero before each scan, so no
+    /// session admitted before the store escapes it.
+    pub(crate) inflight_binds: AtomicUsize,
     /// Set by a local `stop`: the idle wait ends the hub as SIGTERM does.
     stop: AtomicBool,
     /// `tick` as the clock's subscriber: kept alive so advances wake the
@@ -108,6 +118,31 @@ pub(crate) struct Hub {
     /// and joins need none.
     #[cfg(test)]
     pub(crate) before_disconnect_cleanup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot pause in admission after the increment and
+    /// before the flag load.
+    #[cfg(test)]
+    pub(crate) between_admit_steps: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: fired when a sessions-stop zero-wait first finds a
+    /// nonzero bind count.
+    #[cfg(test)]
+    pub(crate) on_inflight_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: fired on the serving thread when the sessions-stop
+    /// fan-out wait first parks with a session unconfirmed.
+    #[cfg(test)]
+    pub(crate) on_fanout_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: fired on the serving thread after the sessions-stop
+    /// scan lists `run/`, before any connect: a test starts or exits a
+    /// session in the window between enumeration and connect.
+    #[cfg(test)]
+    pub(crate) on_scan_listed: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: fired when the Signal arm's flush wait first finds
+    /// `sessions_answering` above 0.
+    #[cfg(test)]
+    pub(crate) on_abort_flush: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: fired on the serving thread after it sees the abort
+    /// and before it writes the answer.
+    #[cfg(test)]
+    pub(crate) before_abort_answer: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
     /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
@@ -175,6 +210,8 @@ impl Hub {
             machine: None,
             next_client: AtomicU64::new(0),
             stop: AtomicBool::new(false),
+            sessions_stopping: AtomicBool::new(false),
+            inflight_binds: AtomicUsize::new(0),
             conns: Mutex::new(Conns {
                 open: Vec::new(),
                 zero_since,
@@ -204,6 +241,18 @@ impl Hub {
             on_pass_on: Mutex::new(None),
             #[cfg(test)]
             before_disconnect_cleanup: Mutex::new(None),
+            #[cfg(test)]
+            between_admit_steps: Mutex::new(None),
+            #[cfg(test)]
+            on_inflight_wait: Mutex::new(None),
+            #[cfg(test)]
+            on_fanout_wait: Mutex::new(None),
+            #[cfg(test)]
+            on_scan_listed: Mutex::new(None),
+            #[cfg(test)]
+            on_abort_flush: Mutex::new(None),
+            #[cfg(test)]
+            before_abort_answer: Mutex::new(None),
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
             line_cap: AtomicUsize::new(support::framing::MAX_LINE),
@@ -387,6 +436,14 @@ impl Hub {
         // checks wakes this thread instead of nobody.
         self.tick.park(self.clock.as_ref(), guard, until);
         Idle::Woken
+    }
+
+    /// Whether a signal or a bare `stop` asked the hub to exit: every
+    /// wait the sessions-stop loop makes ends on it, so a stop with
+    /// `sessions` answers inside the signal bound instead of waiting the
+    /// loop out.
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
     }
 
     /// Records a local `stop`: under the tick hold, so a waiter that has
