@@ -465,10 +465,9 @@ impl App {
     }
 
     /// Hands `key` to the open view. `None` with no view open, and for
-    /// Ctrl+C and while the quit question is open, which go on to the
-    /// quit flow.
+    /// Ctrl+C, which goes on to the quit flow.
     pub(in crate::app) fn config_view_key(&mut self, key: &Key) -> Option<Effect> {
-        if self.config_views.open.is_none() || self.quit_open() || *key == Key::CtrlC {
+        if self.config_views.open.is_none() || *key == Key::CtrlC {
             return None;
         }
         let height = self.config_view_height();

@@ -714,3 +714,42 @@ fn a_result_after_an_amend_is_dropped() {
     assert!(!app.input().has_image());
     assert_eq!(press(&mut app, "ctrl+v"), Effect::ReadImage(1));
 }
+
+#[test]
+fn a_paste_with_the_quit_question_and_the_report_open_changes_neither() {
+    use crate::app::Surface;
+    use crate::app::top::tests::{open, session_app};
+    let mut app = session_app();
+    type_text(&mut app, "keep");
+    open(&mut app, Surface::Report);
+    open(&mut app, Surface::Quit);
+    assert_eq!(app.top_surface(), Surface::Quit);
+    let before = app
+        .import_report()
+        .map(crate::import_report::ImportReport::top);
+    assert_eq!(app.on_edit(Edit::Paste("pasted".to_owned())), Effect::None);
+    assert_eq!(app.input().expand(), "keep");
+    assert_eq!(
+        app.import_report()
+            .map(crate::import_report::ImportReport::top),
+        before
+    );
+    assert!(app.quit_open());
+    assert!(app.import_report_open());
+    // With only the report open the paste is swallowed the same way.
+    press(&mut app, "esc");
+    assert_eq!(app.top_surface(), Surface::Report);
+    assert_eq!(app.on_edit(Edit::Paste("pasted".to_owned())), Effect::None);
+    assert_eq!(app.input().expand(), "keep");
+}
+
+#[test]
+fn a_paste_with_only_the_quit_question_open_reaches_no_draft() {
+    use crate::app::Surface;
+    use crate::app::top::tests::{open, session_app};
+    let mut app = session_app();
+    open(&mut app, Surface::Quit);
+    assert_eq!(app.on_edit(Edit::Paste("pasted".to_owned())), Effect::None);
+    assert_eq!(app.input().expand(), "");
+    assert!(app.quit_open());
+}

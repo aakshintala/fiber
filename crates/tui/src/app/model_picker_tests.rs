@@ -1712,10 +1712,10 @@ fn ctrl_s_sends_one_model_command_and_waits_on_nothing() {
 fn ctrl_s_with_the_quit_question_up_sends_nothing_from_a_choosable_row() {
     let mut app = quitting();
     // A row is there to choose, so only the quit question keeps it back.
-    // The question takes Ctrl+S before the keymap, so this calls the
-    // guard directly.
+    // The question takes Ctrl+S before the keymap, so this runs the
+    // action directly.
     assert!(app.model_picker.choice(true).is_some());
-    assert_eq!(app.model_picker_session_only(), Effect::None);
+    assert_eq!(app.on_action("session_only"), Effect::None);
     assert!(app.quit_open());
     assert!(app.model_picker_open());
     assert!(app.model_picker.start_model.is_none());

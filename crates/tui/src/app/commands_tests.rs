@@ -1341,7 +1341,7 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
     credential_open(&mut app);
     app.open_keymap();
     assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
-    assert_eq!(app.credential_session_only(), Effect::None);
+    assert_eq!(app.on_action("session_only"), Effect::None);
     assert_eq!(
         app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now()),
         Effect::None
@@ -1360,7 +1360,7 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
     app.quit();
     assert!(app.quit_open());
     assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
-    assert_eq!(app.credential_session_only(), Effect::None);
+    assert_eq!(app.on_action("session_only"), Effect::None);
     assert!(app.config_view_open());
     app.on_key(Key::Esc, now());
     assert!(!app.quit_open());

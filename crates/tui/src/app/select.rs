@@ -269,10 +269,14 @@ impl App {
         out
     }
 
-    /// Esc clears a selection shown, before anything it would interrupt;
-    /// with the notice overlay open the overlay closes first.
+    /// Whether a selection shows.
+    pub(in crate::app) fn selection_shown(&self) -> bool {
+        self.select.span().is_some()
+    }
+
+    /// Esc clears a selection shown, before anything it would interrupt.
     pub(in crate::app) fn select_key(&mut self, key: &Key) -> Option<Effect> {
-        if *key != Key::Esc || self.select.span().is_none() || self.notice_overlay().is_some() {
+        if *key != Key::Esc || self.select.span().is_none() {
             return None;
         }
         self.clear_selection();

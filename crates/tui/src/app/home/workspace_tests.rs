@@ -442,7 +442,7 @@ fn ctrl_c_passes_through_while_typing() {
     let mut app = home();
     open(&mut app);
     type_path(&mut app, "/");
-    assert_eq!(app.home_key(&Key::CtrlC), None);
+    assert_eq!(app.home_picker_key(&Key::CtrlC), None);
     assert!(picker_open(&app));
     assert_eq!(typed_text(&app), Some("/".to_owned()));
 }
