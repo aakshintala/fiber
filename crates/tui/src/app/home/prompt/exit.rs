@@ -157,9 +157,10 @@ impl App {
     }
 
     /// The sessions working now, in list order, the attached one last
-    /// when it has no feed row: live rows running a turn, a job or a
-    /// delegate, or waiting on the person, and the attached session while
-    /// its turn runs. Unreadable rows never count, and neither do rows
+    /// when its row does not already list it: live rows running a turn,
+    /// a job or a delegate, or waiting on the person, and the attached
+    /// session while its turn runs, whatever its feed row says.
+    /// Unreadable rows never count, and neither do rows
     /// that left.
     fn working(&self) -> Vec<SessionId> {
         let Some(home) = self.home.as_ref() else {
@@ -180,14 +181,14 @@ impl App {
             })
             .map(|row| row.id.clone())
             .collect();
-        // The attached session counts once: its feed row already names
-        // it, and without one it is still working.
+        // The attached session counts once: a row already listing it
+        // keeps its position, and otherwise it appends last even when
+        // its feed row reads idle.
         if let Phase::Attached {
             session,
             busy: true,
         } = &self.phase
             && !working.contains(session)
-            && !home.sessions.live().iter().any(|row| row.id == *session)
         {
             working.push(session.clone());
         }
