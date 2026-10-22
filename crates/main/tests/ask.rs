@@ -2685,6 +2685,81 @@ fn a_slash_prompt_runs_a_prompt_template() {
     assert_eq!(turn_input(&run), "Plan the work below.\n\n42");
 }
 
+#[test]
+fn slash_init_sends_the_first_party_template() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+        ),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    setup.provider(&server);
+    let installed =
+        fs::read_to_string(setup.home().join("extensions/init/prompts/init/SKILL.md")).unwrap();
+    let body = installed.splitn(3, "---\n").nth(2).unwrap().trim();
+
+    let run = setup.run_with_stdin(&["ask", "/init"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let input = turn_input(&run);
+    assert_eq!(input, body);
+    for case in ["`AGENTS.md`", "`CLAUDE.md`", "write `AGENTS.md`"] {
+        assert!(input.contains(case), "{case}: {input}");
+    }
+}
+
+#[test]
+fn a_personal_init_template_overrides_the_first_party_one() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+        ),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    setup.provider(&server);
+    let dir = setup.home().join("skills/init");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: init\ndescription: My notes.\ndisable-model-invocation: true\n---\nWrite the person's own notes.\n",
+    )
+    .unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "/init"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(5, "notice");
+    assert_eq!(run.kinds(), expected);
+    assert_eq!(turn_input(&run), "Write the person's own notes.");
+    let notice = run.lines.iter().find(|l| l["kind"] == "notice").unwrap();
+    assert_eq!(notice["payload"]["code"], "skill_shadowed");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    for path in [
+        dir.join("SKILL.md"),
+        setup.home().join("extensions/init/prompts/init/SKILL.md"),
+    ] {
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+}
+
 /// Installs the fixture extension and points its provider at `server`,
 /// with `fixture/m1` as the configured model.
 fn fixture(setup: &Setup, server: &ProviderServer) {
