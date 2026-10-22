@@ -163,7 +163,7 @@ Anthropic stores 5-minute and 1-hour entries separately. Moving a session from
 one to the other rewrites the whole cache, and a request that puts a 1-hour
 marker after a 5-minute one is refused. So the lifetime cannot vary by turn.
 
-A 1-hour write costs 2 times base input against 1.25 times for 5 minutes. A
+A 1-hour write costs 2 times base input, 2 times the selected tier's input price under tiers, against 1.25 times for 5 minutes. A
 session that pauses longer than 5 minutes even once in about 100 requests is
 cheaper on 1 hour. The replay is
 [research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py).
