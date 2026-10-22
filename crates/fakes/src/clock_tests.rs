@@ -3430,7 +3430,7 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
     release_waiter.send(()).expect("released the wait");
     // The helper's next look is the one that sees the leaver's park, so
     // this pause marks that look. Arm it before the leaver starts.
-    let (looked, release_look) = clock.pause_next_advance_wait();
+    let (looked, release_look) = clock.pause_next_advance_wait_when_held();
     // A leaver parks at the named instant and exits: its arrival reaches
     // the observation log, then it is gone.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
