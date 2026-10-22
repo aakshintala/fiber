@@ -1,7 +1,9 @@
 //! Tests for the byte parser: bytes read as strokes, and strokes map
 //! through `default_event` to the keys and edits the app matches.
 
-use super::{Button, Edit, Event, Key, Mouse, MouseKind, Parser, Reply, default_event};
+use super::{
+    Button, Edit, Event, Key, Mouse, MouseKind, Parser, Reply, canon_event, default_event,
+};
 use crate::stroke::{Code, Mods, Stroke};
 
 /// Feeds `chunks` in order, mapping every stroke through `default_event`
@@ -1015,13 +1017,25 @@ fn default_event_matches_the_parity_table() {
         assert_eq!(&default_event(&stroke), want, "{name}");
     }
     for binding in crate::bindings::BINDINGS {
-        for name in binding.defaults {
+        assert_eq!(
+            binding.default_events.len(),
+            binding.defaults.len(),
+            "{}: one default event per default key",
+            binding.id
+        );
+        for (name, canon) in binding.defaults.iter().zip(binding.default_events) {
             let (_, want) = named
                 .iter()
                 .find(|(listed, _)| listed == name)
                 .unwrap_or_else(|| panic!("{}: {name} is not in the table", binding.id));
             let stroke = Stroke::parse(name).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(&default_event(&stroke), want, "{}: {name}", binding.id);
+            assert_eq!(
+                &canon_event(canon),
+                want,
+                "{}: {name} carries its own event",
+                binding.id
+            );
         }
     }
     let cases: &[(Stroke, Option<Event>)] = &[
