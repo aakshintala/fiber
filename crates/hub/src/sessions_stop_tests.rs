@@ -288,3 +288,40 @@ fn abort_in_the_first_zero_wait_probes_without_waiting() {
     assert_eq!(outcome.unconfirmed, vec![live]);
     assert_eq!(temp.clock.now(), started);
 }
+
+#[test]
+fn a_split_acknowledgement_parses_whole_after_its_tail_arrives() {
+    let temp = Temp::new("ss-split-ack");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let (client, mut session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let read = BufReader::new(client);
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut read = read;
+        let ack = read_ack(&mut read, &stream, &hub, "c_split", end);
+        done_tx.send(matches!(ack, Ack::Accepted)).unwrap_or(());
+    });
+    let mut full = serde_json::to_vec(&serde_json::json!({"kind": "command_accepted", "ts": 1,
+        "schema_version": contract::SCHEMA_VERSION,
+        "payload": {"command_id": "c_split"}}))
+    .unwrap();
+    full.push(b'\n');
+    let cut = full.len() / 2;
+    session.write_all(&full[..cut]).unwrap();
+    // The head holds no line: the parked wait below is the signal the
+    // reader kept it and waits for the tail.
+    assert!(
+        temp.clock.await_parked(end, Deadline::after(DEADLINE)),
+        "the acknowledgement read parks for its tail"
+    );
+    session.write_all(&full[cut..]).unwrap();
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("the read ends"),
+        "the split acknowledgement is accepted whole"
+    );
+}

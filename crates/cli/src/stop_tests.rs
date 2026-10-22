@@ -642,20 +642,22 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     // The manager must run only after the hub answered: the stub fails
     // the case when its first call lands before the answer signal.
     let (answered_tx, answered_rx) = mpsc::channel::<()>();
-    let calls = Rc::clone(&stub.calls);
-    let pushed = Rc::clone(&calls);
+    let pushed = Rc::clone(&stub.calls);
     let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
-        if calls.borrow().is_empty() {
-            answered_rx
-                .try_recv()
-                .expect("the exchange answers before any manager call");
-        }
         let _ = line;
         Ok(ok())
     }));
     let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
         let line = format!("{program} {}", args.join(" "));
+        // Checked before recording: the push below empties nothing,
+        // so reading after it could never see the first call.
+        let first = pushed.borrow().is_empty();
         pushed.borrow_mut().push(line.clone());
+        if first {
+            answered_rx
+                .try_recv()
+                .expect("the exchange answers before any manager call");
+        }
         (inner.borrow_mut())(&line)
     });
     let home_owned = home.to_owned();
@@ -695,20 +697,22 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     let service = child_service(home);
     let stub = loaded_stub();
     let (answered_tx, answered_rx) = mpsc::channel::<()>();
-    let calls = Rc::clone(&stub.calls);
-    let pushed = Rc::clone(&calls);
+    let pushed = Rc::clone(&stub.calls);
     let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
-        if calls.borrow().is_empty() {
-            answered_rx
-                .try_recv()
-                .expect("the exchange answers before any manager call");
-        }
         let _ = line;
         Ok(ok())
     }));
     let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
         let line = format!("{program} {}", args.join(" "));
+        // Checked before recording: the push below empties nothing,
+        // so reading after it could never see the first call.
+        let first = pushed.borrow().is_empty();
         pushed.borrow_mut().push(line.clone());
+        if first {
+            answered_rx
+                .try_recv()
+                .expect("the exchange answers before any manager call");
+        }
         (inner.borrow_mut())(&line)
     });
     let listener = UnixListener::bind(home.join("run/hub")).unwrap();
@@ -807,7 +811,7 @@ fn an_installed_unit_with_no_hub_still_stops_the_service() {
         "installed-empty",
         dir.path(),
         &home,
-        "Nothing running.\nThe hub starts again at the next login.\n",
+        "Nothing running.\nThe hub starts again at the next login or on fiber hub install.\n",
     );
 }
 
@@ -820,7 +824,7 @@ fn an_installed_unit_with_entries_starts_one_hub_and_stops_it() {
         "installed-started",
         dir.path(),
         &home,
-        "Stopped 2 sessions and the hub.\nThe hub starts again at the next login.\n",
+        "Stopped 2 sessions and the hub.\nThe hub starts again at the next login or on fiber hub install.\n",
     );
 }
 
@@ -842,4 +846,150 @@ fn a_rejected_stop_still_stops_the_service_then_fails() {
         fs::read(&out).unwrap().is_empty(),
         "a rejection prints nothing"
     );
+}
+
+/// Steps the fake clock to the stop bound one second at a time: the answer
+/// wait and the close wait share one deadline, so each move waits for a
+/// fresh park and neither wait can spend the other's bound early.
+fn advance_to_close_expiry(clock: &FakeClock, due: std::time::Instant) {
+    for _ in 0..STOP_WITHIN.as_secs() {
+        clock.advance_when_parked(
+            Some(due),
+            None,
+            Duration::from_secs(1),
+            &Deadline::after(DEADLINE),
+        );
+    }
+}
+
+#[test]
+fn a_stalled_close_after_a_rejection_still_reports_the_rejection() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (got, client) = fake_hub(move |hub| {
+        let mut bytes = serde_json::to_vec(&rejected()).unwrap();
+        bytes.push(b'\n');
+        (&hub).write_all(&bytes).unwrap();
+        // The close stalls: the socket stays open past the bound.
+        release_rx.recv().unwrap();
+        drop(hub);
+    });
+    let clock = FakeClock::new();
+    let due = clock.origin() + STOP_WITHIN;
+    let done = run_wait(client, &clock);
+    Deadline::after(DEADLINE)
+        .recv(&got)
+        .expect("the hub reads the command");
+    advance_to_close_expiry(&clock, due);
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the stop returns");
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.message, "s_aaa still running");
+    assert!(out.is_empty());
+    release_tx.send(()).unwrap();
+}
+
+#[test]
+fn a_stalled_close_after_an_answer_fails_at_the_deadline() {
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (got, client) = fake_hub(move |hub| {
+        let mut bytes = serde_json::to_vec(&accepted(2)).unwrap();
+        bytes.push(b'\n');
+        (&hub).write_all(&bytes).unwrap();
+        // The close stalls: the socket stays open past the bound.
+        release_rx.recv().unwrap();
+        drop(hub);
+    });
+    let clock = FakeClock::new();
+    let due = clock.origin() + STOP_WITHIN;
+    let done = run_wait(client, &clock);
+    Deadline::after(DEADLINE)
+        .recv(&got)
+        .expect("the hub reads the command");
+    advance_to_close_expiry(&clock, due);
+    let (result, out) = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("the stop returns");
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(
+        error.message,
+        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs())
+    );
+    assert!(out.is_empty());
+    release_tx.send(()).unwrap();
+}
+
+/// Runs one local stop whose hub answers `answer` then stalls its close:
+/// the stepper thread moves the fake clock to the bound while the stop
+/// runs on this thread, and the caller holds the close release.
+fn stalled_local(
+    answer: Value,
+    dir: fakes::TempDir,
+) -> (
+    Result<(), Failure>,
+    Vec<u8>,
+    mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
+    fs::create_dir_all(dir.path().join("run")).unwrap();
+    let listener = UnixListener::bind(dir.path().join("run/hub")).unwrap();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let handle = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut hello = serde_json::to_vec(&json!({"kind": "hub_hello", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION, "payload": {}}))
+        .unwrap();
+        hello.push(b'\n');
+        (&stream).write_all(&hello).unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap_or(0);
+        let mut bytes = serde_json::to_vec(&answer).unwrap();
+        bytes.push(b'\n');
+        (&stream).write_all(&bytes).unwrap_or(());
+        // The close stalls: the socket stays open past the bound.
+        release_rx.recv().unwrap();
+    });
+    let stub = Stub::new(|_| panic!("no unit file: the service is untouched"));
+    let clock = FakeClock::new();
+    let due = clock.origin() + STOP_WITHIN;
+    let worker = Arc::clone(&clock);
+    let stepper = thread::spawn(move || {
+        advance_to_close_expiry(&worker, due);
+    });
+    let mut out = Vec::new();
+    let mut start = no_starter();
+    let clock_ref: &FakeClock = &clock;
+    let result = run_local(&mut out, dir.path(), &mut start, clock_ref, &stub.run);
+    stepper.join().unwrap();
+    drop(stub);
+    (result, out, release_tx, handle)
+}
+
+#[test]
+fn a_local_stalled_close_after_a_rejection_still_reports_the_rejection() {
+    let dir = fakes::TempDir::new("cli-stop-local-stalled-rejected");
+    let (result, out, release, handle) = stalled_local(rejected(), dir);
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.message, "s_aaa still running");
+    assert!(out.is_empty());
+    release.send(()).unwrap();
+    handle.join().unwrap();
+}
+
+#[test]
+fn a_local_stalled_close_after_an_answer_fails_at_the_deadline() {
+    let dir = fakes::TempDir::new("cli-stop-local-stalled-accepted");
+    let (result, out, release, handle) = stalled_local(accepted(2), dir);
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(
+        error.message,
+        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs())
+    );
+    assert!(out.is_empty());
+    release.send(()).unwrap();
+    handle.join().unwrap();
 }

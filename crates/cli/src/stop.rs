@@ -12,7 +12,8 @@
 //! installed login service stops only after the hub answered, so the
 //! manager never kills a hub with its sessions still running.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -22,6 +23,7 @@ use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, HubCommandLine, StopArgs};
 use contract::shapes::Failure;
 use contract::{CommandId, HubLine};
+use rustix::event::PollFlags;
 use serde_json::Value;
 
 use crate::hub_service::{
@@ -39,7 +41,7 @@ const NOTHING_RUNNING: &str = "Nothing running.";
 /// The second line whenever the unit file was present: the login service
 /// stays installed, so the hub comes back through it, not through the
 /// socket just closed.
-const INSTALLED_AGAIN: &str = "The hub starts again at the next login.";
+const INSTALLED_AGAIN: &str = "The hub starts again at the next login or on fiber hub install.";
 
 /// One deadline for the whole stop: the probe, a client start, the
 /// manager's calls and the stop exchange all fit inside it. The connect
@@ -49,7 +51,7 @@ pub(crate) const STOP_WITHIN: Duration =
     Duration::from_secs(doors::hub::CONNECT_DEADLINE.as_secs() + 10);
 
 /// What one answered stop exchange reports: the hub answered, so the
-/// service step runs and the close is awaited either way. Only a transport
+/// service step runs and the close is awaited after it. Only a transport
 /// failure, where no answer arrives at all, skips the service step.
 enum Answered {
     /// The hub accepted with its confirmed-closed count.
@@ -136,20 +138,33 @@ pub(crate) fn run_remote(
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
     let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    match exchange_stop(&stream, clock.now() + STOP_WITHIN, clock)? {
-        Answered::Stopped(stopped) => report(
-            out,
-            &format!("Stopped {stopped} sessions and the hub."),
-            false,
-        ),
-        Answered::Rejected(rejection) => Err(rejection),
+    // No service step remotely: the close still follows the answer, and
+    // a stalled one never replaces a survivor rejection.
+    let deadline = clock.now() + STOP_WITHIN;
+    match exchange_stop(&stream, deadline, clock)? {
+        Answered::Stopped(stopped) => {
+            wait_for_close(&stream, deadline, clock)?;
+            report(
+                out,
+                &format!("Stopped {stopped} sessions and the hub."),
+                false,
+            )
+        }
+        Answered::Rejected(rejection) => {
+            // A stalled close never replaces the survivor rejection.
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "a stalled close never replaces the survivor rejection"
+            )]
+            let _ = wait_for_close(&stream, deadline, clock);
+            Err(rejection)
+        }
     }
 }
 
 /// The stop after the exchange answered: the installed service stops when
-/// the unit file is present, then the close the exchange already awaited
-/// is reported. A started hub that stopped nothing reports nothing
-/// running, like the empty path.
+/// the unit file is present, then the close is awaited. A started hub that
+/// stopped nothing reports nothing running, like the empty path.
 #[allow(
     clippy::too_many_arguments,
     reason = "one call of the answered stop: output, connection, deadline, clock, service, stop, install and start"
@@ -164,17 +179,23 @@ fn with_answer(
     installed: bool,
     started: bool,
 ) -> Result<(), Failure> {
-    match exchange_stop(stream, deadline, clock)? {
+    // The answer first: either answer runs the service step below.
+    // Only a transport failure, where no answer arrives, returns
+    // before it.
+    let answered = exchange_stop(stream, deadline, clock)?;
+    match answered {
         Answered::Stopped(0) if started => {
             if installed {
                 stop_login_service(service, run, clock)?;
             }
+            wait_for_close(stream, deadline, clock)?;
             report(out, NOTHING_RUNNING, installed)
         }
         Answered::Stopped(stopped) => {
             if installed {
                 stop_login_service(service, run, clock)?;
             }
+            wait_for_close(stream, deadline, clock)?;
             report(
                 out,
                 &format!("Stopped {stopped} sessions and the hub."),
@@ -185,6 +206,12 @@ fn with_answer(
             if installed {
                 stop_login_service(service, run, clock)?;
             }
+            // A stalled close never replaces the survivor rejection.
+            #[allow(
+                clippy::let_underscore_must_use,
+                reason = "a stalled close never replaces the survivor rejection"
+            )]
+            let _ = wait_for_close(stream, deadline, clock);
             Err(rejection)
         }
     }
@@ -207,11 +234,12 @@ fn session_entries(home: &Path) -> Result<Vec<contract::SessionId>, Failure> {
         .map_err(|error| crate::sessions::hub_failure(doors::Error::Local(error)))
 }
 
-/// Sends `stop` with `sessions` and waits for the answer and the close
-/// through the shared exchange: the answer says the hub accepted the stop,
-/// the end after it is the hub's exit, which is the stop. A rejection is
-/// kept as the answer, so the caller still runs the service step and the
-/// close wait before reporting it.
+/// Sends `stop` with `sessions` and waits for the answer through the
+/// shared exchange: the answer says the hub accepted or refused the stop.
+/// The close after it is awaited separately, after the service step, so a
+/// stalled close never skips it. A rejection is kept as the answer, so the
+/// caller still runs the service step and the close wait before reporting
+/// it.
 fn exchange_stop(
     stream: &UnixStream,
     deadline: Instant,
@@ -226,13 +254,14 @@ fn exchange_stop(
     .map_err(|error| failed(ErrorCode::IoFailed, format!("the hub: {error}")))?;
     request.push(b'\n');
     // The refusal already carries the stop's failure: the exchange maps
-    // only the transport.
+    // only the transport. The close is not awaited here: it follows the
+    // service step in the caller.
     let result = crate::hub_env::exchange(
         stream,
         &request,
         deadline,
         clock,
-        true,
+        false,
         &mut || {},
         &mut || {},
         || {
@@ -258,6 +287,40 @@ fn exchange_stop(
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
         (Ok(answered), Ok(())) => Ok(answered),
+    }
+}
+
+/// Waits for the hub's close after the stop answer: the end after the
+/// answer is the hub's exit, which is the stop. Anything still arriving
+/// drains; the bound ends a stalled close.
+fn wait_for_close(
+    mut stream: &UnixStream,
+    deadline: Instant,
+    clock: &dyn Clock,
+) -> Result<(), Failure> {
+    stream.set_nonblocking(true).map_err(|error| lost(&error))?;
+    let result = loop {
+        if clock.now() >= deadline {
+            break Err(late());
+        }
+        let mut chunk = [0u8; 1024];
+        match stream.read(&mut chunk) {
+            Ok(0) => break Ok(()),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if clock.now() >= deadline {
+                    break Err(late());
+                }
+                crate::hub_env::wait_clock(clock, deadline, stream.as_fd(), PollFlags::IN);
+            }
+            Err(error) => break Err(lost(&error)),
+        }
+    };
+    let restore = crate::hub_env::restore_blocking(stream);
+    match (result, restore) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
+        (Ok(()), Ok(())) => Ok(()),
     }
 }
 

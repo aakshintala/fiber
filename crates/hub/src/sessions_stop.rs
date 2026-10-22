@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::AsRawFd as _;
@@ -511,7 +511,9 @@ enum Ack {
 }
 
 /// Reads lines until the session's acknowledgement for `command_id`,
-/// skipping every other line, on the injected clock.
+/// skipping every other line, on the injected clock. Incomplete bytes
+/// stay in `pending` across readiness waits: a split line parses whole
+/// once its tail arrives, instead of losing its head on `WouldBlock`.
 fn read_ack(
     read: &mut BufReader<UnixStream>,
     stream: &UnixStream,
@@ -519,12 +521,49 @@ fn read_ack(
     command_id: &str,
     end: Instant,
 ) -> Ack {
+    let mut pending: Vec<u8> = Vec::new();
     loop {
-        match support::framing::read_line(read, support::framing::MAX_LINE) {
-            Ok(Some(buf)) => {
-                let ack: Value = match serde_json::from_slice(&buf) {
+        if let Some(pos) = pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = pending.drain(..=pos).collect();
+            let mut line = line;
+            while line
+                .last()
+                .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+            {
+                line.pop();
+            }
+            let ack: Value = match serde_json::from_slice(&line) {
+                Ok(ack) => ack,
+                Err(_) => continue,
+            };
+            let named = ack
+                .get("payload")
+                .and_then(|payload| payload.get("command_id"))
+                .and_then(Value::as_str)
+                == Some(command_id);
+            if !named {
+                continue;
+            }
+            match ack.get("kind").and_then(Value::as_str) {
+                Some("command_accepted") => return Ack::Accepted,
+                Some("command_rejected") => return Ack::Rejected,
+                _ => continue,
+            }
+        }
+        match read.fill_buf() {
+            Ok([]) => {
+                if pending.is_empty() {
+                    return Ack::Gone;
+                }
+                // End of input with a final partial line: parse it
+                // once, then the drained empty tail reports gone.
+                let mut line = std::mem::take(&mut pending);
+                while line.last().is_some_and(|byte| *byte == b'\r') {
+                    line.pop();
+                }
+                let ack: Value = match serde_json::from_slice(&line) {
                     Ok(ack) => ack,
-                    Err(_) => continue,
+                    Err(_) => return Ack::Gone,
                 };
                 let named = ack
                     .get("payload")
@@ -532,20 +571,29 @@ fn read_ack(
                     .and_then(Value::as_str)
                     == Some(command_id);
                 if !named {
-                    continue;
+                    return Ack::Gone;
                 }
                 match ack.get("kind").and_then(Value::as_str) {
                     Some("command_accepted") => return Ack::Accepted,
                     Some("command_rejected") => return Ack::Rejected,
-                    _ => continue,
+                    _ => return Ack::Gone,
                 }
             }
-            Ok(None) => return Ack::Gone,
+            Ok(buf) => {
+                let chunk = buf.to_vec();
+                if pending.len() + chunk.len() > support::framing::MAX_LINE + 1 {
+                    return Ack::Gone;
+                }
+                let take = chunk.len();
+                read.consume(take);
+                pending.extend_from_slice(&chunk);
+            }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 if !wait_ready(stream.as_fd(), libc::POLLIN, hub, end) {
                     return Ack::Unconfirmed;
                 }
             }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(_) => return Ack::Gone,
         }
     }

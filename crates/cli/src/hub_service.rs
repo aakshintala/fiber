@@ -14,7 +14,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -73,9 +73,12 @@ pub(crate) fn system_run(program: &str, args: &[String]) -> io::Result<Ran> {
 /// own process group, and past `MANAGER_WAIT` the whole group is killed
 /// and reaped and the run fails `TimedOut`. A quiet child still answers
 /// promptly: the watchdog re-checks every `WATCH_SLICE`, so a command
-/// that finishes between slices returns within one. Only the stop path
-/// runs through this bound; every other manager call keeps `system_run`
-/// bit-identical, and fast manager calls return the same `Ran` either way.
+/// that finishes between slices returns within one. A background
+/// descendant that outlives the direct child keeps the stderr pipe open:
+/// the drain joins under the same bound, killing what remains of the
+/// group first. Only the stop path runs through this bound; every other
+/// manager call keeps `system_run` bit-identical, and fast manager calls
+/// return the same `Ran` either way.
 pub(crate) fn system_run_bounded(
     program: &str,
     args: &[String],
@@ -119,10 +122,11 @@ pub(crate) fn system_run_bounded(
     let deadline = clock.now() + MANAGER_WAIT;
     let parker = Parker::new();
     loop {
+        let group = child.id();
         let status = match child.try_wait() {
             Ok(status) => status,
             Err(error) => {
-                kill_group(child.id());
+                kill_group(group);
                 // The reap runs for its side effect; the wait's own
                 // error is what the caller sees.
                 #[allow(
@@ -130,18 +134,23 @@ pub(crate) fn system_run_bounded(
                     reason = "the reap runs for its side effect; its error changes nothing"
                 )]
                 let _ = child.wait();
+                join_drained(drained, group, clock, deadline);
                 return Err(error);
             }
         };
         if let Some(status) = status {
+            // The child is gone, but a background descendant may still
+            // hold the pipe: the drain joins under the bound, killing
+            // what remains first.
+            let stderr = join_drained(drained, group, clock, deadline);
             return Ok(Ran {
                 success: status.success(),
                 code: status.code(),
-                stderr: drained.join().unwrap_or_default(),
+                stderr,
             });
         }
         if clock.now() >= deadline {
-            kill_group(child.id());
+            kill_group(group);
             // The reap and the join both run for their side effects: the
             // kill above freed every pipe end, so both return at once.
             #[allow(
@@ -149,11 +158,7 @@ pub(crate) fn system_run_bounded(
                 reason = "the reap and the drain join run for their side effects; the timeout is what the caller sees"
             )]
             let _ = child.wait();
-            #[allow(
-                clippy::let_underscore_must_use,
-                reason = "the reap and the drain join run for their side effects; the timeout is what the caller sees"
-            )]
-            let _ = drained.join();
+            join_drained(drained, group, clock, deadline);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("`{program}` did not finish in {} s", MANAGER_WAIT.as_secs()),
@@ -161,6 +166,29 @@ pub(crate) fn system_run_bounded(
         }
         parker.park_polled(clock, Some(deadline), Some(WATCH_SLICE), 0);
     }
+}
+
+/// Joins the stderr drain under `deadline`: a background descendant that
+/// outlives the direct child keeps the pipe open, so the join parks only
+/// until the bound, kills the group that remains, then joins. Returns the
+/// drained text, or empty when the drain thread itself failed.
+fn join_drained(
+    drained: thread::JoinHandle<String>,
+    group: u32,
+    clock: &dyn Clock,
+    deadline: Instant,
+) -> String {
+    let parker = Parker::new();
+    while !drained.is_finished() {
+        if clock.now() >= deadline {
+            // A background descendant still holds the pipe: the kill
+            // frees every end, so the join below returns at once.
+            kill_group(group);
+            break;
+        }
+        parker.park_polled(clock, Some(deadline), Some(WATCH_SLICE), 0);
+    }
+    drained.join().unwrap_or_default()
 }
 
 /// Kills `group` outright, ignoring every outcome: on the expiry path's

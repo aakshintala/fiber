@@ -1469,3 +1469,50 @@ fn restart_takeover_still_sends_the_bare_stop() {
         "the restart takeover sends the bare stop with no sessions"
     );
 }
+
+#[test]
+fn an_exited_child_with_a_lingering_descendant_is_reaped_within_its_wait() {
+    let dir = fakes::TempDir::new("cli-manager-lingering");
+    let ready = fakes::children::Ready::new(dir.path());
+    // The direct child writes its pid, writes one stderr line, then exits
+    // at once, leaving a background sleep holding the pipe open past the
+    // bound: without the drain's own deadline the join would never return.
+    let script = format!(
+        "echo $$ > '{}'; echo lingering >&2; (sleep 60 &)",
+        ready.path().display()
+    );
+    let clock = FakeClock::new();
+    let due = clock.origin() + MANAGER_WAIT;
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&clock);
+    thread::spawn(move || {
+        done_tx
+            .send(system_run_bounded(
+                "sh",
+                &["-c".to_owned(), script],
+                &*worker,
+            ))
+            .unwrap_or(());
+    });
+    let pids = ready.wait(Deadline::after(DEADLINE));
+    assert_eq!(pids.len(), 1, "the child writes its own pid once");
+    let group = pids[0];
+    // The direct child is already gone, but the drain holds the pipe: the
+    // parked wait below is the signal the join is under the bound.
+    assert!(
+        clock.await_parked(due, Deadline::after(DEADLINE)),
+        "the drain parks at its wait"
+    );
+    clock.advance(MANAGER_WAIT + Duration::from_secs(1));
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the bound ends the run")
+        .unwrap();
+    assert!(ran.success);
+    assert_eq!(ran.code, Some(0));
+    assert_eq!(ran.stderr, "lingering\n");
+    assert!(
+        fakes::group_empties(group, Deadline::after(DEADLINE)),
+        "the kill leaves no descendant behind"
+    );
+}
