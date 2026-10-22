@@ -248,6 +248,9 @@ pub(crate) fn parts_in(
     // A required repository extension that did not load fails the start
     // before any session line is written.
     session_extensions::required(&extensions)?;
+    // Declared hooks with no extension to run them and any `blocking`
+    // entry fail the start closed, so a guard never fails open.
+    session_extensions::missing_hooks(&config, &extensions)?;
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
     // provider HTTP and times non-tool hook chains, and the retained sink

@@ -53,6 +53,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/skills/using-fiber/SKILL.md", "main"),
     ("crates/tools/prompt/guidelines.md", "tools"),
     ("providers/codex/tests/quota-two-windows.json", "main"),
+    ("extensions/hooks/extension.json", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),
     ("providers/bedrock/providers/bedrock.json", "extensions"),
     ("providers/codex/providers/codex.json", "extensions"),

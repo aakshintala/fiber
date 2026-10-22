@@ -367,11 +367,13 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   containing `/` that is not absolute resolves against the extension's
   directory and must stay inside it; a path that leaves the directory is an
   error naming the path. A bare name resolves on `PATH`, and an absolute path
-  is used as written. `opts` takes `cwd` and `env`. The child's working
+  is used as written. `opts` takes `cwd`, `env`, and `input`. The child's working
   directory is unchanged: the workspace, by default. `env` is a table of
   string names to string values added to the inherited environment,
   overriding a variable of the same name; there is no unset. A name must
-  be non-empty and free of `=` and NUL, and a value free of NUL.
+  be non-empty and free of `=` and NUL, and a value free of NUL. `input`
+  is a string streamed to the child's standard input, which closes (EOF)
+  once written; without `input` stdin stays null.
   `extension_exec` does not log it. Inside a
   tool call, the tool's declared `executes` effect is what the permission
   decision judges. Outside one, in a hook, watcher, timer, command or provider callback, it runs
@@ -724,7 +726,10 @@ exactly. An expected `null` matches a missing field or a field set to `null`.
 ```
 
 A case may add `config`, written as the temporary home's global
-configuration. `host.http` and `host.exec` list requests and replies in order.
+configuration. A case may add `settings`, an object keyed by extension name;
+each value is written as that extension's global settings file,
+`config/<extension>.json`, in the temporary home (`docs/configuration.md`,
+"Extension settings"). `host.http` and `host.exec` list requests and replies in order.
 An HTTP reply has `status` and `body`, or an `error` with `code` and `message`.
 An exec reply has `stdout` and `stderr` and either `code` or `signal`, an
 integer signal number the extension sees as a name such as `SIGKILL`. A reply
@@ -1257,7 +1262,9 @@ entries instead of replacing the list:
   missing field, as for any hook ("When a hook fails").
 - **`tools`** lists exact tool names, with no patterns, on a `before_tool` or
   `after_tool` hook. The command runs only for those tools, so a formatter
-  does not start a process on every `read`.
+  does not start a process on every `read`. Without `tools`, the command runs
+  for every tool call; an entry whose `tools` is empty is not registered, and
+  a `notice` names the entry and the field.
 - **A watcher entry** names `watch`, the event kinds it wants
   (`docs/events.md`), its `command` and `args`, and a `timeout`. It has no
   `on_failure`: a watcher changes nothing, so its failure only gives a
@@ -1276,13 +1283,14 @@ environment. The command's program resolves as follows: a bare name on
 directory), an absolute path as written. The package-relative rule is for
 `host.exec` and `process.program` only. It runs once for each time its hook point or event comes round.
 
-**What the command reads.** Standard input carries one JSON line: the hook
-request a process extension receives for that point ("Process extensions"),
-or, for a watcher, the event.
+**What the command reads.** Standard input carries one JSON line: the table
+a Lua hook's `run` is given at that point ('What a hook is given and returns'),
+with `point` naming the hook point and `schema_version`, or, for a watcher,
+the event.
 
-**How the command answers.** Standard output may carry the reply a process
-extension would send, as one JSON line. Two shorthands keep a shell script
-short:
+**How the command answers.** Standard output may carry, as one JSON line,
+the table a Lua hook may return at that point. Two shorthands keep a shell
+script short:
 
 - Exit 0 with plain text on standard output adds the text as context at the
   points that take context: `session_start`, `before_message` and

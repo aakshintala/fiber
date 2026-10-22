@@ -126,6 +126,7 @@ fn run_step(
         cwd: dir.to_path_buf(),
         // The step's output is not capped today.
         env: BTreeMap::new(),
+        input: None,
         cap: usize::MAX,
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the step as it does today.

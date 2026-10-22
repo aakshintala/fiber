@@ -129,7 +129,11 @@ function host.exec(program, args, opts)
       end
     end
   end
-  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd, env = env })
+  local input = opts.input
+  if input ~= nil and type(input) ~= "string" then
+    error("host.exec: `input` must be a string", 2)
+  end
+  local result, code, message = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd, env = env, input = input })
   if result == nil then error(failure(code, message), 0) end
   return result
 end
@@ -497,6 +501,26 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         args,
         cwd,
         env: map,
+        // Missing or `nil` input is today's null stdin; a string, empty
+        // or not, is piped to the child, then EOF.
+        input: match spec.get::<LuaValue>("input")? {
+            LuaValue::Nil => None,
+            LuaValue::String(text) => Some(text.as_bytes().to_vec()),
+            LuaValue::Boolean(_)
+            | LuaValue::LightUserData(_)
+            | LuaValue::Integer(_)
+            | LuaValue::Number(_)
+            | LuaValue::Table(_)
+            | LuaValue::Function(_)
+            | LuaValue::Thread(_)
+            | LuaValue::UserData(_)
+            | LuaValue::Error(_)
+            | LuaValue::Other(_) => {
+                return Err(mlua::Error::RuntimeError(
+                    "host.exec: `input` must be a string".into(),
+                ));
+            }
+        },
         cap,
         // In Fiber's process group, so terminal prompts still work and
         // Ctrl-C at the terminal still reaches the program as it does today.

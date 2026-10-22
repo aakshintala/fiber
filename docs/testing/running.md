@@ -101,5 +101,14 @@ is rewritten to be deterministic, never by rerunning. A failure on a
 commit that does not contain the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
 reopens the closed issue nor counts against the fix.
 
+A test has one flake issue for its whole life. When no issue with its title
+is open, the report looks for a closed one. A failure on a commit that
+contains that issue's fix reopens it, with the sighting as a comment, and
+puts `needs-triage` back on it: the fix did not hold, so its root cause was
+wrong. The fix is the merge commit of the pull request that closed the
+issue. An issue closed without one reopens on any failure. Where a test has
+several closed issues, the most recently closed is the one. Only a test with
+no flake issue at all gets a new one.
+
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.
