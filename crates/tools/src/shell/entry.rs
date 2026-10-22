@@ -26,7 +26,7 @@ pub(super) enum Found<'a> {
 /// first, then the person's first matching entry unless a built-in owns its
 /// name. An empty word list matches nothing.
 pub(super) fn find<'a>(words: &[Word], configured: &'a [(String, Vec<String>)]) -> Found<'a> {
-    if words.first().is_none() {
+    if words.is_empty() {
         return Found::None;
     }
     if let Some(entry) = locate_builtin(words) {
