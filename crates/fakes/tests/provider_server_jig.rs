@@ -15,7 +15,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdout, Command, Stdio};
+use std::process::{ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -33,6 +33,12 @@ const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 /// How long the stub holds the jig back before it starts: one second past
 /// [`DEADLINE`], so the listening line is due after the old bound expires.
 const SLOW_START: Duration = Duration::from_secs(fakes::MUST_SUCCEED_WITHIN.as_secs() + 1);
+
+/// How long the jig may take to print its listening line, process start
+/// included: the first exec of a freshly linked binary can stall under
+/// load. This is the bound `crates/loop/tests/review_jig.rs` gives a built
+/// binary's first start. The exchange after the line keeps [`DEADLINE`].
+const START_BOUND: Duration = Duration::from_secs(30);
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
@@ -140,6 +146,23 @@ fn a_slow_process_start_still_prints_the_listening_line() {
     serve_one_fixture(command);
 }
 
+/// Reads a killed jig's stderr to its end, under [`DEADLINE`]. A read that
+/// does not end names that in the failure instead of hanging the test.
+fn stderr_after_kill(mut stderr: ChildStderr) -> String {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).unwrap();
+        match tx.send(text) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(text) => text,
+        Err(_) => format!("(not closed within {DEADLINE:?})"),
+    }
+}
+
 /// Starts the jig through `command`, which runs it with its fixture, then
 /// checks one exchange and the request the jig printed.
 fn serve_one_fixture(mut command: Command) {
@@ -156,9 +179,18 @@ fn serve_one_fixture(mut command: Command) {
     spawn_reader(child.stdout.take().unwrap(), tx);
     let mut stderr = child.stderr.take().unwrap();
 
-    let printed = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("the provider-server jig printed its listening line");
+    let printed = match Deadline::after(START_BOUND).recv(&rx) {
+        Ok(printed) => printed,
+        Err(err) => {
+            // The group kill closes the jig's stderr, so its read ends.
+            drop(watchdog);
+            let errors = stderr_after_kill(stderr);
+            panic!(
+                "the provider-server jig printed its listening line: {err:?} \
+                 within {START_BOUND:?}\nits stderr: {errors}"
+            );
+        }
+    };
     assert!(printed.starts_with("listening on http://"), "{printed}");
     let addr: SocketAddr = printed
         .trim_start_matches("listening on http://")
