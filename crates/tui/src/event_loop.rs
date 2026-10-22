@@ -190,7 +190,6 @@ pub(crate) fn run_with(
         tty: Some(tty),
         on_attach,
         clock,
-        wakeups: 0,
         files_out: None,
         search: None,
         reader: None,
@@ -340,8 +339,6 @@ struct Loop<B: Backend> {
     tty: Option<File>,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-    /// Inputs handled, for the idle test.
-    wakeups: u64,
     /// Where workers post their results.
     files_out: Option<Sender<Input>>,
     /// The `@` panel's search worker, while the panel is open.
@@ -410,7 +407,6 @@ impl<B: Backend> Loop<B> {
                 }
                 for input in batch {
                     taken = taken.saturating_add(1);
-                    self.wakeups = self.wakeups.saturating_add(1);
                     if let Input::Bytes(bytes) = input {
                         let events = self.parser.feed(&bytes);
                         let wheel = Self::wheel_only(&events);

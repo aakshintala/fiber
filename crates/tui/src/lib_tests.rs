@@ -171,7 +171,6 @@ impl<B: Backend> Loop<B> {
             tty: None,
             on_attach: Box::new(|_| {}),
             clock: fakes::clock::FakeClock::new(),
-            wakeups: 0,
             files_out: None,
             search: None,
             reader: None,
@@ -198,6 +197,20 @@ pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     }
     drop(tx);
     lp.run(&rx)
+}
+
+/// Runs `lp` over `inputs` as [`feed`] does, and returns the exit code with
+/// how many of the inputs `run` took off the channel.
+#[track_caller]
+fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
+    let (tx, rx) = mpsc::channel();
+    let sent = inputs.len();
+    for input in inputs {
+        tx.send(input).unwrap_or_else(|err| panic!("send: {err}"));
+    }
+    drop(tx);
+    let code = lp.run(&rx);
+    (code, sent - rx.try_iter().count())
 }
 
 pub(super) fn hello() -> contract::HubLine {
@@ -267,12 +280,10 @@ fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
         Input::Bytes(b"\x1b[?62;22c".to_vec()),
     ];
     // Every sender gone, the loop's `recv` returns: it was parked there.
-    assert_eq!(feed(&mut lp, quiet), 0);
-    assert_eq!(lp.wakeups, 3);
+    assert_eq!(taken(&mut lp, quiet), (0, 3));
     assert_eq!(sink.len(), first);
     // A key that changes a row writes it.
-    assert_eq!(feed(&mut lp, vec![Input::Bytes(b"a".to_vec())]), 0);
-    assert_eq!(lp.wakeups, 4);
+    assert_eq!(taken(&mut lp, vec![Input::Bytes(b"a".to_vec())]), (0, 1));
     assert!(sink.len() > first);
 }
 
@@ -345,7 +356,7 @@ fn ctrl_c_twice_quits_with_zero() {
     // The sender stays: the loop returns on the quit, not on a closed
     // channel.
     assert_eq!(lp.run(&rx), 0);
-    assert_eq!(lp.wakeups, 2);
+    assert_eq!(2 - rx.try_iter().count(), 2);
     drop(tx);
 }
 
