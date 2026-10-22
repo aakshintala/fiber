@@ -181,9 +181,6 @@ impl App {
             })
             .map(|row| row.id.clone())
             .collect();
-        // The attached session counts once: a row already listing it
-        // keeps its position, and otherwise it appends last even when
-        // its feed row reads idle.
         if let Phase::Attached {
             session,
             busy: true,
