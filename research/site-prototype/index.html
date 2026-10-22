@@ -26,7 +26,7 @@
         <code id="install-command">curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install.sh | sh</code>
         <button id="copy" type="button" hidden>Copy</button>
       </div>
-      <p class="install-note">macOS and Linux · <a href="https://github.com/aakshintala/fiber/blob/main/docs/releasing.md#installing">Install instructions</a></p>
+      <p class="install-note">macOS and Linux · <a href="releasing.html#installing">Install instructions</a></p>
     </section>
 
     <figure class="terminal" aria-describedby="screen-caption">
@@ -50,33 +50,33 @@
         <div><dt>20 <span>ms</span></dt><dd>to start a session</dd></div>
         <div><dt>0</dt><dd>context switches while idle, on every thread</dd></div>
       </dl>
-      <p class="stats-note">Ceilings on Linux x86_64. A change that crosses one fails CI. <a href="https://github.com/aakshintala/fiber/blob/main/docs/performance.md#budgets">Every budget</a></p>
+      <p class="stats-note">Ceilings on Linux x86_64. A change that crosses one fails CI. <a href="performance.html#budgets">Every budget</a></p>
     </section>
 
     <section class="features column" aria-labelledby="features-title">
       <h2 id="features-title">What Fiber does differently.</h2>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/invocation.md#the-hub">Sessions outlive the terminal</a></h3>
+        <h3><a href="invocation.html#the-hub">Sessions outlive the terminal</a></h3>
         <p>Every session runs headless under a hub. Close the terminal and the work keeps going; reopen it and you’re back. Pair a phone or another machine with its own device token, and every client sees the same session.</p>
       </article>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/extensions.md#what-an-extension-is">Extend or replace anything</a></h3>
+        <h3><a href="extensions.html#what-an-extension-is">Extend or replace anything</a></h3>
         <p>An extension registers tools, providers, hooks, commands and screens through the same seams the built-ins use. Give it a built-in’s name and it replaces that built-in. Write it in Lua, inside the session at about 150 KiB, or as a program in any language.</p>
       </article>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/delegates.md#what-a-delegate-is">Delegate to other agents</a></h3>
+        <h3><a href="delegates.html#what-a-delegate-is">Delegate to other agents</a></h3>
         <p>Hand part of the work to another Fiber session, Claude Code or cursor-agent, each with your own setup for that tool. Every delegate is a background job you can wait on, talk to or stop.</p>
       </article>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/permissions.md#the-reviewer">A reviewer, not a prompt for every call</a></h3>
+        <h3><a href="permissions.html#the-reviewer">A reviewer, not a prompt for every call</a></h3>
         <p>Calls your rules don’t settle go to a reviewer model that reads what you asked for and judges the call against it. A blocked call goes back to the agent to find another way; you’re asked only when it keeps hitting the wall.</p>
       </article>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/model-routing.md#protocols-and-providers">Any model, 11 providers</a></h3>
+        <h3><a href="model-routing.html#protocols-and-providers">Any model, 11 providers</a></h3>
         <p>Anthropic, OpenAI, Gemini API, ChatGPT/codex, OpenRouter, OpenCode, Databricks, muse, AWS Bedrock, Google Vertex and Azure.</p>
       </article>
       <article>
-        <h3><a href="https://github.com/aakshintala/fiber/blob/main/docs/configuration.md#importing">Bring your setup</a></h3>
+        <h3><a href="configuration.html#importing">Bring your setup</a></h3>
         <p><code>fiber import</code> copies your Claude Code or Codex configuration into Fiber once.</p>
       </article>
     </section>
