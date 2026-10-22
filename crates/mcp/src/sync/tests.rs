@@ -520,10 +520,11 @@ fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
 }
 
 #[test]
-fn classify_files_a_changed_key_by_whether_the_slot_served() {
+fn classify_files_a_changed_key_by_whether_the_slot_ran_this_session() {
     // A changed start key replaces the slot either way, but the commit
-    // files the name under `started` when the old slot never served this
-    // session and under `restarted` when it did.
+    // files the name under `started` when the old slot never started this
+    // session and under `restarted` when it ran (a running slot does too,
+    // served or not; this test covers the served, nonlive case).
     for served in [false, true] {
         let state = if served { "served" } else { "never-started" };
         let setup = Setup::new();
