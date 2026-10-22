@@ -1,7 +1,7 @@
 //! Tests for the `/` list.
 
 use super::{Row, SHOWN, extensions, filter, is_built_in, rows, window_start};
-use crate::app::commands::TABLE;
+use crate::app::commands::{TABLE, alias_of};
 use contract::commands::BUILT_IN_COMMANDS;
 use contract::events::CommandInfo;
 
@@ -61,6 +61,9 @@ const DRAWN_ORDER: &[&str] = &[
     "context",
     "usage",
     "quota",
+    "status",
+    "diff",
+    "copy",
     "panel",
     "rail",
     "rules",
@@ -127,7 +130,7 @@ fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
 }
 
 #[test]
-fn built_ins_are_drawn_built_ins_plus_rewind() {
+fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
     for name in table_names() {
         assert!(
             BUILT_IN_COMMANDS.contains(&name),
@@ -138,7 +141,24 @@ fn built_ins_are_drawn_built_ins_plus_rewind() {
         .iter()
         .filter(|name| !table_names().contains(name))
         .collect();
-    assert_eq!(extra, [&"rewind", &"exit"]);
+    assert_eq!(
+        extra,
+        [
+            &"effort",
+            &"cost",
+            &"config",
+            &"keybindings",
+            &"rewind",
+            &"rename",
+            &"exit",
+            &"bug"
+        ]
+    );
+    // Every alias is a contract name, so an extension or a skill cannot
+    // take it unannounced.
+    for alias in TABLE.iter().filter_map(|entry| alias_of(entry.name)) {
+        assert!(is_built_in(alias), "{alias}");
+    }
     let rows = rows(&[]);
     let credential = rows.iter().find(|row| row.name == "credential").unwrap();
     assert!(credential.line().contains("/credential [<label>]"));
@@ -263,11 +283,19 @@ fn an_empty_query_shows_every_row() {
 #[test]
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
-    // `re`: resume starts with it, then reload, then the skill `Review`
-    // (case ignored); `prereview` contains it later on.
+    // `re`: resume starts with it, then name by its alias `rename`,
+    // reload, and the skill `Review` (case ignored); `prereview`
+    // contains it later on.
     assert_eq!(
         names(&filter(&all, "re")),
-        ["resume", "reload", "Review", "credential", "prereview"]
+        [
+            "resume",
+            "name",
+            "reload",
+            "Review",
+            "credential",
+            "prereview"
+        ]
     );
     assert_eq!(names(&filter(&all, "RE")), names(&filter(&all, "re")));
     // Contains only: no row starts with `ose`.

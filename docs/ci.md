@@ -92,7 +92,9 @@ A pull request runs only what its diff can affect.
   `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast attaching ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
-  string literal. Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+  string literal. Tests read a repository file only by compiling it in,
+  except a package reader's read of a first-party package through
+  `CARGO_MANIFEST_DIR` (next item); the gate fails on any other run-time read.
   An `include_str!` path resolves from the source file that holds it.
 - A diff under `providers/` or `extensions/` runs the binary-level tests
   and every crate whose tests read a first-party package. The selector lists
@@ -154,7 +156,8 @@ On Linux x86_64 alone:
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
-  string literal, and no crate reads a repository file at run time
+  string literal, and no crate reads a repository file at run time but a
+  package reader reading a first-party package ("Selection")
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
@@ -424,15 +427,25 @@ What the artifacts are, how a release is triggered and how it is signed is
 
 ## The user docs site
 
-A workflow publishes `docs/user/` to GitHub Pages on every merge to `main`.
 The site's address is `https://aakshintala.com/fiber/`: GitHub serves the
-repository's Pages under the account's custom domain. The front page is a
-product page; the user guide sits beside it.
-The site carries the rest of `docs/` too, for readers who follow a link into
-an area doc. Nothing else hosts Fiber's documentation. The command reference
-in `docs/user/` is generated from the same command definitions as `fiber help`
-and shell completion, and the docs check fails when the committed copy differs
-from what the generator writes.
+repository's Pages, with GitHub Actions as the source, under the account's
+custom domain. The front page is a product page, built from
+`research/site-prototype/`; the user guide sits beside it. The site carries
+the rest of `docs/` too, for readers who follow a link into an area doc. Every
+docs page renders in the front page's theme, with the same palette and faces.
+The front page's "Docs" link opens the rendered guide.
+
+The site follows releases, not merges. `/fiber/` shows the front page and
+`docs/` at the newest stable release tag, and `/fiber/nightly/` shows `docs/`
+at the newest nightly tag, under a banner naming the nightly. A deploy
+replaces the whole site, so the release job and the nightly job each build
+both trees from those two tags and deploy them together, after the
+release is published. Until the first stable release, `/fiber/` shows the
+front page and the nightly's docs. Nothing else hosts Fiber's documentation.
+
+The command reference in `docs/user/` is generated from the same command
+definitions as `fiber help` and shell completion. A test in the `fiber` crate
+regenerates it and fails when the committed copy differs.
 
 ## Manually dispatched workflows
 
@@ -473,7 +486,10 @@ computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
 twice its cold-cache duration, since a pull request's first run after a cache
 eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
-raised in its workflow.
+raised in its workflow. The release gates (`release-gate` and `nightly-gate`)
+bound macOS at 50 minutes because a macOS cold build plus the full suite
+measures 24-26 minutes (runs 39679547149/39660697905), twice that per the
+cold-cache rule; Linux stays at 20.
 
 Every `apt-get` step sets a 5-minute `timeout-minutes` and passes the workflow's
 `APT_OPTS` (three retries, 20-second HTTP and HTTPS timeouts), so a silent mirror

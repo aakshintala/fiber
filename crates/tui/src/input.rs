@@ -139,6 +139,7 @@ impl Draft {
             Edit::WordLeft => self.word_left(),
             Edit::WordRight => self.word_right(),
             Edit::DeleteWord => self.delete_word(),
+            Edit::DeleteToLineStart => self.delete_to_line_start(),
             Edit::LineStart => self.line_start(),
             Edit::LineEnd => self.line_end(),
             Edit::Delete => self.delete(),
@@ -252,6 +253,14 @@ impl Draft {
         }
         self.pieces.drain(target..self.cursor);
         self.cursor = target;
+    }
+
+    /// Deletes from the start of the cursor's logical line to the
+    /// cursor; at the line's start, nothing.
+    pub(crate) fn delete_to_line_start(&mut self) {
+        let line = self.line_start_at();
+        self.pieces.drain(line..self.cursor);
+        self.cursor = line;
     }
 
     /// Moves left one piece.

@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use contract::SessionId;
 use contract::events::CommandAccepted;
+use contract::{CommandId, SessionId};
 use serde_json::json;
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
@@ -53,6 +53,12 @@ pub(crate) struct CommandEntry {
 /// read it beside the table.
 pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
     match name {
+        "thinking" => Some("effort"),
+        "usage" => Some("cost"),
+        "settings" => Some("config"),
+        "keys" => Some("keybindings"),
+        "name" => Some("rename"),
+        "feedback" => Some("bug"),
         "quit" => Some("exit"),
         _ => None,
     }
@@ -132,6 +138,24 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the quota view and fetches every label's quota.",
         hint: None,
         run: run_quota,
+    },
+    CommandEntry {
+        name: "status",
+        description: "Opens the status view.",
+        hint: None,
+        run: run_status,
+    },
+    CommandEntry {
+        name: "diff",
+        description: "Opens the Changed files view.",
+        hint: None,
+        run: run_diff,
+    },
+    CommandEntry {
+        name: "copy",
+        description: "Copies the newest reply.",
+        hint: None,
+        run: run_copy,
     },
     CommandEntry {
         name: "panel",
@@ -286,25 +310,34 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args))
+    Some(app.send_command("handoff", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
-    Some(app.send_command("name", Some(json!({ "text": rest }))))
+    Some(app.send_command("name", Some(json!({ "text": rest }))).0)
 }
 
 fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
-    Some(app.send_command("reload", None))
+    Some(app.send_command("reload", None).0)
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     // A bare `/import` imports both sources; anything else goes out as
-    // `source`, and the session refuses what it does not take.
+    // `source`, and the session refuses what it does not take. The
+    // source rides beside the pending entry under the command's id, so
+    // the accepted answer's report names it; a bare import reports the
+    // generic title.
     let rest = rest.trim();
     let args = (!rest.is_empty()).then(|| json!({"source": rest}));
-    Some(app.send_command("import", args))
+    let source = (!rest.is_empty()).then(|| rest.to_owned());
+    let (effect, id) = app.send_command("import", args);
+    let Some(id) = id else {
+        return Some(effect);
+    };
+    app.import_sources.insert(CommandId(id), source);
+    Some(effect)
 }
 
 fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
@@ -387,6 +420,20 @@ fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.quota_view())
 }
 
+fn run_status(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::Status))
+}
+
+fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::ChangedFiles))
+}
+
+fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.copy_last_reply())
+}
+
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
@@ -428,7 +475,16 @@ impl App {
     /// no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
+        self.copy_owed = false;
         self.history.cancel();
+        // The open report owns every key through `route_key`, so a
+        // paste or a home-owned arrow reaching here changes neither
+        // the draft nor the report behind it. It runs ahead of the
+        // picker, the chip row and the draft, as `report_key` runs
+        // ahead of every other key path.
+        if self.import_report_open() {
+            return Effect::None;
+        }
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
         if let Some(effect) = self.model_picker_edit(&edit) {
@@ -543,7 +599,7 @@ impl App {
             } else {
                 Some(json!({"name": name, "text": rest}))
             };
-            return Some(self.send_command("command", args));
+            return Some(self.send_command("command", args).0);
         }
         if !slash::is_built_in(name) {
             return None;
@@ -601,6 +657,7 @@ impl App {
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.copy_owed = false;
         true
     }
 
@@ -617,17 +674,22 @@ impl App {
         (self.outbox.is_up()).then(|| (session.clone(), *busy))
     }
 
-    /// Sends `command` to the attached session. A rejection returns the
-    /// draft.
-    fn send_command(&mut self, command: &str, args: Option<serde_json::Value>) -> Effect {
+    /// Sends `command` to the attached session, returning the minted
+    /// command id beside the effect for callers recording per-command
+    /// state. A rejection returns the draft.
+    fn send_command(
+        &mut self,
+        command: &str,
+        args: Option<serde_json::Value>,
+    ) -> (Effect, Option<String>) {
         let Some((session, _)) = self.command_session() else {
-            return Effect::None;
+            return (Effect::None, None);
         };
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
-        self.outbox.insert(id, Kind::Command, draft);
-        Effect::Send(vec![line])
+        self.outbox.insert(id.clone(), Kind::Command, draft);
+        (Effect::Send(vec![line]), Some(id))
     }
 
     /// `/close`: one `close` with `now`, whether the session is busy or
@@ -888,6 +950,22 @@ pub(crate) mod commands_testkit;
 #[cfg(test)]
 #[path = "exit_alias_tests.rs"]
 mod exit_alias;
+
+#[cfg(test)]
+#[path = "aliases_tests.rs"]
+mod aliases;
+
+#[cfg(test)]
+#[path = "diff_command_tests.rs"]
+mod diff_command;
+
+#[cfg(test)]
+#[path = "status_command_tests.rs"]
+mod status_command;
+
+#[cfg(test)]
+#[path = "copy_command_tests.rs"]
+mod copy_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

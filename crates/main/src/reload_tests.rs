@@ -252,6 +252,41 @@ impl Fixture {
 }
 
 #[test]
+fn a_reload_that_keeps_the_extension_swaps_in_the_new_set() {
+    let fixture = Fixture::new();
+    let old = fixture.state.current.get();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    // The reload re-resolves every session path through the new set: a
+    // binding held by the swapped-out set cannot survive the swap, while
+    // the service retains the reloaded set's names.
+    assert_eq!(
+        fixture.delegate.retains.lock().unwrap().clone(),
+        vec![vec!["demo".to_owned(), "judge".to_owned()]],
+        "retain runs once with the reloaded set's names"
+    );
+    assert!(
+        !Arc::ptr_eq(&old, &fixture.state.current.get()),
+        "the swap installed the reloaded set, not the old one"
+    );
+}
+
+#[test]
+fn a_reload_that_drops_the_extension_retains_without_it() {
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.rig.home.join("extensions/demo")).unwrap();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    // The dropped extension leaves the reloaded set: `retain` with the
+    // reduced names is what stops its running delegates elsewhere.
+    assert_eq!(
+        fixture.delegate.retains.lock().unwrap().clone(),
+        vec![vec!["judge".to_owned()]],
+        "retain runs once without the dropped extension"
+    );
+}
+
+#[test]
 fn invalid_config_keeps_the_set_and_a_repaired_config_can_install() {
     let fixture = Fixture::new();
     let old = fixture.state.current.get();

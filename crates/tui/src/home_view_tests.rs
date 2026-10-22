@@ -546,7 +546,7 @@ fn four_row_header_has_no_count_line_at_the_right_edge() {
         "the four-row logo draws: {frame}"
     );
     assert!(
-        !frame.contains("no sessions yet"),
+        !frame.contains("no live sessions"),
         "counts have no room: {frame}"
     );
 }
@@ -1007,7 +1007,7 @@ fn the_box_is_the_full_width_with_the_session_box_inset() {
 #[test]
 fn home_empty_160x48() {
     let frame = screen(&home(160, 48), 160, 48);
-    assert!(frame.lines().nth(2).unwrap().contains("no sessions yet"));
+    assert!(frame.lines().nth(2).unwrap().contains("no live sessions"));
     assert!(frame.contains("No sessions yet."));
     assert!(frame.contains("Type below and press Enter to start one."));
     insta::assert_snapshot!("home_empty_160x48", frame);
@@ -1017,10 +1017,10 @@ fn home_empty_160x48() {
 fn the_four_row_header_needs_twelve_rows_and_32_columns() {
     let short = screen(&home(80, 11), 80, 11);
     assert!(short.contains("⌇ fiber 0.0.1"));
-    assert!(!short.contains("no sessions yet"));
+    assert!(!short.contains("no live sessions"));
     let tall = screen(&home(80, 12), 80, 12);
     assert!(tall.lines().take(4).any(|line| line.contains('█')));
-    assert!(tall.lines().nth(2).unwrap().contains("no sessions yet"));
+    assert!(tall.lines().nth(2).unwrap().contains("no live sessions"));
     let narrow_area = Rect::new(0, 0, 31, 24);
     let mut narrow_buf = Buffer::empty(narrow_area);
     home_only(&home(31, 24), narrow_area, &mut narrow_buf);
@@ -2620,8 +2620,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     );
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
-    // `/feedback`, `/mcp`, `/credential`, `/logout` and `/theme` are five more rows in the list.
-    assert!(shown.contains("of 31"), "{shown}");
+    // Every built-in is a row of the list.
+    assert!(shown.contains("of 34"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

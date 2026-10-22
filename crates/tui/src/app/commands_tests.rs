@@ -75,7 +75,10 @@ fn handoff_sends_its_instructions() {
 fn the_slash_list_shows_the_name_row() {
     let mut app = connected();
     type_text(&mut app, "/nam");
-    assert_eq!(shown(&app), ["/name <text>  Names the session.  command"]);
+    assert_eq!(
+        shown(&app),
+        ["/name /rename <text>  Names the session.  command"]
+    );
 }
 
 #[test]
@@ -108,8 +111,20 @@ fn import_sends_its_source_when_named() {
     assert_eq!(lines[0]["args"], json!({"source": "codex"}));
 }
 
+/// The open import report's title and item counts.
+fn report_summary(app: &App) -> (String, usize, usize) {
+    let report = app
+        .import_report()
+        .expect("an accepted import opens the report");
+    (
+        report.title().to_owned(),
+        report.copied_count(),
+        report.left_count(),
+    )
+}
+
 #[test]
-fn an_accepted_import_reports_every_line_with_a_reload_reminder() {
+fn an_accepted_import_opens_one_report_and_adds_no_notices() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
@@ -129,27 +144,276 @@ fn an_accepted_import_reports_every_line_with_a_reload_reminder() {
         }),
     );
     assert!(app.on_line(accepted).is_empty());
-    // At most three notices show: the first three report lines, then the
-    // count of the rest.
     assert_eq!(
-        notice_texts(&app),
-        [
-            "imported imported skill lint",
-            "imported imported command plan",
-            "imported imported instruction AGENTS.md",
-            "+3 more",
-        ]
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 4, 1)
     );
-    assert_eq!(
-        app.notice(),
-        Some("Run /reload to apply the imported items.")
-    );
+    assert!(app.notices().is_empty());
+    // Esc closes the report and leaves no notices behind.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
 }
 
 #[test]
-fn an_accepted_import_without_cuts_shows_every_line() {
+fn a_bare_accepted_import_reports_the_generic_title() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha", "beta"],
+                    "skills": ["lint"],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    // A bare `/import` covers both sources, so the title names neither.
+    assert_eq!(report_summary(&app), ("Imported".to_owned(), 3, 0));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn an_empty_accepted_import_still_opens_the_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": [],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 0, 0)
+    );
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_second_accept_for_the_same_import_changes_nothing() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let accepted = || {
+        session_line(
+            "command_accepted",
+            json!({
+                "command_id": id,
+                "result": {
+                    "imported": {
+                        "mcp_servers": ["alpha"],
+                        "skills": [],
+                        "commands": [],
+                        "instructions": [],
+                    },
+                    "left_behind": [],
+                },
+            }),
+        )
+    };
+    assert!(app.on_line(accepted()).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    // The source entry is consumed by the first answer, so a late or
+    // duplicate answer finds nothing: the report stays as it was, even
+    // when the late answer carries a different report.
+    let late = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": [],
+                    "skills": ["other", "another"],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(late).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.notices().is_empty());
+    // An answer arriving after Esc changes nothing either.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.on_line(accepted()).is_empty());
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
+/// One session envelope from a session other than [`SESSION`]: its
+/// answers settle silently, never touching the screen.
+fn other_session_line(kind: &str, payload: Value) -> Line {
+    let mut line = session_line(kind, payload);
+    if let Line::Session(envelope) = &mut line {
+        envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    }
+    line
+}
+
+#[test]
+fn an_accept_for_another_session_settles_the_import_silently() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let report = || {
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        })
+    };
+    // An accept arriving after leaving the session opens no report
+    // and adds no notice; its source entry goes with its pending
+    // entry, so a later duplicate back in the session changes
+    // nothing either.
+    assert!(
+        app.on_line(other_session_line("command_accepted", report()))
+            .is_empty()
+    );
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+    assert!(
+        app.on_line(session_line("command_accepted", report()))
+            .is_empty()
+    );
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_rejected_import_adds_one_notice_and_opens_no_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    // A failed import is one notice, as any failed command is.
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("No."));
+    // The rejection drops the source entry, so a late accept for the
+    // id changes nothing.
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.import_report().is_none());
+}
+
+#[test]
+fn a_reject_for_another_session_drops_the_import_source() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    // A reject arriving after leaving the session opens no report.
+    // Its source entry goes with its pending entry through the
+    // unchanged refused path, so a later accept back in the session
+    // opens no stale report.
+    let rejected = other_session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("No."));
+    let accepted = session_line(
+        "command_accepted",
+        json!({
+            "command_id": id,
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.import_report().is_none());
+    // The late accept adds nothing to the refusal's one notice.
+    assert_eq!(app.notices().len(), 1);
+}
+
+#[test]
+fn report_keys_keep_the_held_conversation_position() {
+    let mut app = attached();
+    app.set_size(80, 24);
+    // One durable row for the held anchor to name.
+    let held = Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(contract::Seq(0)),
+        payload: json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "hi"}]}]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    assert!(app.on_line(held).is_empty());
+    app.screen.pages_mut().hold_anchor(
+        &contract::SessionId(SESSION.to_owned()),
+        contract::Seq(0),
+        0,
+    );
+    // The open report's keys scroll it without discarding the held
+    // position: the anchor reset runs only past the report's keys.
+    let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
     let accepted = session_line(
         "command_accepted",
@@ -162,31 +426,16 @@ fn an_accepted_import_without_cuts_shows_every_line() {
                     "commands": [],
                     "instructions": [],
                 },
-                "left_behind": [{"item": "auth.json", "reason": "credentials are never imported"}],
+                "left_behind": [],
             },
         }),
     );
     assert!(app.on_line(accepted).is_empty());
-    assert_eq!(
-        notice_texts(&app),
-        [
-            "imported imported server alpha",
-            "imported left behind auth.json: credentials are never imported",
-            "imported Run /reload to apply the imported items.",
-        ]
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert!(
+        app.screen.pages_mut().anchored_row().is_some(),
+        "report keys keep the held position"
     );
-}
-
-/// Every notice showing, oldest first, each with its code: what the
-/// person reads after an accepted import.
-fn notice_texts(app: &App) -> Vec<String> {
-    app.notices()
-        .iter()
-        .map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
-            crate::app::NoticeLine::More(n) => format!("+{n} more"),
-        })
-        .collect()
 }
 
 #[test]

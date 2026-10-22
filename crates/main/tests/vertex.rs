@@ -239,8 +239,11 @@ fn a_session_without_a_project_names_the_setting() {
     assert_ne!(run.code, Some(0));
     let text = format!("{:?}{}", run.lines, run.stderr);
     assert!(text.contains("model_unconfigured"), "{text}");
+    // `fiber login vertex` would store a key `credential()` never reads, so
+    // the setting comes first (`docs/model-routing.md`, "A per-account host").
     assert!(
-        text.contains("needs the setting `project` for its base URL, which has no value, and `GOOGLE_CLOUD_PROJECT` is not set in the hub's environment (your login shell). Run `fiber login"),
+        text.contains("needs the setting `project` for its base URL, which has no value, and `GOOGLE_CLOUD_PROJECT` is not set in the hub's environment (your login shell). Set `project` in `config/vertex.json` in Fiber home, or export it in your shell profile and run `fiber hub refresh`."),
         "{text}"
     );
+    assert!(!text.contains("fiber login vertex"), "{text}");
 }

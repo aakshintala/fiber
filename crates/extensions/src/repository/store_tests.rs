@@ -718,9 +718,8 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
     clock.advance(INSTALL_STEP_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
-    if answered.is_none() {
-        clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(WITHIN));
-    }
+    let answered =
+        crate::stall::advance_past_grace_or_answer(&clock, &done_rx, kill_at, GRACE, answered);
     let answer = match answered {
         Some(answer) => answer,
         None => Deadline::after(WITHIN)

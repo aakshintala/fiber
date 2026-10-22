@@ -86,6 +86,8 @@ pub(crate) enum Edit {
     WordRight,
     /// ⌥Backspace (`ESC 0x7f`, `CSI 127;3u`).
     DeleteWord,
+    /// Ctrl+U (`0x15`, `CSI 117;5u`).
+    DeleteToLineStart,
     /// ⌘← (`CSI 1;9D`).
     LineStart,
     /// ⌘→ (`CSI 1;9C`).
@@ -192,6 +194,7 @@ pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
         "esc" => key(Key::Esc),
         "backspace" => key(Key::Backspace),
         "alt+backspace" => edit(Edit::DeleteWord),
+        "ctrl+u" => edit(Edit::DeleteToLineStart),
         "tab" => key(Key::Tab),
         "shift+tab" => key(Key::BackTab),
         "space" => key(Key::Char(' ')),

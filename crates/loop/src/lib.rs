@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
+use crate::shutdown::ReleaseDelegates;
 pub(crate) use completion::Step;
 use contract::ErrorCode;
 use contract::events::{
@@ -341,6 +342,12 @@ pub struct Loop {
     idle_left: bool,
     /// The session's hooks; `None` runs none.
     hooks: Option<Arc<dyn contract::hook::Hooks>>,
+    /// Forgets the normal end's extension-owned ids: `settled` calls it
+    /// with the branch's running snapshot at the top of its normal-end branch,
+    /// before the first drain, so a queued end for a released id is
+    /// dropped and never runs `end_extension_job`. `None` releases
+    /// nothing: every end still runs. Set by [`Loop::released`].
+    release: Option<ReleaseDelegates>,
     /// Reports a replaced prompt's replacement to the door, before the
     /// prompt's acceptance (`docs/state.md`, "Prompt history").
     on_rewrite: Option<crate::before_message::OnRewrite>,
@@ -667,6 +674,7 @@ impl Loop {
             idle_exit: None,
             idle_left: false,
             hooks: None,
+            release: None,
             on_rewrite: None,
             handoff: handoff::State::new(carry),
             ending: jobs::Ending::default(),

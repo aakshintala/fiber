@@ -573,6 +573,14 @@ Most of a provider is data. For the provider:
   `credential()` function that returns a token
 - `login`, when `fiber login` runs that function as a login instead of
   reading a key: `browser`, whose device-code form takes `--device`
+- `credential_label`, when that function supplies the credential and reads
+  nothing Fiber stores, as AWS Bedrock's and Google Vertex's do: `names`,
+  what a credential label names, such as `AWS profile`, and `default`, what
+  the `default` label reads. Such a provider has no key for `fiber login` to
+  store, so `fiber doctor` shows its label as that source, unchecked
+  (`docs/invocation.md`, "Commands and flags"), and no sentence advises
+  `fiber login` (`docs/errors.md`, "The shape"). It is never declared beside
+  `login` or a `credential` key source
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
 - `reviewer_model`, optional: the package default `fiber login` preselects
@@ -700,7 +708,9 @@ fixes, login first: run `fiber login <provider>`, which asks for the host;
 set the named setting in `config/<extension>.json` in Fiber home, for every
 project at once; or, when it names an environment variable, export that
 variable in the shell profile and run `fiber hub refresh`, since the hub
-reads its environment when it starts.
+reads its environment when it starts. For a provider whose data declares
+`credential_label` it names only the last two: its `fiber login` would store
+a key the provider never reads ("What a provider extension declares").
 
 `fiber login <provider>` asks for each missing value after the credential
 is stored and before the reviewer, saving each answer globally. When a
@@ -751,13 +761,13 @@ Each protocol reads cache reads and writes from these usage fields:
 | Protocol | `cache_read` | `cache_write` |
 |---|---|---|
 | `anthropic-messages` | `cache_read_input_tokens` | `cache_creation.ephemeral_5m_input_tokens` under `"5m"`, `cache_creation.ephemeral_1h_input_tokens` under `"1h"` |
-| `openai-completions` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_write_tokens`, under the request's cache lifetime |
-| `openai-responses` | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens`, under the request's cache lifetime |
+| `openai-completions` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_write_tokens`, always under `"5m"` |
+| `openai-responses` | `input_tokens_details.cached_tokens` | `input_tokens_details.cache_write_tokens`, always under `"5m"` |
 | `bedrock-converse` | `cacheReadInputTokens` | `cacheWriteInputTokens`, under `"5m"` |
 
 OpenAI keeps one 30-minute lifetime and Responses sends no lifetime, so a
-Responses write lands under the lifetime the request carried; the price is the
-same under either key. OpenAI's `input_tokens` includes both counts: a
+Responses write lands under `"5m"`. OpenAI's
+`input_tokens` includes both counts: a
 cache-warming request reported 2,347 input with 2,344 written, and the next
 reported 2,347 with 2,344 cached (`research/openai-responses-probe`).
 
@@ -848,7 +858,8 @@ quota".
 A call's `cost` in `usage_recorded` is the vendor's own figure where the
 response or a generation lookup reports one, as OpenRouter's does
 (`docs/events.md`, "Usage and notices"). Otherwise it is the model's declared
-`cost` prices applied to the call's `tokens`, each kind at its own price. A
+`cost` prices applied to the call's `tokens`, each kind at its own price; a
+`cache_write` entry keyed `"1h"` prices at twice the selected `input` price. A
 model with neither has `cost` `null`, and the person sees its tokens only. A
 call whose generation the provider never named has `cost` `null`, whatever the
 model declares.
@@ -873,7 +884,8 @@ which took up to 30 seconds when probed (`research/openrouter-cost`).
 A model priced by request size declares `tiers` (`docs/configuration.md`, "A
 provider's data"). The tier with the highest `input_tokens_above` that the
 call's whole input exceeds gives every price for the whole call; below every
-threshold, the base prices apply. The whole input is `input` plus
+threshold, the base prices apply. A `"1h"` write costs twice that tier's
+`input` price. The whole input is `input` plus
 `cache_read` plus `cache_write` from the call's `tokens`, because a vendor
 that prices by request size counts the whole prompt, cached or not.
 

@@ -181,6 +181,11 @@ fn diagnose_with(
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
 ) -> Diagnostic {
+    // A `FIBER_HOME` too long for the hub socket names its cause and fix
+    // instead of the connect's raw operating-system error.
+    if let Err(failure) = doors::check_socket_path(home, "hub") {
+        return Diagnostic::Failed(failure);
+    }
     let deadline = clock.now() + answer_within;
     let connected = doors::hub::probe_until(home, clock, deadline);
     let stream = match connected {

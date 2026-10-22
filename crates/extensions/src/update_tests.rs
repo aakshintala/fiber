@@ -249,6 +249,7 @@ impl Setup {
             &self.origin(),
             clock.as_ref(),
             true,
+            None,
         ) {
             Ok(_) => panic!("the staged update was expected to fail"),
             Err(err) => err,
@@ -280,6 +281,60 @@ impl Setup {
     }
 }
 
+/// The scratch-to-staged rename crosses filesystems when the installed
+/// binary lives on another mount, so the commit falls back to a copy:
+/// the installed binary sits in a fresh directory on `/dev/shm`, and a
+/// probe rename from the test root there first proves the filesystems
+/// differ. Flipping the `CrossesDevices` comparison to `!=` makes the
+/// commit return `Err` instead of copying, so this test kills that mutant.
+#[cfg(target_os = "linux")]
+#[test]
+fn cross_device_commit_falls_back_to_copy() {
+    let mut setup = Setup::new();
+    setup.member("github.com/acme/widget", "1.0.0");
+    setup.install("github.com/acme/widget");
+    setup.tag_release();
+    assert!(
+        Path::new("/dev/shm").is_dir(),
+        "`/dev/shm` is absent: the cross-device commit test needs it"
+    );
+    let shm = fakes::TempDir::under(Path::new("/dev/shm"), "fiber-update");
+    // The scratch directory lives under the system temporary directory,
+    // so a probe rename from the test root to `/dev/shm` takes the same
+    // cross-filesystem path the commit's rename takes.
+    let probe_src = setup.root.path().join("probe");
+    fs::write(&probe_src, b"probe").unwrap();
+    let probe_dst = shm.path().join("probe");
+    match fs::rename(&probe_src, &probe_dst) {
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(err) => panic!("the probe rename failed unexpectedly: {err}"),
+        Ok(()) => panic!("the probe rename succeeded: `/dev/shm` is no separate filesystem"),
+    }
+    let installed = shm.path().join("fiber");
+    let server = serve(
+        b"marker",
+        b"new",
+        &[(
+            "memory",
+            &manifest("github.com/aakshintala/fiber/extensions/memory", "0.2.0"),
+        )],
+        "[]",
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let staged = stage_update(
+        &setup.home(),
+        &setup.target(&server),
+        &setup.origin(),
+        clock.as_ref(),
+        true,
+        Some(&installed),
+    )
+    .unwrap();
+    let binary = staged.commit().unwrap();
+    assert_eq!(fs::read(&binary).unwrap(), b"marker");
+    assert_eq!(binary.parent(), Some(shm.path()));
+}
+
 #[test]
 fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
     let mut setup = Setup::new();
@@ -300,19 +355,25 @@ fn an_update_moves_every_member_and_leaves_a_removed_first_party_absent() {
         "[]",
     );
     let clock = fakes::clock::FakeClock::new();
+    // The installed binary lives in its own directory, so the staged
+    // binary sits beside it rather than in the home.
+    let bindir = setup.root.path().join("bin");
+    fs::create_dir(&bindir).unwrap();
+    let installed = bindir.join("fiber");
     let staged = stage_update(
         &setup.home(),
         &setup.target(&server),
         &setup.origin(),
         clock.as_ref(),
         true,
+        Some(&installed),
     )
     .unwrap();
     let names: Vec<String> = staged.plan().items().map(|i| i.name.clone()).collect();
     assert_eq!(names, ["github.com/acme/widget"]);
     let binary = staged.commit().unwrap();
     assert_eq!(fs::read(&binary).unwrap(), b"marker");
-    assert_eq!(binary.parent(), Some(setup.home().as_path()));
+    assert_eq!(binary.parent(), Some(bindir.as_path()));
     assert_eq!(
         fs::read_to_string(setup.home().join("docs/v")).unwrap(),
         "new"
@@ -371,6 +432,7 @@ fn fresh_names_hold_only_members_not_yet_installed() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     let mut fresh: Vec<&str> = staged.plan().fresh_names().collect();
@@ -413,6 +475,7 @@ fn an_archive_member_keeps_its_requested_and_floor() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     staged.commit().unwrap();
@@ -449,6 +512,7 @@ fn docs_are_installed_when_absent() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap()
     .commit()
@@ -495,6 +559,7 @@ fn an_install_step_runs_at_the_commit_not_the_stage() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     for item in staged.plan().items() {
@@ -539,6 +604,7 @@ fn a_stageless_docs_stage_leaves_docs_alone() {
         &setup.origin(),
         clock.as_ref(),
         false,
+        None,
     )
     .unwrap()
     .commit()
@@ -575,6 +641,7 @@ fn dropping_a_staged_update_removes_the_staged_docs_and_installs_nothing() {
         &setup.origin(),
         clock.as_ref(),
         true,
+        None,
     )
     .unwrap();
     // The docs sit staged beside `docs/`, not yet swapped in.

@@ -2059,10 +2059,10 @@ fn openai_responses_cache_write_is_recorded_and_priced_from_the_write() {
         .collect();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["payload"]["tokens"]["input"], 3);
-    // The loop runs an hour-lifetime cache, so the write keys `1h`.
+    // OpenAI writes always key `5m`, whatever the request's cache lifetime.
     assert_eq!(
         recorded[0]["payload"]["tokens"]["cache_write"],
-        json!({"1h": 2344})
+        json!({"5m": 2344})
     );
     // gpt-6-luna declares its cache-write price, so the warming block
     // prices from the write: input, read and write at its base tier.
@@ -3327,6 +3327,63 @@ fn a_credential_error_at_startup_advises_fiber_login_when_the_provider_s_data_de
     );
     let said = error["provider"]["message"].as_str().unwrap();
     assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
+}
+
+#[test]
+fn a_credential_label_without_credential_is_a_key_provider_whose_401_advises_fiber_login() {
+    // The data says `credential()` reads nothing stored, but the Lua
+    // registers none: the session reads the stored key, so `fiber login`
+    // is the fix, and the Lua's registration wins over the data
+    // (`docs/errors.md`, "The shape").
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([Response::status(401, "{}")]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let data = json!({"name": "acme", "models": [{"id": "m1", "protocol": "openai-responses",
+        "base_url": base_url, "context_window": 100000}],
+        "credential_label": {"names": "acme profile", "default": "the environment"}});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider(\"acme\", {})\n",
+        &base_url,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("k-acme".into()),
+    )
+    .unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "authentication_failed");
+    assert_eq!(
+        error["message"],
+        "acme rejected the credential (HTTP 401). Check the key it is configured with, or log \
+         in again with `fiber login acme`."
+    );
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[test]

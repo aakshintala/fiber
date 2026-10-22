@@ -6,7 +6,7 @@ use crate::stroke::Stroke;
 /// The ids of actions that edit the draft in the input box, and search: the rule in
 /// `docs/tui.md`, "Rules" exempts them from having a mouse target or a
 /// slash command.
-const EDITING: [&str; 11] = [
+const EDITING: [&str; 12] = [
     "send",
     "line_break",
     "focus_rail",
@@ -14,6 +14,7 @@ const EDITING: [&str; 11] = [
     "search_prompts",
     "move_word",
     "delete_word",
+    "delete_to_line_start",
     "line_start_end",
     "paste_image",
     "search",

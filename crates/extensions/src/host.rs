@@ -152,7 +152,7 @@ pub(crate) fn install(
     hub: &Arc<crate::lua::Hub>,
     failure: mlua::Function,
     note_failure: mlua::Function,
-) -> mlua::Result<(LuaValue, Table)> {
+) -> mlua::Result<(LuaValue, Table, Table)> {
     let HostContext {
         home,
         workspace,
@@ -242,7 +242,7 @@ pub(crate) fn install(
         note_failure,
     )?;
     model::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
-    delegate::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
+    let delegate_handles = delegate::install(lua, &host, &tag, Rc::clone(&entry), failure.clone())?;
     drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
     tool::install(lua, &host, &tag, Rc::clone(&entry))?;
     ask::install(lua, &host, &tag, entry)?;
@@ -283,7 +283,7 @@ pub(crate) fn install(
     let globals = lua.globals();
     globals.set("host", host)?;
     globals.set("json", json)?;
-    Ok((LuaValue::Table(tag), timer_funcs))
+    Ok((LuaValue::Table(tag), timer_funcs, delegate_handles))
 }
 
 /// SHA-256 of `bytes`, as lowercase hex.
@@ -331,6 +331,9 @@ pub(crate) enum Request {
         arguments: Map<String, Value>,
         /// The chunk-local `run` handle this start answers.
         handle: u64,
+        /// The per-call timeout the yield carried: `run` is judged from
+        /// its stream item's push instant, not from the start.
+        timeout: Duration,
     },
     /// `host.oauth.callback`: serve one request on this localhost port,
     /// answering only `path` when set.

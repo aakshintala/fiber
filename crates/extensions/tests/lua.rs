@@ -330,23 +330,57 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
-    let park = asked + LOAD + GRACE;
-    let mark = clock.advance_when_parked(
-        Some(park),
-        None,
-        (LOAD + GRACE)
-            .checked_sub(Duration::from_millis(1))
-            .unwrap(),
-        &Deadline::after(WAIT),
-    );
-    assert!(clock.await_parked_since(&mark, Some(park), fakes::Deadline::after(WAIT)));
+    let early = asked + LOAD;
+    let grace = asked + LOAD + GRACE;
+    // The provider caller parks at its load deadline while the load is
+    // still queued; on a fast run it parks straight at the grace park once
+    // schedule.rs has dispatched the load to Running. The soft wait reports
+    // either park as positive evidence: `Ok` advanced exactly to the early
+    // park, `Mismatch` names the grace park it found instead. `NoPark` is a
+    // hang, not a path, and fails the test.
+    let caller = match clock.try_advance_when_parked(Some(early), None, LOAD, WAIT) {
+        Ok(_) => {
+            // The early mark holds every thread that has ever parked,
+            // including calls that already returned: name the provider
+            // caller by the park it holds next, at its grace, instead of
+            // counting the mark. Unrelated threads are ignored, never
+            // awaited.
+            let mut caller = clock
+                .mark_parked(grace, fakes::Deadline::after(WAIT))
+                .expect("the provider caller parks at its grace")
+                .threads();
+            assert_eq!(
+                caller.len(),
+                1,
+                "only the provider caller parks at its grace"
+            );
+            Some(caller.pop().expect("the provider caller thread"))
+        }
+        Err(fakes::clock::Miss::Mismatch { watched, parked }) => {
+            assert_eq!(
+                watched.1,
+                Some(grace),
+                "the fast path parks the provider caller at its grace, found {watched:?} in {parked:?}"
+            );
+            None
+        }
+        Err(fakes::clock::Miss::NoPark) => {
+            panic!("the provider caller never parked at its load deadline or its grace");
+        }
+    };
+    let short = grace
+        .checked_duration_since(clock.now())
+        .and_then(|left| left.checked_sub(Duration::from_millis(1)))
+        .expect("the grace park is still ahead");
+    let mark = clock.advance_when_parked(Some(grace), caller, short, &Deadline::after(WAIT));
+    assert!(clock.await_parked_since(&mark, Some(grace), fakes::Deadline::after(WAIT)));
     assert!(matches!(
         provider.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
     clock.advance_when_parked(
-        Some(park),
-        None,
+        Some(grace),
+        caller,
         Duration::from_millis(1),
         &Deadline::after(WAIT),
     );

@@ -24,6 +24,8 @@ pub(crate) enum SessionView {
     Quota,
     /// `/context`.
     Context,
+    /// `/status`.
+    Status,
     /// The Changed files list.
     ChangedFiles,
     /// The running delegates, from "N delegates running".
@@ -41,6 +43,8 @@ enum Open {
     Quota(List),
     /// `/context`.
     Context(List),
+    /// `/status`.
+    Status(List),
     /// Changed files' paths.
     Files(List),
     /// The running delegates.
@@ -81,6 +85,7 @@ impl App {
             SessionView::Usage => Open::Usage(List::default()),
             SessionView::Quota => Open::Quota(List::default()),
             SessionView::Context => Open::Context(List::default()),
+            SessionView::Status => Open::Status(List::default()),
             SessionView::ChangedFiles => Open::Files(List::default()),
             SessionView::Delegates => Open::Delegates(List::default()),
             SessionView::Jobs => Open::Jobs(List::default()),
@@ -139,8 +144,9 @@ impl App {
             }
             return Some(Effect::None);
         }
-        if let Some(Open::Usage(list) | Open::Quota(list) | Open::Context(list)) =
-            self.session_views.open.as_mut()
+        if let Some(
+            Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+        ) = self.session_views.open.as_mut()
         {
             list.key(key, rows, height);
         }
@@ -214,8 +220,9 @@ impl App {
             return Effect::None;
         }
         if let Spot::Row(at) = spot
-            && let Some(Open::Usage(list) | Open::Quota(list) | Open::Context(list)) =
-                self.session_views.open.as_mut()
+            && let Some(
+                Open::Usage(list) | Open::Quota(list) | Open::Context(list) | Open::Status(list),
+            ) = self.session_views.open.as_mut()
         {
             list.select(at, rows, height);
         }
@@ -231,6 +238,7 @@ impl App {
             Some(Open::Usage(_))
             | Some(Open::Quota(_))
             | Some(Open::Context(_))
+            | Some(Open::Status(_))
             | Some(Open::Files(_))
             | None => {
                 return Effect::None;
@@ -266,6 +274,7 @@ impl App {
             Some(Open::Usage(_))
             | Some(Open::Quota(_))
             | Some(Open::Context(_))
+            | Some(Open::Status(_))
             | Some(Open::Files(_))
             | None => Vec::new(),
         }
@@ -305,6 +314,22 @@ impl App {
                     width,
                 ))
             }
+            Open::Status(list) => Some(crate::status_view::frame(
+                &crate::status_view::Facts {
+                    session: self.session(),
+                    status: self.panel_state.status(),
+                    credential: self.panel_state.credential(),
+                    hub: self
+                        .home
+                        .as_ref()
+                        .and_then(|home| match &home.launch.location {
+                            crate::LaunchLocation::Local { .. } => None,
+                            crate::LaunchLocation::Remote { hub } => Some(hub.as_str()),
+                        }),
+                    version: self.home.as_ref().map(|home| home.launch.version.as_str()),
+                },
+                *list,
+            )),
             Open::Files(list) => {
                 let chosen = self
                     .session_views

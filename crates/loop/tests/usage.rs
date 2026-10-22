@@ -564,3 +564,47 @@ fn a_subscription_copy_counts_subscription_spend() {
     let exited = all.last().unwrap();
     assert_eq!(exited.payload["usage"]["subscription_cost"], 0.05);
 }
+
+#[test]
+fn a_one_hour_write_costs_twice_input_through_the_session() {
+    let mut usage = call_usage("gen_1h");
+    usage.tokens.input = 0;
+    usage.tokens.output = 0;
+    usage.tokens.cache_write.insert("1h".into(), 1_000_000);
+    let model = r#loop::Model {
+        reference: support::MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 2.0,
+            output: 10.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription: false,
+    };
+    let mut session = Session::open(
+        vec![Scripted::failed_after(failure(), usage)],
+        Vec::new(),
+        Vec::new(),
+        model,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert_eq!(recorded.payload["cost"].as_f64(), Some(4.0));
+}

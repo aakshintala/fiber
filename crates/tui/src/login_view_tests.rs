@@ -965,10 +965,36 @@ fn delete_word_clears_the_key() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "abc");
+    let key_row = |login: &Login| {
+        drawn(login, 80, 24)
+            .lines()
+            .find(|row| row.contains('█'))
+            .map(str::to_owned)
+            .expect("the key row")
+    };
+    assert!(key_row(&login).contains("•••█"), "{}", key_row(&login));
     login.edit_key(&Edit::DeleteWord);
-    let screen = drawn(&login, 80, 24);
-    let dots = screen.lines().find(|row| row.contains('█')).unwrap_or("");
-    assert!(!dots.contains('•'), "{dots:?}");
+    let row = key_row(&login);
+    assert!(row.contains('█') && !row.contains('•'), "{row:?}");
+}
+
+#[test]
+fn delete_to_line_start_clears_the_key() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "abc");
+    let key_row = |login: &Login| {
+        drawn(login, 80, 24)
+            .lines()
+            .find(|row| row.contains('█'))
+            .map(str::to_owned)
+            .expect("the key row")
+    };
+    assert!(key_row(&login).contains("•••█"), "{}", key_row(&login));
+    login.edit_key(&Edit::DeleteToLineStart);
+    let row = key_row(&login);
+    assert!(row.contains('█') && !row.contains('•'), "{row:?}");
 }
 
 #[test]

@@ -15,7 +15,7 @@ use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::SessionId;
-use contract::events::CommandAccepted;
+use contract::events::{CommandAccepted, CommandResult};
 
 mod exit;
 
@@ -28,9 +28,9 @@ pub(super) enum Ask {
     /// A `delete` for an exited row, cascading when the question named
     /// the sessions it would remove.
     Delete(SessionId),
-    /// An `import` from the first-run offer: a hub command answered
+    /// An `import` from the first-run offer, carrying its source: a hub command answered
     /// once, never resent, never on a session line.
-    Import,
+    Import { source: String },
 }
 
 /// The foot's question: deleting an exited session through the hub.
@@ -398,7 +398,12 @@ impl App {
         })
         .to_string();
         if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(command.clone(), Ask::Import);
+            home.questions.asks.insert(
+                command.clone(),
+                Ask::Import {
+                    source: source.to_owned(),
+                },
+            );
         }
         match self
             .outbox
@@ -458,10 +463,13 @@ impl App {
         }
     }
 
-    /// Folds the offer's hub `import` answer: an acceptance renders
-    /// the `/import` row's notices and closes the offer, a rejection
-    /// takes the ask and falls through to the existing refused path
-    /// with the offer open. `None` when `id` is no offer import.
+    /// Folds the offer's hub `import` answer: an acceptance opens the
+    /// import report and closes the offer, a rejection takes the ask
+    /// and falls through to the existing refused path with the offer
+    /// open. A malformed acceptance takes the ask and refuses the same
+    /// way, with the offer open, as does an acceptance without the
+    /// import's report (a null, missing or foreign `result`). `None`
+    /// when `id` is no offer import.
     pub(super) fn import_answer(
         &mut self,
         id: &str,
@@ -470,22 +478,39 @@ impl App {
     ) -> Option<Vec<String>> {
         if !matches!(
             self.home.as_ref()?.questions.asks.get(id),
-            Some(Ask::Import)
+            Some(Ask::Import { .. })
         ) {
             return None;
         }
+        let source = match self.take_ask(id) {
+            Some(Ask::Import { source }) => source,
+            _ => return None,
+        };
         if !accepted {
             // The hub refused the offer's import: the feed and recent
             // rows' notice, with the offer staying open for a retry.
-            self.take_ask(id);
             let code = refusal_code(payload);
             self.notices.push(&code, refusal(payload));
             return Some(Vec::new());
         }
-        let accepted =
-            serde_json::from_value::<CommandAccepted>(Value::Object(payload.clone())).ok()?;
-        self.take_ask(id);
-        self.import_answered(&accepted);
+        let Ok(accepted) =
+            serde_json::from_value::<CommandAccepted>(Value::Object(payload.clone()))
+        else {
+            // The hub answered what the terminal cannot read as a
+            // command answer: the refused path with the offer open.
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Some(Vec::new());
+        };
+        if !matches!(accepted.result, Some(CommandResult::Import { .. })) {
+            // The hub accepted without the import's report: the
+            // refused path with the offer open, as for an
+            // unparseable payload.
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Some(Vec::new());
+        }
+        self.import_answered(Some(source), &accepted);
         self.close_import_prompt();
         Some(Vec::new())
     }
@@ -526,7 +551,7 @@ impl App {
         match ask {
             // The hub answers an import, never a session line: the
             // hub fold takes the ask there, so nothing lands here.
-            Ask::Import => Vec::new(),
+            Ask::Import { .. } => Vec::new(),
             Ask::Stop(session) => {
                 if !accepted {
                     let code = refusal_code(payload);

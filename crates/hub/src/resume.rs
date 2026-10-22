@@ -276,8 +276,29 @@ fn attempt(
     if recorded.delegate {
         return Step::Done(Err(delegate_refused()));
     }
+    // A workspace that is missing with no recorded repository to make it
+    // from cannot be recovered: refuse before starting a process.
+    if recorded.repository.is_none() && missing(&recorded.workspace) {
+        return Step::Done(Err(io_failed(
+            hub,
+            session,
+            &format!("{} no longer exists", recorded.workspace.display()),
+        )));
+    }
+    // Whether the launch target was already missing before the start
+    // was tried: a starter failure then is the confirmed unrecoverable
+    // case, and the hub names it with the ruled shape, without the
+    // starter-error wrapper's period. A target that was present is the
+    // race the ruling leaves alone, so its refusal keeps the wrapper's
+    // period and renders like any other refusal. This observes only: the
+    // hub never refuses on the launch target, whose repository a test
+    // fake may never create.
+    let launch_was_missing = missing(recorded.launch());
     let started = match hub.starter.resume(session, recorded.launch(), credential) {
         Ok(started) => started,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && launch_was_missing => {
+            return Step::Done(Err(io_failed(hub, session, &error.to_string())));
+        }
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
     };
     Step::Done(match start::await_bind(hub, socket, started.as_ref()) {
@@ -372,8 +393,9 @@ impl Recorded {
 }
 
 /// Whether `path` is missing: only `NotFound` counts, so any other
-/// lookup error keeps the workspace.
-fn missing(path: &Path) -> bool {
+/// lookup error keeps the workspace. The hub's resume guard and the real
+/// starter's resume check share it.
+pub(crate) fn missing(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
 }

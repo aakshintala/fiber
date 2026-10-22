@@ -3,6 +3,8 @@
 //! written before `fiber_exited`. No model reads the session again, so
 //! nothing that would only be shown to one is written.
 
+use std::sync::Arc;
+
 use contract::events::{DelegateFinished, Event, JobCompleted};
 use contract::inbox::Delivery;
 use contract::jobs::Taken;
@@ -12,7 +14,19 @@ use crate::inbox::{CLOSING, STALE_REPLY, STALE_STEER, reject};
 use crate::jobs::{Queued, claimed};
 use crate::{Error, Loop};
 
+/// Forgets the normal end's extension-owned ids: what [`Loop::released`]
+/// installs and [`Loop::settled`] calls at the top of its normal-end branch.
+pub(crate) type ReleaseDelegates = Arc<dyn Fn(&[JobId]) + Send + Sync>;
+
 impl Loop {
+    /// Forgets the ids the normal-end branch releases through `release`:
+    /// without it a normal end releases nothing and every queued end
+    /// still runs `end_extension_job`.
+    pub fn released(mut self, release: ReleaseDelegates) -> Self {
+        self.release = Some(release);
+        self
+    }
+
     /// `result` once the jobs have settled. A normal end stops only
     /// extension-owned jobs; a shutdown stops every job. The first error wins.
     pub(crate) fn settled(&mut self, result: Result<(), Error>) -> Result<(), Error> {
@@ -29,7 +43,30 @@ impl Loop {
         if running.is_empty() {
             return result;
         }
+        // The release comes first: a queued end for a released id is
+        // dropped below, so it cannot run `end_extension_job` and queue
+        // a `run` for a binding that is already gone. Without an installed
+        // callback nothing is released and nothing is suppressed.
+        let released = match &self.release {
+            Some(release) => {
+                // The extension-owned ids in the branch's snapshot, in the
+                // same order: the inverse of `model_running`, since ended
+                // ids already left `running`.
+                let released: Vec<JobId> = running
+                    .iter()
+                    .filter(|id| self.handoff.carry.owned(&id.0))
+                    .cloned()
+                    .collect();
+                release(&released);
+                released
+            }
+            None => Vec::new(),
+        };
         let settled = (|| {
+            // Only the first drain suppresses: it holds the ends queued
+            // or deferred at the release. Later drains see only ends that
+            // arrived after it, which still run.
+            let mut suppress = true;
             loop {
                 let deliveries = std::mem::take(&mut self.deferred)
                     .into_iter()
@@ -37,9 +74,17 @@ impl Loop {
                 for delivery in deliveries {
                     if let Delivery::Job(notice) = &delivery {
                         running.retain(|id| id != &notice.completed.job_id);
+                        // A released id's queued or deferred end is
+                        // dropped: the stop below still ends the job and
+                        // its real end is still written, but with no binding
+                        // left its completion queues no `run`.
+                        if suppress && released.contains(&notice.completed.job_id) {
+                            continue;
+                        }
                     }
                     self.settle_normal_one(delivery)?;
                 }
+                suppress = false;
                 running.retain(|id| self.handoff.carry.owned(&id.0));
                 if running.is_empty() {
                     return Ok(());

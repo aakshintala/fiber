@@ -74,7 +74,11 @@ consumer observes it. A security boundary, such as the credential deny or a
 permission denial, is tested at binary level: the call is refused, it never
 starts, and no protected bytes reach the output or an artifact.
 
-Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+Tests read a repository file only by compiling it in. The exception is a
+first-party package under `providers/` or `extensions/`: a test may read one
+at run time through a path joined onto `CARGO_MANIFEST_DIR`, and its crate
+must be on the selector's list of package readers (`docs/ci.md`,
+"Selection"). The gate fails on any other run-time read.
 
 ### Event streams
 

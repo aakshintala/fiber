@@ -287,6 +287,25 @@ pub(crate) fn render(
     if let Some(completions) = app.completions() {
         completions::draw(&completions, conversation, box_top, buf, &mut targets);
     }
+    // The import report draws over the conversation when open: one
+    // overlay with both counts, no notices (`docs/tui.md`,
+    // "Overlays"). The conversation's own targets go away under it,
+    // as under the notices overlay. The quit question draws above
+    // the report, as it takes every key while open.
+    if app.import_report_open() {
+        targets.retain(|target| {
+            !matches!(
+                target.id,
+                TargetId::Line(_)
+                    | TargetId::Link { .. }
+                    | TargetId::FindResult(_)
+                    | TargetId::NewBelow
+                    | TargetId::Turn(_)
+                    | TargetId::Offer(_)
+            )
+        });
+        crate::import_report::draw_report(app, conversation, buf, &mut targets);
+    }
     if app.quit_open() {
         quit::draw(app, area, buf, &mut targets);
     }

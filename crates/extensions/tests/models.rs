@@ -784,7 +784,7 @@ fn add_lua_without_a_data_file_creates_the_provider() {
     assert!(providers.resolve("acme/m").is_ok());
     let data = providers.get("acme").unwrap();
     assert_eq!(data.name, "acme");
-    assert!(data.credential.is_none());
+    assert!(data.credential_from.credential().is_none());
     assert!(data.credential_name.is_none());
     assert!(data.headers.is_empty());
     assert!(data.reviewer_model.is_none());
