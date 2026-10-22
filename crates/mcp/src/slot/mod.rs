@@ -253,20 +253,19 @@ impl Slot {
                         resources: self.resources,
                     }
                 }
-                State::Running {
-                    server, restarted, ..
-                } if server.is_gone() => {
-                    // It died while idle: this re-list is the first to see
+                State::Running { restarted, .. } => {
+                    // A Running slot that fails the first arm is gone: `expired`
+                    // is written at exactly one site, with `gone`, under the
+                    // same lock (`wait.rs::expire_if_awaiting`), so an expired
+                    // server is gone too and the guard above covered the live
+                    // case. It died while idle: this re-list is the first to see
                     // it, as the entry of `serve` is for a call.
                     let death = died(&self.spec.name, !*restarted, self.spec.remote());
                     return Relisted::Replace {
                         record: Some(ServerRecord::Failed(death.record)),
                     };
                 }
-                State::Running { .. }
-                | State::NotStarted { .. }
-                | State::Down { .. }
-                | State::Dead { .. } => {
+                State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
                     return Relisted::Replace { record: None };
                 }
             }
