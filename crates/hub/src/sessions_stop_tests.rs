@@ -872,6 +872,65 @@ fn an_accepted_answer_counts_even_when_the_socket_closes() {
     );
 }
 
+/// A rejection for this command reports rejected: the arm mapping
+/// `command_rejected` to `Rejected` is the only reader of a live
+/// session's refusal, while a rejection naming another command is
+/// skipped like any other line.
+#[test]
+fn a_rejected_acknowledgement_reports_rejected() {
+    let temp = Temp::new("ss-rejected-ack");
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    let line = |kind: &str, command_id: &str| {
+        let mut line = serde_json::to_vec(&serde_json::json!({"kind": kind, "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": command_id}}))
+        .unwrap();
+        line.push(b'\n');
+        line
+    };
+    // Another command's acceptance, then this command's rejection:
+    // only the named line answers.
+    let (client, session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let mut read = BufReader::new(client);
+    (&session)
+        .write_all(&line("command_accepted", "c_other"))
+        .unwrap();
+    (&session)
+        .write_all(&line("command_rejected", "c_mine"))
+        .unwrap();
+    drop(session);
+    assert!(
+        matches!(
+            read_ack(&mut read, &stream, &hub, "c_mine", end),
+            Ack::Rejected
+        ),
+        "this command's rejection reports rejected"
+    );
+    // Another command's rejection, then this command's acceptance:
+    // the unnamed rejection is skipped, not fatal.
+    let (client, session) = UnixStream::pair().unwrap();
+    client.set_nonblocking(true).unwrap();
+    let stream = client.try_clone().unwrap();
+    let mut read = BufReader::new(client);
+    (&session)
+        .write_all(&line("command_rejected", "c_other"))
+        .unwrap();
+    (&session)
+        .write_all(&line("command_accepted", "c_mine"))
+        .unwrap();
+    drop(session);
+    assert!(
+        matches!(
+            read_ack(&mut read, &stream, &hub, "c_mine", end),
+            Ack::Accepted
+        ),
+        "another command's rejection is skipped"
+    );
+}
+
 /// A long line far below the length edge still reaches its
 /// acknowledgement: the bound is tens of megabytes out, not a product
 /// of the bytes seen so far.
