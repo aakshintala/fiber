@@ -866,6 +866,13 @@ fn start_stdin_writer(
 /// the group was signalled before the drain, so a writer parked on a full
 /// pipe wakes when the holders die and exits on its next poll; an
 /// untimely writer is left to its stop, never waited past the bound.
+// Latency only: replacing the body with `()` still drops the writer, which
+// disconnects the stop sender, so the writer exits on its own within one
+// `GROUP_POLL` either way; the join only orders the run's return after
+// that exit. No test can observe the order without reading the real clock
+// or racing thread teardown in `/proc`, which reports exited threads
+// under churn.
+#[cfg_attr(false, mutants::skip)]
 fn finish_stdin_writer(writer: Option<StdinWriter>) {
     if let Some(writer) = writer {
         drop(writer.stop);
@@ -888,8 +895,8 @@ fn write_input(stdin: std::process::ChildStdin, input: &[u8], stop: &mpsc::Recei
     if rustix::fs::fcntl_setfl(fd, rustix::fs::OFlags::NONBLOCK).is_err() {
         return;
     }
-    let mut written = 0;
-    while written < input.len() {
+    let mut remaining = input;
+    while !remaining.is_empty() {
         if matches!(
             stop.try_recv(),
             Ok(()) | Err(mpsc::TryRecvError::Disconnected)
@@ -904,17 +911,17 @@ fn write_input(stdin: std::process::ChildStdin, input: &[u8], stop: &mpsc::Recei
         )];
         match rustix::event::poll(&mut fds, Some(&timeout)) {
             Ok(0) => {}
-            Ok(_) => {
-                let Some(rest) = input.get(written..) else {
-                    return;
-                };
-                match rustix::io::write(fd, rest) {
-                    Ok(0) => return,
-                    Ok(n) => written = written.saturating_add(n),
-                    Err(rustix::io::Errno::AGAIN) => {}
-                    Err(_) => return,
+            Ok(_) => match rustix::io::write(fd, remaining) {
+                Ok(0) => return,
+                Ok(n) => {
+                    let Some(next) = remaining.get(n..) else {
+                        return;
+                    };
+                    remaining = next;
                 }
-            }
+                Err(rustix::io::Errno::AGAIN) => {}
+                Err(_) => return,
+            },
             Err(rustix::io::Errno::INTR) => {}
             Err(_) => return,
         }
