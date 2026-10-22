@@ -5269,3 +5269,390 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     guard.wait_gone();
     stop_hub(&hub);
 }
+
+/// The delegate child's final message: the sentinel the parent's provider
+/// requests must never carry.
+const SENTINEL: &str = "sentinel-scan-done-4d2a9c1e";
+
+/// A `go` command starting an extension delegate on `pb/m`: its `run`
+/// writes an unconditional invocation marker before touching the finish,
+/// then the final message to the workspace, then logs that it wrote.
+/// The same start backs a `go` tool, since a model turn can only call
+/// tools: the ask test's prompt reaches the delegate through it.
+const DELEGATE_INIT: &str = r#"
+local function start()
+  local id = host.delegate(
+    { description = "scan", prompt = "scan the tree", model = "fiber:pb/m" },
+    { timeout = 60000, run = function(finish)
+        host.fs.write("run-invoked.txt", "invoked")
+        host.fs.write("run-out.txt", finish.text)
+        host.log("wrote:" .. finish.text)
+      end })
+  return "started:" .. id
+end
+fiber.command("go", { timeout = 5000, run = function()
+  host.status(start())
+end })
+fiber.tool("go", { description = "Start the scan delegate.", input_schema = { type = "object" },
+  effects = { effects = { "executes" }, reversible = false },
+  timeout = 5000, run = function() return start() end })
+"#;
+
+/// The parent's durable kinds for one command-started delegate, pinned
+/// from a real run: the start pair, then the finish pair, with no turn
+/// anywhere, since the model was never consulted.
+const DELEGATE_COMMAND_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "job_started",
+    "delegate_started",
+    "delegate_finished",
+    "job_completed",
+];
+
+/// Sends `command` on a fresh full subscription, returning the client.
+#[track_caller]
+fn subscribed_command_session(
+    setup: &support::Setup,
+    id: &str,
+) -> (extension_harness::Socket, extension_harness::Running) {
+    let mut running = setup.start_session(id, &[]);
+    let client = running.connect(&setup.socket(id));
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    until_session(&client, "the subscribe acknowledgement", |line| {
+        line["kind"] == "command_accepted"
+    });
+    (client, running)
+}
+
+/// The socket's `extension_ui` statuses from `extension`.
+fn ui_statuses(lines: &[Value], extension: &str) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] == "extension_ui" && line["payload"]["extension"] == extension)
+        .map(|line| line["payload"].to_string())
+        .collect()
+}
+
+#[test]
+fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_reads() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        text_reply("parent-ok")
+    })
+    .unwrap();
+    let child = ProviderServer::start_responding(|_: &Request| text_reply(SENTINEL)).unwrap();
+    providers(&setup, &parent, &child);
+    setup.lua("scan", DELEGATE_INIT);
+    let id = doors::mint("s_");
+    let (client, running) = subscribed_command_session(&setup, &id);
+    send(
+        &client,
+        r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
+    );
+    // The command's `host.delegate` call binds the job: the status names it.
+    let started = until_session(&client, "the delegate start", |line| {
+        line["kind"] == "extension_ui" && line["payload"].to_string().contains("started:")
+    });
+    assert!(
+        ui_statuses(&started, "fiber.test/scan")
+            .iter()
+            .any(|status| status.contains("started:")),
+        "the command reported its delegate id: {started:?}"
+    );
+    // The run wrote the bounded final message, then logged that it wrote:
+    // the log line proves the file is whole before the test reads it. The
+    // end may already sit among these lines, on either side of the write.
+    let wrote = until_session(&client, "the run's write", |line| {
+        line["kind"] == "extension_log" && line["payload"]["message"] == format!("wrote:{SENTINEL}")
+    });
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("run-invoked.txt")).unwrap(),
+        "invoked",
+        "the run entered before reading the finish"
+    );
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("run-out.txt")).unwrap(),
+        SENTINEL,
+        "the run file holds the bounded final message"
+    );
+    // The delegate's end: the log holds the whole order. Read before
+    // close: a never-prompted session's directory is deleted on close,
+    // so after the exit the file is gone.
+    if !wrote.iter().any(|line| line["kind"] == "job_completed") {
+        until_session(&client, "the delegate end", |line| {
+            line["kind"] == "job_completed"
+        });
+    }
+    let lines = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
+    assert_eq!(durable_kinds(&lines), DELEGATE_COMMAND_DURABLE);
+    assert_eq!(one(&lines, "job_completed")["status"], "completed");
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    // No provider request carries the sentinel: the parent was never asked,
+    // and the child's own requests hold its prompt, not its final message.
+    assert!(
+        parent.requests().is_empty(),
+        "the model was never consulted: {:?}",
+        parent
+            .requests()
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !child.requests().is_empty(),
+        "the search ran over the child's requests"
+    );
+    for request in child.requests() {
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(
+            !body.contains(SENTINEL),
+            "no child request carries the final message: {body}"
+        );
+    }
+}
+
+#[test]
+fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        text_reply("parent-ok")
+    })
+    .unwrap();
+    // Held: the delegate stays running across the reload below.
+    let child = ProviderServer::start([text_reply(SENTINEL)]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    setup.lua("scan", DELEGATE_INIT);
+    let id = doors::mint("s_");
+    let (client, running) = subscribed_command_session(&setup, &id);
+    send(
+        &client,
+        r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
+    );
+    let mut stream = until_session(&client, "the delegate start", |line| {
+        line["kind"] == "extension_ui" && line["payload"].to_string().contains("started:")
+    });
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the delegate child is running"
+    );
+    // A reload with the extension disabled: the reloaded set drops it, so
+    // `retain` stops its running delegate.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "extensions": {"fiber.test/scan": {"enabled": false}}}),
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    let reloaded = until_session(&client, "the reload", |line| line["kind"] == "reloaded");
+    stream.extend(reloaded.clone());
+    assert!(
+        reloaded.last().unwrap()["payload"].get("failed").is_none(),
+        "the reload dropped the extension cleanly: {reloaded:?}"
+    );
+    // The stop ends the delegate `cancelled`, and its `run` never ran:
+    // no invocation marker, so no finish read either.
+    stream.extend(until_session(&client, "the cancelled end", |line| {
+        line["kind"] == "job_completed" && line["payload"]["status"] == "cancelled"
+    }));
+    assert!(
+        !setup.workspace().join("run-invoked.txt").is_file(),
+        "the stopped delegate ran no run"
+    );
+    assert!(
+        !setup.workspace().join("run-out.txt").is_file(),
+        "the stopped delegate wrote no finish"
+    );
+    assert_eq!(
+        child.requests().len(),
+        1,
+        "the delegate ran exactly its held first request"
+    );
+    // The whole durable stream, in order, read before close: a
+    // never-prompted session's directory is deleted on close.
+    assert_eq!(
+        durable_kinds(&read_lines(
+            &support::session_dir(&setup, &id).join("events.jsonl")
+        )),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "job_started",
+            "delegate_started",
+            "reloaded",
+            "extensions_loaded",
+            "preamble_built",
+            "delegate_finished",
+            "job_completed",
+        ]
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    stream.extend(until_session_close(&client));
+    // The whole socket stream, in order, from the command's send to the
+    // session's exit: the replayed startup, the command's delegate start,
+    // the reload, and the cancelled end. `clients`, `session_status` and
+    // `attention` are independently triggered (`docs/testing.md`, "Event
+    // streams"), so they are set aside; every other line is pinned.
+    // `extension_ui` floats against `job_started`/`delegate_started`: the
+    // command writes its status after `host.delegate` returns, while the
+    // loop writes `job_started` with no ordering edge between them, and
+    // `delegate_started` follows the child's spawn. `job_started` always
+    // precedes `delegate_started`; `extension_ui` may land before, between,
+    // or after them. Those three placements are valid; anything duplicated,
+    // missing or otherwise reordered fails.
+    let kinds = owned_kinds(&stream);
+    let ordered: Vec<&str> = kinds
+        .iter()
+        .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
+        .map(String::as_str)
+        .collect();
+    let started_first: [&str; 15] = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "command_accepted",
+        "job_started",
+        "delegate_started",
+        "extension_ui",
+        "reloaded",
+        "command_accepted",
+        "extensions_loaded",
+        "preamble_built",
+        "delegate_finished",
+        "job_completed",
+        "command_accepted",
+        "fiber_exited",
+    ];
+    let mut ui_first = started_first;
+    ui_first.swap(5, 6);
+    let mut ui_before_job = started_first;
+    ui_before_job[4] = "extension_ui";
+    ui_before_job[5] = "job_started";
+    ui_before_job[6] = "delegate_started";
+    assert!(
+        ordered == started_first || ordered == ui_first || ordered == ui_before_job,
+        "unexpected stream: {ordered:?}"
+    );
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The model's first turn calls the `go` tool; the second ends the
+    // turn, so the prompt ends the session. Reviewer verdicts answer
+    // "allow", as the answering helper does.
+    let called = Arc::new(AtomicBool::new(false));
+    let parent = ProviderServer::start_responding(move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if called.swap(true, Ordering::SeqCst) {
+            return text_reply("all done");
+        }
+        support::stream(&[function_call("call_go", "go", &json!({}))])
+    })
+    .unwrap();
+    // Held: the delegate is still running when the prompt ends the session.
+    let child = ProviderServer::start([text_reply(SENTINEL)]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    setup.lua("scan", DELEGATE_INIT);
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // The whole stream, in order, with the independently triggered
+    // `session_status` lines set aside: they carry no position relative
+    // to the session's other lines (`docs/testing.md`, "Event streams").
+    let kinds = owned_kinds(&lines);
+    let ordered: Vec<&str> = kinds
+        .iter()
+        .filter(|kind| *kind != "session_status")
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        ordered,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "job_started",
+            "delegate_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+            "fiber_exited",
+        ]
+    );
+    // The normal end releases the running delegate: the ordered stream
+    // already pins its `cancelled` end before the exit, and its `run`
+    // never ran: no invocation marker, so no finish read either.
+    let end = kinds
+        .iter()
+        .position(|kind| kind == "job_completed")
+        .expect("no job_completed in {kinds:?}");
+    let exit = kinds
+        .iter()
+        .position(|kind| kind == "fiber_exited")
+        .expect("no fiber_exited in {kinds:?}");
+    assert!(end < exit, "the cancelled end precedes the exit: {kinds:?}");
+    assert_eq!(one(&lines, "job_completed")["status"], "cancelled");
+    assert!(
+        !setup.workspace().join("run-invoked.txt").is_file(),
+        "the released delegate ran no run"
+    );
+    assert!(
+        !setup.workspace().join("run-out.txt").is_file(),
+        "the released delegate wrote no finish"
+    );
+    // The sentinel reached no provider request: the wake input carries
+    // the job id, and the tool result carries only the start receipt.
+    for request in parent.requests() {
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(
+            !body.contains(SENTINEL),
+            "no parent request carries the final message: {body}"
+        );
+    }
+}

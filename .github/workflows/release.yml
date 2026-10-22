@@ -439,7 +439,8 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.runner }}
     # The backstop's test job runs this same full suite within these bounds (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    # macOS cold build + full suite 24-26 min (runs 39679547149/39660697905); bound twice cold.
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 20 }}
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
@@ -529,7 +530,8 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.runner }}
     # The backstop's test job runs this same full suite within these bounds (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    # macOS cold build + full suite 24-26 min (runs 39679547149/39660697905); bound twice cold.
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 50 || 20 }}
     env:
       VERSION: ${{ needs.nightly-preflight.outputs.nightly-version }}
     steps:

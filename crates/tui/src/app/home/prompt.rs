@@ -15,7 +15,7 @@ use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::SessionId;
-use contract::events::CommandAccepted;
+use contract::events::{CommandAccepted, CommandResult};
 
 mod exit;
 
@@ -467,7 +467,9 @@ impl App {
     /// import report and closes the offer, a rejection takes the ask
     /// and falls through to the existing refused path with the offer
     /// open. A malformed acceptance takes the ask and refuses the same
-    /// way, with the offer open. `None` when `id` is no offer import.
+    /// way, with the offer open, as does an acceptance without the
+    /// import's report (a null, missing or foreign `result`). `None`
+    /// when `id` is no offer import.
     pub(super) fn import_answer(
         &mut self,
         id: &str,
@@ -500,6 +502,14 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Some(Vec::new());
         };
+        if !matches!(accepted.result, Some(CommandResult::Import { .. })) {
+            // The hub accepted without the import's report: the
+            // refused path with the offer open, as for an
+            // unparseable payload.
+            let code = refusal_code(payload);
+            self.notices.push(&code, refusal(payload));
+            return Some(Vec::new());
+        }
         self.import_answered(Some(source), &accepted);
         self.close_import_prompt();
         Some(Vec::new())

@@ -307,6 +307,16 @@ nightly_notes() {
   fi
 }
 
+# The publish flow runs the `gh release` calls below from the asset
+# directory, not a checkout, so no git-remote lookup can scope them;
+# the failure step runs `draft-delete` from the checkout instead. Either
+# way GH_REPO carries the repository for all of them, defaulting to the
+# Actions-provided `GITHUB_REPOSITORY`, so every call is explicitly scoped
+# regardless of working directory. An explicit GH_REPO wins; with both
+# unset a draft command fails at dispatch naming the variables, never
+# inside a `gh` call.
+export GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+
 # Prints `true` when `v$1` is a draft, `false` when it is published, and
 # fails when no release carries the name.
 release_state() {
@@ -403,6 +413,10 @@ parse_footprint() {
 command=${1:-}
 [ -n "$command" ] || fail "usage: release-pack <command> [args]." 2
 shift
+case $command in
+  draft-begin | draft-upload | draft-publish | draft-delete)
+    [ -n "$GH_REPO" ] || fail "GH_REPO is unset and GITHUB_REPOSITORY is unset." ;;
+esac
 case $command in
   pack-target) pack_target "$@" ;;
   pack-docs) pack_docs "$@" ;;

@@ -5302,6 +5302,26 @@ fn a_rejected_offer_answer_notices_and_leaves_the_offer_open() {
 }
 
 #[test]
+fn an_accepted_offer_answer_with_a_null_result_notices_and_leaves_the_offer_open() {
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"].as_str().unwrap().to_owned();
+    // The hub accepts without the import's report: the refused path
+    // with the offer open, as for an unparseable payload.
+    assert!(app.on_line(hub_accepted(&id, Value::Null)).is_empty());
+    assert!(app.import_report().is_none());
+    assert_eq!(app.notice(), Some("rejected"));
+    assert_eq!(offer_notices(&app), ["malformed rejected"]);
+    assert!(app.home_screen().unwrap().question_import);
+}
+
+#[test]
 fn esc_dismisses_for_the_run_only() {
     let seam = Arc::new(Fake::new(Vec::new()));
     if let Ok(mut pending) = seam.pending.lock() {

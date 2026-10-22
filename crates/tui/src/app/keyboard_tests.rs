@@ -1374,7 +1374,6 @@ fn editing_keys_do_nothing_while_the_key_map_is_open() {
     key(&mut app, '!');
     assert_eq!(app.draft(), "ab!");
 }
-
 /// The open import report is an overlay: strokes resolve through the
 /// overlay context while it is open, so nothing types into the draft,
 /// the chip row or the conversation behind it.
@@ -1418,4 +1417,30 @@ fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
         Some(crate::mouse::TargetId::Home(Spot::Workspace))
     );
     assert!(app.notices().is_empty());
+}
+
+#[test]
+fn ctrl_u_deletes_the_draft_line_back_to_its_start() {
+    let mut app = attached(80, 24);
+    type_text(&mut app, "first");
+    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
+    type_text(&mut app, "second line");
+    assert_eq!(press(&mut app, "ctrl+u"), Effect::None);
+    assert_eq!(app.draft(), "first\n");
+    // Rebound, the old key types nothing and the new one deletes.
+    keyed(&mut app, &[("delete_to_line_start", json!("ctrl+k"))]);
+    type_text(&mut app, "again");
+    assert_eq!(press(&mut app, "ctrl+u"), Effect::None);
+    assert_eq!(app.draft(), "first\nagain");
+    assert_eq!(press(&mut app, "ctrl+k"), Effect::None);
+    assert_eq!(app.draft(), "first\n");
+}
+
+#[test]
+fn ctrl_u_deletes_in_a_draft_typed_during_a_turn() {
+    let mut app = attached(80, 24);
+    turn_starts(&mut app);
+    type_text(&mut app, "steer this way");
+    assert_eq!(press(&mut app, "ctrl+u"), Effect::None);
+    assert_eq!(app.draft(), "");
 }

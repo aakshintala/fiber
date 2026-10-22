@@ -10,9 +10,11 @@
 )]
 use std::time::Duration;
 
+use contract::JobId;
 use contract::clock::Clock;
 use fakes::clock::FakeClock;
 
+use super::super::Target;
 use super::*;
 
 fn timer(firing: bool) -> Timer {
@@ -58,6 +60,24 @@ fn take_timer_cleanup_takes_the_list() {
     hub.lock().timers.cleanup.extend([3, 5]);
     assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
     assert!(hub.take_timer_cleanup().is_empty());
+}
+
+/// `take_delegate_cleanup` hands over the `run` handle `finish_delegate`
+/// queued and empties the list: the thread clears exactly this entry.
+#[test]
+fn take_delegate_cleanup_clears_the_run_handle_list() {
+    let hub = Hub::new(FakeClock::new());
+    let job_id = JobId("j_1".to_owned());
+    hub.bind_delegate(job_id.clone(), 7, Duration::from_secs(5));
+    let target = Target::Delegate {
+        extension: "ext".to_owned(),
+        job_id: job_id.clone(),
+        handle: 7,
+        timeout: Duration::from_secs(5),
+    };
+    hub.finish_delegate("ext", 0, &target, Ok(serde_json::Value::Null));
+    assert_eq!(hub.take_delegate_cleanup(), vec![7]);
+    assert!(hub.take_delegate_cleanup().is_empty());
 }
 
 /// The scheduler starts the earliest due timer that waits: due, neither

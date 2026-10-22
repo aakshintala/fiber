@@ -425,7 +425,7 @@ fn targets(providers: &Providers) -> Vec<LoginName> {
         .map(|name| {
             if providers
                 .get(name)
-                .is_some_and(|data| data.login == Some(Login::Browser))
+                .is_some_and(|data| data.credential_from.login() == Some(Login::Browser))
             {
                 LoginName::Browser(name.to_owned())
             } else {
@@ -585,7 +585,7 @@ pub(crate) fn login(
     if io
         .providers
         .get(&name)
-        .is_some_and(|data| data.login == Some(Login::Browser))
+        .is_some_and(|data| data.credential_from.login() == Some(Login::Browser))
     {
         return login_with(io, &name, label);
     }
@@ -622,7 +622,7 @@ pub(crate) fn login(
                 && io
                     .providers
                     .get(&name)
-                    .is_some_and(|data| data.login != Some(Login::Browser))
+                    .is_some_and(|data| data.credential_from.login() != Some(Login::Browser))
             {
                 host::hosts(io, &name)?;
                 post_store_reviewer(io, &name, &format!("fiber: {done} {}", stored.path))?;
@@ -815,7 +815,7 @@ fn declared_source(config: &Config, provider: &ProviderData) -> Option<String> {
         .into_iter()
         .next()
         .map(|(_, declared)| declared)
-        .or_else(|| provider.credential.clone())?;
+        .or_else(|| provider.credential_from.credential().cloned())?;
     Some(source.describe())
 }
 

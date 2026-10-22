@@ -512,6 +512,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "usage",
     "cost",
     "quota",
+    "status",
     "diff",
     "copy",
     "tools",

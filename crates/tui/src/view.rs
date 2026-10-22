@@ -287,13 +287,11 @@ pub(crate) fn render(
     if let Some(completions) = app.completions() {
         completions::draw(&completions, conversation, box_top, buf, &mut targets);
     }
-    if app.quit_open() {
-        quit::draw(app, area, buf, &mut targets);
-    }
-    // The import report draws over the conversation when open, above
-    // every other overlay: one overlay with both counts, no notices
-    // (`docs/tui.md`, "Overlays"). The conversation's own targets go
-    // away under it, as under the notices overlay.
+    // The import report draws over the conversation when open: one
+    // overlay with both counts, no notices (`docs/tui.md`,
+    // "Overlays"). The conversation's own targets go away under it,
+    // as under the notices overlay. The quit question draws above
+    // the report, as it takes every key while open.
     if app.import_report_open() {
         targets.retain(|target| {
             !matches!(
@@ -307,6 +305,9 @@ pub(crate) fn render(
             )
         });
         crate::import_report::draw_report(app, conversation, buf, &mut targets);
+    }
+    if app.quit_open() {
+        quit::draw(app, area, buf, &mut targets);
     }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {

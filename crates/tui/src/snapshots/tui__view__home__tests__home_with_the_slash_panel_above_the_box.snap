@@ -4,7 +4,7 @@ expression: "screen(&app, 80, 24)"
 ---
 ▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
 ▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
-▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no sessions yet
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no live sessions
 ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
@@ -17,7 +17,7 @@ expression: "screen(&app, 80, 24)"
     credential    Switches the credential label, or opens t… [<label>] command
     scoped-models Chooses which models the model picker shows.         command
     tools         Opens the tools view.                                command
-  1–8 of 33 · ↓ 25 more
+  1–8 of 34 · ↓ 26 more
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

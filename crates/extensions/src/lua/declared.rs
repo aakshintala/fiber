@@ -62,6 +62,9 @@ impl CallbackTimeouts {
             }
             // A search backend's `run` runs under the backend's timeout.
             Target::Search(name) => self.search.get(name).copied(),
+            // A delegate `run` runs under the per-call timeout the
+            // `host.delegate` yield carried, judged from the push instant.
+            Target::Delegate { timeout, .. } => Some(*timeout),
         }
     }
 

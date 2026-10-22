@@ -110,6 +110,34 @@ fn quit_over_a_session() {
 }
 
 #[test]
+fn quit_draws_over_the_import_report_over_a_session() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.open_import_report(
+        Some("codex".to_owned()),
+        contract::events::ImportedNames {
+            mcp_servers: vec!["alpha".to_owned()],
+            skills: vec![],
+            commands: vec![],
+            instructions: vec![],
+        },
+        vec![],
+    );
+    assert!(app.import_report_open());
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    // The quit question draws above the report, as it takes every
+    // key while open: its frame shows over the session.
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("Quit"), "{shown}");
+    assert!(shown.contains("leave them running"), "{shown}");
+}
+
+#[test]
 fn quit_on_home() {
     let mut app = home(80, 24);
     ask_quit(&mut app);

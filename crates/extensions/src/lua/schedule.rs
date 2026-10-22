@@ -170,6 +170,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                     | Target::Tool(_)
                     | Target::Search(_)
                     | Target::Watcher { .. }
+                    | Target::Delegate { .. }
                     | Target::Effects(_) => host::state::Scope::Other,
                 };
                 vm.state.enter(scope);
@@ -186,6 +187,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                     | Target::Tool(_)
                     | Target::Search(_)
                     | Target::Watcher { .. }
+                    | Target::Delegate { .. }
                     | Target::Effects(_) => host::state::Scope::Other,
                 };
                 vm.state.enter(scope);
@@ -208,7 +210,8 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
         // in its coroutine.
         let failed = step.is_err();
         settle(&start, &hub, &mut parked, id, &target, step);
-        // A finished timer leaves its Lua function, which the thread frees.
+        // A finished timer leaves its Lua function, and a finished delegate
+        // run its stored pair, which the thread frees.
         for timer_id in hub.take_timer_cleanup() {
             match vm.timer_funcs.set(
                 i64::try_from(timer_id).unwrap_or(i64::MAX),
@@ -216,6 +219,9 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
             ) {
                 Ok(()) | Err(_) => {}
             }
+        }
+        for handle in hub.take_delegate_cleanup() {
+            vm.clear_delegate_handle(handle);
         }
         if failed {
             vm.collect();
@@ -277,7 +283,14 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             // whatever the target, before the timer and non-timer
             // branches below.
             let unsent = p.ask.as_ref().and_then(|request| shared.decline(request));
-            if let Target::Timer { id: timer_id } = p.target {
+            if let Target::Delegate { .. } = p.target {
+                // A delegate `run` has no waiter: its timeout ends the
+                // item and is noticed as `hook_failed`, like a watcher.
+                let result = Err(timed_out(name, &p.target, p.timeout, false));
+                drop(shared);
+                hub.finish_delegate(name, p.id, &p.target, result);
+                shared = hub.lock();
+            } else if let Target::Timer { id: timer_id } = p.target {
                 // A firing past its timeout ends; an `every` keeps firing.
                 shared.calls.remove(&p.id);
                 shared.timers.end_firing(timer_id, now);
@@ -332,14 +345,18 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             }
             continue;
         }
-        /// One ordered stream: hooks, watcher deliveries and commands form one
-        /// stream, each finishing before the next starts. A queued stream job
-        /// starts only when no stream job is parked and no earlier stream job
-        /// in the queue is held. Provider functions still run in the gaps.
+        /// One ordered stream: hooks, watcher deliveries, commands and
+        /// delegate `run` deliveries form one stream, each finishing
+        /// before the next starts. A queued stream job starts only when no
+        /// stream job is parked and no earlier stream job in the queue is
+        /// held. Provider functions still run in the gaps.
         fn is_stream(target: &Target) -> bool {
             matches!(
                 target,
-                Target::Command(_) | Target::Hook { .. } | Target::Watcher { .. }
+                Target::Command(_)
+                    | Target::Hook { .. }
+                    | Target::Watcher { .. }
+                    | Target::Delegate { .. }
             )
         }
         let stream_busy = parked.iter().any(|p| is_stream(&p.target));
@@ -624,6 +641,12 @@ fn settle(
     }
     let (thread, target, deadline, timeout, request) = match step {
         Ok(Step::Done(value)) => {
+            // A delegate `run` has no waiter: its result is dropped, and
+            // a failure is noticed as `hook_failed`, like a watcher.
+            if let Target::Delegate { .. } = target {
+                hub.finish_delegate(&start.name, id, target, Ok(value));
+                return;
+            }
             #[cfg(test)]
             await_completion_release(&start.name, target);
             // A watcher delivery has no waiter: a failure is a notice
@@ -635,6 +658,10 @@ fn settle(
             return hub.finish(id, Ok(value));
         }
         Err(e) => {
+            if let Target::Delegate { .. } = target {
+                hub.finish_delegate(&start.name, id, target, Err(e));
+                return;
+            }
             #[cfg(test)]
             await_completion_release(&start.name, target);
             if let Target::Watcher { index } = target {

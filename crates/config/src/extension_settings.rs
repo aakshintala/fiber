@@ -15,7 +15,7 @@ use crate::home::ProjectKey;
 use crate::home::parse;
 use crate::names::full_name;
 use crate::write::{self, Scope};
-use crate::{path, top_level};
+use crate::{Source, path, top_level};
 
 /// One extension's settings files, by layer.
 #[derive(Clone)]
@@ -177,4 +177,115 @@ impl fmt::Debug for ExtensionSettings {
             .field("files", &self.files.keys())
             .finish_non_exhaustive()
     }
+}
+
+/// Splits an extension-settings key `extensions.<name>.settings.<rest>`
+/// into the extension's full name and the relative segments below its
+/// `settings`, the empty rest included. `None` for every other shape and
+/// for unparseable keys, which keep their existing errors.
+pub fn settings_key(key: &str) -> Option<(String, Vec<String>)> {
+    match path::parse(key)?.as_slice() {
+        [area, name, settings, rest @ ..] if area == "extensions" && settings == "settings" => {
+            Some((full_name(name), rest.to_vec()))
+        }
+        _ => None,
+    }
+}
+
+/// The layered read of one settings key: the value with its source when
+/// some layer holds it, beside the repository notices the read ignored.
+type LayeredGet = (Option<(Value, Source)>, Vec<Notice>);
+
+impl ExtensionSettings {
+    /// The effective value of `key` in `extension`'s settings, the layer
+    /// it came from, and the repository notices the read ignored:
+    /// `-c` run settings, then the project file, then the repository
+    /// file, then the global file (`docs/configuration.md`, "Extension
+    /// settings"). The value reads through [`Self::merged`], so a higher
+    /// scalar over a lower object hides it there already; only the source
+    /// walks the layers highest-first. Corrupt JSON and non-object files
+    /// are an error. `None` when no layer holds the key.
+    pub fn get_layered(
+        &self,
+        extension: &str,
+        repo_settings: &[&str],
+        key: &str,
+    ) -> Result<LayeredGet, ConfigError> {
+        let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+        let (merged, notices) = self.merged(extension, repo_settings)?;
+        let Some(value) = path::get(&merged, &key).cloned() else {
+            return Ok((None, notices));
+        };
+        let extension = &full_name(extension);
+        let global_file = write::settings_file(&self.home, extension);
+        let repository_file = write::settings_file(&self.workspace.join(".fiber"), extension);
+        let project_file = write::settings_file(
+            &self.home.join("projects").join(self.project.as_str()),
+            extension,
+        );
+        let mut layers: Vec<(Source, Option<Value>)> = vec![
+            (
+                Source::Global(global_file.clone()),
+                file_subtree(&self.files, &global_file)?,
+            ),
+            (
+                Source::Repository(repository_file.clone()),
+                repository_subtree(&self.files, &repository_file, repo_settings)?,
+            ),
+            (
+                Source::Project(project_file.clone()),
+                file_subtree(&self.files, &project_file)?,
+            ),
+        ];
+        if let Some(run) = self.run_settings.get(extension) {
+            layers.push((Source::Run, Some(run.clone())));
+        }
+        // Highest first: the first layer holding the key names the
+        // source, as `Config::get_segments` names it.
+        for (source, subtree) in layers.iter().rev() {
+            if let Some(subtree) = subtree
+                && path::get(subtree, &key).is_some()
+            {
+                return Ok((Some((value, source.clone())), notices));
+            }
+        }
+        Ok((None, notices))
+    }
+}
+
+/// The extension's settings the snapshot holds at `file`: `None` when the
+/// layer holds no file. Corrupt JSON is an error; a file that reads as
+/// valid JSON of a non-object type is the `top_level` shape error, as
+/// [`ExtensionSettings::merged`] reports it.
+fn file_subtree(
+    files: &BTreeMap<PathBuf, Vec<u8>>,
+    file: &Path,
+) -> Result<Option<Value>, ConfigError> {
+    let Some(bytes) = files.get(file) else {
+        return Ok(None);
+    };
+    match parse(file, bytes)? {
+        Value::Object(map) => Ok(Some(Value::Object(map))),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err(top_level(&file.display().to_string()))
+        }
+    }
+}
+
+/// The repository layer's contribution: the file's object kept to the
+/// top-level keys `repo_settings` lists, as [`ExtensionSettings::merged`]
+/// keeps it. Any other key there is dropped here; the session collects
+/// the notice once at load.
+fn repository_subtree(
+    files: &BTreeMap<PathBuf, Vec<u8>>,
+    file: &Path,
+    repo_settings: &[&str],
+) -> Result<Option<Value>, ConfigError> {
+    let Some(mut kept) = file_subtree(files, file)? else {
+        return Ok(None);
+    };
+    if let Value::Object(map) = &mut kept {
+        map.retain(|key, _| repo_settings.contains(&key.as_str()));
+    }
+    Ok(Some(kept))
 }

@@ -106,33 +106,13 @@ fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
-/// `value` as a host: at most one leading `https://` and one trailing `/`
-/// are stripped, and what remains must be letters, digits, `.` and `-`,
-/// with an optional `:` and a port from 0 to 65535. The result is a
-/// sub-slice of `value`, never a copy of anything else.
+/// `value` as a host, by the one rule in [`config::host_shape`]: at most
+/// one leading `https://` and one trailing `/` are stripped, and what
+/// remains must be letters, digits, `.` and `-`, with an optional `:` and
+/// a port from 0 to 65535. The result is a sub-slice of `value`, never a
+/// copy of anything else.
 pub(super) fn host(value: &str) -> Option<&str> {
-    let rest = value.strip_prefix("https://").unwrap_or(value);
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    let (host, port) = match rest.split_once(':') {
-        Some((host, port)) => (host, Some(port)),
-        None => (rest, None),
-    };
-    if host.is_empty()
-        || !host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    {
-        return None;
-    }
-    if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
-            return None;
-        }
-        if port.parse::<u16>().is_err() {
-            return None;
-        }
-    }
-    Some(rest)
+    config::host_shape(value)
 }
 
 /// `template` with each `{name}` replaced by the host `lookup(name)` gives;
@@ -178,8 +158,10 @@ pub(super) fn fill(template: &str, lookup: &Lookup<'_>) -> Result<Filled, Config
 
 /// The `model_unconfigured` notice for model `id` of `provider`, whose
 /// placeholder `name` has no value. It names the setting, the login
-/// that asks for it, and the config file that holds the answer — never
-/// the value. An absent environment fallback adds the hub-side refresh:
+/// that asks for it when `login` is set, and the config file that holds
+/// the answer — never the value. `login` is unset for a provider whose
+/// data declares `credential_label`: its `fiber login` would store a key it
+/// never reads (`docs/model-routing.md`, "A per-account host"). An absent environment fallback adds the hub-side refresh:
 /// the fallback is read in the hub's environment, so a newly exported
 /// variable needs `fiber hub refresh` before the list sees it. A
 /// present-but-invalid value reads the same as unset: the setting or
@@ -191,6 +173,7 @@ pub(super) fn unconfigured(
     extension: &str,
     name: &str,
     env: Option<&str>,
+    login: bool,
 ) -> Notice {
     let mut message = format!(
         "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
@@ -201,11 +184,16 @@ pub(super) fn unconfigured(
             ", and `{var}` is not set in the hub's environment (your login shell)"
         ));
     }
-    message.push_str(&format!(
-        ". Run `fiber login {provider}`, \
-         or set `{name}` in `config/{}.json` in Fiber home",
-        config::dir_name(extension)
-    ));
+    let dir = config::dir_name(extension);
+    if login {
+        message.push_str(&format!(
+            ". Run `fiber login {provider}`, or set `{name}` in `config/{dir}.json` in Fiber home"
+        ));
+    } else {
+        message.push_str(&format!(
+            ". Set `{name}` in `config/{dir}.json` in Fiber home"
+        ));
+    }
     if env.is_some() {
         message.push_str(", or export it in your shell profile and run `fiber hub refresh`");
     }

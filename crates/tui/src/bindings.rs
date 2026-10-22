@@ -194,6 +194,17 @@ pub(crate) const BINDINGS: &[Binding] = &[
     },
     Binding {
         area: "The input box",
+        id: "delete_to_line_start",
+        when: "",
+        description: "Delete to the start of the line",
+        keys: "Ctrl+U",
+        other_paths: "",
+        contexts: Contexts::INPUT_STEERING,
+        defaults: &["ctrl+u"],
+        events: &[Canon::Edit(Edit::DeleteToLineStart)],
+    },
+    Binding {
+        area: "The input box",
         id: "line_start_end",
         when: "where the terminal passes them",
         description: "Start or end of the line",
