@@ -3360,3 +3360,228 @@ fn a_watch_refusal_surfaces_as_the_registration_notice() {
         "{notices:?}"
     );
 }
+
+/// The load gate and the removed-extension check: these tests install a
+/// stand-in under the first-party `hooks` name and pin the gate around it.
+/// The stand-in keeps the tests about the gate, not the package's Lua: a
+/// one-line `init` script is enough to prove loading, skipping and notices.
+/// Installs the package named `github.com/aakshintala/fiber/extensions/hooks`
+/// with `init` as its entry script.
+fn install_hooks(home: &Home, init: &str) {
+    let src = home.root.path().join("src").join("hooks-first-party");
+    fs::create_dir_all(&src).unwrap();
+    // The package's own manifest, so the tests load what ships.
+    fs::write(
+        src.join("extension.json"),
+        include_str!("../../../extensions/hooks/extension.json"),
+    )
+    .unwrap();
+    fs::write(src.join("init.lua"), init).unwrap();
+    plan(
+        &home.home(),
+        &Request::Path(src),
+        "0.1.0",
+        &Origin::github(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// One `extensions."<hooks>".settings.hooks=<entries>` override.
+fn hooks_override(entries: &str) -> String {
+    format!(
+        "extensions.\"{}\".settings.hooks={entries}",
+        config::full_name("hooks")
+    )
+}
+
+/// Loads the session with `entries` as the declared `hooks` settings.
+fn load_with_hooks(home: &Home, entries: &str) -> Arc<SessionExtensions> {
+    let setting = hooks_override(entries);
+    home.load(&[setting.as_str()])
+}
+
+fn hooks_config(home: &Home, entries: &str) -> Config {
+    let setting = hooks_override(entries);
+    home.config(&[setting.as_str()])
+}
+
+const BLOCKING_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#;
+const NON_BLOCKING_ENTRY: &str = r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"non-blocking"}}"#;
+const NO_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000}}"#;
+const UNKNOWN_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"sometimes"}}"#;
+const NON_STRING_ON_FAILURE_ENTRY: &str =
+    r#"{"audit":{"point":"after_tool","command":"true","timeout":1000,"on_failure":5}}"#;
+const WATCHER_ENTRY: &str =
+    r#"{"ping":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#;
+
+#[test]
+fn hooks_without_a_hooks_key_does_not_load() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = home.load(&[]);
+    assert!(
+        !session.loaded_names().contains(&config::full_name("hooks")),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+#[test]
+fn hooks_with_a_hooks_key_loads() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = load_with_hooks(&home, BLOCKING_ENTRY);
+    assert!(
+        session.loaded_names().contains(&config::full_name("hooks")),
+        "{:?}",
+        session.loaded_names()
+    );
+}
+
+#[test]
+fn hooks_with_an_empty_hooks_key_loads_silently() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let session = load_with_hooks(&home, "{}");
+    assert!(
+        session.loaded_names().contains(&config::full_name("hooks")),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+/// `hooks_state` maps declarations to the gate's state: nothing declared
+/// or already loaded is `Ready`; any `blocking` (or missing or invalid
+/// `on_failure`) entry without the extension loaded is `MissingBlocking`;
+/// watcher entries never gate, and an empty `hooks` key loads silently.
+#[test]
+fn hooks_state_maps_declarations_to_a_gate_state() {
+    let home = Home::new();
+    let hooks = config::full_name("hooks");
+    // (entries JSON, `None` for no `hooks` key; extension loaded; state)
+    let cases: &[(Option<&str>, bool, super::HooksState)] = &[
+        // No declarations: nothing to gate.
+        (None, false, super::HooksState::Ready),
+        // The extension loaded: declared entries can run.
+        (Some(BLOCKING_ENTRY), true, super::HooksState::Ready),
+        // A lone `on_failure`-less entry fails closed like `blocking`.
+        (
+            Some(NO_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // An `on_failure`-less entry beside a `blocking` one still gates.
+        (
+            Some(
+                r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#,
+            ),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // An unknown `on_failure` is not consent to fail open.
+        (
+            Some(UNKNOWN_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // A non-string `on_failure` is not consent either.
+        (
+            Some(NON_STRING_ON_FAILURE_ENTRY),
+            false,
+            super::HooksState::MissingBlocking,
+        ),
+        // Watcher entries never gate the start.
+        (Some(WATCHER_ENTRY), false, super::HooksState::Ready),
+        // An empty `hooks` key loads silently.
+        (Some("{}"), false, super::HooksState::Ready),
+    ];
+    for (entries, is_loaded, expected) in cases {
+        let config = match entries {
+            Some(json) => hooks_config(&home, json),
+            None => home.config(&[]),
+        };
+        let loaded = is_loaded
+            .then(|| hooks.clone())
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            super::hooks_state(&config, &loaded).unwrap(),
+            *expected,
+            "entries: {entries:?}, loaded: {is_loaded}"
+        );
+    }
+}
+
+#[test]
+fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
+    let home = Home::new();
+    match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]).unwrap() {
+        super::HooksState::MissingNotice { notice } => {
+            assert_eq!(notice.code, ErrorCode::ExtensionMissing);
+            assert_eq!(
+                notice.extension.as_deref(),
+                Some(config::full_name("hooks").as_str())
+            );
+            assert!(
+                notice.message.contains("fiber extension install hooks"),
+                "{}",
+                notice.message
+            );
+        }
+        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking) => {
+            panic!("expected MissingNotice, got {state:?}");
+        }
+    }
+}
+
+#[test]
+fn declared_non_blocking_hooks_without_the_package_leave_one_notice() {
+    let home = Home::new();
+    let session = load_with_hooks(&home, NON_BLOCKING_ENTRY);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionMissing);
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some(config::full_name("hooks").as_str())
+    );
+}
+
+#[test]
+fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
+    let home = Home::new();
+    let session = load_with_hooks(&home, BLOCKING_ENTRY);
+    assert!(
+        !session.loaded_names().contains(&config::full_name("hooks")),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+#[test]
+fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
+    let home = Home::new();
+    install_hooks(&home, "-- no hooks registered\n");
+    let file = home.home().join("config").join("hooks.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "{not json").unwrap();
+    let session = home.load(&[]);
+    assert!(
+        !session.loaded_names().contains(&config::full_name("hooks")),
+        "{:?}",
+        session.loaded_names()
+    );
+    // Malformed settings are not a missing extension: the read's error
+    // propagates, and the gate fails the start with its code.
+    let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid);
+}

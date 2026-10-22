@@ -130,6 +130,17 @@ fn inline_styles() {
 }
 
 #[test]
+fn each_run_of_one_style_is_one_span_and_a_style_change_starts_another() {
+    let rendered = render("a **b** c **d** e", 40);
+    let spans: Vec<&str> = rendered.lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(spans, ["a ", "b", " c ", "d", " e"]);
+}
+
+#[test]
 fn links_draw_in_accent_while_plain_text_stays_text() {
     let rendered = render("see [l](http://x) now", 40);
     let line = &rendered.lines[0];
@@ -546,12 +557,12 @@ fn the_widest_of_unequal_columns_shrinks_first() {
     assert_eq!(lines[0], "aaaaaaa   bbbbbbb");
 }
 
-/// `text` wrapped by [`super::wrap_joined`], each row as a string.
+/// `text` wrapped by [`super::wrap_joined_indices`], each row as a string.
 fn wrapped(text: &str, first: usize, rest: usize, words: bool) -> Vec<String> {
     let cells: Vec<(char, Style)> = text.chars().map(|ch| (ch, Style::default())).collect();
-    super::wrap_joined(&cells, first, rest, words)
+    super::wrap_joined_indices(&cells, first, rest, words)
         .iter()
-        .map(|(row, _)| row.iter().map(|(ch, _)| ch).collect())
+        .map(|(row, _, _)| row.iter().map(|(ch, _)| ch).collect())
         .collect()
 }
 

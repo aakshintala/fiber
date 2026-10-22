@@ -321,6 +321,22 @@ impl App {
         }
     }
 
+    /// Closes the open `/`, `@` and `/theme ` panels, as if Esc had
+    /// closed each one: the draft is unchanged, a search panel hiding
+    /// the draft is untouched, and the next typed `/` still opens its
+    /// panel. A panel that is not open leaves no flag behind, so a
+    /// flag once set stays set. Idempotent.
+    pub(crate) fn close_completion_panels(&mut self) {
+        // Both conditions are read before either flag is set: a `/`
+        // panel counts only while no search panel hides it, and a
+        // theme panel only with a name to show, as Esc sees them.
+        let slash = self.slash_open() && self.search_panel().is_none();
+        let theme = self.theme_open() && !self.theme_names().is_empty();
+        self.completion.files = None;
+        self.completion.slash_closed |= slash;
+        self.completion.theme_closed |= theme;
+    }
+
     /// A key for the open completion panel; `None` when no panel is open
     /// or the key is the input box's.
     pub(super) fn completion_key(&mut self, key: &Key) -> Option<Effect> {

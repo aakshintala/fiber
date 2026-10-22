@@ -441,7 +441,9 @@ custom domain. The front page is a product page, built from
 `research/site-prototype/`; the user guide sits beside it. The site carries
 the rest of `docs/` too, for readers who follow a link into an area doc. Every
 docs page renders in the front page's theme, with the same palette and faces.
-The front page's "Docs" link opens the rendered guide.
+The front page's "Docs" link opens the rendered guide. The build fails when a
+front-page link points at `docs/` on GitHub, or names a page or anchor the
+build didn't write.
 
 The site follows releases, not merges. `/fiber/` shows the front page and
 `docs/` at the newest stable release tag, and `/fiber/nightly/` shows `docs/`

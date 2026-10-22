@@ -10,10 +10,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
 
 use contract::Envelope;
 use contract::events::{Event, Notice, SkillListed, SkillsChanged};
+use support::lock;
 
 use crate::Error;
 use crate::opening;
@@ -485,10 +486,6 @@ fn one_line(text: &str) -> String {
         out.push(' ');
     }
     out
-}
-
-fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

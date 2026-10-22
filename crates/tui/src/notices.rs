@@ -39,6 +39,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("credential_missing", Kind::Event),
     ("extension_failed", Kind::Event),
     ("extension_incompatible", Kind::Event),
+    ("extension_missing", Kind::Event),
     ("extension_shadowed", Kind::Event),
     ("history_loading", Kind::Condition),
     ("hook_failed", Kind::Event),

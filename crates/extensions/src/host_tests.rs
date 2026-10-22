@@ -536,6 +536,67 @@ fn exec_env_rejects_a_non_table_or_a_non_string_entry() {
     }
 }
 
+#[test]
+fn exec_input_is_forwarded_in_the_yielded_spec() {
+    let lua = lua();
+    let spec = yielded_env(&lua, "host.exec('sh', {}, {input = 'abc'})");
+    assert_eq!(spec["input"], "abc");
+}
+
+#[test]
+fn exec_input_nil_is_omitted_from_the_yielded_spec() {
+    let lua = lua();
+    let spec = yielded_env(&lua, "host.exec('sh', {})");
+    assert!(spec.get("input").is_none(), "{spec}");
+}
+
+#[test]
+fn exec_input_rejects_a_non_string() {
+    let lua = lua_prelude(PathBuf::from("/nonexistent-fiber-home"), &[]);
+    for code in [
+        "return host.exec('sh', {}, {input = 1})",
+        "return host.exec('sh', {}, {input = {}})",
+        "return host.exec('sh', {}, {input = true})",
+    ] {
+        let message = pcall_string_of(&lua, code);
+        assert_eq!(message, "host.exec: `input` must be a string", "{code}");
+    }
+}
+
+#[test]
+fn exec_request_reads_input_as_bytes_and_absent_as_none() {
+    let lua = Lua::new();
+    let spec = lua.create_table().unwrap();
+    spec.set("program", "sh").unwrap();
+    spec.set("args", lua.create_table().unwrap()).unwrap();
+    let read = exec_request_of(&spec).unwrap();
+    assert_eq!(read.input, None, "absent input is null stdin");
+    spec.set("input", "").unwrap();
+    let read = exec_request_of(&spec).unwrap();
+    assert_eq!(
+        read.input,
+        Some(Vec::new()),
+        "empty input streams empty, then EOF"
+    );
+    spec.set("input", "abc").unwrap();
+    let read = exec_request_of(&spec).unwrap();
+    assert_eq!(read.input, Some(b"abc".to_vec()));
+}
+
+#[test]
+fn exec_request_rejects_a_non_string_input() {
+    let lua = Lua::new();
+    let spec = lua.create_table().unwrap();
+    spec.set("program", "sh").unwrap();
+    spec.set("args", lua.create_table().unwrap()).unwrap();
+    spec.set("input", 1).unwrap();
+    let message = match exec_request_of(&spec) {
+        Ok(_) => panic!("a non-string input never reads"),
+        Err(message) => message,
+    };
+    assert_eq!(message, "host.exec: `input` must be a string");
+}
+
 /// An `exec` spec table with `env` built from `pairs`.
 fn exec_spec(lua: &Lua, pairs: &[(&[u8], &[u8])]) -> Table {
     let spec = lua.create_table().unwrap();

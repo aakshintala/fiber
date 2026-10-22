@@ -28,6 +28,9 @@ pub(crate) struct ExecRequest {
     /// Variables added to the inherited environment, overriding a
     /// same-named variable; empty keeps today's behaviour.
     pub env: BTreeMap<String, String>,
+    /// Bytes piped to the child's standard input, then EOF (`None` keeps
+    /// today's null stdin; `Some` with no bytes streams empty then EOF).
+    pub input: Option<Vec<u8>>,
     /// Each stream's bound in bytes: the extension's memory cap.
     pub cap: usize,
     /// Whether the program runs in its own process group. `host.exec`
@@ -233,7 +236,13 @@ pub(crate) fn run(
     cmd.args(&req.args)
         .current_dir(&req.cwd)
         .envs(&req.env)
-        .stdin(Stdio::null())
+        // Piped stdin carries `input`, then EOF; null stdin is today's
+        // behaviour when no input was given.
+        .stdin(if req.input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if req.own_group {
@@ -322,6 +331,20 @@ pub(crate) fn run(
             source,
         ));
     }
+    // The stdin writer is detached: the run never waits for it. A full
+    // pipe parks it until the group stop breaks the pipe; a closed pipe
+    // ends the write at once.
+    if let Err(source) = start_stdin_writer(req, &mut child) {
+        return Err(abort_startup(
+            req,
+            listing.take(),
+            child,
+            &shared,
+            clock,
+            [true, true],
+            source,
+        ));
+    };
     if req.own_group {
         // The waiter takes the child through a handoff, so a spawn failure
         // keeps it here for the stop and the reap instead of dropping it in
@@ -357,8 +380,9 @@ pub(crate) fn run(
                 std::io::Error::other("host.exec waiter gone"),
             ));
         }
-
-        return supervise(
+        // The stdin writer started before the handoff above moved the
+        // child.
+        let outcome = supervise(
             req,
             &shared,
             clock,
@@ -368,6 +392,7 @@ pub(crate) fn run(
             StopTarget::Group(pgid),
             listing.take(),
         );
+        return outcome;
     }
     // Without its own group no waiter thread starts: the supervising thread
     // below reaps the child itself, so a reaped pid, which the system may
@@ -782,6 +807,37 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
         lock(&shared.inner),
         |guard| guard.seq != seen,
     );
+}
+
+/// Starts the thread streaming `req`'s input to the child's stdin, then
+/// closing it (EOF). `None` when no input was given: stdin stays null.
+/// The writer owns the child's stdin and touches no shared state. The
+/// run never waits for it: a full pipe parks the writer until the group
+/// stop breaks the pipe, and a closed pipe ends the write at once. A
+/// thread that cannot start is a post-spawn failure like a reader that
+/// cannot start: the group stops and the run is still logged.
+fn start_stdin_writer(req: &ExecRequest, child: &mut Child) -> Result<(), std::io::Error> {
+    let Some(input) = req.input.clone() else {
+        return Ok(());
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(std::io::Error::other("host.exec pipes missing"));
+    };
+    match std::thread::Builder::new()
+        .name("exec stdin".into())
+        .spawn(move || {
+            use std::io::Write as _;
+            // A broken pipe just ends the write, since the child is gone.
+            if stdin.write_all(&input).is_err() {}
+            // Dropping `stdin` closes it (EOF).
+        }) {
+        Ok(_) => Ok(()),
+        Err(source) => {
+            // The closure never ran: dropping it closes stdin (EOF), and
+            // no writer exists, so the run's teardown waits on nothing.
+            Err(source)
+        }
+    }
 }
 
 fn read_into(

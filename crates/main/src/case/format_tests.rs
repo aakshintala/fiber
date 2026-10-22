@@ -772,3 +772,39 @@ fn an_exec_signal_of_the_wrong_type_is_rejected() {
     assert!(error.contains("host.exec[1].reply.signal"), "{error}");
     assert!(error.contains("expected a whole number"), "{error}");
 }
+
+#[test]
+fn a_settings_object_is_read_whole() {
+    let mut value = session_case();
+    value["settings"] =
+        json!({"hooks": {"hooks": {"probe": {"point": "session_start", "command": "probe"}}}});
+    let Case::Session(parsed) = parse(&value).expect("a settings object parses") else {
+        panic!("a settings case parsed as a call case");
+    };
+    assert_eq!(
+        parsed.settings,
+        Some(
+            json!({"hooks": {"hooks": {"probe": {"point": "session_start", "command": "probe"}}}})
+        )
+    );
+}
+
+#[test]
+fn non_object_settings_names_the_field() {
+    let mut value = session_case();
+    value["settings"] = json!(false);
+    let error = case_error(&value);
+    assert!(error.contains("settings"), "{error}");
+}
+
+#[test]
+fn a_call_case_with_settings_is_rejected() {
+    let mut value = json!({
+        "call": {"provider": "p", "function": "credential", "arg": {}},
+        "host": {"http": []},
+        "returns": {},
+    });
+    value["settings"] = json!({"hooks": {}});
+    let error = case_error(&value);
+    assert!(error.contains("call cases take"), "{error}");
+}

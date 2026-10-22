@@ -151,8 +151,16 @@ local failures = { blocking = true, ["non-blocking"] = true }
 local function hook(point, spec)
   init_registration('hook')
   local name = tostring(point)
+  -- A declared entry names the problem, so a notice names the entry and
+  -- the missing field. Without one the string is what it always was, so
+  -- every existing pin holds.
+  local entry = type(spec) == "table" and spec.entry or nil
   local function refuse(why)
-    problems[#problems + 1] = "`" .. name .. "` hook not registered: " .. why
+    if type(entry) == "string" then
+      problems[#problems + 1] = "`" .. name .. "` hook not registered for entry `" .. entry .. "`: " .. why
+    else
+      problems[#problems + 1] = "`" .. name .. "` hook not registered: " .. why
+    end
   end
   if type(point) ~= "string" or not hook_points[point] then
     return refuse("`" .. name .. "` is not a hook point")

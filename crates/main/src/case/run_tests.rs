@@ -128,6 +128,7 @@ fn session_case(
         script: json!({}),
         prompt: String::new(),
         config: None,
+        settings: None,
         host,
         clock: advances,
         until,
@@ -1144,4 +1145,22 @@ fn an_unwritable_home_names_the_home() {
         err.contains(&home.display().to_string()),
         "the error names the home: {err}"
     );
+}
+
+#[test]
+fn each_settings_entry_is_written_as_that_extensions_global_file() {
+    let root = fakes::TempDir::new("fiber-case-settings");
+    let home = root.path().join("home");
+    super::write_settings(
+        &home,
+        &json!({"hooks": {"hooks": {"probe": {"point": "session_start"}}}, "other": {}}),
+    )
+    .unwrap();
+    let text = fs::read_to_string(home.join("config").join("hooks.json")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap(),
+        json!({"hooks": {"probe": {"point": "session_start"}}}),
+    );
+    let text = fs::read_to_string(home.join("config").join("other.json")).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
 }

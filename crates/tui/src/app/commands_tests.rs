@@ -236,7 +236,7 @@ fn a_second_accept_for_the_same_import_changes_nothing() {
         report_summary(&app),
         ("Imported from Codex".to_owned(), 1, 0)
     );
-    // The source entry is consumed by the first answer, so a late or
+    // The pending entry is consumed by the first answer, so a late or
     // duplicate answer finds nothing: the report stays as it was, even
     // when the late answer carries a different report.
     let late = session_line(
@@ -268,8 +268,9 @@ fn a_second_accept_for_the_same_import_changes_nothing() {
     assert!(app.notices().is_empty());
 }
 
-/// One session envelope from a session other than [`SESSION`]: its
-/// answers settle silently, never touching the screen.
+/// One session envelope from a session other than [`SESSION`]: most
+/// answers settle silently, never touching the screen, while an
+/// accepted import opens its report.
 fn other_session_line(kind: &str, payload: Value) -> Line {
     let mut line = session_line(kind, payload);
     if let Line::Session(envelope) = &mut line {
@@ -278,41 +279,221 @@ fn other_session_line(kind: &str, payload: Value) -> Line {
     line
 }
 
+/// Results carrying no import report: a missing result, a null
+/// A valid import `result`: one copied server, nothing left behind.
+fn import_result() -> Value {
+    json!({
+        "imported": {
+            "mcp_servers": ["alpha"],
+            "skills": [],
+            "commands": [],
+            "instructions": [],
+        },
+        "left_behind": [],
+    })
+}
+
+/// Results carrying no import report: a missing result, a null
+/// one, a valid other command's result, and a shape no command
+/// answers with (which fails the typed accept parse).
+fn malformed_results() -> [Value; 4] {
+    [
+        json!({}),
+        json!({"result": null}),
+        json!({"result": {"tools": []}}),
+        json!({"result": {"unrelated": true}}),
+    ]
+}
+
 #[test]
-fn an_accept_for_another_session_settles_the_import_silently() {
+fn an_accept_for_another_session_opens_the_report() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
     let report = || {
         json!({
             "command_id": id,
-            "result": {
-                "imported": {
-                    "mcp_servers": ["alpha"],
-                    "skills": [],
-                    "commands": [],
-                    "instructions": [],
-                },
-                "left_behind": [],
-            },
+            "result": import_result(),
         })
     };
-    // An accept arriving after leaving the session opens no report
-    // and adds no notice; its source entry goes with its pending
-    // entry, so a later duplicate back in the session changes
-    // nothing either.
+    // An accept arriving on another session opens the report there:
+    // the answer settles the pending entry whatever surface shows.
     assert!(
         app.on_line(other_session_line("command_accepted", report()))
             .is_empty()
     );
-    assert!(app.import_report().is_none());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
     assert!(app.notices().is_empty());
+    // Esc closes the report; a duplicate accept back in the session
+    // finds no pending entry, so it opens nothing and adds no notice.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
     assert!(
         app.on_line(session_line("command_accepted", report()))
             .is_empty()
     );
     assert!(app.import_report().is_none());
     assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_malformed_accepted_import_adds_one_notice_and_opens_no_report() {
+    // Each stub carries no import report (see `malformed_results`).
+    let stubs = malformed_results();
+    for stub in &stubs {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, "/import codex"));
+        let id = lines[0]["id"].clone();
+        let mut payload = stub.clone();
+        payload["command_id"] = id.clone();
+        if payload["result"] == json!({"unrelated": true}) {
+            // The foreign shape fails the typed accept parse, so the
+            // settle reads the raw payload.
+            assert!(
+                serde_json::from_value::<contract::events::CommandAccepted>(payload.clone())
+                    .is_err()
+            );
+        }
+        assert!(
+            app.on_line(session_line("command_accepted", payload))
+                .is_empty()
+        );
+        // One notice naming the refusal, no report, and the pending
+        // entry closes: a later valid accept for the id changes
+        // nothing and adds nothing.
+        assert_eq!(app.notices().len(), 1);
+        assert_eq!(app.notice(), Some("rejected"));
+        assert!(app.import_report().is_none());
+        assert!(app.outbox.pending.is_empty());
+        let late = session_line(
+            "command_accepted",
+            json!({"command_id": id, "result": import_result()}),
+        );
+        assert!(app.on_line(late).is_empty());
+        assert!(app.import_report().is_none());
+        assert_eq!(app.notices().len(), 1);
+    }
+}
+
+#[test]
+fn a_malformed_accept_for_another_session_adds_one_notice() {
+    let stubs = malformed_results();
+    for stub in &stubs {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, "/import codex"));
+        let id = lines[0]["id"].clone();
+        let mut payload = stub.clone();
+        payload["command_id"] = id.clone();
+        assert!(
+            app.on_line(other_session_line("command_accepted", payload))
+                .is_empty()
+        );
+        assert_eq!(app.notices().len(), 1);
+        assert_eq!(app.notice(), Some("rejected"));
+        assert!(app.import_report().is_none());
+        assert!(app.outbox.pending.is_empty());
+    }
+}
+
+#[test]
+fn an_accept_after_going_home_opens_the_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    app.go_home();
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.notices().is_empty());
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn opening_the_report_closes_the_slash_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    // Esc closes the report and leaves no panel behind; the draft
+    // is untouched.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "/");
+}
+
+#[test]
+fn opening_the_report_closes_the_at_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    app.on_files(app.generation(), Ok(vec!["a.rs".to_owned()]));
+    assert!(app.completions().is_some());
+    assert!(app.files_open());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "@");
+}
+
+#[test]
+fn opening_the_report_closes_the_theme_panel() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    type_text(&mut app, "/theme ");
+    assert!(app.completions().is_some());
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert_eq!(
+        report_summary(&app),
+        ("Imported from Codex".to_owned(), 1, 0)
+    );
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.import_report().is_none());
+    assert!(app.completions().is_none());
+    assert!(!app.files_open());
+    assert_eq!(app.draft(), "/theme ");
 }
 
 #[test]
@@ -328,7 +509,7 @@ fn a_rejected_import_adds_one_notice_and_opens_no_report() {
     // A failed import is one notice, as any failed command is.
     assert!(app.import_report().is_none());
     assert_eq!(app.notice(), Some("No."));
-    // The rejection drops the source entry, so a late accept for the
+    // The rejection drops the pending entry, so a late accept for the
     // id changes nothing.
     let accepted = session_line(
         "command_accepted",
@@ -355,9 +536,8 @@ fn a_reject_for_another_session_drops_the_import_source() {
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
     // A reject arriving after leaving the session opens no report.
-    // Its source entry goes with its pending entry through the
-    // unchanged refused path, so a later accept back in the session
-    // opens no stale report.
+    // Its pending entry goes through the unchanged refused path, so
+    // a later accept back in the session opens no stale report.
     let rejected = other_session_line(
         "command_rejected",
         json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
@@ -1386,4 +1566,60 @@ fn an_extension_draft_with_an_image_is_a_prompt() {
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "prompt");
+}
+
+#[test]
+fn a_rejected_named_import_returns_its_draft_with_the_notice() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    // A failed import is one notice, as any failed command is, and the
+    // draft comes back for a retry.
+    assert!(app.import_report().is_none());
+    assert_eq!(app.draft(), "/import codex");
+    assert_eq!(app.notice(), Some("No."));
+}
+
+#[test]
+fn an_accepted_unknown_source_import_settles_without_a_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import vim"));
+    let id = lines[0]["id"].clone();
+    assert_eq!(lines[0]["args"], json!({"source": "vim"}));
+    // An unknown source stays a plain command: its accept closes the
+    // entry with no report and no notice.
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn a_malformed_accept_leaves_a_non_import_entry_pending() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/reload"));
+    let id = lines[0]["id"].clone();
+    // An answer the terminal cannot read closes only a pending import:
+    // any other kind keeps its silent drop, entry still pending.
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"unrelated": true}}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.notices().is_empty());
+    assert!(app.import_report().is_none());
+    assert!(
+        app.outbox
+            .pending
+            .contains_key(id.as_str().unwrap_or_default())
+    );
 }

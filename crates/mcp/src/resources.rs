@@ -9,7 +9,7 @@
 //! wherever it is declared.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use contract::emit::Emit;
 use contract::images::Images;
@@ -85,10 +85,7 @@ impl Resources {
     /// A snapshot of the slots this registration reaches, including every
     /// adoption into its own start.
     fn snapshot(&self) -> Vec<Arc<Slot>> {
-        self.slots
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        support::lock(&self.slots).clone()
     }
 
     /// The first slot named `server` that offers resources, in list order.

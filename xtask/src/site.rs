@@ -59,6 +59,7 @@ fn build(root: &Path, out: &Path) -> Result<(), String> {
         .ok_or("no release tag to build from.".to_owned())?;
     copy_prototype(root, root_tag, out)?;
     render_tree(root, root_tag, out, false)?;
+    check_front_page_links(out)?;
     if let Some(tag) = &nightly {
         let tree = out.join("nightly");
         let reference = format!("refs/tags/{tag}");
@@ -88,6 +89,57 @@ fn copy_tag_file(root: &Path, reference: &str, source: &str, dest: &Path) -> Res
             .map_err(|error| format!("{}: {error}", parent.display()))?;
     }
     std::fs::write(dest, &bytes).map_err(|error| format!("{}: {error}", dest.display()))?;
+    Ok(())
+}
+
+/// Fails when a link in the copied `index.html` leaves the site for the
+/// repository's docs, or does not resolve against what the build wrote.
+///
+/// The rule: every `href="..."` is either external (it holds `://` or starts
+/// with `mailto:`), which is fine unless it is a `blob/` or `tree/` URL of
+/// this repository under `docs/`; or it is local, and then its path (empty
+/// means `index.html`, a trailing `/` means that directory's `index.html`)
+/// must be a file under `out`, and its `#fragment`, if any, must be an
+/// `id="..."` in that file. Rendered pages get their ids from `render`, which
+/// takes them from `docs::heading_ids`, so there is no second slugger.
+fn check_front_page_links(out: &Path) -> Result<(), String> {
+    let index = out.join("index.html");
+    let html =
+        std::fs::read_to_string(&index).map_err(|error| format!("{}: {error}", index.display()))?;
+    for chunk in html.split("href=\"").skip(1) {
+        let Some((href, _)) = chunk.split_once('"') else {
+            continue;
+        };
+        let on_github = href.strip_prefix(GITHUB).and_then(|rest| {
+            rest.strip_prefix("/blob/")
+                .or_else(|| rest.strip_prefix("/tree/"))
+        });
+        if let Some(rest) = on_github
+            && rest
+                .split_once('/')
+                .is_some_and(|(_, path)| path.starts_with("docs"))
+        {
+            return Err(format!(
+                "index.html link {href} points at GitHub; link the rendered page instead."
+            ));
+        }
+        if href.contains("://") || href.starts_with("mailto:") {
+            continue;
+        }
+        let (path, fragment) = href.split_once('#').unwrap_or((href, ""));
+        let file = if path.is_empty() || path.ends_with('/') {
+            format!("{path}index.html")
+        } else {
+            path.to_owned()
+        };
+        let target = std::fs::read_to_string(out.join(&file))
+            .map_err(|_| format!("index.html link {href}: the build wrote no {file}."))?;
+        if !fragment.is_empty() && !target.contains(&format!("id=\"{fragment}\"")) {
+            return Err(format!(
+                "index.html link {href}: {file} has no #{fragment}."
+            ));
+        }
+    }
     Ok(())
 }
 
