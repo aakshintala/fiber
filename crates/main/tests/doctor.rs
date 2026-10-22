@@ -215,3 +215,110 @@ fn a_userinfo_url_is_refused_without_naming_credentials() {
     assert!(!said.contains(":pw@"), "{said}");
     assert!(!said.contains("example.invalid"), "{said}");
 }
+
+/// Installs the first-party `package` with its endpoint `origin` pointed
+/// at a closed port, writes `config`, and runs `fiber doctor` with `env`.
+fn doctor_with_package(
+    setup: &Setup,
+    package: &str,
+    origin: &str,
+    config: &serde_json::Value,
+    env: &[(&str, &str)],
+) -> Output {
+    let to = setup.root.path().join(format!("pkg-{package}"));
+    support::package::copy_package(package, &to, origin, "http://127.0.0.1:1");
+    let installed = run_to_exit(
+        setup.deadline,
+        "extension install",
+        setup.fiber(&["extension", "install", to.to_str().unwrap()]),
+    );
+    assert_eq!(
+        installed.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&installed)
+    );
+    write_json(&setup.home().join("config.json"), config);
+    let mut doctor = setup.fiber(&["doctor"]);
+    doctor.envs(env.iter().copied());
+    run_to_exit(setup.deadline, &format!("doctor with {package}"), doctor)
+}
+
+/// Runs `fiber doctor` with the bedrock package and the label `work`
+/// selected, and asserts what #3020 expects: the AWS profile as its source,
+/// unchecked, no stored file listed, no `fiber login` advice and exit 0.
+#[track_caller]
+fn assert_bedrock_profile_is_its_source(setup: &Setup) {
+    let output = doctor_with_package(
+        setup,
+        "bedrock",
+        "https://bedrock-runtime.{region}.amazonaws.com",
+        &json!({
+            "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "providers": {"bedrock": {"credential": "work"}},
+        }),
+        &[("AWS_REGION", "us-east-1")],
+    );
+    // Bedrock's `credential()` reads the AWS profile, which doctor cannot
+    // check without running it, so nothing blocks (#3020).
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let text = stdout_text(&output);
+    assert!(
+        text.contains("bedrock:\n  * work  AWS profile work, read by credential() (not checked)\n"),
+        "{text}"
+    );
+    assert!(!text.contains("credentials/bedrock"), "{text}");
+    assert!(!text.contains("fiber login bedrock"), "{text}");
+}
+
+#[test]
+fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
+    assert_bedrock_profile_is_its_source(&Setup::new());
+}
+
+#[test]
+fn a_key_stored_for_bedrock_is_never_listed_as_its_credential() {
+    let setup = Setup::new();
+    // As `fiber login bedrock --as work` writes one; Bedrock never reads it.
+    config::store_credential(
+        &setup.home(),
+        "bedrock",
+        "work",
+        &config::Secret::new("not-a-key".into()),
+    )
+    .unwrap();
+    assert_bedrock_profile_is_its_source(&setup);
+}
+
+#[test]
+fn vertex_s_default_label_is_its_source_and_never_a_missing_key() {
+    let setup = Setup::new();
+    let output = doctor_with_package(
+        &setup,
+        "vertex",
+        "https://aiplatform.googleapis.com",
+        &json!({"model": "vertex/gemini-3.1-flash-lite"}),
+        &[("GOOGLE_CLOUD_PROJECT", "example-project")],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr_text(&output)
+    );
+    let text = stdout_text(&output);
+    assert!(
+        text.contains(
+            "vertex:\n  * default  the active gcloud configuration, or Application Default \
+             Credentials, read by credential() (not checked)\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("fiber login vertex"), "{text}");
+}

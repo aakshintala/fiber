@@ -162,7 +162,7 @@ pub(crate) fn session_credential(
 /// declares no `login`, since `fiber login` then stores a key nothing reads
 /// (`docs/errors.md`, "The shape").
 pub(crate) fn login_advice(credential: bool, provider: &ProviderData) -> LoginAdvice {
-    if credential && provider.login.is_none() {
+    if credential && provider.credential_from.login().is_none() {
         LoginAdvice::Omitted
     } else {
         LoginAdvice::Advised

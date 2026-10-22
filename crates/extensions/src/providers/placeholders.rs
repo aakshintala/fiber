@@ -158,8 +158,10 @@ pub(super) fn fill(template: &str, lookup: &Lookup<'_>) -> Result<Filled, Config
 
 /// The `model_unconfigured` notice for model `id` of `provider`, whose
 /// placeholder `name` has no value. It names the setting, the login
-/// that asks for it, and the config file that holds the answer — never
-/// the value. An absent environment fallback adds the hub-side refresh:
+/// that asks for it when `login` is set, and the config file that holds
+/// the answer — never the value. `login` is unset for a provider whose
+/// data declares `credential_label`: its `fiber login` would store a key it
+/// never reads (`docs/model-routing.md`, "A per-account host"). An absent environment fallback adds the hub-side refresh:
 /// the fallback is read in the hub's environment, so a newly exported
 /// variable needs `fiber hub refresh` before the list sees it. A
 /// present-but-invalid value reads the same as unset: the setting or
@@ -171,6 +173,7 @@ pub(super) fn unconfigured(
     extension: &str,
     name: &str,
     env: Option<&str>,
+    login: bool,
 ) -> Notice {
     let mut message = format!(
         "The model `{provider}/{id}` needs the setting `{name}` for its base URL, \
@@ -181,11 +184,16 @@ pub(super) fn unconfigured(
             ", and `{var}` is not set in the hub's environment (your login shell)"
         ));
     }
-    message.push_str(&format!(
-        ". Run `fiber login {provider}`, \
-         or set `{name}` in `config/{}.json` in Fiber home",
-        config::dir_name(extension)
-    ));
+    let dir = config::dir_name(extension);
+    if login {
+        message.push_str(&format!(
+            ". Run `fiber login {provider}`, or set `{name}` in `config/{dir}.json` in Fiber home"
+        ));
+    } else {
+        message.push_str(&format!(
+            ". Set `{name}` in `config/{dir}.json` in Fiber home"
+        ));
+    }
     if env.is_some() {
         message.push_str(", or export it in your shell profile and run `fiber hub refresh`");
     }
