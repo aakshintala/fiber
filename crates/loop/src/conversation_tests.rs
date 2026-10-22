@@ -4300,11 +4300,9 @@ fn a_message_in_a_rewind_summary_turn_is_not_kept() {
 
 #[test]
 fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
-    let steer = |origin| {
+    let steer = |origin, text: &str| {
         Event::SteeringApplied(contract::events::SteeringApplied {
-            content: vec![ContentPart::Text {
-                text: "steered".into(),
-            }],
+            content: vec![ContentPart::Text { text: text.into() }],
             sender: Sender {
                 origin,
                 command_id: None,
@@ -4314,13 +4312,16 @@ fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
     };
     let (conversation, _) = kept_run(&[
         (6, "turn_started", start_turn("A")),
-        (7, "steering_applied", steer(Origin::Driver)),
+        (7, "steering_applied", steer(Origin::Driver, "steered")),
         (
             8,
             "steering_applied",
-            steer(Origin::Extension {
-                extension: "fiber.test/ext".into(),
-            }),
+            steer(
+                Origin::Extension {
+                    extension: "fiber.test/ext".into(),
+                },
+                "from an extension",
+            ),
         ),
         (9, "turn_started", kept_handoff_turn()),
         (10, "handoff_completed", kept_handoff_done("NOTE")),
