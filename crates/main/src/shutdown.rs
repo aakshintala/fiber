@@ -105,8 +105,10 @@ fn shutdown_steps(
 ) {
     // The code first: the loop reads it once the stopper wakes it.
     publish(code);
-    stop_callbacks();
+    // Before the callbacks stop: stopping one breaks a reload's extension
+    // initialisation, which must then answer `closing`, not a degraded value.
     cancel_reads();
+    stop_callbacks();
     rest();
 }
 
