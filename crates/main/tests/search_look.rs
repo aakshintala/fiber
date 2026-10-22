@@ -1030,11 +1030,13 @@ fn the_changed_files_rows_match_the_doc() {
     assert!(changed_file_row_ready(&grid));
 }
 
-/// Session settled and its speed row drawn: no later fold in this turn moves the cards.
+/// Turn complete (`✓ READY`) and the Session cost row drawn: no later fold in
+/// this turn moves the cards. The speed row is not part of it: it is absent
+/// when the reply's first and last events share a timestamp.
 fn session_settled(grid: &Grid) -> bool {
     // The panel starts at column 100, as in `panel_item_at`: a `cost`
     // elsewhere (a conversation echo, another card) does not settle us.
-    support::session_cost_drawn(grid, 100) && grid.contents.contains("speed, last reply")
+    support::session_cost_drawn(grid, 100) && grid.contents.contains("✓ READY")
 }
 
 /// The Session spend row drawn in the panel: the parent script reports
@@ -1072,7 +1074,7 @@ fn the_item_views_top_row_closes_them() {
         grid.contents.contains(REPLY)
             && panel_item_at(grid, "review the diff").is_some()
             && panel_item_at(grid, "Jobs").is_some()
-            && session_settled(grid)
+            && support::session_cost_drawn(grid, 100)
             && session_spend_drawn(grid)
     });
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
@@ -1089,7 +1091,7 @@ fn the_item_views_top_row_closes_them() {
         ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
-            session_settled(grid)
+            support::session_cost_drawn(grid, 100)
                 && session_spend_drawn(grid)
                 && panel_card_item_at(grid, card, description).is_some()
         });
@@ -1098,7 +1100,7 @@ fn the_item_views_top_row_closes_them() {
         // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
         run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
         run.wait_screen("the running item's hover acknowledgement", |grid| {
-            session_settled(grid)
+            support::session_cost_drawn(grid, 100)
                 && session_spend_drawn(grid)
                 && panel_card_item_at(grid, card, description) == Some((x, y))
                 && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)

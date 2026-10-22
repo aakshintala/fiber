@@ -14,7 +14,7 @@ use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
@@ -560,6 +560,64 @@ fn append(file: &Path, logs: &Path, bytes: &[u8]) {
     }
 }
 
+/// Files in `logs/` and `crashes/` older than this are deleted
+/// (`docs/state.md`, "Bounds").
+const OLD_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// Besides the old files, each directory keeps this many of its newest.
+const KEEP: usize = 100;
+
+/// A diagnostic file to delete: its path and its length.
+pub struct OldFile {
+    /// The file's path.
+    pub path: PathBuf,
+    /// The file's length.
+    pub bytes: u64,
+}
+
+/// Every file in `dir` that pruning deletes: the regular files older than
+/// 30 days, then all but the newest 100 of the rest by mtime, sorted by path.
+/// A missing directory, a symlink and a subdirectory select nothing; unreadable
+/// metadata counts as empty at the epoch.
+#[must_use]
+pub fn old_diagnostics(dir: &Path, now: SystemTime) -> Vec<OldFile> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut old = Vec::new();
+    let mut kept: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let (len, at, is_old) = match entry.metadata() {
+            Ok(meta) => {
+                let old = meta.modified().is_ok_and(|at| at + OLD_AFTER < now);
+                let at = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                (meta.len(), at, old)
+            }
+            Err(_) => (0, SystemTime::UNIX_EPOCH, false),
+        };
+        if is_old {
+            old.push(OldFile { path, bytes: len });
+        } else {
+            kept.push((at, path, len));
+        }
+    }
+    kept.sort();
+    let drop = kept.len().saturating_sub(KEEP);
+    for (_, path, bytes) in kept.into_iter().take(drop) {
+        old.push(OldFile { path, bytes });
+    }
+    old.sort_by(|a, b| a.path.cmp(&b.path));
+    old
+}
+
 #[cfg(test)]
 #[path = "diag_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "old_diagnostics_tests.rs"]
+mod old_diagnostics_tests;

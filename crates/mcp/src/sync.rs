@@ -137,9 +137,9 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
             },
             Some(slot) => {
                 let old = slot.spec();
-                // When the start spec matches, a slot that served before
-                // replaces under `restarted`; a never-started slot starts
-                // fresh under `started`.
+                // A replacement files under `restarted` when the old slot
+                // ran this session (it is running, or it served before),
+                // and under `started` when the slot never started.
                 let disposition = if slot.is_running() || slot.served_before() {
                     Disposition::Restarted
                 } else {
@@ -147,16 +147,14 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                 };
                 // A lazy slot never answers a reload: force a real start.
                 // A changed key or timeouts replace even a slot that never
-                // served: serving in place would run the old spec.
+                // served: serving in place would run the old spec. The
+                // commit files the replacement by the disposition above.
                 if old.key() != spec.key()
                     || old.startup_timeout != spec.startup_timeout
                     || old.call_timeout != spec.call_timeout
                     || old.required != spec.required
                 {
-                    SyncRow::Shadow {
-                        spec,
-                        disposition: Disposition::Restarted,
-                    }
+                    SyncRow::Shadow { spec, disposition }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
                 } else {

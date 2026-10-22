@@ -1,5 +1,6 @@
 //! Tests for the hub's diagnostic log (`docs/state.md`, "Diagnostic logs"
-//! and "Bounds"): the line shape, rotation past 10 MiB, and pruning.
+//! and "Bounds"): the line shape, rotation past 10 MiB, and that start-up
+//! deletes what `log::diag::old_diagnostics` selects.
 
 #![allow(
     clippy::unwrap_used,
@@ -9,23 +10,14 @@
 )]
 
 use std::fs::{self, File};
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
+use contract::clock::Clock;
 use log::diag::Severity;
-
-use super::*;
-
-/// `FakeClock::new` reads the process clock once for its monotonic origin;
-/// its wall time is fixed: 2023-11-14T22:13:20Z.
-const WALL: u64 = 1_700_000_000;
-const DAY: u64 = 24 * 60 * 60;
-
-fn wall() -> SystemTime {
-    SystemTime::UNIX_EPOCH + Duration::from_secs(WALL)
-}
 
 struct Temp {
     dir: PathBuf,
@@ -142,38 +134,27 @@ fn a_log_over_10_mib_is_renamed_before_the_next_write() {
 }
 
 #[test]
-fn prune_deletes_files_older_than_30_days_and_keeps_the_boundary() {
+fn start_up_deletes_what_old_diagnostics_selects_and_leaves_the_rest() {
     let temp = Temp::new();
     let logs = temp.dir.join("logs");
-    fs::create_dir_all(&logs).unwrap();
+    fs::create_dir_all(logs.join("sub")).unwrap();
     let old = logs.join("old.log");
-    let edge = logs.join("edge.log");
     let fresh = logs.join("fresh.log");
     fs::write(&old, b"old").unwrap();
-    fs::write(&edge, b"edge").unwrap();
     fs::write(&fresh, b"fresh").unwrap();
     File::options()
         .write(true)
         .open(&old)
         .unwrap()
-        .set_modified(wall() - Duration::from_secs(30 * DAY + 1))
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
         .unwrap();
-    File::options()
-        .write(true)
-        .open(&edge)
-        .unwrap()
-        .set_modified(wall() - Duration::from_secs(30 * DAY))
-        .unwrap();
-    File::options()
-        .write(true)
-        .open(&fresh)
-        .unwrap()
-        .set_modified(wall() - Duration::from_secs(DAY))
-        .unwrap();
+    let selected = log::diag::old_diagnostics(&logs, fakes::clock::FakeClock::new().wall());
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].path, old);
     temp.diag();
     assert!(!old.exists());
-    assert!(edge.exists());
     assert!(fresh.exists());
+    assert!(logs.join("sub").is_dir());
 }
 
 #[test]
@@ -220,47 +201,6 @@ fn concurrent_writes_past_the_limit_lose_no_records() {
         }
     }
     assert_eq!(lines, prefill + WRITERS * EACH);
-}
-
-#[test]
-fn prune_keeps_the_newest_100_files_by_mtime() {
-    let temp = Temp::new();
-    let crashes = temp.dir.join("crashes");
-    fs::create_dir_all(&crashes).unwrap();
-    for i in 0..101 {
-        let path = crashes.join(format!("{i:03}.txt"));
-        fs::write(&path, b"x").unwrap();
-        File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_699_000_000 + i))
-            .unwrap();
-    }
-    temp.diag();
-    assert!(!crashes.join("000.txt").exists());
-    for i in 1..101 {
-        assert!(crashes.join(format!("{i:03}.txt")).exists());
-    }
-}
-
-#[test]
-fn prune_keeps_100_files_and_leaves_subdirectories_alone() {
-    let temp = Temp::new();
-    let logs = temp.dir.join("logs");
-    fs::create_dir_all(logs.join("sub")).unwrap();
-    for i in 0..100 {
-        let path = logs.join(format!("{i:03}.log"));
-        fs::write(&path, b"x").unwrap();
-        File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_699_000_000 + i))
-            .unwrap();
-    }
-    temp.diag();
-    assert_eq!(fs::read_dir(&logs).unwrap().count(), 101);
 }
 
 #[test]

@@ -14,7 +14,6 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -315,21 +314,6 @@ impl Setup {
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
-/// [`Deadline`].
-#[track_caller]
-fn mkfifo(setup: &Setup, path: &Path) {
-    let mut command = Command::new("mkfifo");
-    command
-        .arg(path)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let made = support::run_to_exit(setup.deadline, "mkfifo", command);
-    assert!(made.status.success(), "mkfifo {}: {made:?}", path.display());
 }
 
 impl StdoutRun {
@@ -1561,7 +1545,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
 fn a_background_shell_job_is_waited_for_before_ask_exits() {
     let setup = Setup::new_with_started_deadline();
     let ready = setup.workspace().join("ready");
-    mkfifo(&setup, &ready);
+    fakes::fifo(&ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
     // the job's blocks, and the job's `read` waits for the line `act` writes.
     let release = fs::OpenOptions::new()
@@ -1690,7 +1674,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
 fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let setup = Setup::new_with_started_deadline();
     let ready = setup.workspace().join("ready");
-    mkfifo(&setup, &ready);
+    fakes::fifo(&ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
     // the job's blocks, and the job's `read` waits for the line `act` writes.
     let release = fs::OpenOptions::new()

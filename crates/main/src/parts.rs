@@ -461,6 +461,7 @@ pub(crate) fn parts_in(
     prompt.system = patch.system;
     prompt.append = patch.append;
     prompt.agents_home = agents_home;
+    prompt.docs = Some(prompt_files::docs_place(&home, env!("CARGO_PKG_VERSION")));
     prompt.addendum = providers.addendum(&model).map(str::to_owned);
     prompt.extensions = patch.extensions;
     prompt.extension_dirs = patch.extension_dirs;

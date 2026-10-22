@@ -71,17 +71,6 @@ pub(crate) struct Shared {
     pub(crate) cv: Condvar,
 }
 
-impl SharedState {
-    /// Whether any pending slot holds a response; read on a guard the
-    /// caller already holds, inside `cv.wait_timeout_while`, so the wait
-    /// never locks twice. Only `await_response` calls this while holding
-    /// the guard; `view` relocks it and `pending` is private.
-    #[cfg(test)]
-    pub(crate) fn holds_a_response(&self) -> bool {
-        self.pending.values().any(|slot| slot.is_some())
-    }
-}
-
 impl Wake for Shared {
     fn wake(&self) {
         // The sequence moves under the same lock as the wait, so a clock
