@@ -134,6 +134,12 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         "crates/tools/src/picture_timing_tests.rs",
         "changed on main by #3132",
     ),
+    held(
+        "crates/tools/src/web_fetch/download_tests.rs",
+        "held by #3149",
+    ),
+    held("crates/tui/src/lib_image_tests.rs", "held by #3152"),
+    held("crates/tui/src/loop_tests.rs", "held by #3152"),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.
