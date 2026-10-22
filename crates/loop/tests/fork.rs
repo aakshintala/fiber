@@ -623,7 +623,17 @@ fn prepared() -> ReloadPrepared {
             replaces: Vec::new(),
         }],
         notices: Vec::new(),
-        server_sync: r#loop::ServerSync::default(),
+        server_sync: r#loop::ServerSync {
+            servers: contract::events::ReloadedServers {
+                kept: Vec::new(),
+                restarted: Vec::new(),
+                started: Vec::new(),
+                stopped: Vec::new(),
+            },
+            server_records: Vec::new(),
+            server_failures: Vec::new(),
+            new_prompts: None,
+        },
         hooks: None,
         reviewer: Err(contract::shapes::Failure {
             code: ErrorCode::NoModel,

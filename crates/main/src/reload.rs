@@ -130,6 +130,22 @@ pub(crate) struct State {
     pub(crate) images: Arc<dyn contract::images::Images>,
 }
 
+/// The late preparation skips the sync: no grouping, records,
+/// failures or carried prompt sources.
+fn empty_sync() -> r#loop::ServerSync {
+    r#loop::ServerSync {
+        servers: contract::events::ReloadedServers {
+            kept: Vec::new(),
+            restarted: Vec::new(),
+            started: Vec::new(),
+            stopped: Vec::new(),
+        },
+        server_records: Vec::new(),
+        server_failures: Vec::new(),
+        new_prompts: None,
+    }
+}
+
 impl State {
     #[allow(
         clippy::too_many_arguments,
@@ -434,7 +450,7 @@ impl State {
         // as a startup row: `loop` routes the carried tags to the fetch
         // the sync bundles with the rows below.
         let mut prompt_rows = baseline;
-        contract::events::CommandInfo::merge_into(&mut prompt_rows, &new_prompts);
+        r#loop::ServerSync::merge_command_rows(&mut prompt_rows, &new_prompts);
         let listed = r#loop::commands(
             &inputs,
             &self.sources.workspace,
@@ -552,7 +568,7 @@ impl State {
                     .prompt_rows
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                contract::events::CommandInfo::merge_into(&mut rows, &carried_prompts);
+                r#loop::ServerSync::merge_command_rows(&mut rows, &carried_prompts);
             }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());
@@ -616,7 +632,7 @@ impl State {
                 },
                 // The late preparation skips the sync: no grouping,
                 // records, failures or carried prompt sources.
-                None => r#loop::ServerSync::default(),
+                None => empty_sync(),
             },
             hooks: Some(hooks),
             reviewer,

@@ -10,11 +10,10 @@ use contract::tool::ServerRecord;
 use fakes::Deadline;
 use serde_json::json;
 
-use super::rows::Disposition;
 use crate::slot::Served;
 use crate::test_support::FakeImages;
 use crate::test_support::{Setup, WITHIN};
-use crate::{SyncRow, classify_sync, commit_sync, stage_sync};
+use crate::{Disposition, SyncRow, classify_sync, commit_sync, stage_sync};
 
 const HI: &str = r#"{"content":[{"type":"text","text":"hi"}]}"#;
 
@@ -108,73 +107,57 @@ fn commit_writes_no_cache_for_an_unchanged_keep() {
 }
 
 #[test]
-fn install_relisted_refuses_a_slot_whose_server_died() {
-    // The install-time liveness revalidation: installing staged lists
-    // on a slot whose server died keeps what the slot holds instead of
-    // publishing lists its dead server never served, so the commit
-    // cannot mark a dead keep as kept.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let slot = setup.running(&started);
-    setup.kill(&started);
-    assert!(slot.is_running(), "the kill moves no slot");
-    assert!(
-        !slot.install_relisted(crate::cache::Cached {
-            tools: vec![
-                serde_json::from_value(json!({"name": "echo"})).expect("listed"),
-                serde_json::from_value(json!({"name": "plus"})).expect("listed"),
-            ],
-            prompts: Vec::new(),
-            resources: false,
-        }),
-        "a dead slot declines the install"
-    );
-    let live: Vec<String> = {
-        let mut names: Vec<String> = slot.live_names().into_iter().collect();
-        names.sort();
-        names
-    };
-    assert_eq!(
-        live,
-        vec!["echo".to_owned()],
-        "a dead slot keeps what it holds"
-    );
-    let listed: Vec<String> = slot
-        .listed_tools()
-        .iter()
-        .map(|tool| tool.name.clone())
-        .collect();
-    assert_eq!(listed, vec!["echo".to_owned()]);
-    setup.stop(started.servers);
-}
-
-#[test]
-fn install_relisted_installs_on_a_live_slot() {
-    // A live slot installs the re-list and answers true, so the commit's
-    // cache write persists only lists a live server served.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    let started = setup.start(vec![setup.spec("fx")]);
-    let slot = setup.running(&started);
-    assert!(
-        slot.install_relisted(crate::cache::Cached {
-            tools: vec![
-                serde_json::from_value(json!({"name": "echo"})).expect("listed"),
-                serde_json::from_value(json!({"name": "plus"})).expect("listed"),
-            ],
-            prompts: Vec::new(),
-            resources: false,
-        }),
-        "a live slot installs the re-list"
-    );
-    let live: Vec<String> = {
-        let mut names: Vec<String> = slot.live_names().into_iter().collect();
-        names.sort();
-        names
-    };
-    assert_eq!(live, vec!["echo".to_owned(), "plus".to_owned()]);
-    setup.stop(started.servers);
+fn install_relisted_installs_only_on_a_live_slot() {
+    // The install-time liveness revalidation: a live slot installs the
+    // re-list and answers true, so the commit's cache write persists
+    // only lists a live server served; a slot whose server died keeps
+    // what it holds instead of publishing lists its dead server never
+    // served, so the commit cannot mark a dead keep as kept.
+    for dead in [false, true] {
+        let state = if dead { "dead" } else { "live" };
+        let setup = Setup::new();
+        setup.tools(&serde_json::json!([{"name": "echo"}]));
+        let started = setup.start(vec![setup.spec("fx")]);
+        let slot = setup.running(&started);
+        if dead {
+            setup.kill(&started);
+            assert!(slot.is_running(), "the kill moves no slot");
+        }
+        assert_eq!(
+            slot.install_relisted(crate::cache::Cached {
+                tools: vec![
+                    serde_json::from_value(json!({"name": "echo"})).expect("listed"),
+                    serde_json::from_value(json!({"name": "plus"})).expect("listed"),
+                ],
+                prompts: Vec::new(),
+                resources: false,
+            }),
+            !dead,
+            "a {state} slot answers whether it installed",
+        );
+        let expected = if dead {
+            vec!["echo".to_owned()]
+        } else {
+            vec!["echo".to_owned(), "plus".to_owned()]
+        };
+        let live: Vec<String> = {
+            let mut names: Vec<String> = slot.live_names().into_iter().collect();
+            names.sort();
+            names
+        };
+        assert_eq!(live, expected, "a {state} slot holds the installed set");
+        let listed: Vec<String> = {
+            let mut names: Vec<String> = slot
+                .listed_tools()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(listed, expected, "a {state} slot lists the installed set");
+        setup.stop(started.servers);
+    }
 }
 
 #[test]
@@ -447,122 +430,81 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
 }
 
 #[test]
-fn classify_replaces_a_down_slot_and_the_commit_files_it_restarted() {
-    // A slot whose first start failed stays `Down` with its restart
-    // unused: the same spec takes the replace path beside the old
-    // slot, and the commit files it under `restarted`, never
-    // `started`.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", HI);
-    let spec = setup.spec("fx");
-    let images = FakeImages::ok();
-    // The first start writes the cache; the second declares from it
-    // without spawning; failing that first serve leaves the slot
-    // `Down`.
-    let first = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
-    setup.stop(first.servers);
-    let started = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
-    let slot = started.servers.slot("fx").expect("the lazy slot");
-    setup.write("fail-start", "");
-    assert!(
-        matches!(setup.serve(&slot), Served::Failed(_)),
-        "the first serve fails"
-    );
-    let rows = classify_sync(vec![spec.clone()], &started.servers);
-    assert!(
-        matches!(
-            rows.as_slice(),
-            [SyncRow::Shadow {
-                disposition: Disposition::Restarted,
-                ..
-            }]
-        ),
-        "a down slot takes the replace path"
-    );
-    std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
-    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
-    let staged = outcome.expect("a replacement stages");
-    let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
-    assert!(
-        synced.servers.started.is_empty(),
-        "a down slot never files under started"
-    );
-    let echo = synced
-        .tools
-        .iter()
-        .find(|(_, _, info)| info.name == "mcp__fx__echo")
-        .expect("the replacement is declared");
-    assert!(
-        setup.run(&echo.1).error.is_none(),
-        "the replacement answers"
-    );
-    assert!(
-        servers.slot("fx").is_some_and(|slot| slot.is_live()),
-        "the commit swapped the down slot for a live one"
-    );
-    setup.stop(servers);
-}
-
-#[test]
-fn classify_replaces_a_dead_slot_and_the_commit_files_it_restarted() {
-    // A death seen while idle, then a failed restart, leaves the slot
-    // `Dead`: the same spec still takes the replace path beside the
-    // old slot, and the commit files it under `restarted`, never
-    // `started`.
-    let setup = Setup::new();
-    setup.tools(&serde_json::json!([{"name": "echo"}]));
-    setup.result("echo", HI);
-    let started = setup.start(vec![setup.spec("fx")]);
-    let slot = setup.running(&started);
-    setup.kill(&started);
-    setup.write("fail-start", "");
-    assert!(
-        matches!(setup.serve(&slot), Served::Failed(_)),
-        "the restart fails"
-    );
-    let images = FakeImages::ok();
-    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(
-        matches!(
-            rows.as_slice(),
-            [SyncRow::Shadow {
-                disposition: Disposition::Restarted,
-                ..
-            }]
-        ),
-        "a dead slot takes the replace path"
-    );
-    std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
-    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
-    let staged = outcome.expect("a replacement stages");
-    let owned = setup.owned_inputs(&images);
-    let synced = commit_sync(staged, &servers, &owned.inputs());
-    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
-    assert!(
-        synced.servers.started.is_empty(),
-        "a dead slot never files under started"
-    );
-    let echo = synced
-        .tools
-        .iter()
-        .find(|(_, _, info)| info.name == "mcp__fx__echo")
-        .expect("the replacement is declared");
-    assert!(
-        setup.run(&echo.1).error.is_none(),
-        "the replacement answers"
-    );
-    assert!(
-        servers.slot("fx").is_some_and(|slot| slot.is_live()),
-        "the commit swapped the dead slot for a live one"
-    );
-    setup.stop(servers);
+fn classify_replaces_a_nonlive_slot_and_the_commit_files_it_restarted() {
+    // A slot that served before and serves no more — `Down` with its
+    // restart unused, or `Dead` after a failed restart — takes the
+    // replace path beside the old slot, and the commit files it under
+    // `restarted`, never `started`.
+    for dead in [false, true] {
+        let state = if dead { "dead" } else { "down" };
+        let setup = Setup::new();
+        setup.tools(&serde_json::json!([{"name": "echo"}]));
+        setup.result("echo", HI);
+        let spec = setup.spec("fx");
+        let images = FakeImages::ok();
+        // The first start writes the cache; stopping it leaves the
+        // cache behind. A `Down` slot declares from the cache without
+        // spawning and fails its first serve; a `Dead` slot runs, is
+        // killed, and fails its restart.
+        let started = if dead {
+            let started = setup.start(vec![spec.clone()]);
+            let slot = setup.running(&started);
+            setup.kill(&started);
+            setup.write("fail-start", "");
+            assert!(
+                matches!(setup.serve(&slot), Served::Failed(_)),
+                "the restart fails"
+            );
+            started
+        } else {
+            let first = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+            setup.stop(first.servers);
+            let started = setup.start_with_images(vec![spec.clone()], Arc::clone(&images));
+            let slot = started.servers.slot("fx").expect("the lazy slot");
+            setup.write("fail-start", "");
+            assert!(
+                matches!(setup.serve(&slot), Served::Failed(_)),
+                "the first serve fails"
+            );
+            started
+        };
+        let rows = classify_sync(vec![spec], &started.servers);
+        assert!(
+            matches!(
+                rows.as_slice(),
+                [SyncRow::Shadow {
+                    disposition: Disposition::Restarted,
+                    ..
+                }]
+            ),
+            "a {state} slot takes the replace path"
+        );
+        std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
+        let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+        let (outcome, servers) = Deadline::after(WITHIN)
+            .recv(&result)
+            .expect("the stage ends");
+        let staged = outcome.expect("a replacement stages");
+        let owned = setup.owned_inputs(&images);
+        let synced = commit_sync(staged, &servers, &owned.inputs());
+        assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
+        assert!(
+            synced.servers.started.is_empty(),
+            "a {state} slot never files under started"
+        );
+        let echo = synced
+            .tools
+            .iter()
+            .find(|(_, _, info)| info.name == "mcp__fx__echo")
+            .expect("the replacement is declared");
+        assert!(
+            setup.run(&echo.1).error.is_none(),
+            "the replacement answers"
+        );
+        assert!(
+            servers.slot("fx").is_some_and(|slot| slot.is_live()),
+            "the commit swapped the {state} slot for a live one"
+        );
+        setup.stop(servers);
+    }
 }

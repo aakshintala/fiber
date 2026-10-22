@@ -90,7 +90,6 @@ pub struct ReloadSettings {
 /// new-server prompt rows. Carried as one result from preparation
 /// through installation to the log, so the fields describing one sync
 /// never drift apart.
-#[derive(Default)]
 pub struct ServerSync {
     /// Kept, restarted, started and stopped, by name.
     pub servers: ReloadedServers,
@@ -105,6 +104,24 @@ pub struct ServerSync {
     /// as one value, so new rows without their fetch cannot be
     /// represented: `None` when the sync carried no new rows.
     pub new_prompts: Option<(Vec<CommandInfo>, crate::FetchPrompt)>,
+}
+
+impl ServerSync {
+    /// Appends `add` to `rows`, keeping the first of each tag-and-name:
+    /// every startup row stays, and a second reload keeps the first
+    /// reload's rows for kept servers. `main` preparation and `loop`
+    /// installation share this, so carried prompt rows merge the same
+    /// way on both sides of the reload.
+    pub fn merge_command_rows(rows: &mut Vec<CommandInfo>, add: &[CommandInfo]) {
+        for prompt in add {
+            if !rows
+                .iter()
+                .any(|row| row.tag == prompt.tag && row.name == prompt.name)
+            {
+                rows.push(prompt.clone());
+            }
+        }
+    }
 }
 
 /// A complete reload ready for an infallible field swap and installation.
@@ -273,7 +290,7 @@ impl Loop {
             && let Some(prompts) = self.server_prompts.as_mut()
         {
             let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
-            CommandInfo::merge_into(&mut prompts.rows, &rows);
+            ServerSync::merge_command_rows(&mut prompts.rows, &rows);
             let old = Arc::clone(&prompts.fetch);
             prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
                 if tags.contains(server) {
