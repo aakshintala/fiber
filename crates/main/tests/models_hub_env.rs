@@ -107,7 +107,7 @@ fn expected_list_notice() -> String {
         "../../../providers/databricks/providers/databricks.json"
     ))
     .unwrap();
-    let count = data["models"].as_array().unwrap().len();
+    let count = data.get("models").and_then(Value::as_array).unwrap().len();
     let subject = if count == 1 {
         "1 model needs the setting `workspace` for its base URL".to_owned()
     } else {

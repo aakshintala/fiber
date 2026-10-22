@@ -532,6 +532,10 @@ fn left_out(ids: &[&str], variable: Option<&str>, login: bool) -> Unconfigured {
     }
 }
 
+/// One wording case: the hidden ids, the declared variable, whether
+/// login asks for the setting, and the expected message.
+type Case<'a> = (&'a [&'a str], Option<&'a str>, bool, Option<&'a str>);
+
 /// Admits every reference.
 fn every(_: &str) -> bool {
     true
@@ -541,7 +545,7 @@ fn every(_: &str) -> bool {
 fn the_aggregate_notice_counts_the_models_it_leaves_out() {
     let ids: Vec<String> = (1..=136).map(|n| format!("m-{n}")).collect();
     let many: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let cases: [(&[&str], Option<&str>, bool, Option<&str>); 6] = [
+    let cases: [Case<'_>; 6] = [
         (&[], None, true, None),
         (
             &["m"],
