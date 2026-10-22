@@ -216,18 +216,15 @@ fn config(debug: bool) -> Value {
 /// file that cannot be read is an `Err` naming it; a missing `dir` holds
 /// no logs. Rotated `*.log.1` files and subdirectories are not read.
 fn read_logs(dir: &Path) -> Vec<Result<String, String>> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
+    let mut paths = match fs::read_dir(dir).and_then(|entries| {
+        entries
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()
+    }) {
+        Ok(paths) => paths,
         Err(err) if err.kind() == ErrorKind::NotFound => return Vec::new(),
         Err(err) => return vec![Err(format!("listing {}: {err}", dir.display()))],
     };
-    let mut paths = Vec::new();
-    for entry in entries {
-        match entry {
-            Ok(entry) => paths.push(entry.path()),
-            Err(err) => return vec![Err(format!("listing {}: {err}", dir.display()))],
-        }
-    }
     paths.retain(|path| path.extension() == Some(OsStr::new("log")));
     paths.sort();
     paths

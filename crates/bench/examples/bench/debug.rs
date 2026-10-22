@@ -123,7 +123,9 @@ fn entry(workload: &str, run: Run) -> Value {
         "provider_request": provider_request,
         "notes": notes,
     });
-    if let (Err(err), Some(object)) = (run.result, entry.as_object_mut()) {
+    if let Err(err) = run.result
+        && let Some(object) = entry.as_object_mut()
+    {
         object.insert("error".to_owned(), Value::String(err));
     }
     entry
@@ -144,7 +146,6 @@ pub(crate) fn debug_pass(
         .map(|workload| entry(workload.name, run(workload)))
         .collect();
     head.metrics.insert("op_breakdown", entries);
-    head.metric_runs.insert("op_breakdown", 1);
 }
 
 /// One workload's debug run: the workload once, timed on `clock`, in a

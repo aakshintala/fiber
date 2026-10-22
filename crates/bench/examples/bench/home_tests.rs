@@ -46,6 +46,8 @@ fn read_logs_returns_each_log_file_in_file_name_order() {
 #[test]
 fn read_logs_of_a_missing_directory_is_empty() {
     let dir = TempDir::new("logs");
+    fs::write(dir.path().join("a.log"), "present\n").unwrap();
+    assert_eq!(read_logs(dir.path()), vec![Ok("present\n".to_owned())]);
     assert!(read_logs(&dir.path().join("absent")).is_empty());
 }
 

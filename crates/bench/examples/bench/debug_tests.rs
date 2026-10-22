@@ -95,21 +95,15 @@ fn tally_sums_provider_request_total_ms() {
 }
 
 #[test]
-fn tally_without_provider_requests_is_zero() {
-    let logs = [text(vec![op("startup.config", 2)])];
-    let (_, provider, _) = tally(&logs);
-    assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
-}
-
-#[test]
 fn tally_does_not_count_other_codes() {
     let logs = [text(vec![
+        op("startup.config", 4),
         line("info", json!({"op": "startup.config", "ms": 5})),
         line("peak_memory", json!({"bytes": 1})),
         line("session_started", json!({"op": "tool.run", "ms": 3})),
     ])];
     let (ops, provider, notes) = tally(&logs);
-    assert_eq!(ops, json!({}));
+    assert_eq!(ops, json!({"startup.config": {"count": 1, "ms": 4}}));
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
     assert!(notes.is_empty(), "{notes:?}");
 }
@@ -184,6 +178,7 @@ fn debug_workloads_without_paging_when_no_jig() {
 #[test]
 fn debug_workloads_never_hold_fsyncs_idle_or_resume() {
     let names = names(&debug_workloads(&args(&["--paging", "j"])));
+    assert!(names.contains(&"busy turn"), "{names:?}");
     for excluded in ["fsyncs", "session idle", "terminal idle"] {
         assert!(!names.contains(&excluded), "{excluded} in {names:?}");
     }
@@ -206,7 +201,6 @@ fn debug_pass_has_one_entry_per_workload_in_selection_order() {
         .filter_map(|entry| entry.get("workload")?.as_str())
         .collect();
     assert_eq!(got, expected);
-    assert_eq!(head.metric_runs.get("op_breakdown"), Some(&1));
     assert_eq!(head.metrics.get("attach_stage_ms"), Some(&vec![json!(1)]));
     assert_eq!(head.metric_runs.get("attach_stage_ms"), Some(&5));
 }
@@ -250,6 +244,13 @@ fn debug_pass_is_skipped_unless_only_all() {
         });
         assert_eq!(calls.get(), 0, "{extra:?}");
         assert!(!head.metrics.contains_key("op_breakdown"), "{extra:?}");
-        assert!(!head.metric_runs.contains_key("op_breakdown"), "{extra:?}");
     }
+    let mut head = Pass::new(Side::Head, args(&["--only", "all"]));
+    let calls = Cell::new(0);
+    debug_pass(&mut head, |_| {
+        calls.set(calls.get() + 1);
+        run(Ok(()), Vec::new(), Vec::new())
+    });
+    assert!(calls.get() > 0);
+    assert!(head.metrics.contains_key("op_breakdown"));
 }

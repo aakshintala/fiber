@@ -4206,6 +4206,7 @@ fn a_malformed_breakdown_says_it_could_not_be_read_and_adds_no_failure() {
 #[test]
 fn a_head_without_breakdown_renders_no_debug_run_section() {
     let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(out.comment.contains("### Not measured"), "{}", out.comment);
     assert!(!out.comment.contains("Debug run"), "{}", out.comment);
     assert!(
         !out.comment.contains("could not be read"),
