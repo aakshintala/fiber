@@ -11,6 +11,7 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -37,8 +38,8 @@ use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
 /// `.config/nextest.toml` kills a slow test after a 30s period times 4
-/// (120s total); with the 30s start bound, the 5s reap and the 5s
-/// watchdog stand-down the longest run sums to 50s, so 120s is at least
+/// (120s total); with the 30s start bound, the 10s reap and the 10s
+/// watchdog stand-down the longest run sums to 60s, so 120s is at least
 /// twice it: `docs/testing.md`, "Waits and timeouts", needs nextest's
 /// timeout to be at least twice the test's own deadlines, so a hang
 /// reports which wait expired.
@@ -343,7 +344,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
         Ok(output) => output.unwrap(),
         Err(_) => {
             kill_group(group, "KILL").unwrap_or(false);
-            let output = Deadline::after(Duration::from_secs(5))
+            let output = Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&finished)
                 .expect("the review jig died after KILL");
             panic!(
@@ -352,7 +353,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
             );
         }
     };
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 
@@ -1857,7 +1858,7 @@ impl HeldExchange {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 kill_group(self.group, "KILL").unwrap_or(false);
-                let output = Deadline::after(Duration::from_secs(5))
+                let output = Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv(&self.finished)
                     .expect("the review jig died after KILL");
                 panic!(
@@ -1867,7 +1868,7 @@ impl HeldExchange {
             }
         };
         self.watchdog
-            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            .stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
         output
     }
 }

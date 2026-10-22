@@ -10,6 +10,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -32,9 +33,6 @@ use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
 use fakes::Deadline;
 use log::Log;
-
-/// Wall-clock bound on every receive.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 fn confirm() -> Interaction {
     Interaction::Confirm {
@@ -100,7 +98,7 @@ fn a_raise_is_taken_once_and_wakes_the_loop_thread() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let _answers = ask_on(&slot, &wake, 1);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&woken)
         .expect("the raise wakes");
     let raised = slot.take_raised().expect("the raise is there");
@@ -114,7 +112,7 @@ fn resolve_releases_the_asker_with_that_answer() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 1);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&woken)
         .expect("the raise wakes");
     let raised = slot.take_raised().unwrap();
@@ -128,7 +126,7 @@ fn resolve_releases_the_asker_with_that_answer() {
     assert_eq!(slot.pending(), Some((RequestId("r_1".into()), None)));
     slot.resolve(confirmed());
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answers).unwrap(),
         confirmed()
     );
     assert_eq!(slot.pending(), None);
@@ -167,7 +165,7 @@ fn the_release_frees_a_raised_and_a_pending_ask() {
     );
     drop(release);
     for answers in [raised_answers, pending_answers] {
-        let wait = Deadline::after(DEADLINE);
+        let wait = Deadline::after(MUST_SUCCEED_WITHIN);
         assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
         // A second ask on a closed slot returns at once too.
         assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
@@ -182,7 +180,7 @@ fn after_the_release_a_first_ask_returns_no_answer_at_once() {
     release.add(Arc::clone(&stream));
     drop(release);
     let answers = ask_stream(&stream);
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert!(
@@ -196,11 +194,11 @@ fn a_second_ask_after_a_closed_release_returns_no_answer_at_once() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 2);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&woken)
         .expect("the raise wakes");
     slot.close();
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert!(
@@ -214,22 +212,22 @@ fn one_call_asks_twice_in_sequence() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 2);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&woken)
         .expect("the first raise wakes");
     slot.take_raised().unwrap();
     slot.resolve(confirmed());
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answers).unwrap(),
         confirmed()
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&woken)
         .expect("the second raise wakes");
     slot.take_raised().unwrap();
     slot.resolve(Answered::NoAnswer);
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answers).unwrap(),
         Answered::NoAnswer
     );
 }
@@ -591,7 +589,7 @@ impl contract::tool::Tool for SeesCancel {
         let wake: Arc<dyn Wake> = Arc::new(CancelledWake(woke_tx));
         cancel.subscribe(Arc::downgrade(&wake));
         self.started.send(()).unwrap();
-        let saw = Deadline::after(DEADLINE).recv(&woke).is_ok();
+        let saw = Deadline::after(MUST_SUCCEED_WITHIN).recv(&woke).is_ok();
         drop(wake);
         self.saw.store(saw, Ordering::SeqCst);
         contract::tool::Output::default()
@@ -602,7 +600,7 @@ impl contract::tool::Tool for SeesCancel {
 fn dropping_the_release_cancels_each_inner_call_it_holds() {
     use contract::tool::InnerCalls as _;
 
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let home = fakes::TempDir::new("fiber-release-cancels-inner");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();

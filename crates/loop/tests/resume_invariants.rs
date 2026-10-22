@@ -12,12 +12,12 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use support::History;
 use support::{completed_event, requested, standing_request, started, user_turn};
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use contract::events::{Empty, Event, FiberExited, FiberStarted, TurnOutcome};
 use contract::inbox::Delivery;
@@ -29,10 +29,6 @@ use fakes::Deadline;
 use fakes::Scripted;
 use proptest::prelude::*;
 use serde_json::json;
-
-/// One wait per case: the resumed turn runs on a thread, and the test
-/// receives it with this deadline.
-const CASE_DEADLINE: Duration = Duration::from_secs(2);
 
 /// What a crash left behind for one call.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,7 +238,7 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     std::thread::spawn(move || {
         done.send(looped.turn()).unwrap();
     });
-    let outcome = Deadline::after(CASE_DEADLINE)
+    let outcome = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the resumed turn ended before the deadline");
     prop_assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
@@ -378,12 +374,11 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    // Each hanging case runs out CASE_DEADLINE (2 s). Mutation testing stops
-    // a mutant's test run at 120 s, and the deadlines one test can run out in
-    // turn must add up to well under that: 10 cases plus 10 shrink iterations
-    // is at most 20 x 2 s = 40 s, while 24 cases plus 10 shrinks would be
-    // 34 x 2 s = 68 s, past BUDGET (60 s).
-    #![proptest_config(ProptestConfig { cases: 10, max_shrink_iters: 10, ..ProptestConfig::default() })]
+    // A failing run is one case plus at most 4 shrink runs. A hanging run
+    // runs out one MUST_SUCCEED_WITHIN (10 s) deadline, so 5 x 10 s = 50 s,
+    // under the 120 s stop that mutation testing gives a test run
+    // (`docs/testing/mutants.md`, "Proving a test bites").
+    #![proptest_config(ProptestConfig { cases: 10, max_shrink_iters: 4, ..ProptestConfig::default() })]
 
     /// A crashed history resumes without running an uncertain call again.
     #[test]

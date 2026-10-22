@@ -15,9 +15,9 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
 
 use contract::emit::Emit;
 use contract::events::{CacheLifetime, TurnOutcome};
@@ -41,9 +41,6 @@ use serde_json::{Map, Value, json};
 use support::{
     DEADLINE, assert_kinds, calls_reply, completed, delivery, model, of_kind, read_until, text_all,
 };
-
-/// The tests' wall-clock bound for a wait that names what it waits for.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A provider that defers, delegating every call to the scripted provider
 /// that records the requests.
@@ -157,7 +154,9 @@ impl Tool for SearchTool {
             let wake: Arc<dyn contract::clock::Wake> = Arc::new(CancelWake(tx));
             cancel.subscribe(Arc::downgrade(&wake));
             if !cancel.is_cancelled() {
-                Deadline::after(WAIT).recv(&rx).expect("the cancel landed");
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv(&rx)
+                    .expect("the cancel landed");
             }
             assert!(cancel.is_cancelled());
         }
