@@ -272,15 +272,7 @@ impl Loop {
             && let Some(prompts) = self.server_prompts.as_mut()
         {
             let tags: HashSet<String> = rows.iter().map(|row| row.tag.clone()).collect();
-            for row in rows {
-                if !prompts
-                    .rows
-                    .iter()
-                    .any(|kept| kept.tag == row.tag && kept.name == row.name)
-                {
-                    prompts.rows.push(row);
-                }
-            }
+            CommandInfo::merge_into(&mut prompts.rows, &rows);
             let old = Arc::clone(&prompts.fetch);
             prompts.fetch = Arc::new(move |server, prompt, text, cancel| {
                 if tags.contains(server) {

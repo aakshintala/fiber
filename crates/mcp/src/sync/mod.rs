@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use contract::images::Images;
 
 pub use commit::{Synced, commit_sync};
-pub use rows::{SyncRow, classify_sync};
+pub use rows::{Disposition, SyncRow, classify_sync};
 pub use stage::{StagedSync, stage_sync};
 
 /// One sync's startup inputs, as at session start: the public stage and

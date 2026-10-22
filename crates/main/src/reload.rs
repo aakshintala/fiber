@@ -5,23 +5,6 @@ use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
 
-/// Appends `add` to `rows`, keeping the first of each tag-and-name:
-/// every startup row stays, and a second reload keeps the first
-/// reload's rows for kept servers.
-fn merge_prompt_rows(
-    rows: &mut Vec<contract::events::CommandInfo>,
-    add: &[contract::events::CommandInfo],
-) {
-    for prompt in add {
-        if !rows
-            .iter()
-            .any(|row| row.tag == prompt.tag && row.name == prompt.name)
-        {
-            rows.push(prompt.clone());
-        }
-    }
-}
-
 pub(crate) fn preparer(
     build: impl Fn(&r#loop::ReloadRoute) -> Result<r#loop::ReloadPrepared, Rejection>
     + Send
@@ -441,7 +424,7 @@ impl State {
         // as a startup row: `loop` routes the carried tags to the fetch
         // the sync bundles with the rows below.
         let mut prompt_rows = baseline;
-        merge_prompt_rows(&mut prompt_rows, &new_prompts);
+        contract::events::CommandInfo::merge_into(&mut prompt_rows, &new_prompts);
         let listed = r#loop::commands(
             &inputs,
             &self.sources.workspace,
@@ -556,7 +539,7 @@ impl State {
                     .prompt_rows
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner);
-                merge_prompt_rows(&mut rows, &carried_prompts);
+                contract::events::CommandInfo::merge_into(&mut rows, &carried_prompts);
             }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
             extensions.drive_to(shared.drive.clone());

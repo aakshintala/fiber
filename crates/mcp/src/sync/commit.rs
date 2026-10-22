@@ -12,7 +12,8 @@ use crate::prompt::{PromptSource, Prompts};
 use crate::start::{ServerSpec, Servers};
 
 use super::SyncInputs;
-use super::stage::{Disposition, ShadowStaged, StagedRow};
+use super::rows::Disposition;
+use super::stage::StagedRow;
 
 /// What the commit installs: the new MCP tool set, the records to write
 /// before `reloaded`, the non-required failures for its `failed` entry,
@@ -104,7 +105,7 @@ pub fn commit_sync(
                 installing.tools.extend(used);
                 installing.servers.kept.push(name);
             }
-            StagedRow::Shadow(ShadowStaged::Up {
+            StagedRow::ShadowUp {
                 spec,
                 slot,
                 listed,
@@ -112,7 +113,7 @@ pub fn commit_sync(
                 records: carried,
                 disposition,
                 sources,
-            }) => {
+            } => {
                 let name = spec.name.clone();
                 // A fresh start swaps a leftover slot out, and a
                 // replacement swaps the stale spec out: a lazy
@@ -133,12 +134,12 @@ pub fn commit_sync(
                 all_sources.extend(sources);
                 disposition.file(&mut installing.servers, name);
             }
-            StagedRow::Shadow(ShadowStaged::Failed {
+            StagedRow::ShadowFailed {
                 spec,
                 failure,
                 records: carried,
                 disposition,
-            }) => {
+            } => {
                 install_failed(
                     &mut installing,
                     servers,

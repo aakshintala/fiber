@@ -670,6 +670,24 @@ pub struct CommandInfo {
     pub extension: bool,
 }
 
+impl CommandInfo {
+    /// Appends `add` to `rows`, keeping the first of each tag-and-name:
+    /// every startup row stays, and a second reload keeps the first
+    /// reload's rows for kept servers. `main` preparation and `loop`
+    /// installation share this, so carried prompt rows merge the same
+    /// way on both sides of the reload.
+    pub fn merge_into(rows: &mut Vec<Self>, add: &[Self]) {
+        for prompt in add {
+            if !rows
+                .iter()
+                .any(|row| row.tag == prompt.tag && row.name == prompt.name)
+            {
+                rows.push(prompt.clone());
+            }
+        }
+    }
+}
+
 /// Where a tool comes from, keyed by `source`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]

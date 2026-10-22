@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use contract::events::{McpServerFailed, ReloadedServers};
+use contract::events::McpServerFailed;
 
 use crate::cache::Cached;
 use crate::prompt::PromptSource;
@@ -11,7 +11,7 @@ use crate::slot::{Relisted, Slot};
 use crate::start::{Declaration, ServerSpec, Servers, Shadowed, declare, open_staged};
 
 use super::SyncInputs;
-use super::rows::SyncRow;
+use super::rows::{Disposition, SyncRow};
 
 /// What one staged row holds: the outcome with the cache payload, without
 /// touching the live slots or the cache files until every required start
@@ -22,50 +22,9 @@ pub(super) enum StagedRow {
         listed: Cached,
         used: Vec<Declaration>,
     },
-    /// A staged shadow start: a replacement or a fresh start, or the
-    /// failure a non-required shadow filed.
-    Shadow(ShadowStaged),
-    Remove {
-        name: String,
-    },
-}
-
-/// Which quadrant the commit files a shadow under: a replacement lands in
-/// `restarted`, a fresh start in `started`. One variant travels from the
-/// classifying row through staging to the commit, so no boolean can
-/// disagree with the row that produced it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Disposition {
-    Restarted,
-    Started,
-}
-
-impl Disposition {
-    /// Files `name` under `restarted` (a replacement) or `started` (a
-    /// fresh start).
-    pub(super) fn file(self, servers: &mut ReloadedServers, name: String) {
-        if self == Disposition::Restarted {
-            servers.restarted.push(name);
-        } else {
-            servers.started.push(name);
-        }
-    }
-}
-
-/// The staged sync: every kept re-list outcome and every shadow-started
-/// replacement, with staged tools and staged cache writes. Opaque to
-/// `main`, which passes it from stage to commit.
-pub struct StagedSync {
-    pub(super) rows: Vec<StagedRow>,
-}
-
-/// What one shadow start staged: a successful shadow start or its
-/// failure, so the callers' matches need no unreachable arm. The stage
-/// loop files each as its commit row.
-pub(super) enum ShadowStaged {
     /// A successful shadow start — a replacement or a fresh start —
     /// with its staged tools, cache payload and prompt sources.
-    Up {
+    ShadowUp {
         spec: ServerSpec,
         slot: Arc<Slot>,
         listed: Cached,
@@ -78,15 +37,25 @@ pub(super) enum ShadowStaged {
         /// no startup rows.
         sources: Vec<PromptSource>,
     },
-    /// The shadow start failed without `required`: the failure the
+    /// A shadow start that failed without `required`: the failure the
     /// commit files, with the old deaths staged beside it.
-    Failed {
+    ShadowFailed {
         spec: ServerSpec,
         failure: McpServerFailed,
         records: Vec<contract::tool::ServerRecord>,
         /// Which quadrant the commit files the failure under.
         disposition: Disposition,
     },
+    Remove {
+        name: String,
+    },
+}
+
+/// The staged sync: every kept re-list outcome and every shadow-started
+/// replacement, with staged tools and staged cache writes. Opaque to
+/// `main`, which passes it from stage to commit.
+pub struct StagedSync {
+    pub(super) rows: Vec<StagedRow>,
 }
 
 /// The start's failure for a required shadow that failed to start: the
@@ -100,12 +69,12 @@ fn required_failed(failure: &McpServerFailed) -> contract::shapes::Failure {
     }
 }
 
-/// Shadow-starts one fresh server for a replace or start row, without
-/// touching the live slots or the cache files: `disposition` names the
-/// quadrant the commit files it under, and the failure stages the old
-/// deaths beside the start failure when the shadow fails. A required
-/// failure stops every shadow started so far and propagates, so no
-/// replacement child outlives the rejected reload.
+/// Shadow-starts one fresh server for a shadow row, without touching the
+/// live slots or the cache files: `disposition` names the quadrant the
+/// commit files it under, and the failure stages the old deaths beside
+/// the start failure when the shadow fails. A required failure stops every
+/// shadow started so far and propagates, so no replacement child outlives
+/// the rejected reload.
 fn stage_shadow(
     shadows: &mut Vec<Arc<Slot>>,
     servers: &Servers,
@@ -113,7 +82,7 @@ fn stage_shadow(
     records: Vec<contract::tool::ServerRecord>,
     disposition: Disposition,
     inputs: &SyncInputs,
-) -> Result<ShadowStaged, contract::shapes::Failure> {
+) -> Result<StagedRow, contract::shapes::Failure> {
     match open_staged(
         spec.clone(),
         inputs.workspace,
@@ -126,7 +95,7 @@ fn stage_shadow(
     ) {
         Shadowed::Up(opened) => {
             shadows.push(Arc::clone(&opened.slot));
-            Ok(ShadowStaged::Up {
+            Ok(StagedRow::ShadowUp {
                 spec,
                 slot: opened.slot,
                 listed: opened.listed,
@@ -143,7 +112,7 @@ fn stage_shadow(
                 }
                 return Err(required_failed(&failure));
             }
-            Ok(ShadowStaged::Failed {
+            Ok(StagedRow::ShadowFailed {
                 spec,
                 failure,
                 records,
@@ -182,44 +151,40 @@ pub fn stage_sync(
                         staged.push(StagedRow::Keep { spec, listed, used });
                     }
                     Relisted::Replace { records } => {
-                        staged.push(StagedRow::Shadow(stage_shadow(
+                        staged.push(stage_shadow(
                             &mut shadows,
                             servers,
                             spec,
                             records,
                             Disposition::Restarted,
                             inputs,
-                        )?));
+                        )?);
                     }
                 }
             }
-            SyncRow::Replace { spec } => {
+            SyncRow::Shadow { spec, disposition } => {
                 // The old death the commit writes before the ready, when
-                // this check is the first to see it: nothing for a live or
-                // expired slot, whose stop writes no record.
-                let records: Vec<contract::tool::ServerRecord> = servers
-                    .slot(&spec.name)
-                    .and_then(|slot| slot.idle_death())
-                    .into_iter()
-                    .collect();
-                staged.push(StagedRow::Shadow(stage_shadow(
+                // this check is the first to see it: nothing for a live
+                // or expired slot, whose stop writes no record, and
+                // nothing for a fresh start, which carries no old slot.
+                let records: Vec<contract::tool::ServerRecord> =
+                    if disposition == Disposition::Restarted {
+                        servers
+                            .slot(&spec.name)
+                            .and_then(|slot| slot.idle_death())
+                            .into_iter()
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                staged.push(stage_shadow(
                     &mut shadows,
                     servers,
                     spec,
                     records,
-                    Disposition::Restarted,
+                    disposition,
                     inputs,
-                )?));
-            }
-            SyncRow::Start { spec } => {
-                staged.push(StagedRow::Shadow(stage_shadow(
-                    &mut shadows,
-                    servers,
-                    spec,
-                    Vec::new(),
-                    Disposition::Started,
-                    inputs,
-                )?));
+                )?);
             }
             SyncRow::Remove { name } => {
                 staged.push(StagedRow::Remove { name });

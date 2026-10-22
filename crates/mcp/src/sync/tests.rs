@@ -10,6 +10,7 @@ use contract::tool::ServerRecord;
 use fakes::Deadline;
 use serde_json::json;
 
+use super::rows::Disposition;
 use crate::slot::Served;
 use crate::test_support::FakeImages;
 use crate::test_support::{Setup, WITHIN};
@@ -319,7 +320,13 @@ fn an_optional_replacement_failure_still_writes_the_detected_death() {
     // The replacement cannot start, but the death is already detected.
     setup.write("fail-start", "");
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Replace { .. }]));
+    assert!(matches!(
+        rows.as_slice(),
+        [SyncRow::Shadow {
+            disposition: Disposition::Restarted,
+            ..
+        }]
+    ));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
     let (outcome, servers) = Deadline::after(WITHIN)
@@ -407,7 +414,13 @@ fn classify_starts_a_lazy_slot_and_commit_swaps_it_for_a_live_one() {
     assert!(!slot.is_running());
     assert!(!slot.is_live());
     let rows = classify_sync(vec![spec], &started.servers);
-    assert!(matches!(rows.as_slice(), [SyncRow::Start { .. }]));
+    assert!(matches!(
+        rows.as_slice(),
+        [SyncRow::Shadow {
+            disposition: Disposition::Started,
+            ..
+        }]
+    ));
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
     let (outcome, servers) = fakes::Deadline::after(WITHIN)
         .recv(&result)
@@ -458,7 +471,13 @@ fn classify_replaces_a_down_slot_and_the_commit_files_it_restarted() {
     );
     let rows = classify_sync(vec![spec.clone()], &started.servers);
     assert!(
-        matches!(rows.as_slice(), [SyncRow::Replace { .. }]),
+        matches!(
+            rows.as_slice(),
+            [SyncRow::Shadow {
+                disposition: Disposition::Restarted,
+                ..
+            }]
+        ),
         "a down slot takes the replace path"
     );
     std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");
@@ -510,7 +529,13 @@ fn classify_replaces_a_dead_slot_and_the_commit_files_it_restarted() {
     let images = FakeImages::ok();
     let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     assert!(
-        matches!(rows.as_slice(), [SyncRow::Replace { .. }]),
+        matches!(
+            rows.as_slice(),
+            [SyncRow::Shadow {
+                disposition: Disposition::Restarted,
+                ..
+            }]
+        ),
         "a dead slot takes the replace path"
     );
     std::fs::remove_file(setup.dir.path().join("fail-start")).expect("fail-start");

@@ -5,12 +5,14 @@
 
 use std::sync::PoisonError;
 
+use contract::events::ReloadedServers;
+
 use crate::start::{ServerSpec, Servers};
 
 /// One row of the reload sync, classified from the new specs against the
 /// live slots (`docs/mcp.md`, "Reload"). `Keep` re-lists in place with a
-/// staged install; `Replace` and `Start` shadow-start first and install at
-/// commit; `Remove` stops and drops at commit. Main drives the
+/// staged install; `Shadow` shadow-starts fresh and installs at commit;
+/// `Remove` stops and drops at commit. Main drives the
 /// classify/stage/commit entries and never touches slots directly.
 pub enum SyncRow {
     /// The same executable with only declare-time differences, or an
@@ -20,18 +22,18 @@ pub enum SyncRow {
         /// The new spec to re-list and declare through.
         spec: ServerSpec,
     },
-    /// A new executable or endpoint, a timeout/`required` difference, a
-    /// dead slot, or a kept re-list that signalled the replace path:
-    /// shadow-start the new spec fresh and swap at commit.
-    Replace {
+    /// A shadow-started fresh server: a replacement (a new executable
+    /// or endpoint, a timeout/`required` difference, a dead slot, or a
+    /// kept re-list that signalled the replace path) or a fresh start
+    /// (declared now with no live slot, where a lazy `NotStarted` slot
+    /// never answers a reload). Which quadrant the commit files it
+    /// under rides along, so no boolean can disagree with the row that
+    /// produced it.
+    Shadow {
         /// The new spec to shadow-start fresh.
         spec: ServerSpec,
-    },
-    /// Declared now with no live slot: start fresh as the session start
-    /// does. A lazy `NotStarted` slot never answers a reload.
-    Start {
-        /// The new spec to start.
-        spec: ServerSpec,
+        /// Which quadrant the commit files the shadow under.
+        disposition: Disposition,
     },
     /// Declared before with no declaration now: stop, drop, undeclare.
     /// A removed `required` server is a removal, never a start failure.
@@ -39,6 +41,30 @@ pub enum SyncRow {
         /// The dropped server's name.
         name: String,
     },
+}
+
+/// Which quadrant the commit files a shadow under: a replacement lands in
+/// `restarted`, a fresh start in `started`. One variant travels from the
+/// classifying row through staging to the commit, so no boolean can
+/// disagree with the row that produced it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Disposition {
+    /// A replacement: the commit files the name under `restarted`.
+    Restarted,
+    /// A fresh start: the commit files the name under `started`.
+    Started,
+}
+
+impl Disposition {
+    /// Files `name` under `restarted` (a replacement) or `started` (a
+    /// fresh start).
+    pub(super) fn file(self, servers: &mut ReloadedServers, name: String) {
+        if self == Disposition::Restarted {
+            servers.restarted.push(name);
+        } else {
+            servers.started.push(name);
+        }
+    }
 }
 
 /// Classifies the person's new specs against the live slots, required
@@ -68,7 +94,13 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
     let mut optional = Vec::new();
     for spec in new_specs {
         let row = match by_name.get(&spec.name) {
-            None => SyncRow::Start { spec },
+            // Declared now with no live slot: start fresh as the session
+            // start does. A lazy `NotStarted` slot never answers a
+            // reload.
+            None => SyncRow::Shadow {
+                spec,
+                disposition: Disposition::Started,
+            },
             Some(slot) => {
                 let old = slot.spec();
                 // A lazy slot never answers a reload: force a real start.
@@ -79,30 +111,40 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                     || old.call_timeout != spec.call_timeout
                     || old.required != spec.required
                 {
-                    SyncRow::Replace { spec }
+                    SyncRow::Shadow {
+                        spec,
+                        disposition: Disposition::Restarted,
+                    }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
                 } else if slot.is_running() {
                     // Running but gone or expired: it died while idle, so
                     // the re-list would only fall back; replace beside it.
-                    SyncRow::Replace { spec }
+                    SyncRow::Shadow {
+                        spec,
+                        disposition: Disposition::Restarted,
+                    }
                 } else if slot.served_before() {
                     // `Down` or `Dead`: it served before and serves no
                     // more, so the sync swaps it beside the old slot and
                     // the commit files the name under `restarted`.
-                    SyncRow::Replace { spec }
+                    SyncRow::Shadow {
+                        spec,
+                        disposition: Disposition::Restarted,
+                    }
                 } else {
                     // `NotStarted`: nothing ever served, so the
                     // single-spec start runs fresh and the commit swaps
                     // the leftover slot out.
-                    SyncRow::Start { spec }
+                    SyncRow::Shadow {
+                        spec,
+                        disposition: Disposition::Started,
+                    }
                 }
             }
         };
         let is_required = match &row {
-            SyncRow::Keep { spec } | SyncRow::Replace { spec } | SyncRow::Start { spec } => {
-                spec.required
-            }
+            SyncRow::Keep { spec } | SyncRow::Shadow { spec, .. } => spec.required,
             SyncRow::Remove { .. } => false,
         };
         if is_required {
