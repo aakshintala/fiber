@@ -194,3 +194,23 @@ fn the_checked_files_are_docs_and_the_root_guides() {
         ["docs/adr/a.md", "docs/b.md", "README.md"]
     );
 }
+
+#[test]
+fn heading_ids_follow_document_order_with_github_dedup() {
+    assert_eq!(
+        heading_ids("# Two Words\n## Two Words\n### Two Words\n"),
+        ["two-words", "two-words-1", "two-words-2"]
+    );
+    assert_eq!(heading_ids("# A\n# B\n# A\n"), ["a", "b", "a-1"]);
+}
+
+#[test]
+fn anchors_collects_heading_ids() {
+    let markdown = "# A\n## A\n### B\n";
+    let ordered = heading_ids(markdown);
+    let collected: Vec<String> = anchors(markdown).into_iter().collect();
+    assert_eq!(ordered.len(), collected.len());
+    for id in &ordered {
+        assert!(collected.contains(id), "{id} is collected");
+    }
+}
