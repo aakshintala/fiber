@@ -936,43 +936,95 @@ fn space_types_a_space() {
     );
 }
 
-/// Every bound stroke maps to its key or edit, and anything else to nothing.
+/// The event each default key name gave before `BINDINGS` carried it. A
+/// literal copy, so a change to the derivation cannot move its own answer.
+fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
+    let key = |key: Key| Some(Event::Key(key));
+    let edit = |edit: Edit| Some(Event::Edit(edit));
+    vec![
+        ("enter", key(Key::Enter)),
+        ("shift+enter", edit(Edit::ShiftEnter)),
+        ("esc", key(Key::Esc)),
+        ("backspace", key(Key::Backspace)),
+        ("alt+backspace", edit(Edit::DeleteWord)),
+        ("ctrl+u", edit(Edit::DeleteToLineStart)),
+        ("tab", key(Key::Tab)),
+        ("shift+tab", key(Key::BackTab)),
+        ("space", key(Key::Char(' '))),
+        ("pageup", key(Key::PageUp)),
+        ("pagedown", key(Key::PageDown)),
+        ("end", key(Key::End)),
+        ("up", key(Key::Up)),
+        ("alt+up", key(Key::AltUp)),
+        ("down", key(Key::Down)),
+        ("alt+down", key(Key::AltDown)),
+        ("left", edit(Edit::Left)),
+        ("right", edit(Edit::Right)),
+        ("alt+left", edit(Edit::WordLeft)),
+        ("ctrl+left", edit(Edit::WordLeft)),
+        ("alt+b", edit(Edit::WordLeft)),
+        ("alt+right", edit(Edit::WordRight)),
+        ("ctrl+right", edit(Edit::WordRight)),
+        ("alt+f", edit(Edit::WordRight)),
+        ("super+left", edit(Edit::LineStart)),
+        ("super+right", edit(Edit::LineEnd)),
+        ("delete", edit(Edit::Delete)),
+        ("f1", key(Key::F1)),
+        ("ctrl+c", key(Key::CtrlC)),
+        ("ctrl+o", key(Key::CtrlO)),
+        ("ctrl+g", key(Key::CtrlG)),
+        ("ctrl+r", key(Key::CtrlR)),
+        ("ctrl+v", key(Key::CtrlV)),
+        ("ctrl+l", key(Key::CtrlL)),
+        ("ctrl+f", key(Key::CtrlF)),
+        ("super+f", key(Key::CtrlF)),
+        ("ctrl+j", edit(Edit::CtrlJ)),
+        ("alt+a", key(Key::AltA)),
+        ("alt+x", key(Key::AltX)),
+        ("alt+p", key(Key::AltP)),
+        ("alt+r", key(Key::AltR)),
+        ("j", key(Key::Char('j'))),
+        ("k", key(Key::Char('k'))),
+        ("y", key(Key::Char('y'))),
+        ("alt+1", key(Key::AltDigit(1))),
+        ("alt+2", key(Key::AltDigit(2))),
+        ("alt+3", key(Key::AltDigit(3))),
+        ("alt+4", key(Key::AltDigit(4))),
+        ("alt+5", key(Key::AltDigit(5))),
+        ("alt+6", key(Key::AltDigit(6))),
+        ("alt+7", key(Key::AltDigit(7))),
+        ("alt+8", key(Key::AltDigit(8))),
+        ("alt+9", key(Key::AltDigit(9))),
+        ("alt+0", None),
+        ("ctrl+n", None),
+        ("ctrl+s", None),
+    ]
+}
+
+/// Every default key name gives the event it gave before `BINDINGS`
+/// carried them, every default key in `BINDINGS` is one of those names,
+/// the typing rules hold, and anything else reads as nothing.
 #[test]
 fn default_event_matches_the_parity_table() {
     let key = |key: Key| Some(Event::Key(key));
-    let edit = |edit: Edit| Some(Event::Edit(edit));
     let (shift, alt, ctrl, super_) = (Mods::SHIFT, Mods::ALT, Mods::CTRL, Mods::SUPER);
+    let named = named_strokes();
+    for (name, want) in &named {
+        let stroke = Stroke::parse(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(&stroke.name(), name, "{name} is the written form");
+        assert_eq!(&default_event(&stroke), want, "{name}");
+    }
+    for binding in crate::bindings::BINDINGS {
+        for name in binding.defaults {
+            let (_, want) = named
+                .iter()
+                .find(|(listed, _)| listed == name)
+                .unwrap_or_else(|| panic!("{}: {name} is not in the table", binding.id));
+            let stroke = Stroke::parse(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(&default_event(&stroke), want, "{}: {name}", binding.id);
+        }
+    }
     let cases: &[(Stroke, Option<Event>)] = &[
-        (plain(Code::Enter), key(Key::Enter)),
-        (plain(Code::Esc), key(Key::Esc)),
-        (plain(Code::Backspace), key(Key::Backspace)),
-        (plain(Code::Tab), key(Key::Tab)),
-        (modified(Code::Tab, shift), key(Key::BackTab)),
-        (plain(Code::Space), key(Key::Char(' '))),
-        (plain(Code::PageUp), key(Key::PageUp)),
-        (plain(Code::PageDown), key(Key::PageDown)),
-        (plain(Code::End), key(Key::End)),
-        (plain(Code::Up), key(Key::Up)),
-        (plain(Code::Down), key(Key::Down)),
-        (plain(Code::F(1)), key(Key::F1)),
-        (modified(Code::Char('c'), ctrl), key(Key::CtrlC)),
-        (modified(Code::Char('o'), ctrl), key(Key::CtrlO)),
-        (modified(Code::Char('g'), ctrl), key(Key::CtrlG)),
-        (modified(Code::Char('r'), ctrl), key(Key::CtrlR)),
-        (modified(Code::Char('v'), ctrl), key(Key::CtrlV)),
-        (modified(Code::Char('l'), ctrl), key(Key::CtrlL)),
-        (modified(Code::Char('f'), ctrl), key(Key::CtrlF)),
-        (modified(Code::Char('f'), super_), key(Key::CtrlF)),
-        (modified(Code::Char('j'), ctrl), edit(Edit::CtrlJ)),
-        (modified(Code::Char('a'), alt), key(Key::AltA)),
-        (modified(Code::Char('x'), alt), key(Key::AltX)),
-        (modified(Code::Up, alt), key(Key::AltUp)),
-        (modified(Code::Down, alt), key(Key::AltDown)),
-        (modified(Code::Char('p'), alt), key(Key::AltP)),
-        (modified(Code::Char('r'), alt), key(Key::AltR)),
-        (modified(Code::Char('1'), alt), key(Key::AltDigit(1))),
-        (modified(Code::Char('5'), alt), key(Key::AltDigit(5))),
-        (modified(Code::Char('9'), alt), key(Key::AltDigit(9))),
         (plain(Code::Char('a')), key(Key::Char('a'))),
         (plain(Code::Char('\u{e9}')), key(Key::Char('\u{e9}'))),
         (plain(Code::Char('?')), key(Key::Char('?'))),
@@ -985,23 +1037,6 @@ fn default_event_matches_the_parity_table() {
             modified(Code::Char('\u{e9}'), shift),
             key(Key::Char('\u{c9}')),
         ),
-        (plain(Code::Left), edit(Edit::Left)),
-        (plain(Code::Right), edit(Edit::Right)),
-        (modified(Code::Enter, shift), edit(Edit::ShiftEnter)),
-        (modified(Code::Left, alt), edit(Edit::WordLeft)),
-        (modified(Code::Left, ctrl), edit(Edit::WordLeft)),
-        (modified(Code::Char('b'), alt), edit(Edit::WordLeft)),
-        (modified(Code::Right, alt), edit(Edit::WordRight)),
-        (modified(Code::Right, ctrl), edit(Edit::WordRight)),
-        (modified(Code::Char('f'), alt), edit(Edit::WordRight)),
-        (modified(Code::Backspace, alt), edit(Edit::DeleteWord)),
-        (
-            modified(Code::Char('u'), ctrl),
-            edit(Edit::DeleteToLineStart),
-        ),
-        (modified(Code::Left, super_), edit(Edit::LineStart)),
-        (modified(Code::Right, super_), edit(Edit::LineEnd)),
-        (plain(Code::Delete), edit(Edit::Delete)),
         // Anything else reads as nothing.
         (modified(Code::Char('a'), ctrl), None),
         (modified(Code::Space, ctrl), None),
