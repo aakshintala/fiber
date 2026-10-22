@@ -26,7 +26,8 @@ use std::fs;
 use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{ExitStatus, Output};
+use std::time::Duration;
 use support::pty::{Grid, KITTY_PUSH, Run};
 use support::*;
 
@@ -168,6 +169,85 @@ fn sessions_ids(setup: &Setup, hub: &str) -> Vec<String> {
         .collect()
 }
 
+/// Hub start attempts `world_with` makes, each on a port from `ports`.
+const PORT_ATTEMPTS: usize = 5;
+/// How long one connect waits before the hub's exit is looked at again.
+const HELLO_SLICE: Duration = Duration::from_secs(2);
+/// What a hello wait leaves of the deadline for its report and cleanup.
+const REPORT_MARGIN: Duration = Duration::from_millis(250);
+/// The `hub.log` lines a failure report shows.
+const LOG_TAIL: usize = 20;
+
+/// Whether `log` holds the hub's failure to bind `port`: the line its start
+/// error writes before the hub exits (`127.0.0.1:<port>: <why>`).
+fn port_taken(log: &str, port: u16) -> bool {
+    log.contains(&format!("127.0.0.1:{port}: "))
+}
+
+/// What a hub that did not say hello left behind: its exit `status`
+/// (`None` for a hub still running) and the tail of `hub.log`.
+fn report(setup: &Setup, status: Option<ExitStatus>) -> String {
+    let log = setup.hub_log();
+    let lines: Vec<&str> = log.lines().collect();
+    let tail = lines[lines.len().saturating_sub(LOG_TAIL)..].join("\n");
+    let state = match status {
+        Some(status) => format!("exited ({status})"),
+        None => "was still running".to_owned(),
+    };
+    format!("{state}; hub.log tail (last {LOG_TAIL} lines):\n{tail}")
+}
+
+/// Stops waiting on `process`: snapshots its status, reaps it (killing a
+/// hub still running), and panics with `why` and the report.
+fn give_up(setup: &Setup, mut process: HubProc, why: &str) -> ! {
+    let status = process.child.try_wait().unwrap();
+    match status {
+        Some(_) => drop(process.wait()),
+        None => drop(process.kill_and_wait()),
+    }
+    panic!("{why}: the hub {}", report(setup, status));
+}
+
+/// Waits for the hub's `hub_hello` in slices of [`HELLO_SLICE`], looking at
+/// the hub's exit between them. `Ok` is the hello and the live hub; `Err`
+/// is the status of a hub that exited, already reaped. The deadline is the
+/// test's own, never renewed: a slice ends [`REPORT_MARGIN`] before it, so
+/// the report and the cleanup run first.
+fn await_hello(
+    setup: &Setup,
+    mut process: HubProc,
+) -> Result<(doors::hub::Hub, HubProc), ExitStatus> {
+    loop {
+        let left = setup.deadline.left();
+        if left <= REPORT_MARGIN {
+            give_up(setup, process, "waited for the installed hub's hello");
+        }
+        let until = SystemClock.now() + (left - REPORT_MARGIN).min(HELLO_SLICE);
+        let home = setup.home();
+        let slice = bounded(setup.deadline, "the installed hub's hello", move || {
+            doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
+        });
+        let error = match slice {
+            Ok(hub) => return Ok((hub, process)),
+            Err(error) => error,
+        };
+        if process.child.try_wait().unwrap().is_some() {
+            return Err(process.wait());
+        }
+        // Only a slice's own end loops; any other error would repeat at once.
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::UnexpectedEof
+        ) {
+            give_up(
+                setup,
+                process,
+                &format!("the installed hub's hello failed with {error}"),
+            );
+        }
+    }
+}
+
 /// The paired world the cases share: `a` serves its hub on a free port,
 /// `b` is paired with it, holds its own git repository with its own
 /// file, and configures its own model. The hub connection is held so the
@@ -245,7 +325,7 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":a.workspace().display().to_string(), "name":"remote session", "how":"exited"});
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
     fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
-    let port = ports();
+    let mut port = ports();
     let server = ProviderServer::start([support::hello()]).unwrap();
     provider_with_port(&a, &server, port);
     // The hub machine already imported: the first-run offer reads the
@@ -260,18 +340,34 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     // `~/` on the hub expands against the inherited `HOME`, which the
     // harness otherwise points at the setup root: point it at the hub's
     // home, as production has it, so the picker browses the hub's home.
-    let mut serve = a.fiber(&["hub", "serve", "--installed"]);
-    serve.env("HOME", a.home());
-    let process = HubProc::spawn_command(a.deadline, &mut serve);
-    let home = a.home();
-    // The hub's own `hub_hello` is the readiness signal: the connect waits
-    // for the bind and the hello by what remains of the test's deadline,
-    // not by the connect's fixed 5 s, which a slow hub start can outlast.
-    let until = SystemClock.now() + a.deadline.left();
-    let hub = bounded(a.deadline, "the installed hub's hello", move || {
-        doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
-    })
-    .unwrap();
+    // A port another process took between the pick and the hub's bind
+    // fails that hub at once: the next attempt serves on a fresh port.
+    let mut attempt = 1;
+    let (hub, process) = loop {
+        if attempt > 1 {
+            port = ports();
+            serve_on(&a, port);
+        }
+        let logged = a.hub_log().len();
+        let mut serve = a.fiber(&["hub", "serve", "--installed"]);
+        serve.env("HOME", a.home());
+        let process = HubProc::spawn_command(a.deadline, &mut serve);
+        match await_hello(&a, process) {
+            Ok(hello) => break hello,
+            Err(status) => {
+                let log = a.hub_log();
+                let added = log.get(logged..).unwrap_or_default();
+                if attempt < PORT_ATTEMPTS && port_taken(added, port) {
+                    attempt += 1;
+                    continue;
+                }
+                panic!(
+                    "the installed hub's hello on 127.0.0.1:{port}, attempt {attempt} of {PORT_ATTEMPTS}: the hub {}",
+                    report(&a, Some(status))
+                );
+            }
+        }
+    };
     assert_eq!(hub.1.kind, "hub_hello");
     let address = format!("ws://127.0.0.1:{port}");
     let code = run(&a, &["hub", "pair", "laptop"]);
@@ -707,4 +803,58 @@ fn repository_hub_default_is_ignored_with_a_notice() {
         "the notice prints before the picker: {terminal}"
     );
     reap_idle(world);
+}
+
+#[test]
+fn a_taken_port_is_retried_with_a_fresh_one() {
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut draws = 0;
+    let world = world_with(true, &mut || {
+        draws += 1;
+        if draws == 1 { taken } else { free_port() }
+    });
+    assert_ne!(world.port, taken, "the hub that said hello is the retry");
+    assert!(
+        world.a.hub_log().contains(&format!("127.0.0.1:{taken}: ")),
+        "the first hub failed on the taken port: {}",
+        world.a.hub_log()
+    );
+    reap_idle(world);
+    drop(held);
+}
+
+#[test]
+fn a_hub_that_never_gets_a_port_fails_naming_the_port_and_the_log() {
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut draws = 0;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        world_with(true, &mut || {
+            draws += 1;
+            taken
+        })
+    }));
+    let payload = failed
+        .err()
+        .expect("a hub that cannot bind fails the world");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .expect("the panic carries text");
+    for needle in [
+        format!("127.0.0.1:{taken}"),
+        "exited".to_owned(),
+        "Address already in use".to_owned(),
+        format!("attempt {PORT_ATTEMPTS} of {PORT_ATTEMPTS}"),
+    ] {
+        assert!(message.contains(&needle), "{needle:?} missing: {message}");
+    }
+    assert_eq!(draws, PORT_ATTEMPTS, "one port is drawn per attempt");
+    drop(held);
 }
