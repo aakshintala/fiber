@@ -111,10 +111,12 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     };
     let mut buf = Buffer::empty(screen);
     let mut targets = Vec::new();
-    match frame {
-        Surface::Quit => quit::draw(app, area, &mut buf, &mut targets),
-        Surface::Notice => notice_rows::overlay(app, area, &mut buf, &mut targets),
-        _ => Rect::default(),
+    if frame == Surface::Quit {
+        quit::draw(app, area, &mut buf, &mut targets)
+    } else if frame == Surface::Notice {
+        notice_rows::overlay(app, area, &mut buf, &mut targets)
+    } else {
+        Rect::default()
     }
 }
 
