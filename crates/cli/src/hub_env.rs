@@ -143,7 +143,6 @@ fn ask(
         &request,
         deadline,
         clock,
-        false,
         before_read,
         before_wait,
         || (),
@@ -178,22 +177,20 @@ pub(crate) fn restore_blocking(stream: &UnixStream) -> std::io::Result<()> {
 /// non-blocking under the same deadline, so unrelated lines, trickled
 /// bytes and silence all end there. `before_read` runs just before each
 /// read; `before_wait` runs after each wait's deadline check, just before
-/// [`Clock::wait_until`]. When `wait_for_close` the answer does not end
-/// the exchange: lines keep draining until the peer closes, and that
-/// close is the result. Malformed lines never end it either: they are
-/// skipped. `closed`, `late` and `lost` shape the three failures;
-/// `on_line` maps each parsed line to its answer, if any. It leaves the
-/// stream's mode alone; the caller restores blocking after.
+/// [`Clock::wait_until`]. The first answered line ends the exchange.
+/// Malformed lines never end it: they are skipped. `closed`, `late` and
+/// `lost` shape the three failures; `on_line` maps each parsed line to
+/// its answer, if any. It leaves the stream's mode alone; the caller
+/// restores blocking after.
 #[allow(
     clippy::too_many_arguments,
-    reason = "one call of the shared query: stream, request, deadline, clock, end, hooks, error shapes and line handler"
+    reason = "one call of the shared query: stream, request, deadline, clock, hooks, error shapes and line handler"
 )]
 pub(crate) fn exchange<T, E>(
     mut stream: &UnixStream,
     request: &[u8],
     deadline: Instant,
     clock: &dyn Clock,
-    wait_for_close: bool,
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
     closed: impl Fn() -> E,
@@ -223,7 +220,6 @@ pub(crate) fn exchange<T, E>(
             }
         }
     }
-    let mut done = None;
     let mut pending = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -232,10 +228,7 @@ pub(crate) fn exchange<T, E>(
         }
         before_read();
         match stream.read(&mut chunk) {
-            Ok(0) => match done {
-                Some(value) => return Ok(value),
-                None => return Err(closed()),
-            },
+            Ok(0) => return Err(closed()),
             Ok(read) => {
                 pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
             }
@@ -261,13 +254,7 @@ pub(crate) fn exchange<T, E>(
             };
             match on_line(&line) {
                 Err(error) => return Err(error),
-                Ok(Some(value)) => {
-                    if wait_for_close {
-                        done = Some(value);
-                    } else {
-                        return Ok(value);
-                    }
-                }
+                Ok(Some(value)) => return Ok(value),
                 Ok(None) => {}
             }
         }

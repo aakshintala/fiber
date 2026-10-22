@@ -1317,7 +1317,20 @@ fn stop_without_a_unit_file_calls_nothing() {
 #[test]
 fn a_prompt_command_answers_through_the_bound() {
     let clock = FakeClock::new();
-    let ran = system_run_bounded("true", &[], &*clock).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&clock);
+    // The wall deadline fails a hang; it never decides: a frozen clock
+    // leaves a wedged child parked, so the call runs on a worker while
+    // this thread receives under the deadline.
+    thread::spawn(move || {
+        done_tx
+            .send(system_run_bounded("true", &[], &*worker))
+            .unwrap_or(());
+    });
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("a prompt command answers")
+        .unwrap();
     assert_eq!(
         ran,
         Ran {

@@ -180,8 +180,10 @@ pub(crate) fn on_stop_answered(hook: impl FnOnce() + 'static) {
 }
 
 /// The stop after the exchange answered: the installed service stops when
-/// the unit file is present, then the close is awaited. A started hub that
-/// stopped nothing reports nothing running, like the empty path.
+/// the unit file is present, then the close is awaited. A service failure
+/// never replaces the answer: it is reported after the tail below, and a
+/// stalled close never replaces either. A started hub that stopped nothing
+/// reports nothing running, like the empty path.
 #[allow(
     clippy::too_many_arguments,
     reason = "one call of the answered stop: output, connection, deadline, clock, service, stop, install and start"
@@ -224,13 +226,22 @@ fn with_answer(
         }
         Answered::Rejected(rejection) => AfterAnswer::Keep(rejection),
     };
-    if installed {
-        stop_login_service(service, run, clock)?;
-    }
+    // A partial stop finishes every step it can: the service error is
+    // kept aside and the tail below always runs, so a manager failure
+    // never swallows the survivor rejection and never skips the close.
+    let service_error = if installed {
+        stop_login_service(service, run, clock).err()
+    } else {
+        None
+    };
     match marked {
         AfterAnswer::Report(first) => {
             wait_for_close(stream, deadline, clock)?;
-            report(out, &first, installed)
+            report(out, &first, installed)?;
+            if let Some(error) = service_error {
+                return Err(error);
+            }
+            Ok(())
         }
         AfterAnswer::Keep(rejection) => {
             // A stalled close never replaces the survivor rejection.
@@ -239,6 +250,12 @@ fn with_answer(
                 reason = "a stalled close never replaces the survivor rejection"
             )]
             let _ = wait_for_close(stream, deadline, clock);
+            if let Some(error) = service_error {
+                // The command's result is the rejection below; the
+                // manager failure is reported additionally, the way
+                // every failure prints.
+                writeln!(io::stderr(), "fiber: {}", error.message).unwrap_or(());
+            }
             Err(rejection)
         }
     }
@@ -288,7 +305,6 @@ fn exchange_stop(
         &request,
         deadline,
         clock,
-        false,
         &mut || {},
         &mut || {},
         || {

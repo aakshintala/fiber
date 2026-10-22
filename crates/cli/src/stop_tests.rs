@@ -583,6 +583,7 @@ fn stop_local_cases() {
         "installed-empty" => installed_empty(&home, &mut out, &clock),
         "installed-started" => installed_started(&home, &mut out, &clock),
         "installed-rejected" => installed_rejected(&home, &mut out, &clock),
+        "installed-rejected-service-error" => installed_rejected_service_error(&home, &mut out),
         case => panic!("unknown stop case: {case}"),
     }
     std::process::exit(0);
@@ -859,6 +860,103 @@ fn a_rejected_stop_still_stops_the_service_then_fails() {
     );
 }
 
+/// The installed-rejected flow with a failing manager, for the rerun
+/// child: the manager fails its stop after the hub's rejection, the close
+/// is still awaited to the bound, and the child reports the survivors
+/// while printing the manager failure beside it. The fake clock plus a
+/// held close prove the wait: the clock only reaches the bound when the
+/// close wait parks there. The child runs it because the service lookup
+/// reads HOME, which only the child controls.
+fn installed_rejected_service_error(home: &Path, out: &mut dyn Write) {
+    let service = child_service(home);
+    // The manager answers the check, then fails the stop itself.
+    let stops = stop_args(&service);
+    let stub = Stub::new(move |line| {
+        if stops.iter().any(|stop| stop == line) {
+            Err(std::io::Error::other("boom"))
+        } else {
+            Ok(ok())
+        }
+    });
+    // The hub answers the rejection, then holds its close open.
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let listener = UnixListener::bind(home.join("run/hub")).unwrap();
+    let (line_tx, line_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut hello = serde_json::to_vec(&json!({"kind": "hub_hello", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION, "payload": {}}))
+        .unwrap();
+        hello.push(b'\n');
+        (&stream).write_all(&hello).unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap_or(0);
+        line_tx.send(line).unwrap_or(());
+        let mut answer = serde_json::to_vec(&rejected()).unwrap();
+        answer.push(b'\n');
+        (&stream).write_all(&answer).unwrap_or(());
+        release_rx.recv().unwrap_or(());
+    });
+    let pushed = Rc::clone(&stub.calls);
+    on_stop_answered({
+        let pushed = Rc::clone(&pushed);
+        move || pushed.borrow_mut().push("answer".to_owned())
+    });
+    let clock = FakeClock::new();
+    let due = clock.origin() + STOP_WITHIN;
+    let worker = Arc::clone(&clock);
+    let stepper = thread::spawn(move || {
+        advance_to_close_expiry(&worker, due);
+    });
+    let mut start = move || -> std::io::Result<()> {
+        panic!("the probe answers: the starter never runs");
+    };
+    let clock_ref: &FakeClock = &clock;
+    let error = run_local(out, home, &mut start, clock_ref, &stub.run).unwrap_err();
+    stepper.join().unwrap();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.message, "s_aaa still running");
+    assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
+    let mut expected = vec!["answer".to_owned(), print_args(&service)];
+    expected.extend(stop_args(&service));
+    assert_eq!(
+        stub.calls(),
+        expected,
+        "the service stop is attempted after the rejection"
+    );
+    assert!(clock.now() >= due, "the close is awaited to the bound");
+    release_tx.send(()).unwrap();
+}
+
+#[test]
+fn a_rejected_stop_with_a_manager_error_reports_it_beside_the_rejection() {
+    let dir = fakes::TempDir::new("cli-stop-rejected-service-error-child");
+    let home = dir.path().join("home");
+    setup(&home, &dir.path().join("user"), true, true);
+    let user = dir.path().join("user");
+    let out = dir.path().join("out");
+    let output = stop_child("installed-rejected-service-error", &user, &home, &out);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the service-error child stops cleanly: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let program = match manager() {
+        Manager::Launchd { .. } => "launchctl",
+        Manager::Systemd => "systemctl",
+    };
+    assert!(
+        fs::read(&out).unwrap().is_empty(),
+        "a rejection prints nothing"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains(&format!("fiber: running `{program}`: boom")),
+        "the manager failure is reported additionally: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 /// Steps the fake clock to the stop bound one second at a time: the answer
 /// wait and the close wait share one deadline, so each move waits for a
 /// fresh park and neither wait can spend the other's bound early.
