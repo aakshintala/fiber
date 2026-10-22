@@ -11,20 +11,15 @@
 # lock held and a package half configured.
 #
 # Usage: scripts/install-shells [DIR]
-# DIR is the archive cache directory. With no DIR, nothing is kept.
+# DIR is the archive cache directory. With no DIR, no archives are kept.
 # APT_OPTS holds apt-get's options; it is split on whitespace on purpose.
 set -euo pipefail
 
 apt_opts="${APT_OPTS:-}"
 archives=/var/cache/apt/archives
-
 dir="${1:-}"
-if [ -z "$dir" ]; then
-  dir="$(mktemp -d)"
-  trap 'rm -rf "$dir"' EXIT
-fi
 
-if compgen -G "$dir/*.deb" >/dev/null; then
+if [ -n "$dir" ] && compgen -G "$dir/*.deb" >/dev/null; then
   echo "install-shells: installing cached archives from $dir"
   sudo dpkg -i "$dir"/*.deb
   exit 0
@@ -37,8 +32,6 @@ download() {
     sh "$apt_opts"
 }
 
-# shellcheck disable=SC2086 # apt_opts is a list of options
-sudo apt-get $apt_opts clean
 attempt=1
 until download; do
   echo "install-shells: download attempt $attempt failed or passed 90 s; retrying in 5 s" >&2
@@ -46,18 +39,10 @@ until download; do
   sleep 5
 done
 
-mkdir -p "$dir"
-if compgen -G "$archives/*.deb" >/dev/null; then
+if [ -n "$dir" ] && compgen -G "$archives/*.deb" >/dev/null; then
+  mkdir -p "$dir"
   cp "$archives"/*.deb "$dir"/
 fi
-# An incomplete set would make a later hit fail on a missing package.
-for package in zsh zsh-common fish fish-common xsel; do
-  if ! compgen -G "$dir/${package}_*.deb" >/dev/null; then
-    echo "install-shells: no $package archive downloaded; caching nothing" >&2
-    rm -f "$dir"/*.deb
-    break
-  fi
-done
 
 # shellcheck disable=SC2086 # apt_opts is a list of options
 sudo apt-get $apt_opts install -y zsh fish
