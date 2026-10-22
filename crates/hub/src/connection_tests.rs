@@ -521,7 +521,10 @@ fn stop_from_a_device_is_accepted_and_records_the_stop() {
         assert_eq!(id, "c_1");
         assert_eq!(result, Value::Null);
     });
-    assert!(hub.stop_requested(), "the hub stops after answering");
+    await_true("the hub to stop after answering", {
+        let hub = Arc::clone(&hub);
+        move || hub.stop_requested()
+    });
 }
 
 #[test]
@@ -570,7 +573,10 @@ fn stop_with_sessions_from_a_device_is_accepted() {
         assert_eq!(id, "c_1");
         assert_eq!(result, json!({"sessions_stopped": 0}));
     });
-    assert!(hub.stop_requested(), "the hub stops after answering");
+    await_true("the hub to stop after answering", {
+        let hub = Arc::clone(&hub);
+        move || hub.stop_requested()
+    });
 }
 
 /// A hub on `clock`, held by the test for advances: the stop loop parks
@@ -606,6 +612,13 @@ fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
         .as_str()
         .unwrap()
         .to_owned();
+    // The hook records the loop thread before the stop is sent, so the
+    // advance below can name its wait: under load the session worker's
+    // read wait can park at the same bound.
+    let (fanout_tx, fanout_rx) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        fanout_tx.send(thread::current().id()).unwrap_or(());
+    }));
     client.send(&command("c_stop", "stop", json!({"sessions": true})));
     // The loop's fan-out wait parks on the scan bound with the session
     // unconfirmed; expiring it names the survivor.
@@ -614,9 +627,12 @@ fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
         clock.await_parked(bound, fakes::Deadline::after(DEADLINE)),
         "the loop waits for the close"
     );
+    let loop_thread = Deadline::after(DEADLINE)
+        .recv(&fanout_rx)
+        .unwrap_or_else(|_| panic!("the loop enters its fan-out wait"));
     clock.advance_when_parked(
         Some(bound),
-        None,
+        Some(loop_thread),
         crate::sessions_stop::SESSIONS_STOP_WITHIN,
         &Deadline::after(DEADLINE),
     );
