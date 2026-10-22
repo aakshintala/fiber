@@ -3452,9 +3452,9 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
         clock.origin(),
         "the leaver alone never satisfies a count of two"
     );
-    // Arm the decision pause before the held thread parks, so the pause
-    // fires on the look that sees it.
-    let (decided, release_decision) = clock.pause_next_advance_wait();
+    // Arm the decision pause before the held thread parks. It fires only on
+    // a look with a held park, so the looks before the park pass it by.
+    let (decided, release_decision) = clock.pause_next_advance_wait_when_held();
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(until));
     Deadline::after(Duration::from_secs(5))
         .recv(&parked_a)
@@ -3498,6 +3498,33 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
     Deadline::after(Duration::from_secs(5))
         .recv(&exit_b)
         .expect("the second held thread exits");
+}
+
+#[test]
+fn held_advance_wait_pause_stays_armed_until_a_park_is_held() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (checked, release_check) = clock.pause_next_advance_wait_when_held();
+    // Queued first: a fire returns at once instead of blocking on the release.
+    release_check.send(()).expect("queued the release");
+    // A look with nobody held passes the pause and leaves it armed.
+    clock.advance_wait_checked(&super::lock(&clock.state));
+    assert!(
+        checked.try_recv().is_err(),
+        "a look with nobody held must not fire the pause"
+    );
+    let (parked, release, exit, _) = park_once(&clock, Some(until));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked)
+        .expect("waited for the thread to park");
+    clock.advance_wait_checked(&super::lock(&clock.state));
+    Deadline::after(Duration::from_secs(5))
+        .recv(&checked)
+        .expect("a look with a held park fires the pause");
+    release.send(()).unwrap();
+    Deadline::after(Duration::from_secs(5))
+        .recv(&exit)
+        .expect("the thread exits");
 }
 
 #[test]
