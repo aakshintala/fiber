@@ -137,6 +137,14 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
             },
             Some(slot) => {
                 let old = slot.spec();
+                // When the start spec matches, a slot that served before
+                // replaces under `restarted`; a never-started slot starts
+                // fresh under `started`.
+                let disposition = if slot.is_running() || slot.served_before() {
+                    Disposition::Restarted
+                } else {
+                    Disposition::Started
+                };
                 // A lazy slot never answers a reload: force a real start.
                 // A changed key or timeouts replace even a slot that never
                 // served: serving in place would run the old spec.
@@ -151,23 +159,12 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                     }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
-                } else if slot.is_running() || slot.served_before() {
-                    // Running but gone or expired, `Down` or `Dead`: it
-                    // served before and serves no more, so the re-list
-                    // would only fall back; replace beside the old slot
-                    // and file the name under `restarted`.
-                    SyncRow::Shadow {
-                        spec,
-                        disposition: Disposition::Restarted,
-                    }
                 } else {
-                    // `NotStarted`: nothing ever served, so the
-                    // single-spec start runs fresh and the commit swaps
-                    // the leftover slot out.
-                    SyncRow::Shadow {
-                        spec,
-                        disposition: Disposition::Started,
-                    }
+                    // Running but gone or expired, `Down`, `Dead` or
+                    // `NotStarted`: the re-list would only fall back, so
+                    // replace beside the old slot; a `NotStarted` slot
+                    // never served, so the commit swaps the leftover out.
+                    SyncRow::Shadow { spec, disposition }
                 }
             }
         };
@@ -602,14 +599,16 @@ pub fn apply_sync(mut staged: StagedSync, servers: &Servers, inputs: &SyncInputs
         match row {
             StagedRow::Keep { spec, listed, .. } => {
                 let name = spec.name.clone();
-                // One gate for the cache write: the install answers whether
-                // the slot was still live under its own lock, so a keep
-                // that died racing the apply keeps its old cache bytes
-                // while its staged tools still declare.
-                if let Some(slot) = servers.slot(&name)
-                    && slot.install_relisted(listed.clone())
-                {
-                    cache::write(inputs.cache, &name, &spec.key(), &listed);
+                // The staged declaration already used the new spec, so the
+                // slot carries it from here: the next classify and the call
+                // timeouts read the re-declared values. The swap lands even
+                // when the re-list install below declines, so a keep that
+                // died racing the apply still declares its staged tools.
+                if let Some(slot) = servers.slot(&name) {
+                    slot.set_spec(spec.clone());
+                    if slot.install_relisted(listed.clone()) {
+                        cache::write(inputs.cache, &name, &spec.key(), &listed);
+                    }
                 }
             }
             StagedRow::ShadowUp {

@@ -1,0 +1,109 @@
+/* The docs pages' prose rules (docs/ci.md, "The user docs site"). Every rule
+   reuses the front page's palette and faces and nothing else: each colour
+   is a front-page custom property and each stack is one of its two stacks.
+   Content rules scope under .fiber-docs so the front page's element
+   selectors never match docs content; the bare rules below reset what the
+   front page sets on body, main, h1 and .column. */
+body {
+  background: var(--page);
+  color: var(--ink);
+}
+main.fiber-docs {
+  display: block;
+  width: min(860px, calc(100% - 48px));
+  margin-inline: auto;
+  padding-block: 48px 72px;
+  line-height: 1.65;
+}
+.column {
+  width: min(860px, calc(100% - 48px));
+  margin-inline: auto;
+}
+.fiber-docs h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: -.035em;
+  line-height: 1.1;
+  font-size: 38px;
+  margin: 0 0 24px;
+}
+.fiber-docs h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: -.035em;
+  line-height: 1.2;
+  font-size: 30px;
+  margin: 40px 0 16px;
+}
+.fiber-docs h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 32px 0 8px;
+}
+.fiber-docs p {
+  margin: 0 0 16px;
+}
+.fiber-docs ul,
+.fiber-docs ol {
+  margin: 0 0 16px;
+  padding-inline-start: 28px;
+}
+.fiber-docs li {
+  margin-block: 4px;
+}
+.fiber-docs a {
+  color: inherit;
+  text-underline-offset: .24em;
+}
+.fiber-docs a:hover {
+  color: var(--accent);
+}
+.fiber-docs code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.fiber-docs pre {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 16px 18px;
+  overflow-x: auto;
+}
+.fiber-docs pre code {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.fiber-docs table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+}
+.fiber-docs th,
+.fiber-docs td {
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 13px;
+}
+.fiber-docs th {
+  background: var(--surface);
+}
+.fiber-docs .nightly-banner {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 3px;
+  padding: 12px 16px;
+  margin: 0 0 32px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.fiber-docs .nightly-banner a {
+  color: var(--accent);
+}
