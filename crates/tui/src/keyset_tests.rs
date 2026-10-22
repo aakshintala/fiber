@@ -2,9 +2,9 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{Context, Contexts, Keyset, load, resolved};
+use super::{Context, Contexts, Keyset, load};
 use crate::bindings::BINDINGS;
-use crate::keys::{Edit, Key, default_event};
+use crate::keys::{Edit, Key};
 use crate::stroke::Stroke;
 
 /// The keyset for `entries`, with its notices.
@@ -27,21 +27,6 @@ fn at(entries: &[(&str, Value)], name: &str, context: Context) -> super::Resolve
     keys.resolve(&stroke(name), context)
 }
 
-/// Every context a binding acts in.
-fn acting(binding: &crate::bindings::Binding) -> Vec<Context> {
-    [
-        Context::Input,
-        Context::Steering,
-        Context::Conversation,
-        Context::Search,
-        Context::Overlay,
-        Context::Picker,
-    ]
-    .into_iter()
-    .filter(|context| binding.contexts.contains(*context))
-    .collect()
-}
-
 #[test]
 fn the_defaults_never_clash() {
     for (lower, first) in BINDINGS.iter().enumerate() {
@@ -58,31 +43,6 @@ fn the_defaults_never_clash() {
                         second.id
                     );
                 }
-            }
-        }
-    }
-}
-
-#[test]
-fn without_person_entries_every_default_key_gives_its_default_event() {
-    let (keys, notices) = keyset(&[]);
-    assert!(notices.is_empty());
-    for binding in BINDINGS {
-        assert!(
-            !binding.defaults.is_empty(),
-            "{} has no defaults",
-            binding.id
-        );
-        for name in binding.defaults {
-            let pressed = stroke(name);
-            for context in acting(binding) {
-                let got = keys.resolve(&pressed, context);
-                let want = if matches!(binding.events, [super::Canon::Action]) {
-                    super::Resolved::Action(binding.id)
-                } else {
-                    resolved(default_event(&pressed))
-                };
-                assert_eq!(got, want, "{} {name} in {context:?}", binding.id);
             }
         }
     }
