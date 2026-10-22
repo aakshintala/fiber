@@ -9,11 +9,12 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
-    InstructionSent, Outcome, ShellCommand, SkillLoad, ToolCallCompleted, ToolCallRequested,
+    InstructionSent, KeptMessage, Outcome, ShellCommand, SkillLoad, ToolCallCompleted,
+    ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input, PdfRef};
-use contract::shapes::ContentPart;
-use contract::{ActionId, Envelope};
+use contract::shapes::{ContentPart, Origin};
+use contract::{ActionId, Envelope, Seq};
 
 use crate::Error;
 use crate::handoff::Carry;
@@ -124,7 +125,10 @@ fn rebuild_with_cut(
             if index >= cut {
                 if let Event::HandoffCompleted(done) = &mut event {
                     done.outcome = Outcome::Failed;
-                } else if matches!(event, Event::OpeningMessage(_) | Event::SkillsResent(_)) {
+                } else if matches!(
+                    event,
+                    Event::OpeningMessage(_) | Event::SkillsResent(_) | Event::ReviewerKept(_)
+                ) {
                     continue;
                 }
             }
@@ -207,11 +211,11 @@ impl Rendered {
             // call block alone would be refused.
             Event::ToolCallRequested(call) if call.provider_item.is_some() => {
                 if action.is_some_and(|action| completed.contains(action)) {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                 }
             }
             Event::ToolCallCompleted(done) if done.provider_item.is_some() => {
-                self.render(event, action, model);
+                self.render(event, action, model, seq.map(Seq));
             }
             Event::ToolCallRequested(call) => {
                 if let Some(action) = action {
@@ -264,7 +268,7 @@ impl Rendered {
             // each call with its result, so no result outlives its call.
             Event::FiberStarted(_) => {
                 self.flush();
-                self.render(event, action, model);
+                self.render(event, action, model, seq.map(Seq));
             }
             // The next round starts a new batch: every call of the last
             // one still without a result gets its fixed one first, before
@@ -281,7 +285,7 @@ impl Rendered {
             | Event::HandoffStarted(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
-                self.render(event, action, model);
+                self.render(event, action, model, seq.map(Seq));
             }
             // Every other kind either continues the batch or adds nothing.
             // Each is listed, so a new kind does not compile until it is
@@ -335,7 +339,7 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
-                self.render(event, action, model);
+                self.render(event, action, model, seq.map(Seq));
             }
             // A sent shell waits for the next turn: held under its line's
             // `seq`, which the `turn_started` naming it releases. It
@@ -351,7 +355,7 @@ impl Rendered {
             Event::JobLine(line) => {
                 self.flush();
                 if self.outstanding.is_empty() {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                 } else {
                     self.held.push(Input::User {
                         text: crate::jobs::line_text(line),
@@ -368,7 +372,7 @@ impl Rendered {
             // waits for that batch's results.
             Event::JobCompleted(job) => {
                 if self.carry.owned(&job.job_id.0) {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                     return;
                 }
                 if action.is_none() {
@@ -384,12 +388,12 @@ impl Rendered {
                         });
                     }
                 } else {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                 }
             }
             Event::DelegateFinished(finished) => {
                 if self.carry.owned(&finished.job_id.0) {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                     return;
                 }
                 if action.is_none() {
@@ -401,13 +405,13 @@ impl Rendered {
                         images: Vec::new(),
                     });
                 } else {
-                    self.render(event, action, model);
+                    self.render(event, action, model, seq.map(Seq));
                 }
             }
         }
     }
 
-    fn render(&mut self, event: &Event, action: Option<&ActionId>, model: &str) {
+    fn render(&mut self, event: &Event, action: Option<&ActionId>, model: &str, seq: Option<Seq>) {
         render(
             &mut self.conversation,
             event,
@@ -415,6 +419,7 @@ impl Rendered {
             model,
             &mut self.had,
             &mut self.carry,
+            seq,
         );
     }
 
@@ -456,6 +461,7 @@ pub(crate) fn render(
     model: &str,
     had: &mut BTreeMap<String, String>,
     carry: &mut Carry,
+    seq: Option<Seq>,
 ) {
     // The opening slot lives only between an opening message and its
     // `session_start` contexts: every rendered durable event clears it,
@@ -480,6 +486,8 @@ pub(crate) fn render(
                 return;
             }
             carry.input.clear();
+            carry.turn_from = carry.person.len();
+            record_persons(carry, event, seq);
             for item in &started.input {
                 match item {
                     InputItem::Message { content, .. } => {
@@ -514,7 +522,13 @@ pub(crate) fn render(
         Event::SteeringApplied(steering) => {
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
+            if !carry.in_summary() {
+                record_persons(carry, event, seq);
+            }
         }
+        // The person's kept messages join the context a completed handoff
+        // started, between the opening and the carried input.
+        Event::ReviewerKept(kept) => carry.keep(&kept.kept, conversation),
         // A hook's added context: its own user message, holding the text
         // alone. It joins neither the handoff's input nor what the
         // reviewer is shown (`docs/extensions.md`, "The hook points"). A
@@ -739,7 +753,6 @@ pub(crate) fn render(
         | Event::Notice(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
-        | Event::ReviewerKept(_)
         | Event::McpServerFailed(_)
         | Event::McpServerReady(_)
         | Event::Reloaded(_)
@@ -757,6 +770,35 @@ pub(crate) fn render(
         | Event::JobCompleted(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
+    }
+}
+
+/// Records the person's messages `event` holds, under the line's `seq`:
+/// each driver `message` item of a `turn_started`, keyed by its index among
+/// every item, and a driver `steering_applied`. The same predicate as the
+/// reviewer's transcript (`reviewer::render_reviewed`), so the two hold the
+/// same messages. A line with no `seq` holds none. The caller skips a
+/// rewind summary turn.
+pub(crate) fn record_persons(carry: &mut Carry, event: &Event, seq: Option<Seq>) {
+    let Some(seq) = seq else { return };
+    if let Event::TurnStarted(started) = event {
+        for (item, entry) in started.input.iter().enumerate() {
+            if let InputItem::Message {
+                content, sender, ..
+            } = entry
+                && sender.origin == Origin::Driver
+            {
+                let key = KeptMessage {
+                    seq,
+                    item: item as u64,
+                };
+                carry.record_person(key, user(content));
+            }
+        }
+    } else if let Event::SteeringApplied(steering) = event
+        && steering.sender.origin == Origin::Driver
+    {
+        carry.record_person(KeptMessage { seq, item: 0 }, user(&steering.content));
     }
 }
 

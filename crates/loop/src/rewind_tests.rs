@@ -1022,6 +1022,27 @@ fn folded_at(sessions: &Path, at: u64) -> (crate::resume::Resumed, Vec<contract:
     (folded, conversation)
 }
 
+/// The seed a resume window starts from when the parent segments held the
+/// person's messages `texts`, each the first line of its segment: the
+/// reviewer's index of them, and nothing else.
+fn seeded(texts: &[&str]) -> Carry {
+    Carry {
+        person: texts
+            .iter()
+            .map(|text| {
+                (
+                    contract::events::KeptMessage {
+                        seq: Seq(1),
+                        item: 0,
+                    },
+                    user_input(text),
+                )
+            })
+            .collect(),
+        ..Carry::default()
+    }
+}
+
 fn user_input(text: &str) -> contract::provider::Input {
     contract::provider::Input::User {
         text: text.to_owned(),
@@ -1039,7 +1060,7 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
     // The window is turn 2's `turn_started` in the parent segment, and no
     // job or session log preceded it, so the seed is the default.
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(folded.seed, seeded(&["one"]));
     // The carried input, then the note, under the new opening message.
     assert_eq!(conversation.len(), 3);
     assert!(
@@ -1080,7 +1101,7 @@ fn a_point_on_the_handoffs_completion_applies_it() {
     // itself, the handoff applies.
     let (folded, conversation) = folded_at(&sessions, 6);
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(folded.seed, seeded(&["one"]));
     // The carried input and the note, with no opening message: that line
     // is past the point.
     assert_eq!(
@@ -1326,7 +1347,7 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
     // handoff turn's start there.
     let (folded, conversation) = folded_chain(&sessions, 8);
     assert_eq!(folded.window, (1, 3));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(folded.seed, seeded(&["a-one", "b-one"]));
     assert_eq!(conversation.len(), 3);
     assert!(
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
@@ -1407,7 +1428,7 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(folded.seed, seeded(&["one"]));
     let log = log::Log::open(
         &sessions,
         SessionId(HB.to_owned()),
@@ -1485,7 +1506,7 @@ fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Inpu
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(folded.seed, seeded(&["one"]));
     let log = log::Log::open(
         sessions,
         SessionId(HB.to_owned()),

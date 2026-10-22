@@ -143,10 +143,11 @@ Fiber: your context holds {tokens} tokens. At {trigger_at} tokens Fiber will ask
 
 ## handoff-note
 
-Fiber is about to restart your context. Write a handoff note. The next agent continues this work from your note, with only the system prompt, the project's instruction files and the person's latest message besides.
+Fiber is about to restart your context. Write a handoff note. The next agent continues this work from your note, with only the system prompt, the project's instruction files, the person's latest message and, when the session keeps them, the person's earlier messages that still bind, besides.
 
 - Say what the work is, what is done, what is in progress and what comes next.
 - Record the decisions made and why, and what failed and why.
+- Quote the person's standing orders and limits, such as "read-only" or "don't touch X", and say which of the person's messages each one came from.
 - Refer to specs, issues, commits, files, artifacts and searches of the session log by path or URL. Do not copy their content.
 - Name the skills the next agent should load.
 - Leave out secrets, such as keys, tokens and passwords.
