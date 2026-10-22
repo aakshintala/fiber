@@ -19,6 +19,7 @@
 
 mod support;
 
+use contract::clock::Clock;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use std::fs;
@@ -249,8 +250,12 @@ fn world(default: bool) -> World {
     serve.env("HOME", a.home());
     let process = HubProc::spawn_command(a.deadline, &mut serve);
     let home = a.home();
+    // The hub's own `hub_hello` is the readiness signal: the connect waits
+    // for the bind and the hello by what remains of the test's deadline,
+    // not by the connect's fixed 5 s, which a slow hub start can outlast.
+    let until = SystemClock.now() + a.deadline.left();
     let hub = bounded(a.deadline, "the installed hub's hello", move || {
-        doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
+        doors::hub::connect_until(&home, &mut || Ok(()), &SystemClock, until, &mut || {})
     })
     .unwrap();
     assert_eq!(hub.1.kind, "hub_hello");
