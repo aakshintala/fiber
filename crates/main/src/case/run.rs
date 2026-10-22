@@ -494,6 +494,21 @@ fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
         let config_path = config::global_config_file(&home);
         write_config(&config_path, config)?;
     }
+    if let Some(settings) = &case.settings {
+        let home = config::fiber_home_from_env().map_err(|error| error.to_string())?;
+        write_settings(&home, settings)?;
+    }
+    Ok(())
+}
+
+/// Writes each entry of the case's `settings` object as that extension's
+/// global settings file under `home/config`, creating a missing parent
+/// directory per file. A non-object never reaches this function:
+/// `SessionCase::parse` rejects it.
+fn write_settings(home: &Path, settings: &Value) -> Result<(), String> {
+    for (name, value) in settings.as_object().into_iter().flatten() {
+        write_config(&config::settings_file(home, name), value)?;
+    }
     Ok(())
 }
 

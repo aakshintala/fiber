@@ -1,0 +1,100 @@
+{
+  "script": {
+    "steps": [
+      {
+        "text": "Hello."
+      }
+    ]
+  },
+  "prompt": "hi",
+  "settings": {
+    "hooks": {
+      "hooks": {
+        "says-hi": {
+          "point": "session_start",
+          "command": "probe",
+          "args": [],
+          "timeout": 10000,
+          "on_failure": "blocking"
+        }
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "probe",
+          "args": []
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "hook was here\n",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "kind": "session_started"
+    },
+    {
+      "kind": "fiber_started"
+    },
+    {
+      "kind": "extensions_loaded"
+    },
+    {
+      "kind": "preamble_built"
+    },
+    {
+      "kind": "opening_message"
+    },
+    {
+      "kind": "extension_state_set",
+      "payload": {
+        "extension": "github.com/aakshintala/fiber/extensions/hooks",
+        "key": "hooks_workspace"
+      }
+    },
+    {
+      "kind": "context_added",
+      "payload": {
+        "text": "hook was here",
+        "extension": "github.com/aakshintala/fiber/extensions/hooks",
+        "hook": "session_start"
+      }
+    },
+    {
+      "kind": "turn_started"
+    },
+    {
+      "kind": "step_started"
+    },
+    {
+      "kind": "extension_exec"
+    },
+    {
+      "kind": "assistant_message_started"
+    },
+    {
+      "kind": "text_completed",
+      "payload": {
+        "text": "Hello."
+      }
+    },
+    {
+      "kind": "usage_recorded"
+    },
+    {
+      "kind": "assistant_message_completed"
+    },
+    {
+      "kind": "turn_completed"
+    },
+    {
+      "kind": "fiber_exited"
+    }
+  ]
+}
