@@ -748,3 +748,70 @@ fn parked_hook_holds_the_delegate_item_until_it_finishes() {
     );
     wait_until_idle(ext);
 }
+
+/// A settled delegate `run` clears its handle from the VM: a replay of
+/// the consumed handle runs nothing, so a stale completion cannot
+/// resurrect the old `run`.
+#[test]
+fn a_settled_run_clears_the_run_handle_so_a_replay_runs_nothing() {
+    let clock = FakeClock::new();
+    let rig = running_extension(
+        "host.status(\"run-\" .. done.job_id)",
+        5_000,
+        Arc::clone(&clock),
+    );
+    let ext = &rig.ext;
+    let job_id = start_job(ext, &rig.bound_rx);
+    // The binding carries the chunk-local handle the replay forges.
+    let (handle, timeout) = ext
+        .hub
+        .lock()
+        .delegates
+        .get(&job_id)
+        .copied()
+        .expect("the start bound its handle");
+    assert!(
+        end_job(ext, &job_id, Outcome::Completed),
+        "the completion pushes the run"
+    );
+    wait_until_idle(ext);
+    let runs = || {
+        rig.emit
+            .statuses()
+            .iter()
+            .filter(|status| *status == &format!("run-{}", job_id.0))
+            .count()
+    };
+    assert_eq!(runs(), 1, "the run ran once");
+    assert!(
+        !ext.hub
+            .push_delegate_run(ext.name(), &completed(&job_id, Outcome::Completed)),
+        "a second completion for the same id pushes nothing"
+    );
+    // A replay of the consumed handle: the settle cleared the VM entry,
+    // so the thread drops it instead of running the old `run` again.
+    {
+        let mut shared = ext.hub.lock();
+        shared.push(
+            Target::Delegate {
+                extension: ext.name().to_owned(),
+                job_id: id("j_replay"),
+                handle,
+                timeout,
+            },
+            run_arg(
+                &completed(&job_id, Outcome::Completed),
+                Some(&finished(&job_id)),
+            ),
+            clock.now(),
+        );
+        drop(shared);
+        ext.hub.notify();
+    }
+    wait_until_idle(ext);
+    assert_eq!(
+        runs(),
+        1,
+        "the replay ran nothing: the settled run cleared its handle"
+    );
+}
