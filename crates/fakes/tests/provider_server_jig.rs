@@ -12,8 +12,9 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -29,6 +30,10 @@ mod support;
 /// wait (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
+/// How long the stub holds the jig back before it starts: one second past
+/// [`DEADLINE`], so the listening line is due after the old bound expires.
+const SLOW_START: Duration = Duration::from_secs(fakes::MUST_SUCCEED_WITHIN.as_secs() + 1);
+
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
 /// cargo and waits on no build lock.
@@ -37,6 +42,17 @@ fn example_path() -> PathBuf {
     path.pop();
     path.pop();
     path.join("examples").join("provider-server")
+}
+
+/// A stub that sleeps `delay` and then runs its arguments, so the jig starts
+/// only after `delay`. The sleep is the stub's own: the test waits on the
+/// jig's line under its deadline, never on the clock.
+fn slow_start_stub(dir: &Path, delay: Duration) -> PathBuf {
+    let path = dir.join("slow-start");
+    let script = format!("#!/bin/sh\nsleep {}\nexec \"$@\"\n", delay.as_secs());
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
 }
 
 /// Reads the jig's stdout: first its `listening on` line, then one request
@@ -106,9 +122,28 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     let dir = fakes::TempDir::new("provider-server-jig");
     let fixture = dir.path().join("reply.sse");
     std::fs::write(&fixture, "data: hi\n\n").unwrap();
+    let mut command = Command::new(example_path());
+    command.arg(&fixture);
+    serve_one_fixture(command);
+}
 
-    let mut child = Command::new(example_path())
-        .arg(&fixture)
+/// The reported flake: the built binary's first start outlasts the wait for
+/// its listening line. The stub delays the jig's start past that wait.
+#[test]
+fn a_slow_process_start_still_prints_the_listening_line() {
+    let dir = fakes::TempDir::new("provider-server-jig");
+    let fixture = dir.path().join("reply.sse");
+    std::fs::write(&fixture, "data: hi\n\n").unwrap();
+    let stub = slow_start_stub(dir.path(), SLOW_START);
+    let mut command = Command::new(stub);
+    command.arg(example_path()).arg(&fixture);
+    serve_one_fixture(command);
+}
+
+/// Starts the jig through `command`, which runs it with its fixture, then
+/// checks one exchange and the request the jig printed.
+fn serve_one_fixture(mut command: Command) {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
