@@ -637,7 +637,22 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
         vec![Ok(()), Ok(()), Err(Errno::SRCH)],
         vec![Ok(()), Ok(())],
     );
+    // Forced late wake (repro for #3068): the settlement holds after
+    // its first kill, so one bump of the wait's own wake lands inside
+    // the generation-to-park window, exactly as the stdout reader's
+    // late answer does when the `sleep` holding the pipe goes away —
+    // the reader answers, bumps, and the first poll park ends at once.
+    // The released pass then parks on a stale generation and returns
+    // at once, so the next pass spends the second probe with `now`
+    // still at the deadline; the poll advance below retires the group
+    // via SRCH and the repoll park never comes.
+    let (killed, is_killed) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_settle(killed, freed);
     clock.advance_when_parked(Some(deadline), None, timeout, &Deadline::after(DEADLINE));
+    Deadline::after(DEADLINE).recv_or_fail(&is_killed, "the settlement's first kill");
+    reads.wake.bump();
+    release.send(()).unwrap();
     // The timeout re-kills on the poll cadence: each advance follows a
     // confirmed park, so the first two parks each earn one more send and
     // the third observation retires the group.
