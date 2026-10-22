@@ -453,8 +453,11 @@ fn poll_ready(fd: BorrowedFd, events: libc::c_short) -> bool {
         reason = "POLL_SLICE is ten milliseconds"
     )]
     let timeout = POLL_SLICE.as_millis() as libc::c_int;
+    // The watched bits are disjoint, so `+` is their union, and an
+    // arithmetic mutant changes the mask where `^` would not: raw
+    // `c_short` has no union method, and no dependency buys one.
     raw_poll(fd.as_raw_fd(), events, timeout)
-        & (libc::POLLIN | libc::POLLOUT | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+        & (libc::POLLIN + libc::POLLOUT + libc::POLLERR + libc::POLLHUP + libc::POLLNVAL)
             as libc::c_short
         != 0
 }
@@ -767,6 +770,11 @@ fn raw_connect(fd: RawFd, addr: &libc::sockaddr_un, len: libc::socklen_t) -> lib
     unsafe_code,
     reason = "getsockopt writes only the local error slot for its length"
 )]
+// Exempt: when `getsockopt` itself fails this returns -1, and
+// `check_connected` maps every nonzero code to `Gone` or `Unconfirmed`
+// (`0 => Ok`, refused/missing => `Gone`, `_` => `Unconfirmed`), so -1 and
+// the `1` mutant take the same arm: no test can separate them.
+#[cfg_attr(false, mutants::skip)]
 fn raw_socket_error(fd: RawFd) -> libc::c_int {
     // SAFETY: `err` is a local `c_int` and `len` names exactly it, so
     // `getsockopt` writes only the local; the call takes no ownership.

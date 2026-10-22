@@ -579,6 +579,144 @@ fn stop_with_sessions_from_a_device_is_accepted() {
     });
 }
 
+/// A written but undrained answer waits out the bound: the write and
+/// its flag land before the wait starts, the wait holds to the bound,
+/// and the answer goes out whole. An `||` mutant would return as soon
+/// as the write lands.
+#[test]
+fn a_written_but_undrained_answer_waits_out_the_bound() {
+    let temp = Temp::new();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
+    // The spawn refusal runs the writer on the driving thread: the
+    // answer and the written flag land before the wait starts.
+    *hub.fail_spawn.lock().unwrap() = Some("hub-stop-out");
+    let web = crate::port::Web::never_drained(false);
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("drain-web-test".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let web = Arc::clone(&web);
+            let writer = Arc::clone(&writer);
+            move || {
+                drain_web(
+                    &hub,
+                    &writer,
+                    &web,
+                    "command_accepted",
+                    serde_json::Map::from_iter([(
+                        "command_id".to_owned(),
+                        Value::String("c_1".to_owned()),
+                    )]),
+                );
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The answer is out while the wait still parks on the bound: the
+    // mutant would have returned already.
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text).unwrap();
+    let end = clock.origin() + crate::port::STOP_CLOSE_WAIT;
+    assert!(
+        clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "the answer waits for the drain"
+    );
+    clock.advance(crate::port::STOP_CLOSE_WAIT + Duration::from_secs(1));
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends at the bound");
+    let line: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        line.get("kind").and_then(Value::as_str),
+        Some("command_accepted")
+    );
+    assert_eq!(
+        line.pointer("/payload/command_id").and_then(Value::as_str),
+        Some("c_1")
+    );
+    // EOF after the answer: the writer shut its side down.
+    let mut rest = String::new();
+    read.read_to_string(&mut rest).unwrap();
+    assert!(rest.is_empty());
+}
+
+/// An unwritten answer with a drained web still waits: the writer blocks
+/// in a full socket, so `written` stays unset while `drained` holds. An
+/// `||` mutant would return at once.
+#[test]
+fn an_unwritten_answer_with_a_drained_web_still_waits() {
+    let temp = Temp::new();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
+    let web = crate::port::Web::never_drained(true);
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    // Fill the writer's direction past its buffer: the writer blocks in
+    // its write, so `written` stays unset deterministically.
+    writer.set_nonblocking(true).unwrap();
+    let filler = vec![0u8; 65_536];
+    for _ in 0..128 {
+        match (&writer).write(&filler) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("filling the send buffer: {error}"),
+        }
+    }
+    writer.set_nonblocking(false).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("drain-web-test".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let web = Arc::clone(&web);
+            let writer = Arc::clone(&writer);
+            move || {
+                drain_web(
+                    &hub,
+                    &writer,
+                    &web,
+                    "command_accepted",
+                    serde_json::Map::from_iter([(
+                        "command_id".to_owned(),
+                        Value::String("c_2".to_owned()),
+                    )]),
+                );
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    let end = clock.origin() + crate::port::STOP_CLOSE_WAIT;
+    assert!(
+        clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "the unwritten answer waits"
+    );
+    // Drain the filler past the answer to EOF: the freed room unblocks
+    // the writer, and the shutdown ends the read.
+    let mut all = Vec::new();
+    BufReader::new(peer).read_to_end(&mut all).unwrap();
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends after the drain");
+    let text = String::from_utf8(all).unwrap();
+    // The filler carries no newline, so the answer is not the last
+    // line: it starts where the JSON starts.
+    let start = text
+        .find("{\"kind\"")
+        .expect("the answer follows the filler");
+    let line: Value = serde_json::from_str(&text[start..]).unwrap();
+    assert_eq!(
+        line.get("kind").and_then(Value::as_str),
+        Some("command_accepted")
+    );
+    assert_eq!(
+        line.pointer("/payload/command_id").and_then(Value::as_str),
+        Some("c_2")
+    );
+}
+
 /// A hub on `clock`, held by the test for advances: the stop loop parks
 /// on the injected clock, so bound-expiry tests drive it from here.
 fn hub_with_clock(

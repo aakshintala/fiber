@@ -119,6 +119,47 @@ fn stops_a_running_session_through_subscribe_then_close() {
     assert_ne!(subscribe_id, close_id);
 }
 
+/// An expired end with no stop finishes the partial round: the loop
+/// returns the first round's confirmed and unconfirmed instead of
+/// rescanning. A second session starts after the first listing, so a
+/// rescan would name it unconfirmed too: an `&&` mutant fails the
+/// survivor-only assertion.
+#[test]
+fn an_expired_end_with_no_stop_finishes_the_partial_round() {
+    let temp = Temp::new("ss-expired");
+    let starter = FakeStarter::strict(&temp.dir);
+    let probe = starter.clone();
+    let id = start(&starter, 1);
+    let hub = temp.hub(starter);
+    let rx = stop_async(&hub);
+    // The worker's close lands before its close-wait: polling for it
+    // proves the first round's listing ran before the session below
+    // starts.
+    testkit::await_true("the worker to send close", {
+        let probe = probe.clone();
+        move || {
+            probe
+                .received()
+                .iter()
+                .any(|line| line.contains("\"close\""))
+        }
+    });
+    // Started after the first listing: the rescan sees it, the finished
+    // round does not.
+    let _second = start(&probe, 2);
+    let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
+    assert!(
+        temp.clock
+            .await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "the loop waits for the close"
+    );
+    temp.clock
+        .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
+    let outcome = join(rx);
+    assert!(outcome.confirmed.is_empty());
+    assert_eq!(outcome.unconfirmed, vec![id]);
+}
+
 #[test]
 fn stops_every_running_session_leaving_no_socket_behind() {
     let temp = Temp::new("ss-stop-all");
