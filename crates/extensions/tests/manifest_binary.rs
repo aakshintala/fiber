@@ -138,14 +138,14 @@ fiber.tool("bare", {
 })
 "#;
 
-/// Installs `fiber.test/mybin` with a real `binaries` entry for this
-/// platform, serving `body`, and returns its installed directory.
-fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::PathBuf) {
-    let setup = Setup::new();
+/// Installs `fiber.test/mybin` into `setup` with a real `binaries` entry for
+/// this platform, serving `body`, and returns the server and installed
+/// directory.
+fn install_into(setup: &Setup, body: &'static [u8]) -> (fakes::ProviderServer, std::path::PathBuf) {
     let server = serve_once(body);
     let url = format!("{}/tool-1.0", server.url());
     let dir = install_lua(
-        &setup,
+        setup,
         "mybin",
         &json!({"binaries": { extensions::platform(): { "url": url, "sha256": sha256(body) } }}),
         INIT,
@@ -154,20 +154,69 @@ fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::P
         server.await_requests(1, Deadline::after(WAIT)),
         "waited for the binary to be downloaded"
     );
+    (server, dir)
+}
+
+/// Installs `fiber.test/mybin` with `body` and returns its installed directory.
+fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::PathBuf) {
+    let setup = Setup::new();
+    let (server, dir) = install_into(&setup, body);
     (setup, server, dir)
+}
+
+/// What a `ran` timeout leaves to read: the installed binary, the call's
+/// callback output (none arrives before the deadline), and the stages the
+/// script's marker file records.
+fn timeout_report(dir: &Path, marker: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = dir.join("bin").join("mybin");
+    let mode = match std::fs::metadata(&binary) {
+        Ok(meta) => format!("{:o}", meta.permissions().mode() & 0o7777),
+        Err(e) => format!("<{e}>"),
+    };
+    let stages = match std::fs::read_to_string(marker) {
+        Ok(text) => text,
+        Err(e) => format!("<{e}>"),
+    };
+    let started = stages.lines().any(|line| line == "started");
+    let eof = stages.lines().any(|line| line == "eof");
+    format!(
+        "tool=run_it program=bin/mybin\n\
+         binary={} exists={} mode={mode}\n\
+         callback output: none, no result arrived before the deadline\n\
+         marker={} started={started} eof={eof} raw={stages:?}",
+        binary.display(),
+        binary.exists(),
+        marker.display(),
+    )
 }
 
 #[test]
 fn the_manifest_named_binary_runs_through_host_exec() {
-    let (_setup, _server, dir) = installed(b"#!/bin/sh\necho from-binary\n");
+    let setup = Setup::new();
+    let marker = setup.root().join("marker");
+    let script: &'static str = format!(
+        "#!/bin/sh\necho started >> '{}'\necho from-binary\necho eof >> '{}'\n",
+        marker.display(),
+        marker.display(),
+    )
+    .leak();
+    let (_server, dir) = install_into(&setup, script.as_bytes());
     let ext = extension(&dir, "mybin", INIT, FakeClock::new());
     let tools = by_name(&ext);
+    let rx = run(&tools["run_it"], json!({}));
+    let output = match Deadline::after(WAIT).recv(&rx) {
+        Ok(output) => output,
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!("{}", timeout_report(&dir, &marker)),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the call's thread ended without a result")
+        }
+    };
+    assert_eq!(text(&output), "from-binary\n");
     assert_eq!(
-        text(&ran(
-            &run(&tools["run_it"], json!({})),
-            &Deadline::after(WAIT)
-        )),
-        "from-binary\n"
+        std::fs::read_to_string(&marker).unwrap(),
+        "started\neof\n",
+        "the script reached its first and last lines"
     );
 }
 
