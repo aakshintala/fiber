@@ -6,8 +6,8 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use fakes::TempDir;
 
@@ -38,16 +38,11 @@ const CODE_QUALITY: &str = "# Code quality
 | none yet | | |
 ";
 
-/// How long a test waits for one child (`git` or `xtask`) to exit, in real
-/// time.
-///
-/// The worst test, `select_counts_untracked_and_committed_changes`, waits on
-/// 9 children (`workspace()`'s 3 `git` + 3 `git` + 3 `xtask`), plus one
-/// bounded reap after the first miss, then stops: (9 + 1) x 5 s = 50 s <=
-/// 60 s, half of nextest's 120 s kill. A passing run never waits on it; it
-/// only bounds a hang.
-const CHILD_WITHIN: Duration = Duration::from_secs(5);
-
+/// Runs the built `xtask` in `dir`. Each child, a `git` or an `xtask`, waits
+/// under `fakes::MUST_SUCCEED_WITHIN`. A hang fails at the first child that
+/// runs out, after one bounded reap, so one test runs out at most 2 x 10 s =
+/// 20 s, under half of nextest's 120 s kill. A passing run never waits on
+/// the bound.
 fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
     command
@@ -59,21 +54,21 @@ fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i3
         &format!("xtask {args:?}"),
         command,
         stdin.as_bytes(),
-        CHILD_WITHIN,
+        MUST_SUCCEED_WITHIN,
     );
     (code.unwrap(), text)
 }
 
 fn git(dir: &TempDir, args: &[&str]) {
-    // This wrapper's shape differs from `common::git` (no output, a 5 s
-    // bound), so it keeps its body and shares only the wait.
+    // This wrapper's shape differs from `common::git` (no output, the shared
+    // must-succeed bound), so it keeps its body and shares only the wait.
     let mut command = Command::new("git");
     command
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(dir.path())
         .stdin(Stdio::null());
-    let (code, out) = common::run(&format!("git {args:?}"), command, &[], CHILD_WITHIN);
+    let (code, out) = common::run(&format!("git {args:?}"), command, &[], MUST_SUCCEED_WITHIN);
     assert_eq!(code, Some(0), "git {args:?}: {out}");
 }
 

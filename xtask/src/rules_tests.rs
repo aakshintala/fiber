@@ -1,6 +1,6 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use fakes::{Deadline, finished};
 
@@ -1357,8 +1357,6 @@ fn source_tokens_skip_escaped_and_unicode_character_literals() {
 
 const CURSOR_PROBE_ENV: &str = "XTASK_SOURCE_CURSOR_STALL_PROBE";
 const SCANNER_PROBE_ENV: &str = "XTASK_SOURCE_SCANNER_BOUND_PROBE";
-/// A child that spins without a scanner guard must fail well before the mutant timeout.
-const CURSOR_PROBE_WITHIN: Duration = Duration::from_secs(5);
 
 fn run_scanner_bound_probe(case: &str) {
     let child = Command::new(std::env::current_exe().unwrap())
@@ -1378,7 +1376,7 @@ fn run_scanner_bound_probe(case: &str) {
         &format!("scanner bound probe {case}"),
         child,
         &[],
-        Deadline::after(CURSOR_PROBE_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
         output.status.success(),
@@ -1854,7 +1852,7 @@ fn run_cursor_stall_probe(case: &str) {
         &format!("source cursor probe {case}"),
         child,
         &[],
-        Deadline::after(CURSOR_PROBE_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
         output.status.success(),
