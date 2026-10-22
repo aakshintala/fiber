@@ -236,7 +236,7 @@ fn a_second_accept_for_the_same_import_changes_nothing() {
         report_summary(&app),
         ("Imported from Codex".to_owned(), 1, 0)
     );
-    // The source entry is consumed by the first answer, so a late or
+    // The pending entry is consumed by the first answer, so a late or
     // duplicate answer finds nothing: the report stays as it was, even
     // when the late answer carries a different report.
     let late = session_line(
@@ -268,8 +268,9 @@ fn a_second_accept_for_the_same_import_changes_nothing() {
     assert!(app.notices().is_empty());
 }
 
-/// One session envelope from a session other than [`SESSION`]: its
-/// answers settle silently, never touching the screen.
+/// One session envelope from a session other than [`SESSION`]: most
+/// answers settle silently, never touching the screen, while an
+/// accepted import opens its report.
 fn other_session_line(kind: &str, payload: Value) -> Line {
     let mut line = session_line(kind, payload);
     if let Line::Session(envelope) = &mut line {
@@ -507,7 +508,7 @@ fn a_rejected_import_adds_one_notice_and_opens_no_report() {
     // A failed import is one notice, as any failed command is.
     assert!(app.import_report().is_none());
     assert_eq!(app.notice(), Some("No."));
-    // The rejection drops the source entry, so a late accept for the
+    // The rejection drops the pending entry, so a late accept for the
     // id changes nothing.
     let accepted = session_line(
         "command_accepted",
@@ -534,9 +535,8 @@ fn a_reject_for_another_session_drops_the_import_source() {
     let lines = sent(enter(&mut app, "/import codex"));
     let id = lines[0]["id"].clone();
     // A reject arriving after leaving the session opens no report.
-    // Its source entry goes with its pending entry through the
-    // unchanged refused path, so a later accept back in the session
-    // opens no stale report.
+    // Its pending entry goes through the unchanged refused path, so
+    // a later accept back in the session opens no stale report.
     let rejected = other_session_line(
         "command_rejected",
         json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
@@ -1565,4 +1565,60 @@ fn an_extension_draft_with_an_image_is_a_prompt() {
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "prompt");
+}
+
+#[test]
+fn a_rejected_named_import_returns_its_draft_with_the_notice() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import codex"));
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "invalid_arguments", "message": "No."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    // A failed import is one notice, as any failed command is, and the
+    // draft comes back for a retry.
+    assert!(app.import_report().is_none());
+    assert_eq!(app.draft(), "/import codex");
+    assert_eq!(app.notice(), Some("No."));
+}
+
+#[test]
+fn an_accepted_unknown_source_import_settles_without_a_report() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/import vim"));
+    let id = lines[0]["id"].clone();
+    assert_eq!(lines[0]["args"], json!({"source": "vim"}));
+    // An unknown source stays a plain command: its accept closes the
+    // entry with no report and no notice.
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": import_result()}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.import_report().is_none());
+    assert!(app.notices().is_empty());
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn a_malformed_accept_leaves_a_non_import_entry_pending() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "/reload"));
+    let id = lines[0]["id"].clone();
+    // An answer the terminal cannot read closes only a pending import:
+    // any other kind keeps its silent drop, entry still pending.
+    let accepted = session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"unrelated": true}}),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    assert!(app.notices().is_empty());
+    assert!(app.import_report().is_none());
+    assert!(
+        app.outbox
+            .pending
+            .contains_key(id.as_str().unwrap_or_default())
+    );
 }

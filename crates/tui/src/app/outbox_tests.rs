@@ -299,3 +299,19 @@ fn kept_lines_go_out_again_unchanged_after_a_drop() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn an_import_entry_answers_with_its_source_then_closes() {
+    use crate::import_report::ImportSource;
+
+    let mut outbox = up();
+    outbox.insert(
+        "c_1".to_owned(),
+        Kind::Import(ImportSource::Codex),
+        Draft::default(),
+    );
+    let (kind, _) = outbox.answered("c_1").expect("the pending import answers");
+    assert_eq!(kind, Kind::Import(ImportSource::Codex));
+    assert!(outbox.pending.is_empty());
+    assert!(outbox.answered("c_1").is_none());
+}

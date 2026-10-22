@@ -15,7 +15,7 @@ use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
 use contract::SessionId;
-use contract::events::{CommandAccepted, CommandResult};
+use contract::events::CommandAccepted;
 
 mod exit;
 
@@ -503,7 +503,7 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Some(Vec::new());
         };
-        if !matches!(accepted.result, Some(CommandResult::Import { .. })) {
+        if !self.import_answered(Some(source), &accepted) {
             // The hub accepted without the import's report: the
             // refused path with the offer open, as for an
             // unparseable payload.
@@ -511,7 +511,6 @@ impl App {
             self.notices.push(&code, refusal(payload));
             return Some(Vec::new());
         }
-        self.import_answered(Some(source), &accepted);
         self.close_import_prompt();
         Some(Vec::new())
     }

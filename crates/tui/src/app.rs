@@ -14,7 +14,7 @@ use contract::events::{
     SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
+use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use serde_json::{Map, Value};
 
@@ -27,6 +27,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Pages};
+use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
 use steering::Steering;
@@ -210,11 +211,6 @@ pub(crate) struct App {
     /// The accepted-import report, while open on home or over a
     /// session (`docs/tui.md`, "Notices").
     pub(crate) import_report: Option<ImportReport>,
-    /// Every sent `import`'s source by command id: the named source,
-    /// or `None` for a bare `/import` covering both. The answer folds
-    /// the entry: an acceptance opens the report with it, any other
-    /// fold drops it, so a late answer finds nothing.
-    import_sources: HashMap<CommandId, Option<String>>,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
@@ -328,7 +324,6 @@ impl App {
             outbox: outbox::Outbox::default(),
             images: images::Images::default(),
             import_report: None,
-            import_sources: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
@@ -1571,7 +1566,8 @@ impl App {
                 | Kind::Steer
                 | Kind::Reply
                 | Kind::Shell
-                | Kind::Command,
+                | Kind::Command
+                | Kind::Import(_),
                 _,
             )) => {
                 self.notices.push(code, message);
@@ -1584,18 +1580,56 @@ impl App {
 
     /// An accepted `import`: one report overlay naming what the import
     /// copied and left behind, and no notices, since imported items
-    /// apply on the next reload. A late or duplicate answer finds no
-    /// source entry and changes nothing. A rejection drops the entry
-    /// through `refused` unchanged.
-    fn import_answered(&mut self, source: Option<String>, accepted: &CommandAccepted) {
+    /// apply on the next reload. Returns whether the report opened; a
+    /// late or duplicate answer finds no entry and changes nothing.
+    fn import_answered(&mut self, source: Option<String>, accepted: &CommandAccepted) -> bool {
         let Some(CommandResult::Import {
             imported,
             left_behind,
         }) = &accepted.result
         else {
-            return;
+            return false;
         };
         self.open_import_report(source, imported.clone(), left_behind.clone());
+        true
+    }
+
+    /// Settles an accepted command through its pending entry: the entry
+    /// closes once, whatever surface shows. An accepted `import` opens
+    /// exactly one of its report or one refusal notice; a late or
+    /// duplicate answer finds no entry and changes nothing. An answer
+    /// the terminal cannot read as a command answer still closes a
+    /// pending `import` entry, with the refusal path's one notice, and
+    /// leaves every other kind untouched.
+    fn accepted_settled(
+        &mut self,
+        envelope: &Envelope,
+        accepted: Option<&CommandAccepted>,
+    ) -> Option<(Kind, Draft)> {
+        let id = envelope.payload.get("command_id")?.as_str()?;
+        let entry = match accepted {
+            Some(_) => self.outbox.answered(id),
+            // An unparseable accept closes only a pending import: any
+            // other kind keeps its silent drop.
+            None if matches!(self.outbox.pending.get(id), Some((Kind::Import(_), _))) => {
+                self.outbox.answered(id)
+            }
+            None => return None,
+        };
+        let source = match &entry {
+            Some((Kind::Import(source), _)) => Some(*source),
+            _ => None,
+        };
+        if let Some(source) = source {
+            let opened = accepted.is_some_and(|answer| {
+                self.import_answered(source.arg().map(str::to_owned), answer)
+            });
+            if !opened {
+                self.notices
+                    .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
+            }
+        }
+        entry
     }
 
     /// Drops a pending command, returning its draft to an empty box.
@@ -1647,9 +1681,8 @@ impl App {
             self.item_session_line(envelope);
             match envelope.kind.as_str() {
                 "command_accepted" => {
-                    if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        self.outbox.answered(&accepted.command_id.0);
-                    }
+                    let accepted = read!(envelope, CommandAccepted);
+                    self.accepted_settled(envelope, accepted.as_ref());
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
@@ -1667,28 +1700,21 @@ impl App {
             // entry when its answer arrives, as on screen
             // (`docs/invocation.md`, "The command line"). `reply_ack`
             // above already settled a `reply`, including its decline's
-            // `cancel`, so a second settle here finds nothing to do.
+            // `cancel`, so a second settle here finds nothing to do. An
+            // accepted import opens its report on whatever surface
+            // shows, through the same settle as the attached session's.
             match envelope.kind.as_str() {
                 "command_accepted" => {
-                    if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        // No `commands_answered`: a `commands` answer from
-                        // another session is ignored, and a resent command
-                        // needs only its pending entry closed. A background
-                        // import drops its source entry with it, silently:
-                        // no report opens off screen, and a later
-                        // duplicate finds nothing.
-                        self.outbox.answered(&accepted.command_id.0);
-                        self.import_sources.remove(&accepted.command_id);
-                    }
+                    // No `commands_answered`: a `commands` answer from
+                    // another session is ignored, and a resent command
+                    // needs only its pending entry closed.
+                    let accepted = read!(envelope, CommandAccepted);
+                    self.accepted_settled(envelope, accepted.as_ref());
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
-                        // A refused background import drops its source
-                        // entry beside its pending entry, so a later
-                        // accept for the id opens no stale report.
-                        self.import_sources.remove(&id);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -1725,15 +1751,10 @@ impl App {
         let mut changed = applied.changed;
         match envelope.kind.as_str() {
             "command_accepted" => {
-                if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    let sent = self.outbox.answered(&accepted.command_id.0);
+                let accepted = read!(envelope, CommandAccepted);
+                let sent = self.accepted_settled(envelope, accepted.as_ref());
+                if let Some(accepted) = accepted {
                     self.commands_answered(&accepted);
-                    // The accepted import's source entry is consumed by
-                    // its answer: a late or duplicate answer finds
-                    // nothing and changes nothing.
-                    if let Some(source) = self.import_sources.remove(&accepted.command_id) {
-                        self.import_answered(source, &accepted);
-                    }
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
@@ -1755,9 +1776,6 @@ impl App {
                 {
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
-                    // A refused import drops its source entry with its
-                    // answer, as an accepted one consumes it.
-                    self.import_sources.remove(&id);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }
