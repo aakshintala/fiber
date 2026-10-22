@@ -3,6 +3,7 @@
 //! ignored, as [`Emit`] says. [`EventLog`] instead records every event,
 //! ephemeral and durable alike, in arrival order.
 
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use crate::deadline::Deadline;
@@ -55,14 +56,26 @@ impl Emit for Recorder {
 
 /// An [`Emit`] a test hands an emitter: it records every event without
 /// looking at its class, so durable events are kept as well as ephemeral
-/// ones. Unlike [`Recorder`] it cannot wait for text; it only replays what
-/// arrived, in arrival order.
+/// ones. Unlike [`Recorder`] it cannot wait for text; [`EventLog::channel`]
+/// also hands each event to a receiver as it arrives.
 #[derive(Default)]
 pub struct EventLog {
     inner: Mutex<Vec<Event>>,
+    tx: Option<mpsc::Sender<Event>>,
 }
 
 impl EventLog {
+    /// A log that also sends each event to the returned receiver, as it
+    /// arrives. A dropped receiver does not stop recording.
+    pub fn channel() -> (Self, Receiver<Event>) {
+        let (tx, rx) = mpsc::channel();
+        let log = Self {
+            inner: Mutex::new(Vec::new()),
+            tx: Some(tx),
+        };
+        (log, rx)
+    }
+
     /// Every event recorded so far, in arrival order.
     pub fn events(&self) -> Vec<Event> {
         lock(&self.inner).clone()
@@ -72,6 +85,11 @@ impl EventLog {
 impl Emit for EventLog {
     fn emit(&self, event: &Event) {
         lock(&self.inner).push(event.clone());
+        // The lock is released before the send: a receiver that is slow to
+        // take the event does not hold up the next emitter.
+        if let Some(tx) = &self.tx {
+            let _sent = tx.send(event.clone());
+        }
     }
 }
 
