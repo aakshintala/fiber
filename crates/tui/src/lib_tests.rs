@@ -149,7 +149,9 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     app.set_size(width, height);
     let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
-    lp.tty = tty;
+    if let Some(tty) = tty {
+        lp.tty = tty;
+    }
     lp.on_attach = Box::new(move |session| {
         if let Ok(mut held) = seen.lock() {
             held.push(session.0.clone());
@@ -165,8 +167,8 @@ pub(super) fn idle_retry() -> Arc<crate::retry::Retry> {
 }
 
 impl<B: Backend> Loop<B> {
-    /// A loop on `screen` at today's test defaults: a fake clock, no tty, no
-    /// reader, hover on and no environment. A test sets
+    /// A loop on `screen` at today's test defaults: a fake clock, a read-only
+    /// `/dev/null` for a tty (every write to it fails and it has no size), no reader, hover on and no environment. A test sets
     /// any other value by assigning the field.
     pub(super) fn for_test(app: App, screen: Screen<B>) -> Self {
         // The receiver is dropped: a worker's answer finds the channel
@@ -178,7 +180,7 @@ impl<B: Backend> Loop<B> {
             parser: crate::keys::Parser::default(),
             screen,
             hub: Connection::new(crate::retry::Retry::new(&clock)),
-            tty: None,
+            tty: File::open("/dev/null").unwrap_or_else(|err| panic!("/dev/null: {err}")),
             on_attach: Box::new(|_| {}),
             clock,
             files_out,

@@ -188,7 +188,7 @@ pub(crate) fn run_with(
         parser: Parser::default(),
         screen,
         hub: Connection::new(Arc::clone(&retry)),
-        tty: Some(tty),
+        tty,
         on_attach,
         clock,
         files_out: tx.clone(),
@@ -229,18 +229,13 @@ pub(crate) fn run_with(
     // owed, or its answer would clear a meanwhile taken read's mark.
     terminal.app.note_catalogue_read();
     terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
-    match terminal
-        .tty
-        .as_ref()
-        .map(|tty| spawn_reader(tty, tx.clone()))
-    {
-        Some(Ok(reader)) => terminal.reader = Some(reader),
+    match spawn_reader(&terminal.tty, tx.clone()) {
+        Ok(reader) => terminal.reader = Some(reader),
         // Without the reader no key reaches the loop: fail instead of
         // running deaf. The guard's drop restores the terminal.
-        Some(Err(error)) => {
+        Err(error) => {
             return Err(Error::from(error));
         }
-        None => {}
     }
     spawn_hub(
         connect,
@@ -266,10 +261,9 @@ pub(crate) fn run_with(
     // blocked and end with the process.
     terminal.hub.hang_up();
     drop(restore);
-    if let Some(mut tty) = terminal.tty.take() {
-        for line in &lines {
-            writeln!(tty, "{line}").unwrap_or(());
-        }
+    let mut tty = &terminal.tty;
+    for line in &lines {
+        writeln!(tty, "{line}").unwrap_or(());
     }
     Ok(code)
 }
@@ -335,7 +329,7 @@ struct Loop<B: Backend> {
     /// thread's permit, reached only through its interface.
     hub: Connection,
     /// The tty, for its size on resize.
-    tty: Option<File>,
+    tty: File,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     /// Where workers post their results.
@@ -527,7 +521,7 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
-                    clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
+                    clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
@@ -692,7 +686,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
             Input::Resize => {
-                if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
+                if let Ok((width, height)) = term::size(&self.tty) {
                     self.app.set_size(width, height);
                     if self.screen.resize(width, height).is_err() {
                         return Some(1);
@@ -720,10 +714,10 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
-            clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
+            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
         }
         if let Some(text) = self.app.take_owed_copy() {
-            clipboard::copy(self.tty.as_ref(), self.programs.copy.as_deref(), text);
+            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
         }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
@@ -790,9 +784,8 @@ impl<B: Backend> Loop<B> {
 
     /// Writes the app's window title when it changed since the last write.
     fn write_title(&mut self) {
-        if let Some(bytes) = self.title.next(self.app.title())
-            && let Some(mut tty) = self.tty.as_ref()
-        {
+        if let Some(bytes) = self.title.next(self.app.title()) {
+            let mut tty = &self.tty;
             tty.write_all(&bytes).unwrap_or(());
         }
     }
@@ -804,9 +797,8 @@ impl<B: Backend> Loop<B> {
         if !self.hover {
             return;
         }
-        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at))
-            && let Some(mut tty) = self.tty.as_ref()
-        {
+        if let Some(bytes) = self.shape.next(self.app.over_edge(self.pointer.at)) {
+            let mut tty = &self.tty;
             tty.write_all(bytes).unwrap_or(());
         }
     }
@@ -815,9 +807,8 @@ impl<B: Backend> Loop<B> {
     /// "Getting the person's attention"). A failed write is dropped.
     fn write_alerts(&mut self) {
         let bytes = self.app.take_alerts();
-        if let Some(mut tty) = self.tty.as_ref() {
-            tty.write_all(&bytes).unwrap_or(());
-        }
+        let mut tty = &self.tty;
+        tty.write_all(&bytes).unwrap_or(());
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need
@@ -828,9 +819,8 @@ impl<B: Backend> Loop<B> {
             return;
         }
         self.app.set_kitty();
-        if let Some(mut tty) = self.tty.as_ref()
-            && io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok()
-        {
+        let mut tty = &self.tty;
+        if io::Write::write_all(&mut tty, term::KITTY_PUSH).is_ok() {
             self.parser.set_kitty();
         }
     }
@@ -1030,10 +1020,8 @@ impl<B: Backend> Loop<B> {
         if let Some(reader) = &self.reader {
             reader.resume();
         }
-        let (width, height) = match self.tty.as_ref().map(term::size) {
-            Some(Ok(size)) => size,
-            Some(Err(_)) | None => (self.screen.area().width, self.screen.area().height),
-        };
+        let (width, height) = term::size(&self.tty)
+            .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
         self.screen.resize(width, height).err().map(|_| 1)
     }

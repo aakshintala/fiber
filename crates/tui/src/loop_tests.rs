@@ -850,7 +850,7 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     let (mut lp, theirs, tx, rx) = opened();
     let dir = fakes::TempDir::new("tui-select-page");
     let path = dir.path().join("tty");
-    lp.tty = Some(std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}")));
+    lp.tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}"));
     let seen = serve(theirs, tx.clone(), answers_all());
     // At the top, page 0 loads; a drag over its first rows, past the
     // right-aligned bubble text, then End, which drops it, then the
