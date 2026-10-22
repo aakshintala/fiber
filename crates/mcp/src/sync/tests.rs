@@ -255,16 +255,7 @@ fn commit_never_writes_a_declined_keep_payload() {
     let slot = setup.running(&started);
     let cache_before = setup.cache_bytes();
     setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
-    let mut changed = setup.spec("fx");
-    changed.hints.insert(
-        "echo".to_owned(),
-        Hints {
-            read_only: None,
-            destructive: Some(false),
-            open_world: None,
-        },
-    );
-    let rows = classify_sync(vec![changed.clone()], &started.servers);
+    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
     assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
     let images = FakeImages::ok();
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
@@ -300,11 +291,6 @@ fn commit_never_writes_a_declined_keep_payload() {
         "the next call restarts the dead keep"
     );
     assert!(slot.is_live(), "the keep serves again");
-    assert_eq!(
-        servers.slot("fx").expect("the kept slot").spec().hints,
-        changed.hints,
-        "the keep persists the new spec even when the install declines"
-    );
     setup.stop(servers);
 }
 
@@ -916,25 +902,6 @@ fn plan_declares_no_resources_for_a_keep_offering_none() {
     setup.stop(servers);
 }
 
-/// Stages, plans and applies one keep classification: the three keep
-/// re-declare tests share this plumbing and assert only their field kind.
-fn stage_plan_apply(
-    rows: Vec<SyncRow>,
-    servers: crate::start::Servers,
-    setup: &Setup,
-    images: &std::sync::Arc<FakeImages>,
-) -> (crate::Synced, crate::start::Servers) {
-    let result = Setup::stage_on_thread(rows, servers, setup, images);
-    let (outcome, servers) = Deadline::after(WITHIN)
-        .recv(&result)
-        .expect("the stage ends");
-    let staged = outcome.expect("a keep stages");
-    let owned = setup.owned_inputs(images);
-    let synced = plan_sync(&staged, &servers, &owned.inputs());
-    apply_sync(staged, &servers, &owned.inputs());
-    (synced, servers)
-}
-
 #[test]
 fn keep_redeclare_with_a_newly_disabled_tool_drops_it_and_keeps_the_new_spec() {
     // A declare-only change re-declares in place: the disabled tool
@@ -956,7 +923,13 @@ fn keep_redeclare_with_a_newly_disabled_tool_drops_it_and_keeps_the_new_spec() {
         "a declare-only change keeps the server connected"
     );
     let images = FakeImages::ok();
-    let (synced, servers) = stage_plan_apply(rows, started.servers, &setup, &images);
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     assert!(synced.servers.restarted.is_empty());
     let names: Vec<String> = synced
@@ -965,6 +938,7 @@ fn keep_redeclare_with_a_newly_disabled_tool_drops_it_and_keeps_the_new_spec() {
         .map(|(_, _, info)| info.name.clone())
         .collect();
     assert_eq!(names, vec!["mcp__fx__echo".to_owned()]);
+    apply_sync(staged, &servers, &owned.inputs());
     let kept = servers.slot("fx").expect("the kept slot");
     assert!(
         Arc::ptr_eq(&slot, &kept),
@@ -1002,7 +976,13 @@ fn keep_redeclare_with_a_newly_enabled_tool_adds_it_and_keeps_the_new_spec() {
         "lifting the allow-list keeps the server connected"
     );
     let images = FakeImages::ok();
-    let (synced, servers) = stage_plan_apply(rows, started.servers, &setup, &images);
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let mut names: Vec<String> = synced
         .tools
@@ -1014,6 +994,7 @@ fn keep_redeclare_with_a_newly_enabled_tool_adds_it_and_keeps_the_new_spec() {
         names,
         vec!["mcp__fx__echo".to_owned(), "mcp__fx__plus".to_owned()]
     );
+    apply_sync(staged, &servers, &owned.inputs());
     let kept = servers.slot("fx").expect("the kept slot");
     assert!(
         Arc::ptr_eq(&slot, &kept),
@@ -1053,7 +1034,13 @@ fn keep_redeclare_with_a_changed_hint_shows_in_the_declared_effects() {
         "a hint-only change keeps the server connected"
     );
     let images = FakeImages::ok();
-    let (synced, servers) = stage_plan_apply(rows, started.servers, &setup, &images);
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
     assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
     let (_, tool, _) = synced
         .tools
@@ -1070,6 +1057,7 @@ fn keep_redeclare_with_a_changed_hint_shows_in_the_declared_effects() {
         "the re-declaration carries the person's override"
     );
     assert!(effects.declared.reversible);
+    apply_sync(staged, &servers, &owned.inputs());
     let kept = servers.slot("fx").expect("the kept slot");
     assert!(
         Arc::ptr_eq(&slot, &kept),

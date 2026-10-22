@@ -260,7 +260,8 @@ impl Slot {
                     // server is gone too and the guard above covered the live
                     // case. It died while idle: this re-list is the first to see
                     // it, as the entry of `serve` is for a call.
-                    let death = died(&lock(&self.spec), !*restarted);
+                    let snapshot = lock(&self.spec).clone();
+                    let death = died(&snapshot.name, !*restarted, snapshot.remote());
                     return Relisted::Replace {
                         record: Some(ServerRecord::Failed(death.record)),
                     };
@@ -284,13 +285,13 @@ impl Slot {
                 // the handshake's listing shares, restartable as a death
                 // the next call would restart. Built without moving the
                 // slot.
-                let guard = lock(&self.spec);
+                let snapshot = lock(&self.spec).clone();
                 let mut death = not_started(
-                    &guard.name,
+                    &snapshot.name,
                     &crate::server::StartError::Deadline,
-                    guard.startup_timeout,
-                    guard.required,
-                    guard.remote(),
+                    snapshot.startup_timeout,
+                    snapshot.required,
+                    snapshot.remote(),
                 );
                 death.record.will_restart = true;
                 Relisted::Replace {
@@ -300,7 +301,8 @@ impl Slot {
             relist::Fetched::Failed {
                 error: Some(CallError::Gone),
             } => {
-                let death = died(&lock(&self.spec), !restarted);
+                let snapshot = lock(&self.spec).clone();
+                let death = died(&snapshot.name, !restarted, snapshot.remote());
                 Relisted::Replace {
                     record: Some(ServerRecord::Failed(death.record)),
                 }
@@ -564,7 +566,8 @@ impl Slot {
                         return Served::Up(Arc::clone(server), records);
                     } else {
                         // It died while idle: this call is the first to see it.
-                        let death = died(&lock(&self.spec), !*restarted);
+                        let snapshot = lock(&self.spec).clone();
+                        let death = died(&snapshot.name, !*restarted, snapshot.remote());
                         records.push(ServerRecord::Failed(death.record.clone()));
                         if *restarted {
                             *state = State::Dead {
@@ -728,7 +731,8 @@ impl Slot {
         if !server.is_gone() {
             return None;
         }
-        let death = died(&lock(&self.spec), !*restarted);
+        let snapshot = lock(&self.spec).clone();
+        let death = died(&snapshot.name, !*restarted, snapshot.remote());
         Some(ServerRecord::Failed(death.record))
     }
 
@@ -815,7 +819,8 @@ impl Slot {
         if !Arc::ptr_eq(server, gone) {
             return None;
         }
-        let death = died(&lock(&self.spec), !*restarted);
+        let snapshot = lock(&self.spec).clone();
+        let death = died(&snapshot.name, !*restarted, snapshot.remote());
         *state = if *restarted {
             State::Dead {
                 error: death.error.clone(),
@@ -877,9 +882,7 @@ pub(crate) struct Death {
 /// The death of a server that exited: Fiber restarts it on the next call
 /// when `will_restart`, and otherwise its tools fail for the session. A
 /// remote server stopped answering instead of exiting.
-fn died(spec: &ServerSpec, will_restart: bool) -> Death {
-    let server = &spec.name;
-    let remote = spec.remote();
+fn died(server: &str, will_restart: bool, remote: bool) -> Death {
     let error = if remote {
         if will_restart {
             McpError::ServerStoppedAnswering {
