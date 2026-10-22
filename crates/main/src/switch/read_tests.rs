@@ -659,8 +659,9 @@ fn timeout_rekills_a_group_that_survives_its_first_kill() {
     match fakes::kill_group(pgid, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    Deadline::after(DEADLINE).recv_or_fail(&is_noted, "one answer's note");
-    Deadline::after(DEADLINE).recv_or_fail(&is_noted, "the other answer's note");
+    let notes = Deadline::after(DEADLINE);
+    notes.recv_or_fail(&is_noted, "one answer's note");
+    notes.recv_or_fail(&is_noted, "the other answer's note");
     assert_eq!(
         reads.wake.generation(),
         sent + 4,

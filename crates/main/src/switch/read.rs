@@ -125,6 +125,25 @@ struct SpawnPause {
     release: mpsc::Receiver<()>,
 }
 
+#[cfg(test)]
+impl SpawnPause {
+    /// Reports an armed pause and blocks until the test releases it.
+    /// The slot is taken into a local first and the mutex guard dropped
+    /// before any send or receive blocks, so no lock is held across the
+    /// pause. Runs free unless a test armed a pause meanwhile.
+    fn hold(slot: &Mutex<Option<SpawnPause>>) {
+        let point = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
 /// Everything [`Reads`] guards with its one lock. The lock is never held
 /// across a spawn: a spawn checks under the lock, spawns with it released,
 /// then lists under the lock. A cancel that landed mid-spawn is seen on
@@ -857,19 +876,7 @@ impl Reads {
     /// Reports the spawn reached its pause and blocks until the test
     /// releases it. Runs free unless a test armed a pause meanwhile.
     fn pause_before_spawn(&self) {
-        let point = self
-            .spawn_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.spawn_pause);
     }
 
     /// Arms one pause after the next `run`'s value arrived and before it
@@ -885,19 +892,7 @@ impl Reads {
     /// Reports the run holds its value and blocks until the test
     /// releases it. Runs free unless a test armed a pause meanwhile.
     fn pause_after_answered(&self) {
-        let point = self
-            .answered_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.answered_pause);
     }
 
     /// Arms one pause after the next spawn lists its group: the spawn
@@ -913,19 +908,7 @@ impl Reads {
     /// Reports the spawn listed its group and blocks until the test
     /// releases it. Runs free unless a test armed a pause meanwhile.
     fn pause_after_listed(&self) {
-        let point = self
-            .listed_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.listed_pause);
     }
 
     /// Arms one pause before the next spawn reaps a late child: the spawn
@@ -942,19 +925,7 @@ impl Reads {
     /// the test releases it. Runs free unless a test armed a pause
     /// meanwhile.
     fn pause_before_reap(&self) {
-        let point = self
-            .reap_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.reap_pause);
     }
 
     /// Arms one pause after the next late spawn reaps its leader and
@@ -972,19 +943,7 @@ impl Reads {
     /// Reports the late spawn reaped its leader and blocks until the test
     /// releases it. Runs free unless a test armed a pause meanwhile.
     fn pause_after_reaped(&self) {
-        let point = self
-            .reaped_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.reaped_pause);
     }
 
     /// Arms one pause before the next `command` reaps its leader: the
@@ -1006,19 +965,7 @@ impl Reads {
     /// Reports the command reached its leader's reap and blocks until the
     /// test releases it. Runs free unless a test armed a pause meanwhile.
     fn pause_before_command_reap(&self) {
-        let point = self
-            .command_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.command_pause);
     }
 
     /// Arms one pause after the timeout settlement kills its group: the
@@ -1037,19 +984,7 @@ impl Reads {
     /// releases it. Runs free unless a test armed a pause meanwhile; each
     /// pass consumes one armed pause, so re-arming pauses a later pass too.
     fn pause_after_settle_kill(&self) {
-        let point = self
-            .settle_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.settle_pause);
     }
 
     /// Arms one pause at the top of the timeout settlement's next pass:
@@ -1072,19 +1007,7 @@ impl Reads {
     /// each pass consumes one armed pause, so re-arming pauses a later
     /// pass too.
     fn pause_before_settle_pass(&self) {
-        let point = self
-            .settle_pass_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.settle_pass_pause);
     }
 
     /// Arms one pause before the credential reaper's leader wait: the
@@ -1104,15 +1027,7 @@ impl Reads {
     /// is held across the pause. Runs free unless a test armed a pause
     /// meanwhile.
     fn pause_before_reaper_wait(slot: &Arc<Mutex<Option<SpawnPause>>>) {
-        let point = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(slot);
     }
 
     /// Arms one pause before the next `settle` pass's park: the pass sends
@@ -1137,19 +1052,7 @@ impl Reads {
     /// held across the pause. Runs free unless a test armed a pause
     /// meanwhile.
     fn pause_before_settle_park(&self) {
-        let point = self
-            .settle_park_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.settle_park_pause);
     }
 
     /// Arms the completion notes a test counts before it releases the
@@ -1189,19 +1092,7 @@ impl Reads {
     /// Reports timeout settlement completion and blocks until the test
     /// releases the reaper wait. Runs free unless a test armed a pause.
     fn pause_after_settle_complete(&self) {
-        let point = self
-            .settle_complete_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(point) = point {
-            match point.entered.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            match point.release.recv() {
-                Ok(()) | Err(_) => {}
-            }
-        }
+        SpawnPause::hold(&self.settle_complete_pause);
     }
 }
 
