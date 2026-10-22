@@ -702,11 +702,16 @@ fn running_setup() -> (Setup, fs::File, fakes::Watchdog, String) {
             {"text": ["Reviewed."]}
         ]}),
     );
+    // The parent turn reports input usage on its first step, so the
+    // Session `cache hits` row draws with the turn's first fold: later
+    // delegate spend rewrites the row's values instead of adding a row,
+    // and no later fold moves the cards under coordinates the test read.
     write_json(
         &setup.workspace().join("s.json"),
         &json!({"steps": [
             {"tool_calls": [{"name": "delegate_spawn", "arguments": {
-                "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}]},
+                "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}],
+             "usage": {"input": 1200}},
             {"tool_calls": [{"name": "shell", "arguments": {"command": command, "run_in_background": true}}]},
             {"text": [REPLY]}
         ]}),
@@ -1032,6 +1037,16 @@ fn session_settled(grid: &Grid) -> bool {
     support::session_cost_drawn(grid, 100) && grid.contents.contains("speed, last reply")
 }
 
+/// The Session spend row drawn in the panel: the parent script reports
+/// input usage, so `cache hits` lands with the turn's first fold and
+/// later delegate spend only rewrites the row's values
+/// (`crates/tui/src/view/panel.rs`, `session_rows`). A wait that supplies
+/// panel coordinates for a later write holds until the row lands, so no
+/// later fold moves the cards under the stored coordinates.
+fn session_spend_drawn(grid: &Grid) -> bool {
+    panel_item_at(grid, "cache hits").is_some()
+}
+
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
     grid.rows.iter().enumerate().find_map(|(y, _)| {
         let y = u16::try_from(y).ok()?;
@@ -1058,11 +1073,14 @@ fn the_item_views_top_row_closes_them() {
             && panel_item_at(grid, "review the diff").is_some()
             && panel_item_at(grid, "Jobs").is_some()
             && session_settled(grid)
+            && session_spend_drawn(grid)
     });
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
     run.wait_screen("the expanded Jobs card", |grid| {
-        panel_item_at(grid, "head -n 1").is_some()
+        session_settled(grid)
+            && session_spend_drawn(grid)
+            && panel_item_at(grid, "head -n 1").is_some()
     });
     for (card, description, crumb) in [
         (
@@ -1073,26 +1091,17 @@ fn the_item_views_top_row_closes_them() {
         ("Jobs", "head -n 1", format!("› ▸ {command}")),
     ] {
         let grid = run.wait_screen("the running panel card's first item", |grid| {
-            session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
+            session_settled(grid)
+                && session_spend_drawn(grid)
+                && panel_card_item_at(grid, card, description).is_some()
         });
         let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
-        // Repro: force the late-row shift between the read and the
-        // write. Collapsing the Jobs card removes its item row, standing
-        // in for the Session card's late `cache hits` row moving the
-        // cards down: the stored coordinates go stale, the hover below
-        // misses, and its wait fails every run.
-        if card == "Jobs" {
-            let (jx, jy) = panel_item_at(&grid, "Jobs").unwrap();
-            click(&mut run, jx, jy);
-            run.wait_screen("the collapsed Jobs card", |grid| {
-                panel_item_at(grid, "Jobs").is_some() && panel_item_at(grid, "head -n 1").is_none()
-            });
-        }
         // The hover frame acknowledges this cell as a live click target.
         // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
         run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
         run.wait_screen("the running item's hover acknowledgement", |grid| {
             session_settled(grid)
+                && session_spend_drawn(grid)
                 && panel_card_item_at(grid, card, description) == Some((x, y))
                 && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)
         });
@@ -1108,15 +1117,4 @@ fn the_item_views_top_row_closes_them() {
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
         );
     }
-}
-
-#[test]
-fn probe_cache_hits_arrival() {
-    let (setup, _release, _guard, _command) = running_setup();
-    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
-    run.ready();
-    run.write(b"go\r");
-    run.wait_screen("the delegate spend row", |grid| {
-        grid.contents.contains("cache hits")
-    });
 }
