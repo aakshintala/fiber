@@ -55,12 +55,12 @@ pub(super) struct Simple {
 }
 
 /// One operand word: its raw spelling and its cooked text after quote
-/// removal. `bare` is false for a quoted spelling, which never counts as a
-/// redirect descriptor no matter its text.
+/// removal. A quoted spelling keeps its quotes in raw, so it never counts
+/// as a redirect descriptor no matter its text.
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct Word {
     pub(super) raw: String,
     pub(super) cooked: String,
-    pub(super) bare: bool,
 }
 
 /// The three redirects the recogniser accepts: output discarded to
@@ -477,7 +477,10 @@ fn steal_descriptor(simple: &mut Simple, node: Node, src: &str) -> Option<String
         .words
         .last()
         .filter(|word| {
-            word.bare && !word.cooked.is_empty() && word.cooked.bytes().all(|b| b.is_ascii_digit())
+            !word.raw.contains('\'')
+                && !word.raw.contains('"')
+                && !word.cooked.is_empty()
+                && word.cooked.bytes().all(|b| b.is_ascii_digit())
         })
         .map(|word| (word.raw.clone(), word.cooked.clone()))
         .filter(|(raw, _)| {
@@ -494,30 +497,26 @@ fn steal_descriptor(simple: &mut Simple, node: Node, src: &str) -> Option<String
 /// Cook a command name: every child is one plain word piece.
 fn cook_name(node: Node, src: &str) -> Option<Word> {
     let mut cooked = String::new();
-    let mut bare = true;
     for child in node.children(&mut node.walk()) {
-        let piece = cook_word(child, src)?;
-        bare = bare && piece.bare;
-        cooked.push_str(&piece.cooked);
+        cooked.push_str(&cook_word(child, src)?.cooked);
     }
-    text(node, src).map(|raw| Word { raw, cooked, bare })
+    text(node, src).map(|raw| Word { raw, cooked })
 }
 
 /// Cook one word-ish node into its raw spelling and cooked text.
 fn cook_word(node: Node, src: &str) -> Option<Word> {
     let raw = text(node, src)?;
-    let (cooked, bare) = match node.kind() {
+    let cooked = match node.kind() {
         "word" | "number" => {
             if !raw.chars().all(is_plain) {
                 return None;
             }
-            (raw.clone(), true)
+            raw.clone()
         }
-        "string" => (cook_quoted(&raw, '"')?, false),
-        "raw_string" => (cook_quoted(&raw, '\'')?, false),
+        "string" => cook_quoted(&raw, '"')?,
+        "raw_string" => cook_quoted(&raw, '\'')?,
         "concatenation" => {
             let mut cooked = String::new();
-            let mut bare = true;
             for child in node.children(&mut node.walk()) {
                 if !child.is_named() {
                     let anonymous = text(child, src)?;
@@ -527,15 +526,13 @@ fn cook_word(node: Node, src: &str) -> Option<Word> {
                     cooked.push_str(&anonymous);
                     continue;
                 }
-                let piece = cook_word(child, src)?;
-                bare = bare && piece.bare;
-                cooked.push_str(&piece.cooked);
+                cooked.push_str(&cook_word(child, src)?.cooked);
             }
-            (cooked, bare)
+            cooked
         }
         _ => return None,
     };
-    Some(Word { raw, cooked, bare })
+    Some(Word { raw, cooked })
 }
 
 /// Cook a quoted spelling: strip the quotes and keep the inner text, after

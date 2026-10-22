@@ -459,6 +459,28 @@ fn new_git_forms_read() {
 }
 
 #[test]
+fn exact_forms_read_without_paths() {
+    for command in [
+        "git branch --show-current",
+        "git init",
+        "git status",
+        "git stash list",
+        "git push --dry-run",
+    ] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    // A discard redirect drops out before the exact match.
+    for command in [
+        "git branch --show-current 2>/dev/null",
+        "git status 2>/dev/null",
+    ] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
 fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
@@ -607,10 +629,13 @@ fn head_and_tail_count_forms_read() {
 }
 
 #[test]
-fn only_echo_and_pwd_declare_no_paths() {
+fn only_pathless_commands_declare_no_paths() {
     for command in COMMANDS {
-        let declares =
-            command.name != "echo" && command.name != "pwd" && command.name != "git rev-parse";
+        let declares = command.name != "echo"
+            && command.name != "pwd"
+            && command.name != "git rev-parse"
+            && command.name != "git status"
+            && command.name != "git branch --show-current";
         assert_eq!(command.paths, declares, "{}", command.name);
     }
 }
@@ -880,7 +905,7 @@ fn every_part_on_the_list_reads() {
     assert_reads("ls src && git status");
     assert_eq!(
         classified("ls src && git status").declared.paths,
-        Some(vec!["/work/src".to_owned(), "/work".to_owned()])
+        Some(vec!["/work/src".to_owned()])
     );
     assert_reads("echo hi && pwd");
     assert!(classified("echo hi && pwd").declared.paths.is_none());

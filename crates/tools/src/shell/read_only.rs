@@ -148,6 +148,10 @@ const GIT_STATUS: &[Flag] = &[
     flag("--short"),
     flag("--branch"),
     flag("--porcelain"),
+    // `LC_ALL=C git status`: the locale override keeps the output parseable
+    // and changes no code the command runs. The stage checks an assignment
+    // against the takes-value flags, so this spelling never takes a value.
+    value("LC_ALL"),
 ];
 
 // debt: git diff and git show can run a configured external diff or textconv, drop both entries when the read-only list is no longer trusted
@@ -226,7 +230,13 @@ const GIT_BLAME: &[Flag] = &[
 /// Parts whose cooked words, redirects removed, equal one row exactly read
 /// with no paths. `git branch` has no row: bare `git branch` lists and
 /// `git branch <name>` creates, so only `--show-current` reads.
-pub(super) const EXACT: &[&[&str]] = &[&["git", "branch", "--show-current"]];
+pub(super) const EXACT: &[&[&str]] = &[
+    &["git", "branch", "--show-current"],
+    &["git", "init"],
+    &["git", "status"],
+    &["git", "stash", "list"],
+    &["git", "push", "--dry-run"],
+];
 
 /// Fiber's own read-only commands. The person's `shell.read_only` entries
 /// reach the classifier beside this slice, never under a name above: a
@@ -364,7 +374,9 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "git status",
         flags: GIT_STATUS,
-        paths: true,
+        // The bare call matches EXACT; any other form prints repository
+        // state, which names no path the call reads.
+        paths: false,
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,

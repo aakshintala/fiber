@@ -281,7 +281,7 @@ fn attached_words_are_operands_not_descriptors() {
     assert_eq!(redirect_kinds(&simple), ["discard"]);
     let simple = only_simple("ls \"2\">/dev/null");
     assert_eq!(word_cooked(&simple), ["ls", "2"]);
-    assert!(!simple.words.get(1).unwrap().bare);
+    assert_eq!(simple.words.get(1).unwrap().raw, "\"2\"");
     assert_eq!(redirect_kinds(&simple), ["discard"]);
 }
 

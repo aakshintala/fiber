@@ -5,7 +5,9 @@ use std::path::{Component, Path, PathBuf};
 use contract::shapes::Effect;
 use contract::tool::Effects;
 
+use super::entry;
 use super::read_only::{COMMANDS, Command, EXACT};
+use super::syntax::Word;
 
 /// Effects of `command` run in `workdir`. A command this classifier cannot
 /// read plainly, or any part not on the read-only list, is `executes` with
@@ -97,7 +99,7 @@ fn plain_word(raw: &str) -> bool {
     !raw.is_empty() && !raw.starts_with('-') && !raw.contains(['\'', '"', '/', '.', '=', '>'])
 }
 
-enum Outcome {
+pub(super) enum Outcome {
     Executes,
     Reads(Vec<String>),
 }
@@ -163,17 +165,17 @@ fn part_outcome(part: &Part, workdir: &Path, configured: &[(String, Vec<String>)
         let Some(flags) = flags else {
             return Outcome::Executes;
         };
-        return configured_outcome(flags, words, workdir);
+        return entry::configured_outcome(flags, words, workdir);
     };
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;
     while let Some(word) = words.next() {
-        match word_at(word, ended, entry) {
-            WordAt::Operand(cooked) => operands.push(cooked),
-            WordAt::EndFlags => ended = true,
-            WordAt::Flag => {
-                if accept_flag(entry, &mut words, &word.cooked).is_none() {
+        match entry::word_at(word, ended, entry) {
+            entry::WordAt::Operand(cooked) => operands.push(cooked),
+            entry::WordAt::EndFlags => ended = true,
+            entry::WordAt::Flag => {
+                if entry::accept_flag(entry, &mut words, &word.cooked).is_none() {
                     return Outcome::Executes;
                 }
                 pattern_given |= entry.pattern_flags.contains(&word.cooked.as_str());
@@ -193,7 +195,7 @@ fn part_outcome(part: &Part, workdir: &Path, configured: &[(String, Vec<String>)
 
 /// Resolves each operand against `workdir`, declaring the workdir when
 /// there are none. A path under `/proc/` is not read-only.
-fn path_tail(operands: &[String], workdir: &Path) -> Outcome {
+pub(super) fn path_tail(operands: &[String], workdir: &Path) -> Outcome {
     let mut paths = Vec::new();
     for operand in operands {
         let Some(path) = resolve(workdir, operand) else {
@@ -231,34 +233,6 @@ fn under_proc(path: &str) -> bool {
     normal.starts_with("/proc")
 }
 
-enum WordAt {
-    Operand(String),
-    EndFlags,
-    Flag,
-}
-
-fn word_at(word: &Word, ended: bool, entry: &Command) -> WordAt {
-    if ended || !word.cooked.starts_with('-') {
-        WordAt::Operand(word.cooked.clone())
-    } else if entry.ends_flags && word.cooked == "--" {
-        WordAt::EndFlags
-    } else if entry.prints && !is_option_word(&word.cooked) {
-        // bash's `echo` reads any other word as text.
-        WordAt::Operand(word.cooked.clone())
-    } else {
-        WordAt::Flag
-    }
-}
-
-/// `-` followed by one or more of `n`, `e`, `E`: the only words bash's
-/// `echo` reads as options.
-fn is_option_word(cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|ch| matches!(ch, 'n' | 'e' | 'E'))
-}
-
 /// Whether `first`, the cooked first word, names a built-in command: the
 /// text after its last `/`, against the built-in command names and `sed`,
 /// which has its own grammar. The whole word is used, so a quoted path
@@ -270,53 +244,6 @@ fn builtin_name(first: &str) -> bool {
         || COMMANDS
             .iter()
             .any(|entry| entry.name.split(' ').next().unwrap_or(entry.name) == base)
-}
-
-/// The configured read-only rule for one part: every cooked word starting
-/// `-` is a flag, any other word a path operand. A listed spelling ending
-/// `=` takes a value after that exact prefix, or as the next word; any
-/// other listed spelling matches exactly and takes none. `--` ends no
-/// flags here: it must be listed to read. Flag values are never paths.
-fn configured_outcome(
-    flags: &[String],
-    words: std::slice::Iter<'_, Word>,
-    workdir: &Path,
-) -> Outcome {
-    let mut words = words;
-    let mut operands = Vec::new();
-    while let Some(word) = words.next() {
-        if !word.cooked.starts_with('-') {
-            operands.push(word.cooked.clone());
-            continue;
-        }
-        // An exact plain spelling wins over its `=` twin, in either list
-        // order: the word takes no value and the next word stays an operand.
-        if flags
-            .iter()
-            .any(|flag| !flag.ends_with('=') && *flag == word.cooked)
-        {
-            continue;
-        }
-        // An inline value after the exact `=` prefix, empty allowed.
-        if flags
-            .iter()
-            .any(|flag| flag.ends_with('=') && word.cooked.starts_with(flag.as_str()))
-        {
-            continue;
-        }
-        // A separate value word, a leading `-` allowed; missing executes.
-        if flags.iter().any(|flag| {
-            flag.strip_suffix('=')
-                .is_some_and(|base| base == word.cooked)
-        }) {
-            if words.next().is_none() {
-                return Outcome::Executes;
-            }
-            continue;
-        }
-        return Outcome::Executes;
-    }
-    path_tail(&operands, workdir)
 }
 
 fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'static Command> {
@@ -332,77 +259,12 @@ fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'stat
     COMMANDS.iter().find(|entry| entry.name == first.cooked)
 }
 
-fn accept_flag(
-    entry: &Command,
-    words: &mut std::slice::Iter<'_, Word>,
-    cooked: &str,
-) -> Option<()> {
-    if let Some(name) = long_value_name(cooked) {
-        return entry
-            .flags
-            .iter()
-            .any(|flag| flag.takes_value && flag.spelling == name)
-            .then_some(());
-    }
-    if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
-        if flag.takes_value {
-            words.next()?;
-        }
-        return Some(());
-    }
-    // `git log -<digits>`, as in `git log -8`.
-    if entry.counts && is_count(cooked) {
-        return Some(());
-    }
-    short_cluster(entry, cooked).then_some(())
-}
-
-/// `--name=value`, and only that form. A short flag does not take `=`.
-fn long_value_name(cooked: &str) -> Option<&str> {
-    let (name, _) = cooked.split_once('=')?;
-    name.starts_with("--").then_some(name)
-}
-
-/// `-<one or more ASCII digits>`, as in `git log -8`.
-fn is_count(cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
-}
-
 fn cooked_equals(words: &[Word], row: &[&str]) -> bool {
     words.len() == row.len()
         && words
             .iter()
             .zip(row.iter())
             .all(|(word, want)| word.cooked == *want)
-}
-
-fn short_cluster(entry: &Command, cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty()
-        && rest.chars().all(|ch| {
-            entry
-                .flags
-                .iter()
-                .any(|flag| short_letter(flag) == Some(ch))
-        })
-}
-
-fn short_letter(flag: &super::read_only::Flag) -> Option<char> {
-    if flag.takes_value {
-        return None;
-    }
-    let rest = flag.spelling.strip_prefix('-')?;
-    if rest.starts_with('-') {
-        return None;
-    }
-    let mut chars = rest.chars();
-    let letter = chars.next()?;
-    chars.next().is_none().then_some(letter)
 }
 
 /// A word the lexer accepted as a stderr redirect. Raw equality is
@@ -418,13 +280,6 @@ fn resolve(workdir: &Path, operand: &str) -> Option<String> {
     } else {
         workdir.join(operand).to_str().map(str::to_owned)
     }
-}
-
-/// One word as written, and the same word with quotes removed.
-#[derive(Debug, PartialEq, Eq)]
-struct Word {
-    raw: String,
-    cooked: String,
 }
 
 /// One command between `&&`, `||`, `;` or `|`.
