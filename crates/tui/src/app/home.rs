@@ -741,6 +741,18 @@ impl App {
                         .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
                     return Some(Vec::new());
                 }
+                // An import's answer settles through its pending entry
+                // even while its session reopens: falling through to
+                // `on_session` opens its report, or refuses it with one
+                // notice, instead of dropping it at the gate.
+                if matches!(
+                    envelope.kind.as_str(),
+                    "command_accepted" | "command_rejected"
+                ) && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+                    && let Some((Kind::Import(_), _)) = self.outbox.pending.get(id)
+                {
+                    return None;
+                }
                 if self.gated(&envelope.session_id) {
                     return Some(Vec::new());
                 }
