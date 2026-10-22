@@ -12,6 +12,7 @@ use contract::clock::Wake;
 use contract::commands::ReplyAnswer;
 use contract::events::{Answer, Interaction};
 use contract::tool::{Answered, Asking, Check};
+use support::lock;
 
 use crate::progress::Stream;
 
@@ -272,10 +273,6 @@ impl Drop for Release {
             }
         }
     }
-}
-
-fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

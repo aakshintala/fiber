@@ -940,3 +940,105 @@ fn the_search_panel_is_search_rows_and_reserves_nothing() {
     );
     assert_eq!(app.below_rows(), closed);
 }
+
+/// The prompt recall lists built since the last count.
+fn recall_builds() -> usize {
+    crate::work::take().recall_builds
+}
+
+/// Presses `keys` and returns the draft each leaves.
+fn drafts(app: &mut App, keys: &[Key]) -> Vec<String> {
+    keys.iter()
+        .map(|key| {
+            press(app, key.clone());
+            app.draft()
+        })
+        .collect()
+}
+
+#[test]
+fn recall_builds_its_list_once_for_a_run_of_ups_and_downs() {
+    let mut app = connected();
+    with_own(&mut app, &["one", "two", "three"]);
+    recall_builds();
+    let shown = drafts(&mut app, &[Key::Up, Key::Up, Key::Up, Key::Down, Key::Down]);
+    assert_eq!(shown, ["three", "two", "one", "two", "three"]);
+    assert_eq!(recall_builds(), 1);
+}
+
+#[test]
+fn a_prompt_seen_after_a_recall_rebuilds_the_list_once() {
+    let mut app = connected();
+    with_own(&mut app, &["one", "two", "three"]);
+    drafts(&mut app, &[Key::Up, Key::Up, Key::Up, Key::Down, Key::Down]);
+    recall_builds();
+    app.on_line(turn(S_A, "four", "driver"));
+    assert_eq!(drafts(&mut app, &[Key::Down, Key::Up]), ["", "four"]);
+    assert_eq!(recall_builds(), 1);
+    assert_eq!(drafts(&mut app, &[Key::Up]), ["three"]);
+    assert_eq!(recall_builds(), 0);
+}
+
+#[test]
+fn an_answered_page_rebuilds_the_list_once_and_the_next_recall_reuses_it() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    recall_builds();
+    answer(&mut app, &request, &[line(S_B, "from b")], None);
+    assert_eq!(app.draft(), "from b");
+    assert_eq!(recall_builds(), 1);
+    press(&mut app, Key::Up);
+    assert_eq!(recall_builds(), 0);
+}
+
+#[test]
+fn typing_in_the_search_panel_builds_the_list_once() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::CtrlR);
+    answer(
+        &mut app,
+        &request,
+        &[
+            line(S_B, "Fix the Build"),
+            line(S_B, "run tests"),
+            line(S_B, "build\ndocs"),
+        ],
+        None,
+    );
+    recall_builds();
+    for ch in "build".chars() {
+        press(&mut app, Key::Char(ch));
+        assert!(app.search_panel().is_some());
+    }
+    assert_eq!(recall_builds(), 1);
+    assert_eq!(
+        panel(&app).0,
+        ["search prompts: build", "Fix the Build", "build docs"]
+    );
+}
+
+#[test]
+fn attaching_another_session_rebuilds_the_list_for_it() {
+    let mut app = connected();
+    app.attach(contract::SessionId(S_B.to_owned()));
+    app.on_line(turn(S_B, "in b", "driver"));
+    with_own(&mut app, &["in a"]);
+    assert_eq!(drafts(&mut app, &[Key::Up]), ["in a"]);
+    assert_eq!(recall_builds(), 1);
+    app.attach(contract::SessionId(S_B.to_owned()));
+    assert_eq!(drafts(&mut app, &[Key::Down, Key::Up]), ["", "in b"]);
+    assert_eq!(recall_builds(), 1);
+}
+
+#[test]
+fn a_project_change_rebuilds_the_list_without_the_old_projects_lines() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    answer(&mut app, &request, &[line(S_B, "old project")], None);
+    assert_eq!(app.draft(), "old project");
+    press(&mut app, Key::Down);
+    recall_builds();
+    app.set_project("-Users-me-other".to_owned());
+    assert_eq!(drafts(&mut app, &[Key::Up]), [""]);
+    assert_eq!(recall_builds(), 1);
+}
