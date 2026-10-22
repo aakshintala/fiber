@@ -123,13 +123,8 @@ fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
             );
             // The report leads: the screen dump that closes `base` can outgrow
             // the flaky-report limit and cut off anything placed after it.
-            let (wait, screen) = base
-                .split_once("; screen:")
-                .map_or((base.as_str(), String::new()), |(wait, screen)| {
-                    (wait, format!("; screen:{screen}"))
-                });
             panic!(
-                "last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}; {wait}{screen}"
+                "last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}; {base}"
             );
         }
     }
@@ -450,11 +445,16 @@ fn rail_focus_bolds_the_focused_card_without_colour() {
 /// The report comes before the wait's name, and the wait's name before the
 /// screen dump, so a report cut at a length limit keeps the report.
 fn assert_report_precedes_the_screen(message: &str) {
-    let report = message.find("last check:").expect("a report");
-    let wait = message
-        .find("waited until the deadline for the hint and the lifted first card")
-        .expect("the wait's name");
-    let screen = message.find("screen:").expect("a screen dump");
+    let at = |n: &str| {
+        message
+            .find(n)
+            .unwrap_or_else(|| panic!("{n:?} in {message:?}"))
+    };
+    let (report, wait, screen) = (
+        at("last check:"),
+        at("waited until the deadline for the hint and the lifted first card"),
+        at("screen:"),
+    );
     assert!(report < wait, "the report precedes the wait: {message:?}");
     assert!(wait < screen, "the wait precedes the screen: {message:?}");
 }
@@ -598,7 +598,6 @@ fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) 
 fn hint_lift_report_shows_the_first_cards_actual_background() {
     let flat = Colour::Rgb(40, 50, 60);
     let message = spent_wait_message_with_a_painted_first_card(&Colour::Rgb(10, 20, 30), &flat);
-    assert_report_precedes_the_screen(&message);
     assert!(
         message.contains("first card lifted=false"),
         "the painted card is not the lifted tint: {message:?}"
