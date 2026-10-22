@@ -21,6 +21,13 @@ local function strip(text)
   return (text:gsub("\n$", ""))
 end
 
+-- Full trim for the exit-2 reason: a reason of only whitespace is no
+-- reason, so the entry fails instead of refusing (`docs/extensions.md`,
+-- "Hooks declared in configuration").
+local function trim(text)
+  return (text:match("^%s*(.-)%s*$"))
+end
+
 -- A bare name runs on `PATH`, a relative path with a `/` joins onto the
 -- cached workspace, an absolute path runs as written
 -- (`docs/extensions.md`, "Hooks declared in configuration").
@@ -58,10 +65,14 @@ local function run_entry(name, point, command, args, tools_set)
     end
     local code = result.exit_code
     if code == 2 then
-      if refusing[point] then
-        return { refuse = strip(result.stderr) }
+      if not refusing[point] then
+        error("entry `" .. name .. "`: command exited 2 at `" .. point .. "`, which cannot refuse", 0)
       end
-      error("entry `" .. name .. "`: command exited 2 at `" .. point .. "`, which cannot refuse", 0)
+      local reason = trim(result.stderr)
+      if reason == "" then
+        error("entry `" .. name .. "`: command exited 2 with no reason at `" .. point .. "`", 0)
+      end
+      return { refuse = reason }
     end
     if code ~= 0 then
       error("entry `" .. name .. "`: command exited with status " .. tostring(code), 0)
@@ -98,32 +109,25 @@ local function register(name, entry)
   if type(entry.command) ~= "string" then
     error("entry `" .. name .. "`: `command` must be a string", 0)
   end
+  -- `phase`, `timeout`, `on_failure`, `check` placement and `tools` are
+  -- validated by `fiber.hook`, whose entry-labeled refusal names the entry
+  -- and the field, and the entry is not registered. The set below only
+  -- filters a registered entry's runs; an unregistered entry never runs,
+  -- so a `tools` the refusal rejected leaves no set behind.
   local tools_set = nil
-  if entry.tools ~= nil then
-    if entry.point ~= "before_tool" and entry.point ~= "after_tool" then
-      error("entry `" .. name .. "`: `tools` is only allowed at `before_tool` and `after_tool`", 0)
-    end
-    if type(entry.tools) ~= "table" then
-      error("entry `" .. name .. "`: `tools` must be a list of tool names", 0)
-    end
-    if #entry.tools == 0 then
-      error("entry `" .. name .. "`: `tools` must name at least one tool", 0)
-    end
+  if type(entry.tools) == "table" then
     tools_set = {}
     for _, tool in ipairs(entry.tools) do
-      if type(tool) ~= "string" then
-        error("entry `" .. name .. "`: `tools` must be a list of tool names", 0)
+      if type(tool) == "string" then
+        tools_set[tool] = true
       end
-      tools_set[tool] = true
     end
   end
-  -- `phase`, `timeout`, `on_failure` and `check` placement are validated
-  -- by `fiber.hook`, whose entry-labeled refusal names the entry and the
-  -- field, and the entry is not registered.
   fiber.hook(entry.point, {
     phase = entry.phase,
     timeout = entry.timeout,
     on_failure = entry.on_failure,
+    tools = entry.tools,
     entry = name,
     run = run_entry(name, entry.point, entry.command, entry.args or {}, tools_set),
   })

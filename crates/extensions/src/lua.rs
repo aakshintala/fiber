@@ -184,6 +184,27 @@ local function hook(point, spec)
     return refuse("a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`")
   end
   if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
+  -- Declared entries filter tool points through `tools`; a `tools` the
+  -- entry cannot run on refuses like any other bad field, naming the
+  -- entry, so the entry is not registered and the script goes on.
+  if spec.tools ~= nil then
+    if point ~= "before_tool" and point ~= "after_tool" then
+      return refuse("`tools` is only allowed at `before_tool` and `after_tool`")
+    end
+    if type(spec.tools) ~= "table" then
+      return refuse("`tools` must be a list of tool names")
+    end
+    local count = 0
+    for _, tool in pairs(spec.tools) do
+      if type(tool) ~= "string" then
+        return refuse("`tools` must be a list of tool names")
+      end
+      count = count + 1
+    end
+    if count == 0 then
+      return refuse("`tools` must name at least one tool")
+    end
+  end
   local list = hooks[point] or {}
   hooks[point] = list
   list[#list + 1] = { phase = phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run }

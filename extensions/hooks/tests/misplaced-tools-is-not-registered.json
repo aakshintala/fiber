@@ -31,16 +31,20 @@
       "kind": "fiber_started"
     },
     {
-      "kind": "extensions_loaded",
-      "payload": {
-        "extensions": []
-      }
+      "kind": "extensions_loaded"
     },
     {
       "kind": "preamble_built"
     },
     {
       "kind": "opening_message"
+    },
+    {
+      "kind": "extension_state_set",
+      "payload": {
+        "extension": "github.com/aakshintala/fiber/extensions/hooks",
+        "key": "hooks_workspace"
+      }
     },
     {
       "kind": "turn_started"

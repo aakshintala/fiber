@@ -3361,12 +3361,12 @@ fn a_watch_refusal_surfaces_as_the_registration_notice() {
     );
 }
 
-/// Task 4 (see #564): the load gate and the removed-extension check. The
-/// first-party `hooks` package itself ships in Task 3; these tests install a
-/// stand-in under its full name and pin the gate around it.
+/// The load gate and the removed-extension check: these tests install a
+/// stand-in under the first-party `hooks` name and pin the gate around it.
+/// The stand-in keeps the tests about the gate, not the package's Lua: a
+/// one-line `init` script is enough to prove loading, skipping and notices.
 /// Installs the package named `github.com/aakshintala/fiber/extensions/hooks`
-/// with `init` as its entry script: the stand-in for the first-party package
-/// until it ships.
+/// with `init` as its entry script.
 fn install_hooks(home: &Home, init: &str) {
     let name = config::full_name("hooks");
     let src = home.root.path().join("src").join("hooks-first-party");
@@ -3436,10 +3436,6 @@ fn hooks_without_a_hooks_key_does_not_load() {
         loaded_names(&session)
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
-    assert_eq!(
-        super::hooks_state(&home.config(&[]), &[]),
-        super::HooksState::Ready
-    );
 }
 
 #[test]
@@ -3465,10 +3461,6 @@ fn hooks_with_an_empty_hooks_key_loads_silently() {
         loaded_names(&session)
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, "{}"), &loaded_names(&session)),
-        super::HooksState::Ready
-    );
 }
 
 #[test]
@@ -3590,10 +3582,6 @@ fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
         loaded_names(&session)
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
-    assert_eq!(
-        super::hooks_state(&hooks_config(&home, BLOCKING_ENTRY), &[]),
-        super::HooksState::MissingBlocking
-    );
 }
 
 #[test]

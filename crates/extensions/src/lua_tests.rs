@@ -2523,6 +2523,26 @@ fn hook_refusals_name_the_entry_when_given() {
             "timeout = 100, on_failure = 1, run = run",
             "`on_failure` must be `blocking` or `non-blocking`",
         ),
+        (
+            "\"session_start\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {\"read\"}",
+            "`tools` is only allowed at `before_tool` and `after_tool`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {}",
+            "`tools` must name at least one tool",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = \"read\"",
+            "`tools` must be a list of tool names",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = run, tools = {5}",
+            "`tools` must be a list of tool names",
+        ),
     ];
     let mut init = String::from("local run = function() end\n");
     let mut expected = Vec::new();

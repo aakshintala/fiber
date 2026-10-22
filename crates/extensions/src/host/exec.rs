@@ -334,7 +334,7 @@ pub(crate) fn run(
     // The stdin writer starts after the readers and before the waiter
     // handoff below moves the child: only the waiter arms and the two
     // supervising tails below own its teardown.
-    let stdin_writer = match start_stdin_writer(req, &mut child) {
+    let stdin_stop = match start_stdin_writer(req, &mut child) {
         Ok(writer) => writer,
         Err(source) => {
             return Err(abort_startup(
@@ -362,7 +362,7 @@ pub(crate) fn run(
                 }
             })
         {
-            finish_stdin_writer(stdin_writer);
+            drop(stdin_stop);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -374,7 +374,7 @@ pub(crate) fn run(
             ));
         }
         if let Err(send) = wait_tx.send(child) {
-            finish_stdin_writer(stdin_writer);
+            drop(stdin_stop);
             return Err(abort_startup(
                 req,
                 listing.take(),
@@ -397,7 +397,7 @@ pub(crate) fn run(
             StopTarget::Group(pgid),
             listing.take(),
         );
-        finish_stdin_writer(stdin_writer);
+        drop(stdin_stop);
         return outcome;
     }
     // Without its own group no waiter thread starts: the supervising thread
@@ -419,7 +419,7 @@ pub(crate) fn run(
     // The child is reaped, or dead or dying after the stop: `wait` returns
     // at once then, instead of leaving a zombie.
     let _reaped = child.wait();
-    finish_stdin_writer(stdin_writer);
+    drop(stdin_stop);
     outcome
 }
 
@@ -818,22 +818,19 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     );
 }
 
-/// The stdin writer's end of the run: dropping `stop` tells the writer
-/// the run ended, and `done` fires when the writer stopped.
-struct StdinWriter {
-    stop: mpsc::Sender<()>,
-    done: mpsc::Receiver<()>,
-}
-
 /// Starts the thread streaming `req`'s input to the child's stdin, then
 /// closing it (EOF). `None` when no input was given: stdin stays null.
-/// The writer owns the child's stdin and touches no shared state. A
+/// The writer owns the child's stdin and touches no shared state. The
+/// returned sender stops it: dropping it tells the writer the run ended,
+/// and the run never waits for that exit — every loop iteration in
+/// `write_input` checks the sender first and the poll is bounded by
+/// `GROUP_POLL`, so the writer stops on its own within one poll. A
 /// thread that cannot start is a post-spawn failure like a reader that
 /// cannot start: the group stops and the run is still logged.
 fn start_stdin_writer(
     req: &ExecRequest,
     child: &mut Child,
-) -> Result<Option<StdinWriter>, std::io::Error> {
+) -> Result<Option<mpsc::Sender<()>>, std::io::Error> {
     let Some(input) = req.input.clone() else {
         return Ok(None);
     };
@@ -841,46 +838,17 @@ fn start_stdin_writer(
         return Err(std::io::Error::other("host.exec pipes missing"));
     };
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
-    let (done_tx, done_rx) = mpsc::channel::<()>();
     match std::thread::Builder::new()
         .name("exec stdin".into())
         .spawn(move || {
             write_input(stdin, &input, &stop_rx);
-            let _sent = done_tx.send(());
         }) {
-        Ok(_) => Ok(Some(StdinWriter {
-            stop: stop_tx,
-            done: done_rx,
-        })),
+        Ok(_) => Ok(Some(stop_tx)),
         Err(source) => {
             // The closure never ran: dropping it closes stdin (EOF), and
             // no writer exists, so the run's teardown waits on nothing.
             Err(source)
         }
-    }
-}
-
-/// Ends the stdin writer: the run is over, so the writer closes stdin
-/// and stops whether or not an escaped descendant still holds the pipe.
-/// The join is bounded by [`support::group::DRAIN`] on the process clock:
-/// the group was signalled before the drain, so a writer parked on a full
-/// pipe wakes when the holders die and exits on its next poll; an
-/// untimely writer is left to its stop, never waited past the bound.
-// Latency only: replacing the body with `()` still drops the writer, which
-// disconnects the stop sender, so the writer exits on its own within one
-// `GROUP_POLL` either way; the join only orders the run's return after
-// that exit. No test can observe the order without reading the real clock
-// or racing thread teardown in `/proc`, which reports exited threads
-// under churn.
-#[cfg_attr(false, mutants::skip)]
-fn finish_stdin_writer(writer: Option<StdinWriter>) {
-    if let Some(writer) = writer {
-        drop(writer.stop);
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "a bounded teardown join within the existing DRAIN bound; the writer exits on its stop, so this never waits past it"
-        )]
-        let _answered = writer.done.recv_timeout(support::group::DRAIN);
     }
 }
 

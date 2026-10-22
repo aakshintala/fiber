@@ -401,7 +401,14 @@ fn an_entry_without_tools_runs_for_every_tool_call() {
 #[test]
 fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     let (setup, _server) = hooked(
-        vec![hello()],
+        vec![
+            stream(&[function_call(
+                "call_read",
+                "read",
+                &json!({"path": "note.txt"}),
+            )]),
+            hello(),
+        ],
         &json!({
             "quiet": json!({
                 "point": "after_tool",
@@ -413,27 +420,18 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
             }),
         }),
     );
-    let run = setup.run(&["ask", "hi"]);
+    fs::write(setup.workspace().join("note.txt"), "note text\n").unwrap();
+    let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
-    assert_eq!(notices.len(), 2, "{notices:?}");
-    let failure = notices
-        .iter()
-        .find(|notice| notice["payload"]["code"] == "extension_failed")
-        .expect("the entry's own notice");
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let failure = &notices[0];
+    assert_eq!(failure["payload"]["code"], "extension_failed");
     let message = failure["payload"]["message"].as_str().unwrap();
     assert!(message.contains("quiet"), "{message}");
     assert!(message.contains("tools"), "{message}");
-    let missing = notices
-        .iter()
-        .find(|notice| notice["payload"]["code"] == "extension_missing")
-        .expect("the gate's missing notice");
-    assert_eq!(
-        missing["payload"]["message"],
-        "The `hooks` extension is not installed, so its declared hooks will not run. Run `fiber extension install hooks`.",
-    );
     assert!(
         !setup.workspace().join("quiet.log").exists(),
         "the entry never ran"
@@ -719,14 +717,12 @@ fn an_entry_with_misplaced_tools_is_not_registered_and_names_the_field() {
     );
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(!loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
+    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
     let notices = run.all("notice");
-    assert_eq!(notices.len(), 2, "{notices:?}");
-    let failure = notices
-        .iter()
-        .find(|notice| notice["payload"]["code"] == "extension_failed")
-        .expect("the entry's own notice");
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let failure = &notices[0];
+    assert_eq!(failure["payload"]["code"], "extension_failed");
     let message = failure["payload"]["message"].as_str().unwrap();
     assert!(message.contains("loud"), "{message}");
     assert!(message.contains("tools"), "{message}");

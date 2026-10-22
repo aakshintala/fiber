@@ -503,12 +503,10 @@ fn write_inputs(case: &SessionCase, workspace: &Path) -> Result<(), String> {
 
 /// Writes each entry of the case's `settings` object as that extension's
 /// global settings file under `home/config`, creating a missing parent
-/// directory per file.
+/// directory per file. A non-object never reaches this function:
+/// `SessionCase::parse` rejects it.
 fn write_settings(home: &Path, settings: &Value) -> Result<(), String> {
-    let map = settings
-        .as_object()
-        .ok_or_else(|| "settings: expected an object".to_owned())?;
-    for (name, value) in map {
+    for (name, value) in settings.as_object().into_iter().flatten() {
         write_config(&config::settings_file(home, name), value)?;
     }
     Ok(())
