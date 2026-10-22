@@ -1,5 +1,5 @@
 //! The `tools` rate on a resumed session (`docs/tools.md`, "Seeing the
-//! tools"): the lines the log replayed, then every line appended after.
+//! tools"): the events the log replayed, then every event appended after.
 
 #![allow(
     clippy::unwrap_used,
@@ -97,7 +97,7 @@ fn first_tool(client: &Client, id: &str) -> Value {
 }
 
 #[test]
-fn tools_after_a_resume_use_the_replayed_rate_then_follow_new_lines() {
+fn tools_after_a_resume_use_the_replayed_rate_then_follow_new_events() {
     let temp = Temp::new();
     let home = temp.0.join("h");
     let sessions = home.join("projects/p/sessions");

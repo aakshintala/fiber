@@ -28,7 +28,7 @@ use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 /// appended event. A plain callback, not a second `Queue`: an extension
 /// watcher needs per-kind matching, the busy-bit ephemeral skip with
 /// durable re-queue through the hub stream, and cursor-tracked drain, and
-/// a fold needs to see each line before `append` returns — none of which a
+/// a fold needs to see each event before `append` returns — none of which a
 /// draining reader provides.
 type Subscriber = dyn Fn(&Event, &Envelope) + Send + Sync;
 
@@ -54,8 +54,8 @@ pub struct Log {
     dir: PathBuf,
     /// The diagnostic writer timing appends, installed once per process.
     diag: OnceLock<Arc<Diag>>,
-    /// The rate fold over the lines [`Log::open`] replayed. No append
-    /// changes it: whoever wants the rate after that folds the lines it
+    /// The rate fold over the events [`Log::open`] replayed. No append
+    /// changes it: whoever wants the rate after that folds the events it
     /// is offered through [`Log::subscribe`].
     replayed_rate: RateFold,
 }
@@ -261,9 +261,9 @@ impl Log {
         self.lock().latest.get(kind).cloned()
     }
 
-    /// The bytes-to-tokens rate fold over the lines [`Log::open`] replayed;
+    /// The bytes-to-tokens rate fold over the events [`Log::open`] replayed;
     /// empty for a log [`Log::create`] made. No append changes it: a caller
-    /// that wants the rate to follow later lines seeds its own fold from
+    /// that wants the rate to follow later events seeds its own fold from
     /// this one and folds what [`Log::subscribe`] offers it.
     pub fn replayed_rate(&self) -> RateFold {
         self.replayed_rate.clone()

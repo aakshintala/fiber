@@ -96,9 +96,9 @@ pub(crate) struct Gate {
     /// through [`Session::declarer`].
     pub(crate) tools: Mutex<Vec<ToolInfo>>,
     /// The bytes-to-tokens rate the `tools` answer converts sizes with:
-    /// seeded from the lines the log replayed, then folded from each line
+    /// seeded from the events the log replayed, then folded from each event
     /// the log offers before its `append` returns.
-    rate: Arc<Mutex<log::RateFold>>,
+    pub(crate) rate: Arc<Mutex<log::RateFold>>,
     /// Keeps the fold's subscription on the log registered.
     _feed: log::Subscription,
     /// What the `commands` command answers with, set by
@@ -758,11 +758,6 @@ impl Gate {
         }))
     }
 
-    /// The bytes-to-tokens rate folded from the session's lines so far.
-    pub(crate) fn rate(&self) -> log::Rate {
-        lock(&self.rate).rate()
-    }
-
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
         lock(&self.skills).clone()
     }
@@ -880,7 +875,7 @@ fn open_in(
     let rate = Arc::new(Mutex::new(log.replayed_rate()));
     let feed = {
         let rate = Arc::clone(&rate);
-        log.subscribe(Arc::new(move |_, line| lock(&rate).fold(line)))
+        log.subscribe(Arc::new(move |_, event| lock(&rate).fold(event)))
     };
     let gate = Arc::new(Gate {
         log: Arc::downgrade(log),

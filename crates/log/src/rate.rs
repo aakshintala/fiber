@@ -4,8 +4,8 @@
 //! written to it, over that request's input size in bytes. A request that
 //! reported no input tokens, as one that failed before the provider named
 //! its generation, is skipped for the next. [`Log::open`](crate::Log) folds
-//! one over the lines it replays; the appends after it are not folded here,
-//! so whoever wants the rate to follow them folds the lines
+//! one over the events it replays; the appends after it are not folded here,
+//! so whoever wants the rate to follow them folds the events
 //! [`Log::subscribe`](crate::Log) offers.
 
 use std::collections::HashSet;
