@@ -69,8 +69,11 @@ pub enum HubCommand {
     Status(NoArgs),
     /// Rebuilds the hub's environment.
     Refresh(NoArgs),
-    /// Ends the hub as SIGTERM does, on the local socket only.
-    Stop(NoArgs),
+    /// Ends the hub as SIGTERM does. With `sessions` true, first shuts
+    /// down every running session the hub knows of, each through its own
+    /// shutdown, bounded, then exits. Any authenticated connection may
+    /// send it.
+    Stop(StopArgs),
     /// Answers with the hub's captured values for the named placeholders.
     PlaceholderEnv(PlaceholderEnvArgs),
     /// Answers with a new pairing code for the device.
@@ -274,6 +277,52 @@ pub struct WriteConfig {
     pub text: String,
     /// The version the file still has for the write to land.
     pub version: String,
+}
+
+/// The `args` of `stop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StopArgs {
+    /// With true, first shuts down every running session the hub knows
+    /// of, each through its own shutdown, bounded, then the hub exits.
+    /// Absent means the hub exits at once. Explicit `null` is refused,
+    /// like any other wrong type.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_sessions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sessions: Option<bool>,
+}
+
+/// Reads `sessions`: absent means the hub exits at once, while explicit
+/// `null` is refused. An ordinary `Option<bool>` would read explicit
+/// `null` as absent, against `docs/invocation.md` ("What the hub
+/// speaks"): unknown arguments, wrong types and explicit null are
+/// `invalid_arguments`.
+fn deserialize_sessions<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    struct Sessions;
+    impl<'de> serde::de::Visitor<'de> for Sessions {
+        type Value = Option<bool>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a boolean `sessions`")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Option<bool>, E> {
+            Err(E::custom("`sessions` is null, which stop refuses"))
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Option<bool>, E> {
+            Err(E::custom("`sessions` is null, which stop refuses"))
+        }
+        fn visit_some<D2: Deserializer<'de>>(
+            self,
+            deserializer: D2,
+        ) -> Result<Option<bool>, D2::Error> {
+            bool::deserialize(deserializer).map(Some)
+        }
+    }
+    deserializer.deserialize_option(Sessions)
 }
 
 /// The `args` of `placeholder_env`: the placeholder variable names the

@@ -60,6 +60,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "status", "args": {}}),
         json!({"id": "c", "command": "refresh", "args": {}}),
         json!({"id": "c", "command": "stop", "args": {}}),
+        json!({"id": "c", "command": "stop", "args": {"sessions": true}}),
         json!({"id": "c", "command": "placeholder_env",
             "args": {"names": ["DATABRICKS_HOST"]}}),
         json!({"id": "c", "command": "pairing_code", "args": {"device": "d"}}),
@@ -138,6 +139,49 @@ fn delete_without_cascade_writes_no_cascade() {
     assert_eq!(
         serde_json::to_value(&line).unwrap(),
         json!({"id": "c", "command": "delete", "args": {"session": "s_1"}}),
+    );
+}
+
+#[test]
+fn stop_reads_sessions_and_refuses_anything_else() {
+    for (args, expected) in [
+        (r#"{}"#, Ok(None)),
+        (r#"{"sessions":true}"#, Ok(Some(true))),
+        (r#"{"sessions":false}"#, Ok(Some(false))),
+        (r#"{"sessions":null}"#, Err(())),
+        (r#"{"sessions":"yes"}"#, Err(())),
+        (r#"{"sessions":1}"#, Err(())),
+        (r#"{"sessions":true,"future":1}"#, Err(())),
+        (r#"{"future":1}"#, Err(())),
+    ] {
+        let sample = serde_json::json!({
+            "id": "c",
+            "command": "stop",
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        match expected {
+            Ok(sessions) => assert_eq!(
+                serde_json::from_value::<HubCommandLine>(sample.clone())
+                    .unwrap_or_else(|e| panic!("{sample}: {e}"))
+                    .command,
+                HubCommand::Stop(StopArgs { sessions }),
+                "{sample}"
+            ),
+            Err(()) => assert!(
+                serde_json::from_value::<HubCommandLine>(sample.clone()).is_err(),
+                "{sample}"
+            ),
+        }
+    }
+    let absent: HubCommandLine = serde_json::from_value(json!({
+        "id": "c",
+        "command": "stop",
+        "args": {},
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&absent).unwrap(),
+        json!({"id": "c", "command": "stop", "args": {}})
     );
 }
 

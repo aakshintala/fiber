@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::commands::hub::{HubCommand, NoArgs};
+use contract::commands::hub::{HubCommand, StopArgs};
 use contract::shapes::Failure;
 use serde_json::Value;
 
@@ -209,7 +209,7 @@ pub(crate) fn stop_running_hub(home: &Path, clock: &dyn Clock) {
     drop(request_value(
         &mut read,
         STOP_ID,
-        HubCommand::Stop(NoArgs {}),
+        HubCommand::Stop(StopArgs { sessions: None }),
     ));
 }
 
