@@ -91,10 +91,21 @@ fn provider_with_port(setup: &Setup, server: &ProviderServer, port: u16) {
     .unwrap()
     .commit()
     .unwrap();
+    serve_on(setup, port);
+}
+
+/// Configures the hub machine's model and serves its hub on `port`.
+fn serve_on(setup: &Setup, port: u16) {
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "hub": {"port": port, "idle_exit_ms": 1000}}),
     );
+}
+
+/// A port nothing holds right now: bound on port 0, read, released.
+fn free_port() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.local_addr().unwrap().port()
 }
 
 /// Every `events.jsonl` under `home`'s projects: the logs of the sessions
@@ -172,6 +183,11 @@ struct World {
 }
 
 fn world(default: bool) -> World {
+    world_with(default, &mut free_port)
+}
+
+/// [`world`], with the hub's port drawn from `ports`.
+fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
     let a = Setup::new();
     let b = Setup::new();
     // The listed hub must ignore the client's repository scope, so the
@@ -229,9 +245,7 @@ fn world(default: bool) -> World {
     let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":a.workspace().display().to_string(), "name":"remote session", "how":"exited"});
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
     fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
+    let port = ports();
     let server = ProviderServer::start([support::hello()]).unwrap();
     provider_with_port(&a, &server, port);
     // The hub machine already imported: the first-run offer reads the
