@@ -315,7 +315,7 @@ impl App {
     #[cfg_attr(false, mutants::skip)]
     pub(super) fn rail_stroke(&mut self, stroke: &Stroke, now: Instant) -> Option<Effect> {
         if self.key_context() != Context::Input
-            || self.rail_covered()
+            || self.item_open()
             || self.home.is_none()
             || self.chrome.layout().is_none()
         {
@@ -428,7 +428,7 @@ impl App {
         }
         if self.rail_state.focus.is_none()
             || self.key_context() != Context::Input
-            || self.rail_covered()
+            || self.item_open()
         {
             return None;
         }

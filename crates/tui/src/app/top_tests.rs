@@ -10,12 +10,16 @@ use contract::clock::Clock;
 
 use super::{Surface, between};
 use crate::app::App;
+use crate::app::config_views::ConfigView;
+use crate::app::items::testkit::{job_started, mark_tty};
+use crate::app::session_views::SessionView;
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::keyset::Context;
 use crate::link::Line;
-use contract::SessionId;
+use crate::mouse::TargetId;
 use contract::events::ImportedNames;
+use contract::{JobId, SessionId};
 
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -43,35 +47,63 @@ const ORDER: [Surface; 19] = [
 ];
 
 /// The surfaces [`open`] can open on a session.
-pub(in crate::app) const ON_SESSION: [Surface; 9] = [
+pub(in crate::app) const ON_SESSION: [Surface; 16] = [
     Surface::Quit,
     Surface::Report,
+    Surface::KeysScreen,
     Surface::Keymap,
+    Surface::Picker,
+    Surface::ConfigView,
+    Surface::SessionView,
     Surface::Panel,
     Surface::Offer,
     Surface::Search,
     Surface::Results,
     Surface::Find,
+    Surface::Focus,
+    Surface::Completion,
+    Surface::Job,
     Surface::Notice,
 ];
 
 /// The surfaces [`open`] can open on home.
-pub(in crate::app) const ON_HOME: [Surface; 5] = [
+pub(in crate::app) const ON_HOME: [Surface; 9] = [
     Surface::Quit,
     Surface::Report,
+    Surface::KeysScreen,
+    Surface::Keymap,
+    Surface::Picker,
+    Surface::ConfigView,
     Surface::DeleteQuestion,
     Surface::WorkspacePicker,
     Surface::Notice,
 ];
 
-/// Whether `first` and `second` can both be open: home holds one question
-/// at a time, so the quit question and the delete question replace each
-/// other.
-pub(in crate::app) fn coexist(first: Surface, second: Surface) -> bool {
-    !matches!(
-        (first.min(second), first.max(second)),
-        (Surface::Quit, Surface::DeleteQuestion)
-    )
+/// Every ordered pair of `set` that stays open together, with a fresh
+/// app from `make` holding both. Opening a swapped view or the quit
+/// question can close or refuse the other, which leaves a pair that
+/// never co-occurs in that order. The Ctrl+R panel is itself the
+/// completion panel's rows, so the two are one surface and never a pair.
+pub(in crate::app) fn stacked(set: &[Surface], make: fn() -> App) -> Vec<(Surface, Surface, App)> {
+    let mut out = Vec::new();
+    for first in set {
+        for second in set.iter().filter(|second| {
+            *second != first
+                && !matches!(
+                    (first.min(*second), first.max(*second)),
+                    (Surface::Search, Surface::Completion)
+                )
+        }) {
+            let mut app = make();
+            launch(&mut app, *first);
+            launch(&mut app, *second);
+            let listed = app.top_surfaces();
+            if listed.contains(first) && listed.contains(second) {
+                out.push((*first, *second, app));
+            }
+        }
+    }
+    out
 }
 
 fn hello() -> Line {
@@ -178,9 +210,16 @@ fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) ->
     })
 }
 
-/// Opens `surface` on `app`, the way its own entry point does.
+/// Opens `surface` on `app`, the way its own entry point does, and
+/// asserts it shows.
 #[track_caller]
 pub(in crate::app) fn open(app: &mut App, surface: Surface) {
+    launch(app, surface);
+    assert!(app.top_surfaces().contains(&surface), "{surface:?} opened");
+}
+
+/// The entry point of `surface`, with no check that it shows.
+fn launch(app: &mut App, surface: Surface) {
     match surface {
         Surface::Quit => {
             app.quit();
@@ -222,6 +261,27 @@ pub(in crate::app) fn open(app: &mut App, surface: Surface) {
             app.find_key(&Key::CtrlF);
             app.open_results();
         }
+        Surface::KeysScreen => {
+            app.open_keys();
+        }
+        Surface::Picker => {
+            app.open_model_picker(crate::model_picker::Mode::Choose);
+        }
+        Surface::ConfigView => {
+            app.open_config_view(ConfigView::Theme);
+        }
+        Surface::SessionView => {
+            app.open_session_view(SessionView::Usage);
+        }
+        Surface::Focus => app.focus = Some(TargetId::Turn(0)),
+        Surface::Completion => {
+            app.on_key(Key::Char('/'), fakes::clock::FakeClock::new().now());
+        }
+        Surface::Job => {
+            mark_tty(app);
+            job_started(app, "j_9", "run the editor", 0, "a_1");
+            app.open_item(&JobId("j_9".to_owned()));
+        }
         Surface::Notice => {
             app.notices.push(
                 "extension_failed",
@@ -233,27 +293,19 @@ pub(in crate::app) fn open(app: &mut App, surface: Surface) {
             app.home_click(Spot::Workspace);
         }
         Surface::DeleteQuestion => {
-            let key = app
-                .home_screen()
-                .and_then(|screen| {
-                    crate::home::home_test_rows(&screen)
-                        .into_iter()
-                        .find(|(_, text)| text.contains("old work"))
-                        .map(|row| row.0)
-                })
-                .expect("the exited row");
-            app.home_click(Spot::Stop(key));
+            // A swapped view hides the rows, and the question has nothing to ask about.
+            let row = app.home_screen().and_then(|screen| {
+                crate::home::home_test_rows(&screen)
+                    .into_iter()
+                    .find(|(_, text)| text.contains("old work"))
+                    .map(|row| row.0)
+            });
+            if let Some(key) = row {
+                app.home_click(Spot::Stop(key));
+            }
         }
-        Surface::KeysScreen
-        | Surface::Picker
-        | Surface::ConfigView
-        | Surface::SessionView
-        | Surface::Focus
-        | Surface::Completion
-        | Surface::Job
-        | Surface::Draft => panic!("{surface:?} has no opener here"),
+        Surface::Draft => panic!("{surface:?} has no opener here"),
     }
-    assert!(app.top_surfaces().contains(&surface), "{surface:?} opened");
 }
 
 #[test]
@@ -280,30 +332,77 @@ fn two_surfaces_list_in_the_declared_order_whichever_opened_first() {
         (&ON_SESSION[..], session_app as fn() -> App),
         (&ON_HOME[..], home_app as fn() -> App),
     ] {
-        for first in set {
-            for second in set
-                .iter()
-                .filter(|second| *second != first && coexist(*first, **second))
-            {
-                let mut app = make();
-                open(&mut app, *first);
-                open(&mut app, *second);
-                let listed = app.top_surfaces();
-                assert!(
-                    listed.contains(first) && listed.contains(second),
-                    "{first:?} then {second:?}: {listed:?}"
-                );
-                assert_eq!(
-                    app.top_surface(),
-                    *first.min(second),
-                    "{first:?} {second:?}"
-                );
-                let mut sorted = listed.clone();
-                sorted.sort();
-                assert_eq!(listed, sorted, "{first:?} then {second:?}");
-                assert_eq!(listed.last(), Some(&Surface::Draft));
-            }
+        for (first, second, app) in stacked(set, make) {
+            let listed = app.top_surfaces();
+            assert_eq!(app.top_surface(), first.min(second), "{first:?} {second:?}");
+            let mut sorted = listed.clone();
+            sorted.sort();
+            assert_eq!(listed, sorted, "{first:?} then {second:?}");
+            assert_eq!(listed.last(), Some(&Surface::Draft));
         }
+    }
+}
+
+/// The pairs `docs/tui.md` lets co-occur, from the ticket's pair table;
+/// the table's pairs with the draft are single surfaces and the panel
+/// hides a tty job, so neither is a pair here.
+const PLAN_PAIRS: [(Surface, Surface); 34] = [
+    (Surface::Quit, Surface::Report),
+    (Surface::Quit, Surface::Notice),
+    (Surface::Quit, Surface::Keymap),
+    (Surface::Quit, Surface::Picker),
+    (Surface::Quit, Surface::ConfigView),
+    (Surface::Quit, Surface::SessionView),
+    (Surface::Report, Surface::Notice),
+    (Surface::Report, Surface::Keymap),
+    (Surface::Report, Surface::Picker),
+    (Surface::Report, Surface::ConfigView),
+    (Surface::Report, Surface::SessionView),
+    (Surface::Report, Surface::DeleteQuestion),
+    (Surface::Report, Surface::WorkspacePicker),
+    (Surface::Report, Surface::Panel),
+    (Surface::Report, Surface::Offer),
+    (Surface::Report, Surface::Search),
+    (Surface::Report, Surface::Results),
+    (Surface::Report, Surface::Find),
+    (Surface::Report, Surface::Completion),
+    (Surface::Keymap, Surface::Notice),
+    (Surface::Keymap, Surface::Picker),
+    (Surface::KeysScreen, Surface::Notice),
+    (Surface::ConfigView, Surface::Notice),
+    (Surface::SessionView, Surface::Notice),
+    (Surface::DeleteQuestion, Surface::Notice),
+    (Surface::WorkspacePicker, Surface::Notice),
+    (Surface::Panel, Surface::Notice),
+    (Surface::Panel, Surface::Offer),
+    (Surface::Search, Surface::Notice),
+    (Surface::Offer, Surface::Notice),
+    (Surface::Results, Surface::Notice),
+    (Surface::Find, Surface::Notice),
+    (Surface::Focus, Surface::Notice),
+    (Surface::Completion, Surface::Focus),
+];
+
+#[test]
+fn the_matrix_holds_every_pair_the_plan_lists_in_both_orders() {
+    let mut held = Vec::new();
+    for (set, make) in [
+        (&ON_SESSION[..], session_app as fn() -> App),
+        (&ON_HOME[..], home_app as fn() -> App),
+    ] {
+        held.extend(
+            stacked(set, make)
+                .into_iter()
+                .map(|(first, second, _)| (first, second)),
+        );
+    }
+    for (a, b) in PLAN_PAIRS {
+        // A pair whose second opener refuses or closes the first in one
+        // order only stays in the other.
+        assert!(
+            held.contains(&(a, b)) || held.contains(&(b, a)),
+            "{a:?} with {b:?} never stacks"
+        );
     }
 }
 
@@ -410,15 +509,4 @@ fn the_keys_screen_gives_the_context_below_it() {
     open(&mut app, Surface::Notice);
     assert_eq!(app.top_surface(), Surface::KeysScreen);
     assert_eq!(app.key_context(), Context::Overlay);
-}
-
-#[test]
-fn the_rail_is_covered_by_the_notice_overlay_and_by_an_item_view() {
-    let mut app = session_app();
-    assert!(!app.rail_covered());
-    open(&mut app, Surface::Notice);
-    assert!(app.rail_covered());
-    // Another surface on top leaves the overlay covering the rail.
-    open(&mut app, Surface::Keymap);
-    assert!(app.rail_covered());
 }

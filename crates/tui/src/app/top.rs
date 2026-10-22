@@ -158,12 +158,6 @@ impl App {
         }
     }
 
-    /// Whether an item view or the notice overlay covers the rail, so the
-    /// rail takes no key.
-    pub(super) fn rail_covered(&self) -> bool {
-        self.item_open() || self.top_surfaces().contains(&Surface::Notice)
-    }
-
     /// Offers `key` to the open `surfaces` in order; the first that
     /// handles it wins. Esc reaches the notice overlay first at the
     /// surfaces that yield it.
@@ -214,7 +208,7 @@ impl App {
     /// Esc clears a selection shown, after the notice overlay closes
     /// first, and before anything it would interrupt.
     pub(super) fn selection_esc(&mut self, key: &Key) -> Option<Effect> {
-        if *key == Key::Esc && self.selection_shown() && self.notices.close() {
+        if *key == Key::Esc && self.select.span().is_some() && self.notices.close() {
             return Some(Effect::None);
         }
         self.select_key(key)
