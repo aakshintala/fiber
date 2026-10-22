@@ -452,40 +452,60 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
 
 #[test]
 fn resume_flag_beats_the_logs_last_model() {
+    // The opaque reasoning item the recorded model produced: the resumed
+    // request must not send it to the new model.
+    const MARKER: &str = "MARKER-OLD-REASONING-m2";
     let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_models(&server, &["m1", "m2"], "fake/m1");
-    hand_built(&setup, "s_model1", vec![]);
-    // The session used `fake/m2` before the crash.
-    {
-        let sessions = setup.sessions();
-        let log = log::Log::open(
-            &sessions,
-            SessionId("s_model1".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap();
-        log.append(
-            &Event::ModelChanged(contract::events::ModelChanged {
-                before: contract::events::ModelSettings {
-                    model: "fake/m1".into(),
-                    thinking: None,
-                    cache_lifetime: contract::events::CacheLifetime::OneHour,
-                    credential: None,
-                },
-                after: contract::events::ModelSettings {
+    // The session ran on `fake/m2`: its preamble records that model, and
+    // its reasoning carries no later switch, so the rebuild seeds from the
+    // recorded reference itself.
+    hand_built(
+        &setup,
+        "s_model1",
+        vec![
+            (
+                Event::PreambleBuilt(contract::events::PreambleBuilt {
+                    reason: contract::events::PreambleReason::Start,
                     model: "fake/m2".into(),
+                    context_window: 100000,
+                    trigger_at: None,
+                    budget: None,
                     thinking: None,
+                    tool_choice: "auto".into(),
                     cache_lifetime: contract::events::CacheLifetime::OneHour,
                     credential: None,
-                },
-                source: contract::events::SwitchSource::Driver,
-            }),
-            Some(t()),
-            Some(a("a_1")),
-        )
-        .unwrap();
-    }
+                    system_prompt: String::new(),
+                    tools: Vec::new(),
+                    replaced: Vec::new(),
+                }),
+                None,
+                None,
+            ),
+            (msg_started(), Some(t()), Some(a("a_1"))),
+            (
+                Event::ReasoningCompleted(contract::events::ReasoningCompleted {
+                    text: "old thought".into(),
+                    provider_item: Some(json!({
+                        "type": "reasoning",
+                        "encrypted_content": MARKER,
+                        "summary": "old thought",
+                    })),
+                }),
+                Some(t()),
+                Some(a("a_1")),
+            ),
+            (
+                Event::TextCompleted(contract::events::TextCompleted {
+                    text: "old words".into(),
+                    provider_item: None,
+                }),
+                Some(t()),
+                Some(a("a_1")),
+            ),
+        ],
+    );
 
     let run = setup.run_in_workspace(&["ask", "--resume", "s_model1", "--model", "fake/m1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -494,6 +514,7 @@ fn resume_flag_beats_the_logs_last_model() {
         [
             "fiber_started",
             "extensions_loaded",
+            "model_changed",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -508,6 +529,16 @@ fn resume_flag_beats_the_logs_last_model() {
             "fiber_exited",
         ]
     );
+    let changed = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "model_changed")
+        .unwrap();
+    assert_eq!(changed["payload"]["before"]["model"], "fake/m2");
+    assert_eq!(changed["payload"]["before"]["cache_lifetime"], "1h");
+    assert_eq!(changed["payload"]["after"]["model"], "fake/m1");
+    assert_eq!(changed["payload"]["after"]["cache_lifetime"], "1h");
+    assert_eq!(changed["payload"]["source"], "driver");
     let built = run
         .lines
         .iter()
@@ -520,6 +551,10 @@ fn resume_flag_beats_the_logs_last_model() {
     assert_eq!(requests.len(), 1);
     let body = String::from_utf8_lossy(&requests[0].body);
     assert!(body.contains("\"model\":\"m1\""), "{body}");
+    // The recorded model's readable text crosses the switch as plain
+    // assistant text, but its opaque reasoning never reaches the new model.
+    assert!(body.contains("old words"), "{body}");
+    assert!(!body.contains(MARKER), "{body}");
 }
 
 #[test]
@@ -561,6 +596,11 @@ fn resume_without_flag_keeps_recorded_model() {
 
     let run = setup.run_in_workspace(&["ask", "--resume", "s_model1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.lines.iter().all(|l| l["kind"] != "model_changed"),
+        "a resume that switches nothing records nothing: {:?}",
+        run.kinds()
+    );
     let built = run
         .lines
         .iter()
