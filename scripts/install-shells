@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 # Installs zsh and fish on a Linux CI runner (docs/ci.md, "Job time limits").
-# With a cached archive directory holding .deb files, it installs them with
-# dpkg and makes no network call; a failure there fails the script, with no
-# network fallback. Otherwise the network part, `apt-get update` and
-# `apt-get install --download-only`, runs under a 90-second bound per attempt
-# and is retried after 5 seconds until it succeeds (apt keeps partial archives,
-# so each attempt resumes), leaving the step's timeout as the outer bound. The
-# downloaded archives are copied into the directory for the workflow to cache.
-# The install has no bound, because killing dpkg mid-unpack leaves the dpkg
-# lock held and a package half configured.
+# apt keeps partial archives, so retries resume downloads. The install stays
+# unbounded because killing dpkg mid-unpack leaves the dpkg lock held.
 #
 # Usage: scripts/install-shells [DIR]
 # DIR is the archive cache directory. With no DIR, no archives are kept.
