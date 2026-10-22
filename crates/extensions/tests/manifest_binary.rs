@@ -18,7 +18,8 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use common::{Setup, install_lua};
-use contract::shapes::ContentPart;
+use contract::ErrorCode;
+use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Output, Tool};
 use extensions::{ExecEnd, ExecEntry, ExecReply, HostScript, LuaExtension, LuaTool};
 use fakes::Deadline;
@@ -108,8 +109,8 @@ fn failed(output: &Output) -> String {
 }
 
 /// Serves `body` once at `/tool-1.0`, like the binary download expects.
-fn serve_once(body: &'static [u8]) -> fakes::ProviderServer {
-    fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap()
+fn serve_once(body: &[u8]) -> fakes::ProviderServer {
+    fakes::ProviderServer::start([fakes::Response::status(200, body)]).unwrap()
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -138,14 +139,14 @@ fiber.tool("bare", {
 })
 "#;
 
-/// Installs `fiber.test/mybin` with a real `binaries` entry for this
-/// platform, serving `body`, and returns its installed directory.
-fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::PathBuf) {
-    let setup = Setup::new();
+/// Installs `fiber.test/mybin` into `setup` with a real `binaries` entry for
+/// this platform, serving `body`, and returns the server and installed
+/// directory.
+fn install_into(setup: &Setup, body: &[u8]) -> (fakes::ProviderServer, std::path::PathBuf) {
     let server = serve_once(body);
     let url = format!("{}/tool-1.0", server.url());
     let dir = install_lua(
-        &setup,
+        setup,
         "mybin",
         &json!({"binaries": { extensions::platform(): { "url": url, "sha256": sha256(body) } }}),
         INIT,
@@ -154,20 +155,108 @@ fn installed(body: &'static [u8]) -> (Setup, fakes::ProviderServer, std::path::P
         server.await_requests(1, Deadline::after(WAIT)),
         "waited for the binary to be downloaded"
     );
+    (server, dir)
+}
+
+/// Installs `fiber.test/mybin` with `body` and returns its installed directory.
+fn installed(body: &[u8]) -> (Setup, fakes::ProviderServer, std::path::PathBuf) {
+    let setup = Setup::new();
+    let (server, dir) = install_into(&setup, body);
     (setup, server, dir)
+}
+
+/// What a `ran` timeout leaves to read: the installed binary, any callback
+/// output already queued on `rx` (a failed `host.exec` shows its error here),
+/// and the stages the script's marker file records.
+fn timeout_report(dir: &Path, marker: &Path, rx: &mpsc::Receiver<Output>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = dir.join("bin").join("mybin");
+    let mode = match std::fs::metadata(&binary) {
+        Ok(meta) => format!("{:o}", meta.permissions().mode() & 0o7777),
+        Err(e) => format!("<{e}>"),
+    };
+    let queued = match rx.try_recv() {
+        Ok(Output {
+            error: Some(failure),
+            ..
+        }) => format!("error {:?}: {}", failure.code, failure.message),
+        Ok(_) => "a result without an error".to_owned(),
+        Err(_) => "none queued".to_owned(),
+    };
+    let stages = match std::fs::read_to_string(marker) {
+        Ok(text) => text,
+        Err(e) => format!("<{e}>"),
+    };
+    format!(
+        "tool=run_it program=bin/mybin\n\
+         binary={} exists={} mode={mode}\n\
+         callback output: {queued}\n\
+         marker={} raw={stages:?}",
+        binary.display(),
+        binary.exists(),
+        marker.display(),
+    )
 }
 
 #[test]
 fn the_manifest_named_binary_runs_through_host_exec() {
-    let (_setup, _server, dir) = installed(b"#!/bin/sh\necho from-binary\n");
+    let setup = Setup::new();
+    let marker = setup.root().join("marker");
+    // Close stdout before `eof`, so the script no longer holds the pipe's
+    // write end when it records `eof`.
+    let script = format!(
+        "#!/bin/sh\necho started >> '{}'\necho from-binary\nexec 1>&-\necho eof >> '{}'\n",
+        marker.display(),
+        marker.display(),
+    );
+    let (_server, dir) = install_into(&setup, script.as_bytes());
     let ext = extension(&dir, "mybin", INIT, FakeClock::new());
     let tools = by_name(&ext);
+    let rx = run(&tools["run_it"], json!({}));
+    let output = match Deadline::after(WAIT).recv(&rx) {
+        Ok(output) => output,
+        Err(e) => panic!("{} ({e})", timeout_report(&dir, &marker, &rx)),
+    };
+    assert_eq!(text(&output), "from-binary\n");
     assert_eq!(
-        text(&ran(
-            &run(&tools["run_it"], json!({})),
-            &Deadline::after(WAIT)
-        )),
-        "from-binary\n"
+        std::fs::read_to_string(&marker).unwrap(),
+        "started\neof\n",
+        "the script reached its first and last lines"
+    );
+}
+
+#[test]
+fn the_timeout_report_names_what_is_queued() {
+    let setup = Setup::new();
+    let dir = setup.root();
+    let marker = dir.join("marker");
+    let report = |queued: Option<Output>| {
+        let (tx, rx) = mpsc::channel();
+        if let Some(output) = queued {
+            tx.send(output).unwrap();
+        }
+        timeout_report(&dir, &marker, &rx)
+    };
+    let failure = Output {
+        error: Some(Failure {
+            code: ErrorCode::ExtensionFailed,
+            message: "spawn failed".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..Output::default()
+    };
+    assert!(
+        report(Some(failure)).contains("callback output: error ExtensionFailed: spawn failed"),
+        "a queued error is named with its code and message"
+    );
+    assert!(
+        report(Some(Output::default())).contains("callback output: a result without an error"),
+        "a queued result without an error is named as one"
+    );
+    assert!(
+        report(None).contains("callback output: none queued"),
+        "an empty channel says none is queued"
     );
 }
 
