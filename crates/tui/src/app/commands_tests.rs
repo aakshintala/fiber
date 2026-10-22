@@ -925,7 +925,7 @@ fn a_rejected_extension_command_returns_its_draft_with_the_notice() {
 
 /// A writer answering `done` for every description.
 fn feedback_writer(done: crate::FeedbackDone) -> crate::WriteFeedback {
-    std::sync::Arc::new(move |_: &str, _: Option<&str>| Ok(done.clone()))
+    std::sync::Arc::new(move |_: &str, _: Option<&contract::SessionId>| Ok(done.clone()))
 }
 
 fn feedback_done() -> crate::FeedbackDone {
@@ -992,37 +992,6 @@ fn feedback_sends_the_description_and_lands_path_plus_link() {
         app.notice(),
         Some("Wrote /w/fiber-feedback-7.md\nhttps://example.test/new?title=x")
     );
-}
-
-#[test]
-fn feedback_hands_the_writer_the_attached_session() {
-    let seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>> = std::sync::Arc::default();
-    let writer: crate::WriteFeedback = std::sync::Arc::new({
-        let seen = std::sync::Arc::clone(&seen);
-        move |_: &str, session: Option<&str>| {
-            seen.lock().unwrap().push(session.map(str::to_owned));
-            Ok(feedback_done())
-        }
-    });
-    for (mut app, expected) in [(attached(), Some(SESSION.to_owned())), (connected(), None)] {
-        app.set_feedback(Some(std::sync::Arc::clone(&writer)));
-        let Effect::Feedback { description } = enter(&mut app, "/feedback the sound") else {
-            panic!("feedback effect");
-        };
-        let (tx, rx) = std::sync::mpsc::channel();
-        assert_eq!(
-            crate::feedback::start(
-                app.feedback_writer(),
-                Some(&tx),
-                description,
-                app.session().map(|id| id.0.clone()),
-            ),
-            None
-        );
-        fakes::Deadline::after(std::time::Duration::from_secs(10))
-            .recv_or_fail(&rx, "feedback answer");
-        assert_eq!(seen.lock().unwrap().pop(), Some(expected));
-    }
 }
 
 #[test]

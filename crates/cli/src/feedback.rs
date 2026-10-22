@@ -13,7 +13,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use contract::shapes::Failure;
-use contract::{ErrorCode, clock};
+use contract::{ErrorCode, SessionId, clock};
+use doors::failure;
 
 /// What the report writer reads: the version text, the directory the
 /// report lands in, the clock for the file stamp, and the doctor-output
@@ -28,9 +29,8 @@ pub struct ReportContext<'a> {
     pub clock: &'a dyn clock::Clock,
     /// The doctor output, or its capture failure.
     pub doctor: &'a dyn Fn() -> Result<String, FeedbackError>,
-    /// The diagnostics section for the selected session, or none, or its
-    /// capture failure.
-    pub diagnostics: &'a dyn Fn(Option<&str>) -> Result<String, FeedbackError>,
+    /// The diagnostics section for the selected session, or none.
+    pub diagnostics: &'a dyn Fn(Option<&SessionId>) -> String,
 }
 
 /// Why a feedback write failed: one sentence the door prints.
@@ -42,9 +42,6 @@ pub enum FeedbackError {
     /// The doctor output could not be captured.
     #[error("could not capture the `fiber doctor` output: {0}")]
     Doctor(String),
-    /// The diagnostics could not be captured.
-    #[error("could not capture the diagnostics: {0}")]
-    Diagnostics(String),
     /// The report file could not be written.
     #[error("could not write {path}: {source}", path = path.display())]
     Write {
@@ -59,9 +56,7 @@ impl From<FeedbackError> for Failure {
     fn from(error: FeedbackError) -> Self {
         let code = match &error {
             FeedbackError::EmptyDescription => ErrorCode::Usage,
-            FeedbackError::Doctor(_)
-            | FeedbackError::Diagnostics(_)
-            | FeedbackError::Write { .. } => ErrorCode::IoFailed,
+            FeedbackError::Doctor(_) | FeedbackError::Write { .. } => ErrorCode::IoFailed,
         };
         Failure {
             code,
@@ -190,11 +185,15 @@ struct Entry {
 
 /// `line` as an entry, when it is a diagnostic line of `process` with every
 /// documented field in its documented shape (`docs/state.md`, "Diagnostic
-/// logs"). Anything else is left out, as is an `extension_log` line: it is
-/// the extension's own text, which Fiber cannot vouch for.
+/// logs"), `data` an object when present. Anything else is left out, as is
+/// an `extension_log` line: it is the extension's own text, which Fiber
+/// cannot vouch for.
 fn entry(line: &str, process: &str) -> Option<Entry> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     let fields = value.as_object()?;
+    if fields.get("data").is_some_and(|data| !data.is_object()) {
+        return None;
+    }
     let ts = fields.get("ts")?.as_u64()?;
     let level = fields.get("level")?.as_str()?;
     if !matches!(level, "error" | "warn" | "info" | "debug") {
@@ -226,6 +225,8 @@ fn read_entries(path: &Path, process: &str, into: &mut Vec<Entry>) {
     let Ok(bytes) = fs::read(path) else {
         return;
     };
+    // Per line, not `read_to_string`: a line torn mid-character by a
+    // crash must not hide every line before and after it.
     into.extend(bytes.split(|byte| *byte == b'\n').filter_map(|raw| {
         let line = std::str::from_utf8(raw).ok()?;
         entry(line, process)
@@ -233,22 +234,18 @@ fn read_entries(path: &Path, process: &str, into: &mut Vec<Entry>) {
 }
 
 /// The newest `limit` entries, oldest first, and how many were dropped.
-/// Ties in `ts` keep the order the entries came in. With `favour`, every
-/// `error` and `warn` entry is kept before any other, newest first when
-/// they alone pass `limit`.
-fn newest(mut entries: Vec<Entry>, limit: usize, favour: bool) -> (Vec<Entry>, usize) {
+/// Ties in `ts` keep the order the entries came in. Every `error` and
+/// `warn` entry is kept before any other, newest first when they alone
+/// pass `limit`.
+fn newest(mut entries: Vec<Entry>, limit: usize) -> (Vec<Entry>, usize) {
     entries.sort_by_key(|entry| entry.ts);
     let total = entries.len();
-    let priority = if favour {
-        entries.iter().filter(|entry| entry.priority).count()
-    } else {
-        0
-    };
+    let priority = entries.iter().filter(|entry| entry.priority).count();
     let mut room_priority = limit;
     let mut room_other = limit.saturating_sub(priority);
     let mut kept = Vec::new();
     for entry in entries.into_iter().rev() {
-        let room = if favour && entry.priority {
+        let room = if entry.priority {
             &mut room_priority
         } else {
             &mut room_other
@@ -266,7 +263,7 @@ fn newest(mut entries: Vec<Entry>, limit: usize, favour: bool) -> (Vec<Entry>, u
 /// The hub's reportable lines: `hub.log.1` then `hub.log`, each with a
 /// `ts` no later than `now`, and either no session id and no more than a
 /// day old, or the selected session's id at any age.
-fn hub_entries(logs: &Path, now: u64, session: Option<&str>) -> Vec<Entry> {
+fn hub_entries(logs: &Path, now: u64, session: Option<&SessionId>) -> Vec<Entry> {
     let mut entries = Vec::new();
     for name in ["hub.log.1", "hub.log"] {
         read_entries(&logs.join(name), "hub", &mut entries);
@@ -276,7 +273,7 @@ fn hub_entries(logs: &Path, now: u64, session: Option<&str>) -> Vec<Entry> {
         entry.ts <= now
             && match (entry.session.as_deref(), session) {
                 (None, _) => entry.ts >= oldest,
-                (Some(recorded), Some(selected)) => recorded == selected,
+                (Some(recorded), Some(selected)) => recorded == selected.0,
                 (Some(_), None) => false,
             }
     });
@@ -300,7 +297,7 @@ fn crash_details(text: &str) -> String {
 
 /// The details of every crash report `crashes/<id>-<ms>.txt` for session
 /// `id`, oldest first, each with its file name.
-fn crash_reports(home: &Path, id: &str) -> Vec<(String, String)> {
+fn crash_reports(home: &Path, id: &SessionId) -> Vec<(String, String)> {
     let Ok(entries) = fs::read_dir(config::crashes_dir(home)) else {
         return Vec::new();
     };
@@ -309,7 +306,7 @@ fn crash_reports(home: &Path, id: &str) -> Vec<(String, String)> {
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
             let ms = name
-                .strip_prefix(id)?
+                .strip_prefix(id.0.as_str())?
                 .strip_prefix('-')?
                 .strip_suffix(".txt")?
                 .parse()
@@ -325,6 +322,34 @@ fn crash_reports(home: &Path, id: &str) -> Vec<(String, String)> {
             Some((name, crash_details(&String::from_utf8_lossy(&bytes))))
         })
         .collect()
+}
+
+/// The session a feedback report carries diagnostics for: `explicit`, which
+/// must be a non-delegate session with a log anywhere in Fiber home, or
+/// without one the newest session in `workspace`'s project, which may be
+/// none.
+pub fn select_session(
+    home: &Path,
+    workspace: &Path,
+    explicit: Option<SessionId>,
+) -> Result<Option<SessionId>, Failure> {
+    let Some(id) = explicit else {
+        let project = doors::project(workspace);
+        let sessions = log::sessions_dir(home, &project);
+        return Ok(log::most_recent(&sessions, &|started| {
+            doors::project(Path::new(started)) == project
+        }));
+    };
+    let usable = log::find_logged_session(home, &id)
+        .is_some_and(|(_, dir)| log::started_first(&dir).is_ok_and(|started| !started.delegate));
+    if usable {
+        Ok(Some(id))
+    } else {
+        Err(failure(
+            ErrorCode::SessionNotFound,
+            format!("No session `{}`.", id.0),
+        ))
+    }
 }
 
 /// One report section: `title`, then each text in a fence, or `None.`.
@@ -346,11 +371,12 @@ fn section(out: &mut String, title: &str, texts: &[String]) {
 /// lines from the last day only. Hub lines are capped at 500 and a
 /// session's at 2000, both chosen and not measured; the cap says how many
 /// session lines it left out.
-pub fn diagnostics(home: &Path, clock: &dyn clock::Clock, session: Option<&str>) -> String {
+pub fn diagnostics(home: &Path, clock: &dyn clock::Clock, session: Option<&SessionId>) -> String {
     let now = clock::wall_ms(clock.wall());
     let logs = config::logs_dir(home);
     let mut out = String::from("## Diagnostics\n\n");
-    if let Some(id) = session {
+    if let Some(session) = session {
+        let id = session.0.as_str();
         out.push_str(&format!(
             "Session: {id}\n\n\
              To share the session's log, run `fiber sessions export {id}` and send the directory privately: it holds your prompts and the model's replies, which this report leaves out.\n\n"
@@ -365,19 +391,21 @@ pub fn diagnostics(home: &Path, clock: &dyn clock::Clock, session: Option<&str>)
                 "This machine has no diagnostic lines for session {id}.\n\n"
             ));
         }
-        let (kept, left_out) = newest(lines, SESSION_LINES, true);
+        let (kept, left_out) = newest(lines, SESSION_LINES);
         if left_out > 0 {
             out.push_str(&format!("{left_out} earlier lines left out\n\n"));
         }
         let texts: Vec<String> = kept.into_iter().map(|line| line.text).collect();
         section(&mut out, "Session log lines", &texts);
-        let crashes: Vec<String> = crash_reports(home, id)
+        let crashes: Vec<String> = crash_reports(home, session)
             .into_iter()
             .map(|(name, details)| format!("{name}\n{details}"))
             .collect();
         section(&mut out, "Crash reports", &crashes);
     }
-    let (hub, _) = newest(hub_entries(&logs, now, session), HUB_LINES, false);
+    let mut hub = hub_entries(&logs, now, session);
+    hub.sort_by_key(|line| line.ts);
+    hub.drain(..hub.len().saturating_sub(HUB_LINES));
     let texts: Vec<String> = hub.into_iter().map(|line| line.text).collect();
     section(&mut out, "Hub log lines", &texts);
     out
@@ -392,7 +420,7 @@ pub fn diagnostics(home: &Path, clock: &dyn clock::Clock, session: Option<&str>)
 /// nothing else.
 pub fn write(
     description: &str,
-    session: Option<&str>,
+    session: Option<&SessionId>,
     ctx: &ReportContext<'_>,
 ) -> Result<contract::feedback::FeedbackDone, FeedbackError> {
     let description = description.trim();
@@ -408,7 +436,7 @@ pub fn write(
         &doctor,
     );
     let link = issue_link(&title(description), &report, description);
-    let report = format!("{report}\n{}", (ctx.diagnostics)(session)?);
+    let report = format!("{report}\n{}", (ctx.diagnostics)(session));
     let stamp = clock::wall_ms(ctx.clock.wall());
     let mut path = ctx.cwd.join(format!("fiber-feedback-{stamp}.md"));
     for bump in 2.. {

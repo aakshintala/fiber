@@ -9,6 +9,7 @@ use super::{
     FeedbackError, ReportContext, build_report, crash_details, diagnostics, install_method,
     issue_link, title, write,
 };
+use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
 use fakes::clock::FakeClock;
 use std::fs;
@@ -22,8 +23,8 @@ const DOCTOR: &str = "fiber 0.3.0 (abc123)\ndefault model: none\n";
 
 const DIAGNOSTICS: &str = "## Diagnostics\n\nstub diagnostics\n";
 
-fn stub_diagnostics(_: Option<&str>) -> Result<String, FeedbackError> {
-    Ok(DIAGNOSTICS.to_owned())
+fn stub_diagnostics(_: Option<&SessionId>) -> String {
+    DIAGNOSTICS.to_owned()
 }
 
 /// A context writing into `cwd` with the stub doctor report and the stub
@@ -40,7 +41,7 @@ fn ctx_with<'a>(
     cwd: &'a Path,
     clock: &'a dyn Clock,
     doctor: &'a dyn Fn() -> Result<String, FeedbackError>,
-    diagnostics: &'a dyn Fn(Option<&str>) -> Result<String, FeedbackError>,
+    diagnostics: &'a dyn Fn(Option<&SessionId>) -> String,
 ) -> ReportContext<'a> {
     ReportContext {
         version: VERSION,
@@ -417,36 +418,14 @@ fn write_hands_the_capturer_the_selected_session() {
     let clock = FakeClock::new();
     let doctor = || Ok(DOCTOR.to_owned());
     let seen = std::cell::RefCell::new(Vec::new());
-    let capture = |session: Option<&str>| {
-        seen.borrow_mut().push(session.map(str::to_owned));
-        Ok(DIAGNOSTICS.to_owned())
+    let capture = |session: Option<&SessionId>| {
+        seen.borrow_mut().push(session.cloned());
+        DIAGNOSTICS.to_owned()
     };
     let context = ctx_with(root.path(), clock.as_ref(), &doctor, &capture);
-    write(DESCRIPTION, Some("s_0123456789abcdef"), &context).unwrap();
+    write(DESCRIPTION, Some(&SessionId(SESSION.to_owned())), &context).unwrap();
     write(DESCRIPTION, None, &context).unwrap();
-    assert_eq!(
-        *seen.borrow(),
-        [Some("s_0123456789abcdef".to_owned()), None]
-    );
-}
-
-#[test]
-fn a_diagnostics_failure_writes_nothing() {
-    let root = fakes::TempDir::new("fiber-feedback-diagnostics-fails");
-    let clock = FakeClock::new();
-    let doctor = || Ok(DOCTOR.to_owned());
-    let capture = |_: Option<&str>| Err(FeedbackError::Diagnostics("closed disk".to_owned()));
-    let error = write(
-        DESCRIPTION,
-        None,
-        &ctx_with(root.path(), clock.as_ref(), &doctor, &capture),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "could not capture the diagnostics: closed disk"
-    );
-    assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    assert_eq!(*seen.borrow(), [Some(SessionId(SESSION.to_owned())), None]);
 }
 
 const SESSION: &str = "s_0123456789abcdef";
@@ -474,7 +453,8 @@ impl Home {
     }
 
     fn report(&self, session: Option<&str>) -> String {
-        diagnostics(self.0.path(), FakeClock::new().as_ref(), session)
+        let session = session.map(|id| SessionId(id.to_owned()));
+        diagnostics(self.0.path(), FakeClock::new().as_ref(), session.as_ref())
     }
 }
 
@@ -631,6 +611,47 @@ fn a_session_line_needs_every_documented_field_and_the_selected_id() {
     );
     let report = home.report(Some(SESSION));
     assert_eq!(messages(&report, "Session log lines"), ["good"]);
+}
+
+#[test]
+fn a_debug_lines_data_must_be_an_object() {
+    let home = Home::new();
+    let with_data = |data: &str, tag: &str| {
+        format!(
+            r#"{{"ts":10,"level":"debug","process":"session","session_id":"{SESSION}","code":"c","message":"{tag}","data":{data}}}"#
+        )
+    };
+    home.put(
+        &format!("logs/session-{SESSION}.log"),
+        &[
+            with_data(r#"{"op":"x","ms":3}"#, "object"),
+            with_data("{}", "empty-object"),
+            with_data(r#""text""#, "string"),
+            with_data("[1,2]", "array"),
+            with_data("null", "null"),
+            with_data("7", "number"),
+        ],
+    );
+    assert_eq!(
+        messages(&home.report(Some(SESSION)), "Session log lines"),
+        ["object", "empty-object"]
+    );
+}
+
+#[test]
+fn a_line_torn_mid_character_leaves_the_lines_around_it() {
+    let home = Home::new();
+    let path = home.0.path().join(format!("logs/session-{SESSION}.log"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut bytes = line(1, "info", "session", Some(SESSION), "before").into_bytes();
+    bytes.extend_from_slice(b"\n\xE2\x82\n");
+    bytes.extend_from_slice(line(2, "info", "session", Some(SESSION), "after").as_bytes());
+    bytes.push(b'\n');
+    fs::write(path, bytes).unwrap();
+    assert_eq!(
+        messages(&home.report(Some(SESSION)), "Session log lines"),
+        ["before", "after"]
+    );
 }
 
 #[test]

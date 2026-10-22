@@ -4,22 +4,27 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use contract::SessionId;
 use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+fn session() -> SessionId {
+    SessionId("s_aaaaaaaaaaaaaaaa".to_owned())
+}
+
 /// What a writer saw: the description and the session id it was given.
-type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+type Seen = Arc<Mutex<Vec<(String, Option<SessionId>)>>>;
 
 /// A writer answering `done` for every description, recording what it saw.
 fn stub(done: crate::FeedbackDone) -> (crate::WriteFeedback, Seen) {
     let seen: Seen = Arc::default();
     let writer: crate::WriteFeedback = Arc::new({
         let seen = Arc::clone(&seen);
-        move |description: &str, session: Option<&str>| {
+        move |description: &str, session: Option<&SessionId>| {
             seen.lock()
                 .unwrap()
-                .push((description.to_owned(), session.map(str::to_owned)));
+                .push((description.to_owned(), session.cloned()));
             Ok(done.clone())
         }
     });
@@ -49,7 +54,7 @@ fn start_runs_the_writer_and_posts_its_answer() {
             Some(writer),
             Some(&tx),
             "the sound".to_owned(),
-            Some("s_aaaaaaaaaaaaaaaa".to_owned())
+            Some(session())
         ),
         None
     );
@@ -59,10 +64,7 @@ fn start_runs_the_writer_and_posts_its_answer() {
     assert_eq!(result.unwrap(), expected);
     assert_eq!(
         *seen.lock().unwrap(),
-        [(
-            "the sound".to_owned(),
-            Some("s_aaaaaaaaaaaaaaaa".to_owned())
-        )]
+        [("the sound".to_owned(), Some(session()))]
     );
 }
 

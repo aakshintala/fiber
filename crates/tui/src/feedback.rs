@@ -5,6 +5,8 @@
 use std::sync::mpsc::Sender;
 use std::thread;
 
+use contract::SessionId;
+
 use crate::{FeedbackDone, Input, WriteFeedback};
 
 /// The terminal cannot write feedback without an injected writer: the
@@ -23,7 +25,7 @@ pub(crate) fn start(
     writer: Option<WriteFeedback>,
     out: Option<&Sender<Input>>,
     description: String,
-    session: Option<String>,
+    session: Option<SessionId>,
 ) -> Option<String> {
     let Some(writer) = writer else {
         return Some(NO_WRITER.to_owned());
@@ -35,7 +37,7 @@ pub(crate) fn start(
     match thread::Builder::new()
         .name("tui-feedback".to_owned())
         .spawn(move || {
-            let done: Result<FeedbackDone, String> = writer(&description, session.as_deref());
+            let done: Result<FeedbackDone, String> = writer(&description, session.as_ref());
             match out.send(Input::Feedback(done)) {
                 Ok(()) | Err(_) => {}
             }
