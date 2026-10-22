@@ -295,6 +295,16 @@ fn a_split_acknowledgement_parses_whole_after_its_tail_arrives() {
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let (client, mut session) = UnixStream::pair().unwrap();
     client.set_nonblocking(true).unwrap();
+    let mut full = serde_json::to_vec(&serde_json::json!({"kind": "command_accepted", "ts": 1,
+        "schema_version": contract::SCHEMA_VERSION,
+        "payload": {"command_id": "c_split"}}))
+    .unwrap();
+    full.push(b'\n');
+    let cut = full.len() / 2;
+    // The prefix lands before the reader exists: the parked wait below
+    // can only be the post-prefix wait, never an empty-socket one, so
+    // the tail cannot arrive before the reader consumes the prefix.
+    session.write_all(&full[..cut]).unwrap();
     let stream = client.try_clone().unwrap();
     let read = BufReader::new(client);
     let end = temp.clock.origin() + SESSIONS_STOP_WITHIN;
@@ -304,13 +314,6 @@ fn a_split_acknowledgement_parses_whole_after_its_tail_arrives() {
         let ack = read_ack(&mut read, &stream, &hub, "c_split", end);
         done_tx.send(matches!(ack, Ack::Accepted)).unwrap_or(());
     });
-    let mut full = serde_json::to_vec(&serde_json::json!({"kind": "command_accepted", "ts": 1,
-        "schema_version": contract::SCHEMA_VERSION,
-        "payload": {"command_id": "c_split"}}))
-    .unwrap();
-    full.push(b'\n');
-    let cut = full.len() / 2;
-    session.write_all(&full[..cut]).unwrap();
     // The head holds no line: the parked wait below is the signal the
     // reader kept it and waits for the tail.
     assert!(
