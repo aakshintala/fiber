@@ -8,8 +8,8 @@ use contract::ErrorCode;
 
 use super::{
     ArgumentsError, AskUserError, EditError, FileError, ImageReadError, InspectError, PdfError,
-    ReadError, ResolveError, SkillError, ToolError, UrlError, WebFetchError, WebSearchError,
-    WriteError,
+    ReadError, ResolveError, ShellError, SkillError, ToolError, UrlError, WebFetchError,
+    WebSearchError, WriteError,
 };
 use crate::error::{SessionListError, SessionMessageError};
 
@@ -891,6 +891,125 @@ fn the_arguments_of_a_fetch_keep_their_code() {
     assert_eq!(
         error.to_string(),
         format!("The arguments do not fit the schema: {}.", source())
+    );
+}
+
+#[test]
+fn a_bad_shell_argument_keeps_its_text_and_code() {
+    let error = ShellError::NotADirectory {
+        path: PathBuf::from("/d/x"),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`/d/x` is not a directory. Give a directory as `workdir`."
+    );
+    let error = ShellError::MonitorAlone;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`monitor` cannot be combined with `run_in_background` or `tty`."
+    );
+    let error = ShellError::MonitorTimeout;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "A monitor's limit is `deadline_ms`.");
+    let error = ShellError::DeadlineWithoutMonitor;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`deadline_ms` is a monitor's deadline; set `monitor: true` with it."
+    );
+    let error = ShellError::NoJobs;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "Background jobs are not available in this session."
+    );
+    let error = ShellError::BareWait;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "This command waits with `sleep` for 25 seconds or more. Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop."
+    );
+}
+
+#[test]
+fn a_deadline_past_the_session_longest_names_the_longest_twice() {
+    let error = ShellError::DeadlineTooLong { max_ms: 600_000 };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`deadline_ms` is more than 600000, the longest a monitor may run here. Give 600000 or less."
+    );
+}
+
+#[test]
+fn a_command_that_cannot_start_or_be_reaped_is_a_tool_error() {
+    let error = ShellError::NotStarted {
+        source: io::Error::other("no such file"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The command could not be started: no such file."
+    );
+    let error = ShellError::NotReaped;
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The command's process could not be reaped."
+    );
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn a_stopped_command_keeps_its_closing_line() {
+    let error = ShellError::Indeterminate;
+    assert_eq!(error.code(), ErrorCode::Indeterminate);
+    assert_eq!(
+        error.to_string(),
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    let error = ShellError::TimedOut { ms: 1000 };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(error.to_string(), crate::shell::timeout_line(1000));
+    let error = ShellError::DeadlinePassed { ms: 1000 };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(error.to_string(), crate::shell::deadline_line(1000));
+    let error = ShellError::Killed {
+        signal: "SIGKILL".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::Signal);
+    assert_eq!(error.to_string(), "Killed by SIGKILL.");
+    assert_eq!(error.to_string(), crate::shell::killed_line("SIGKILL"));
+    let error = ShellError::Exited { code: 3 };
+    assert_eq!(error.code(), ErrorCode::NonzeroExit);
+    assert_eq!(error.to_string(), "Exit code 3.");
+    assert_eq!(error.to_string(), crate::shell::exit_line(3));
+}
+
+#[test]
+fn a_limit_stop_says_what_its_line_says() {
+    for monitor in [false, true] {
+        let limit = crate::shell::Limit { ms: 1000, monitor };
+        assert_eq!(limit.stopped().to_string(), limit.line());
+    }
+}
+
+#[test]
+fn a_capped_or_flooded_job_keeps_its_text() {
+    let error = ShellError::Capped;
+    assert_eq!(error.code(), ErrorCode::OutputCap);
+    assert_eq!(
+        error.to_string(),
+        "The output passed 5 GB and the job was stopped."
+    );
+    let error = ShellError::Flooded;
+    assert_eq!(error.code(), ErrorCode::Flooded);
+    assert_eq!(
+        error.to_string(),
+        "The monitor's output was suppressed for 30 seconds, so it was stopped. Restart it with a more selective source."
     );
 }
 

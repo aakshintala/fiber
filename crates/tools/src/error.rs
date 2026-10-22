@@ -11,12 +11,14 @@ mod file_tools;
 mod media;
 mod misc;
 mod session;
+mod shell;
 mod web_fetch;
 
 pub(crate) use file_tools::{EditError, ReadError, WriteError};
 pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
+pub(crate) use shell::ShellError;
 pub(crate) use web_fetch::{UrlError, WebFetchError};
 
 /// Every way a built-in tool call fails. The root is the one type that
@@ -63,6 +65,9 @@ pub(crate) enum ToolError {
     /// `web_fetch` refused the URL, or the fetch failed.
     #[error(transparent)]
     WebFetch(#[from] WebFetchError),
+    /// `shell` refused the call, or the command failed.
+    #[error(transparent)]
+    Shell(#[from] ShellError),
 }
 
 impl ToolError {
@@ -83,6 +88,7 @@ impl ToolError {
             Self::Edit(error) => error.code(),
             Self::WebSearch(error) => error.code(),
             Self::WebFetch(error) => error.code(),
+            Self::Shell(error) => error.code(),
         }
     }
 }

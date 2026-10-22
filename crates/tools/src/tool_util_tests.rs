@@ -7,26 +7,8 @@ use contract::shapes::{ContentPart, Effect};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{
-    Act, arguments, cancelled_before, effects, errored, failed, no_effects, parsed, recheck,
-};
+use super::{Act, arguments, cancelled_before, effects, errored, no_effects, parsed, recheck};
 use crate::error::FileError;
-
-#[test]
-fn the_failed_output_carries_the_code_and_the_message_with_a_newline() {
-    let output = failed(ErrorCode::ToolError, "boom".to_owned());
-    assert_eq!(
-        output.content,
-        vec![ContentPart::Text {
-            text: "boom\n".to_owned()
-        }]
-    );
-    let error = output.error.expect("failed carries an error");
-    assert_eq!(error.code, ErrorCode::ToolError);
-    assert_eq!(error.message, "boom");
-    assert_eq!(error.retry_after_ms, None);
-    assert_eq!(error.provider, None);
-}
 
 #[test]
 fn cancelled_before_says_so_with_no_error() {
