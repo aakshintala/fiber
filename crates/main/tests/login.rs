@@ -1708,12 +1708,12 @@ fn list_models(setup: &Setup) -> Output {
 #[test]
 fn screen_wait_for_keeps_trailing_text_for_the_next_wait() {
     // One read holds both prompts. The second wait must find its text
-    // already received, with no further chunk: the sender stays open, so a
-    // wait for bytes that never come times out instead of disconnecting.
+    // already received; closing the sender makes a missed prompt fail at EOF.
     let terminal = Terminal::open();
     let (send, chunks) = mpsc::channel();
     send.send("fiber: stored credentials/acme/default\r\nReviewer, by number or name: ".to_owned())
         .unwrap();
+    drop(send);
     let mut screen = Screen {
         chunks,
         typed: fs::File::from(terminal.main.try_clone().unwrap()),
