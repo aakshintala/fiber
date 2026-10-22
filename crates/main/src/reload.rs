@@ -84,6 +84,18 @@ pub(crate) fn record_load(
     })
 }
 
+/// Which preparation `prepare_inner` runs: an explicit reload
+/// classifies, stages and commits the MCP sync, while the late
+/// extension-approval preparation skips it, so no slot starts and the
+/// grouping, records, failures and carried prompt sources stay empty.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Preparation {
+    /// An explicit reload: run the MCP sync.
+    Explicit,
+    /// The late extension-approval preparation: skip the MCP sync.
+    Late,
+}
+
 pub(crate) struct State {
     pub(crate) sources: config::Sources,
     pub(crate) template: r#loop::PromptInputs,
@@ -212,7 +224,7 @@ impl State {
             let state = state.clone();
             let reads = state.switching.reads();
             preparer(
-                move |route| state.prepare_inner(route, false),
+                move |route| state.prepare_inner(route, Preparation::Explicit),
                 move |purpose, work| reads.run(purpose, work),
             )
         };
@@ -221,10 +233,10 @@ impl State {
             let reads = state.switching.reads();
             preparer(
                 move |route| {
-                    // The late preparation skips the MCP sync (the `true`
-                    // below): no slot starts, and no grouping, records,
-                    // failures or carried prompt sources.
-                    let mut prepared = state.prepare_inner(route, true)?;
+                    // The late preparation skips the MCP sync
+                    // (`Preparation::Late` below): no slot starts, and no
+                    // grouping, records, failures or carried prompt sources.
+                    let mut prepared = state.prepare_inner(route, Preparation::Late)?;
                     prepared.notices.retain(|notice| !written.contains(notice));
                     Ok(prepared)
                 },
@@ -237,7 +249,7 @@ impl State {
     fn prepare_inner(
         self: &Arc<Self>,
         route: &r#loop::ReloadRoute,
-        late: bool,
+        preparation: Preparation,
     ) -> Result<r#loop::ReloadPrepared, Rejection> {
         use std::sync::PoisonError;
         let failure = |error: Failure| Rejection {
@@ -337,71 +349,74 @@ impl State {
         // sync; the late preparation skips it, so no slot starts, no
         // cache writes, and the grouping, records and failures stay
         // empty.
-        let (synced, protected, ready): (Option<mcp::Synced>, Vec<String>, Vec<String>) = if late {
-            (None, Vec::new(), Vec::new())
-        } else {
-            let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
-            notices.extend(specs.notices);
-            // Repository servers stay with the offer flow that owns
-            // them: never removed while still declared.
-            let protected: Vec<String> = specs
-                .repository
-                .iter()
-                .map(|repo| repo.spec.name.clone())
-                .collect();
-            // Eligible approved repository servers classify like any
-            // other server: changed takes the replace path, same-spec
-            // healthy re-lists in place, and a server approved
-            // in-session starts with its prompt sources joining the
-            // `/` list. Unapproved stay skipped exactly as before.
-            let scope = self
-                .repository
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            let prepared = crate::mcp_servers::repository_servers::prepare(
-                &self.sources.home,
-                &self.sources.project,
-                scope.workspace.as_ref().unwrap_or(&self.sources.workspace),
-                &now.loader.clock,
-                &scope.skipped,
-                specs.repository,
-            );
-            if let Some(failed) = prepared.required_failed {
-                return Err(Rejection {
-                    code: contract::ErrorCode::McpRequiredServerFailed,
-                    message: failed.error.message,
-                });
-            }
-            for failed in prepared.failed {
-                notices.push(contract::events::Notice {
-                    code: failed.error.code,
-                    message: failed.error.message,
-                    extension: None,
-                });
-            }
-            let ready: Vec<String> = prepared
-                .ready
-                .iter()
-                .map(|spec| spec.name.clone())
-                .collect();
-            let mut sync_specs = specs.specs;
-            sync_specs.extend(prepared.ready);
-            let mut rows = mcp::classify_sync(sync_specs, &self.servers);
-            rows.retain(
-                |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
-            );
-            let staged =
-                mcp::stage_sync(rows, &self.servers, &sync_inputs).map_err(|error| Rejection {
-                    code: error.code,
-                    message: error.message,
-                })?;
-            (
-                Some(mcp::commit_sync(staged, &self.servers, &sync_inputs)),
-                protected,
-                ready,
-            )
-        };
+        let (synced, protected, ready): (Option<mcp::Synced>, Vec<String>, Vec<String>) =
+            if preparation == Preparation::Late {
+                (None, Vec::new(), Vec::new())
+            } else {
+                let specs = crate::mcp_servers::specs(&config).map_err(failure)?;
+                notices.extend(specs.notices);
+                // Repository servers stay with the offer flow that owns
+                // them: never removed while still declared.
+                let protected: Vec<String> = specs
+                    .repository
+                    .iter()
+                    .map(|repo| repo.spec.name.clone())
+                    .collect();
+                // Eligible approved repository servers classify like any
+                // other server: changed takes the replace path, same-spec
+                // healthy re-lists in place, and a server approved
+                // in-session starts with its prompt sources joining the
+                // `/` list. Unapproved stay skipped exactly as before.
+                let scope = self
+                    .repository
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                let prepared = crate::mcp_servers::repository_servers::prepare(
+                    &self.sources.home,
+                    &self.sources.project,
+                    scope.workspace.as_ref().unwrap_or(&self.sources.workspace),
+                    &now.loader.clock,
+                    &scope.skipped,
+                    specs.repository,
+                );
+                if let Some(failed) = prepared.required_failed {
+                    return Err(Rejection {
+                        code: contract::ErrorCode::McpRequiredServerFailed,
+                        message: failed.error.message,
+                    });
+                }
+                for failed in prepared.failed {
+                    notices.push(contract::events::Notice {
+                        code: failed.error.code,
+                        message: failed.error.message,
+                        extension: None,
+                    });
+                }
+                let ready: Vec<String> = prepared
+                    .ready
+                    .iter()
+                    .map(|spec| spec.name.clone())
+                    .collect();
+                let mut sync_specs = specs.specs;
+                sync_specs.extend(prepared.ready);
+                let mut rows = mcp::classify_sync(sync_specs, &self.servers);
+                rows.retain(
+                    |row| !matches!(row, mcp::SyncRow::Remove { name } if protected.contains(name)),
+                );
+                let staged =
+                    mcp::stage_sync(rows, &self.servers, &sync_inputs).map_err(|error| {
+                        Rejection {
+                            code: error.code,
+                            message: error.message,
+                        }
+                    })?;
+                (
+                    Some(mcp::commit_sync(staged, &self.servers, &sync_inputs)),
+                    protected,
+                    ready,
+                )
+            };
         // Every shadow source joins the carried rows: a started
         // server's rows are new, and a replaced server's rows ride
         // along so `loop` routes those tags to the replacement source
@@ -477,8 +492,6 @@ impl State {
             tools.push(("builtin".into(), tool));
             infos.push(info);
         }
-        // The sync's tools and infos join after built-ins, so MCP
-        // registrations keep their startup precedence.
         if let Some(synced) = &synced {
             tools.extend(
                 synced
@@ -528,6 +541,11 @@ impl State {
         };
         let shared = self.clone();
         let carried_prompts = new_prompts.clone();
+        // Whether the installed set declares `mcp_resources`: the install
+        // aligns the session marker with it, so a later in-session
+        // repository approval neither offers a second registration scoped
+        // to its own servers nor suppresses the needed one.
+        let declares_resources = infos.iter().any(|info| info.name == mcp::RESOURCES_TOOL);
         let installed = Box::new(move || {
             // The session's current rows grow by this reload's additions,
             // so the next preparation rebuilds from them: rows the session
@@ -570,6 +588,7 @@ impl State {
                 let name = info.name.clone();
                 (shared.declare)(&name, Some(info));
             }
+            shared.servers.set_resources_declared(declares_resources);
             publish();
             crate::settings::refresh_shell_read_only(&shared.shell_read_only, &next.config);
             shared.switching.reloaded(next);

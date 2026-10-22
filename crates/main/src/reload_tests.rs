@@ -298,7 +298,7 @@ impl Fixture {
                             model: "scripted/s.json".into(),
                             credential: None,
                         },
-                        false,
+                        super::Preparation::Explicit,
                     )
                     .unwrap()
             },
@@ -322,7 +322,7 @@ fn invalid_config_keeps_the_set_and_a_repaired_config_can_install() {
                         model: "scripted/s.json".into(),
                         credential: None,
                     },
-                    false,
+                    super::Preparation::Explicit,
                 )
                 .err()
                 .unwrap()
@@ -593,7 +593,7 @@ fn a_rejected_reload_keeps_the_list_and_a_repaired_config_installs() {
                         model: "scripted/s.json".into(),
                         credential: None,
                     },
-                    false,
+                    super::Preparation::Explicit,
                 )
                 .err()
                 .unwrap()
@@ -793,7 +793,7 @@ fn reload_rejects_a_missing_required_package_and_keeps_current() {
                         model: "scripted/s.json".into(),
                         credential: None,
                     },
-                    false,
+                    super::Preparation::Explicit,
                 )
                 .err()
                 .unwrap()
@@ -1012,7 +1012,7 @@ fn a_rejected_required_package_quotes_its_own_notice() {
                         model: "scripted/s.json".into(),
                         credential: None,
                     },
-                    false,
+                    super::Preparation::Explicit,
                 )
                 .err()
                 .unwrap()
@@ -1264,7 +1264,7 @@ impl Fixture {
                         model: "scripted/s.json".into(),
                         credential: None,
                     },
-                    false,
+                    super::Preparation::Explicit,
                 )
             },
         )
@@ -1980,6 +1980,117 @@ fn reload_removes_mcp_resources_when_no_post_sync_slot_offers_them() {
             .all(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL),
     );
     (prepared.installed)();
+    assert!(
+        !fixture
+            .declared_names()
+            .contains(&mcp::RESOURCES_TOOL.to_owned())
+    );
+}
+
+#[test]
+fn reload_aligns_the_resources_marker_with_the_installed_set() {
+    // The session starts with no offering slot, so the marker is unset.
+    let mut fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    assert!(!fixture.state.servers.resources_declared());
+    let repo = FakeServer::new(&fixture.rig, "db", &json!([{"name": "echo"}]));
+    repo.answer("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
+    // The repository server starts as a person server so its cache is
+    // written, then moves to the repository layer and goes lazy with a
+    // resources flag no live fixture server would set.
+    fixture.rewrite(json!({
+        "fx": fixture.servers[0].entry(json!({})),
+        "db": repo.entry(json!({})),
+    }));
+    fixture.relaunch();
+    fixture.flip_resources("db", true);
+    fixture.relaunch();
+    write_repo_config(&fixture, &json!({"db": repo.entry(json!({}))}));
+    fixture.rewrite(json!({"fx": fixture.servers[0].entry(json!({}))}));
+    let prepared = fixture.prepare();
+    assert!(
+        prepared
+            .tools
+            .iter()
+            .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL),
+        "a protected offering slot keeps the resources tool"
+    );
+    (prepared.installed)();
+    assert!(
+        fixture.state.servers.resources_declared(),
+        "install aligns the marker with the offered set"
+    );
+    // A repository server approved in-session starts offering resources
+    // too: the loaded start carries its own scoped copy.
+    let config = fixture.rig.config(Vec::<String>::new());
+    let specs = crate::mcp_servers::specs(&config).expect("the specs read");
+    let db = specs
+        .repository
+        .into_iter()
+        .find(|repo| repo.spec.name == "db")
+        .expect("db stays declared")
+        .spec;
+    let workspace = fixture.state.sources.workspace.clone();
+    let artifacts = fixture.state.artifacts.clone();
+    let cache = config::mcp_cache_dir(&fixture.state.sources.home);
+    let clock = fixture.state.template.clock.clone();
+    let scoped = fakes::within(
+        "scoped resources start",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            mcp::start_observed(
+                vec![db],
+                &workspace,
+                &artifacts,
+                std::sync::Arc::new(DummyImages),
+                &cache,
+                &clock,
+                "test",
+                None,
+            )
+        },
+    );
+    assert!(
+        scoped
+            .tools
+            .iter()
+            .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL),
+        "the adopted start carries its scoped copy"
+    );
+    // The post-offer rule strips the scoped copy exactly when the marker
+    // is set, so the aggregate the reload installed still declares: on the
+    // old code the marker stays unset and the scoped copy replaces it.
+    let mut tools = scoped.tools;
+    let mut infos = scoped.infos;
+    if fixture.state.servers.resources_declared() {
+        tools.retain(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL);
+        infos.retain(|info| info.name != mcp::RESOURCES_TOOL);
+    }
+    scoped.servers.stop();
+    assert!(
+        tools
+            .iter()
+            .all(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL),
+        "the approval strips its scoped copy"
+    );
+    assert!(
+        fixture
+            .declared_names()
+            .contains(&mcp::RESOURCES_TOOL.to_owned()),
+        "the full resource tool set still declares"
+    );
+    // The offering goes away with its declaration: the next install
+    // clears the marker again, so a later approval offers its own copy
+    // instead of suppressing it.
+    write_repo_config(&fixture, &json!({}));
+    let prepared = fixture.prepare();
+    assert!(
+        prepared
+            .tools
+            .iter()
+            .all(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL),
+    );
+    (prepared.installed)();
+    assert!(!fixture.state.servers.resources_declared());
     assert!(
         !fixture
             .declared_names()

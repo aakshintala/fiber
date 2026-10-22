@@ -117,17 +117,11 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                     }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
-                } else if slot.is_running() {
-                    // Running but gone or expired: it died while idle, so
-                    // the re-list would only fall back; replace beside it.
-                    SyncRow::Shadow {
-                        spec,
-                        disposition: Disposition::Restarted,
-                    }
-                } else if slot.served_before() {
-                    // `Down` or `Dead`: it served before and serves no
-                    // more, so the sync swaps it beside the old slot and
-                    // the commit files the name under `restarted`.
+                } else if slot.is_running() || slot.served_before() {
+                    // Running but gone or expired, `Down` or `Dead`: it
+                    // served before and serves no more, so the re-list
+                    // would only fall back; replace beside the old slot
+                    // and file the name under `restarted`.
                     SyncRow::Shadow {
                         spec,
                         disposition: Disposition::Restarted,

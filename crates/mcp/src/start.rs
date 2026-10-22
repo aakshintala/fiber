@@ -399,6 +399,14 @@ impl Servers {
         self.resources_declared.store(true, Ordering::SeqCst);
     }
 
+    /// Aligns the marker with the installed tool set: set when the session
+    /// declares `mcp_resources`, cleared when it does not, so a later
+    /// in-session repository approval neither offers a second registration
+    /// scoped to its own servers nor suppresses the needed one.
+    pub fn set_resources_declared(&self, declared: bool) {
+        self.resources_declared.store(declared, Ordering::SeqCst);
+    }
+
     /// Whether [`Servers::mark_resources_declared`] has run.
     pub fn resources_declared(&self) -> bool {
         self.resources_declared.load(Ordering::SeqCst)

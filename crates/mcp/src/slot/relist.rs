@@ -74,22 +74,21 @@ impl Slot {
         };
         let timeout = self.spec.startup_timeout;
         let bound = crate::wait::deadline(self.clock.as_ref(), timeout);
-        // Maps a failed page to the replace path: a timeout misses the
+        // Any failed page signals the replace path: a timeout misses the
         // deadline, a death carries the death this re-list is the first to
-        // see, and any other end replaces with no records.
-        let fail = |error: Option<CallError>| replace(self, restarted, error);
+        // see, and any other end — expired and refused lists included —
+        // replaces with no records.
         let tools = if list_tools {
-            match crate::server::list_pages::<ListedTool, Relisted>(
+            match crate::server::list_pages::<ListedTool>(
                 &server,
                 &self.clock,
                 "tools/list",
                 "tools",
                 bound,
                 &crate::wait::NoCancel,
-                |error| Err(fail(error)),
             ) {
                 Ok(tools) => tools,
-                Err(relisted) => return relisted,
+                Err(error) => return replace(self, restarted, error),
             }
         } else {
             Vec::new()
@@ -97,17 +96,16 @@ impl Slot {
         let prompts = if list_prompts {
             // Any prompts/list error falls back to the replace path: a
             // failed listing never writes a cache from an empty list.
-            match crate::server::list_pages::<ListedPrompt, Relisted>(
+            match crate::server::list_pages::<ListedPrompt>(
                 &server,
                 &self.clock,
                 "prompts/list",
                 "prompts",
                 bound,
                 &crate::wait::NoCancel,
-                |error| Err(fail(error)),
             ) {
                 Ok(prompts) => prompts,
-                Err(relisted) => return relisted,
+                Err(error) => return replace(self, restarted, error),
             }
         } else {
             Vec::new()
