@@ -630,6 +630,7 @@ fn a_debug_lines_data_must_be_an_object() {
             with_data("[1,2]", "array"),
             with_data("null", "null"),
             with_data("7", "number"),
+            line(10, "debug", "session", Some(SESSION), "missing-data"),
         ],
     );
     assert_eq!(

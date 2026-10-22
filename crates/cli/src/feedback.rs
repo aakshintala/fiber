@@ -185,8 +185,8 @@ struct Entry {
 
 /// `line` as an entry, when it is a diagnostic line of `process` with every
 /// documented field in its documented shape (`docs/state.md`, "Diagnostic
-/// logs"), `data` an object when present. Anything else is left out, as is
-/// an `extension_log` line: it is the extension's own text, which Fiber
+/// logs"), including object `data` on debug lines. Anything else is left out,
+/// as is an `extension_log` line: it is the extension's own text, which Fiber
 /// cannot vouch for.
 fn entry(line: &str, process: &str) -> Option<Entry> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
@@ -197,6 +197,9 @@ fn entry(line: &str, process: &str) -> Option<Entry> {
     let ts = fields.get("ts")?.as_u64()?;
     let level = fields.get("level")?.as_str()?;
     if !matches!(level, "error" | "warn" | "info" | "debug") {
+        return None;
+    }
+    if level == "debug" && !fields.get("data").is_some_and(serde_json::Value::is_object) {
         return None;
     }
     if fields.get("process")?.as_str()? != process {
