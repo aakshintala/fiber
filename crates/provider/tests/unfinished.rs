@@ -87,7 +87,7 @@ fn completions_usage_with_write() -> Value {
 }
 
 #[test]
-fn completions_failed_after_cache_write_carries_it_under_the_hour_lifetime() {
+fn completions_failed_after_cache_write_carries_it_under_five_minutes() {
     let body = {
         let mut out = format!(
             "data: {}\n\ndata: {}\n\n",
@@ -117,7 +117,7 @@ fn completions_failed_after_cache_write_carries_it_under_the_hour_lifetime() {
         Tokens {
             input: 6,
             cache_read: 4,
-            cache_write: std::collections::BTreeMap::from([("1h".to_owned(), 8)]),
+            cache_write: std::collections::BTreeMap::from([("5m".to_owned(), 8)]),
             output: 3,
         }
     );

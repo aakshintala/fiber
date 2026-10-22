@@ -214,7 +214,7 @@ vocabulary of `docs/permissions.md`, "Effects":
 |---|---|---|---|
 | `input` | integer | yes | input tokens neither read from nor written to the cache |
 | `cache_read` | integer | yes | input tokens read from the cache |
-| `cache_write` | object | yes | input tokens written to the cache, keyed by cache lifetime (`"5m"`, `"1h"`); `{}` when nothing was written |
+| `cache_write` | object | yes | input tokens written to the cache, keyed by cache-write billing class (`"5m"`, `"1h"`), not the vendor lifetime (OpenAI's 30-minute cache reports under `"5m"`); `{}` when nothing was written |
 | `output` | integer | yes | output tokens, reasoning included |
 
 ### `usage`
