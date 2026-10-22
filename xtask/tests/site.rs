@@ -641,3 +641,46 @@ fn before_the_first_stable_the_root_tree_has_no_banner() {
         "the nightly tree banners: {text}"
     );
 }
+
+/// Builds a one-tag fixture whose front page is `index` and whose docs hold
+/// `top.md`, returning the build's exit code and output.
+fn build_with_index(index: &str) -> (Option<i32>, String) {
+    let fixture = Fixture::new();
+    fixture.commit_front_page("front");
+    fixture.commit_text("index.html", index, "front page links");
+    fixture.commit_docs_text("top.md", "# Top\n\n## Some Part\n", "docs");
+    fixture.tag("v0.4.0");
+    let out = TempDir::new("xtask-site-out");
+    site_out(&fixture.repo, &out.path().join("site"))
+}
+
+#[test]
+fn a_front_page_link_into_docs_on_github_fails_the_build() {
+    let (code, text) = build_with_index(
+        "<a href=\"https://github.com/aakshintala/fiber/blob/main/docs/top.md#some-part\">x</a>",
+    );
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("points at GitHub"), "{text}");
+}
+
+#[test]
+fn a_front_page_link_to_a_page_the_build_did_not_write_fails() {
+    let (code, text) = build_with_index("<a href=\"missing.html\">x</a>");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("no missing.html"), "{text}");
+}
+
+#[test]
+fn a_front_page_link_to_a_missing_anchor_fails() {
+    let (code, text) = build_with_index("<a href=\"top.html#no-such-part\">x</a>");
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("no #no-such-part"), "{text}");
+}
+
+#[test]
+fn good_front_page_links_build() {
+    let (code, text) = build_with_index(
+        "<a href=\"top.html#some-part\">x</a><a href=\"style.css\">y</a><a href=\"#main\">z</a><a href=\"https://github.com/aakshintala/fiber\">r</a><main id=\"main\"></main>",
+    );
+    assert_eq!(code, Some(0), "{text}");
+}
