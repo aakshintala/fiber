@@ -613,7 +613,7 @@ impl FakeClock {
             .take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
-            crate::deadline::Deadline::after(Duration::from_secs(5))
+            crate::deadline::Deadline::after(crate::MUST_SUCCEED_WITHIN)
                 .recv(&release)
                 .expect("waited for the test to release the advance_when_parked wait");
         }
@@ -697,7 +697,7 @@ impl FakeClock {
             .take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
-            crate::deadline::Deadline::after(Duration::from_secs(5))
+            crate::deadline::Deadline::after(crate::MUST_SUCCEED_WITHIN)
                 .recv(&release)
                 .expect("waited for the test to release the await_any predicate");
         }
@@ -729,7 +729,7 @@ impl FakeClock {
             .take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
-            crate::deadline::Deadline::after(Duration::from_secs(5))
+            crate::deadline::Deadline::after(crate::MUST_SUCCEED_WITHIN)
                 .recv(&release)
                 .expect("waited for the test to release the mark_parked predicate");
         }

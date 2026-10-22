@@ -78,6 +78,16 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     kept("crates/main/tests/repository_offer.rs", "SLICE", SLICE),
     kept("crates/fakes/src/finished_tests.rs", "SHORT", ABSENT),
     kept("crates/main/src/read_signals_tests.rs", "SHORT", ABSENT),
+    kept(
+        "crates/fakes/src/deadline_tests.rs",
+        "SPAN",
+        "value under test",
+    ),
+    kept(
+        "crates/fakes/src/provider_server_tests.rs",
+        "ABSENT",
+        ABSENT,
+    ),
     held("crates/cli/src/extension_test_tests.rs", "held by #3103"),
     held("crates/extensions/src/hooks_tests.rs", "held by #3028"),
     held("crates/extensions/src/host_tests.rs", "held by #3028"),

@@ -7,15 +7,10 @@ use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use super::{open, read_to_eof};
 use crate::deadline::Deadline;
 use crate::within::{MUST_SUCCEED_WITHIN, within};
-
-/// How long a wait that must succeed may take. Every wait below ends as
-/// soon as its signal arrives; the deadline only reports a missed one.
-const WAIT: Duration = Duration::from_secs(3);
 
 /// One scripted `Read` outcome.
 enum Step {
@@ -64,9 +59,9 @@ fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>, what: &str) -> Vec<T
     thread::spawn(move || {
         done_tx.send(rx.iter().collect::<Vec<T>>()).unwrap_or(());
     });
-    match Deadline::after(WAIT).recv(&done_rx) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx) {
         Ok(values) => values,
-        Err(err) => panic!("waited {WAIT:?} for {what}: {err}"),
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}: {err}"),
     }
 }
 
@@ -164,5 +159,8 @@ fn a_non_interrupted_error_ends_the_thread() {
             alive_tx.send(()).unwrap_or(());
         },
     );
-    disconnected(Deadline::after(WAIT).recv(&alive_rx), "the error");
+    disconnected(
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&alive_rx),
+        "the error",
+    );
 }

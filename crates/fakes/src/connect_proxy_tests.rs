@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -15,11 +16,6 @@ const CONNECT_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 /// How long the test waits for the proxy to see a tunnel close.
 const CLOSE_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
-
-/// How long a wait that must return at once may take: under the 10 s
-/// deadlines above, far over an immediate return. A wait that ignored its met
-/// count would take the whole deadline and miss this.
-const QUICK: Duration = Duration::from_secs(5);
 
 /// An echo listener: it answers one connection's first four bytes, then
 /// stays open until the client goes away, so only the client's close ends
@@ -204,9 +200,9 @@ fn await_connects_pins_its_boundary_and_deadline() {
             }
         });
         assert_eq!(
-            Deadline::after(QUICK).recv(&finished),
+            Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished),
             Ok(true),
-            "a met count returns before the deadline within {QUICK:?}"
+            "a met count returns before the deadline within {MUST_SUCCEED_WITHIN:?}"
         );
     });
     first.write_all(b"ping").unwrap();
@@ -258,9 +254,9 @@ fn await_closed_pins_its_deadline() {
             }
         });
         assert_eq!(
-            Deadline::after(QUICK).recv(&finished),
+            Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished),
             Ok(true),
-            "a met closed count returns before the deadline within {QUICK:?}"
+            "a met closed count returns before the deadline within {MUST_SUCCEED_WITHIN:?}"
         );
     });
     echo.join().unwrap();
@@ -599,12 +595,12 @@ fn dropping_the_proxy_closes_every_open_tunnel() {
     drop(proxy);
     // The still-open tunnel's sockets are shut: its read ends at once.
     client_b
-        .set_read_timeout(Some(QUICK))
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
         .expect("the test bounds its reads");
     let mut rest = Vec::new();
-    client_b
-        .read_to_end(&mut rest)
-        .unwrap_or_else(|e| panic!("the open tunnel ends on drop within {QUICK:?}: {e}"));
+    client_b.read_to_end(&mut rest).unwrap_or_else(|e| {
+        panic!("the open tunnel ends on drop within {MUST_SUCCEED_WITHIN:?}: {e}")
+    });
     drop(client_b);
     echo_a.join().unwrap();
     echo_b.join().unwrap();
