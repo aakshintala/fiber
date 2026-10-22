@@ -1088,10 +1088,10 @@ fn keep_redeclare_with_a_changed_hint_shows_in_the_declared_effects() {
 }
 
 #[test]
-fn classify_files_a_never_started_key_change_under_started() {
-    // A slot that never served with a changed start key starts fresh:
-    // the reload files it under `started`, never `restarted`, and the
-    // commit swaps the leftover slot for the live one.
+fn classify_files_a_never_started_key_change_under_restarted() {
+    // A changed start key follows the replacement path, even when the old
+    // lazy slot never served; the commit swaps the leftover slot for the
+    // live one and files the name under `restarted`.
     let setup = Setup::new();
     setup.tools(&serde_json::json!([{"name": "echo"}]));
     setup.result("echo", HI);
@@ -1123,11 +1123,11 @@ fn classify_files_a_never_started_key_change_under_started() {
         matches!(
             rows.as_slice(),
             [SyncRow::Shadow {
-                disposition: Disposition::Started,
+                disposition: Disposition::Restarted,
                 ..
             }]
         ),
-        "a never-served slot with a changed key starts fresh"
+        "a never-served slot with a changed key takes the replacement path"
     );
     let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
     let (outcome, servers) = Deadline::after(WITHIN)
@@ -1137,10 +1137,10 @@ fn classify_files_a_never_started_key_change_under_started() {
     let owned = setup.owned_inputs(&images);
     let synced = plan_sync(&staged, &servers, &owned.inputs());
     apply_sync(staged, &servers, &owned.inputs());
-    assert_eq!(synced.servers.started, vec!["fx".to_owned()]);
+    assert_eq!(synced.servers.restarted, vec!["fx".to_owned()]);
     assert!(
-        synced.servers.restarted.is_empty(),
-        "a never-served slot never files under restarted"
+        synced.servers.started.is_empty(),
+        "a changed key takes the existing replacement reporting path"
     );
     let echo = synced
         .tools

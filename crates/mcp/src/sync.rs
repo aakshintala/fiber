@@ -137,9 +137,9 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
             },
             Some(slot) => {
                 let old = slot.spec();
-                // A slot that served before replaces, filed under
-                // `restarted`; one that never served starts fresh, filed
-                // under `started`.
+                // When the start spec matches, a slot that served before
+                // replaces under `restarted`; a never-started slot starts
+                // fresh under `started`.
                 let disposition = if slot.is_running() || slot.served_before() {
                     Disposition::Restarted
                 } else {
@@ -153,7 +153,10 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                     || old.call_timeout != spec.call_timeout
                     || old.required != spec.required
                 {
-                    SyncRow::Shadow { spec, disposition }
+                    SyncRow::Shadow {
+                        spec,
+                        disposition: Disposition::Restarted,
+                    }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
                 } else {
