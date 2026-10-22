@@ -1,11 +1,14 @@
 //! Tests for [`crate::error`]: one row per case, pinning each code and
 //! each message verbatim.
 
+use std::io;
+use std::path::PathBuf;
+
 use contract::ErrorCode;
 
 use super::{
-    ArgumentsError, AskUserError, EditError, FileError, ImageReadError, PdfError, ReadError,
-    SkillError, ToolError, WebSearchError, WriteError,
+    ArgumentsError, AskUserError, EditError, FileError, ImageReadError, InspectError, PdfError,
+    ReadError, ResolveError, SkillError, ToolError, WebSearchError, WriteError,
 };
 use crate::error::{SessionListError, SessionMessageError};
 
@@ -558,28 +561,94 @@ fn an_invalid_edit_and_a_boundary_keep_their_codes() {
         error.to_string(),
         "The edit could not be applied: a match offset was not a character boundary."
     );
-    let root = ToolError::from(EditError::from(FileError::NotFound {
-        path: std::path::PathBuf::from("/a.txt"),
-    }));
+    let root = ToolError::from(EditError::from(FileError::from(InspectError::NotFound {
+        path: PathBuf::from("/a.txt"),
+    })));
     assert_eq!(root.code(), ErrorCode::NotFound);
 }
 
 #[test]
 fn a_missing_file_names_itself() {
-    let error = FileError::NotFound {
-        path: std::path::PathBuf::from("/a.txt"),
+    let error = InspectError::NotFound {
+        path: PathBuf::from("/a.txt"),
     };
     assert_eq!(error.code(), ErrorCode::NotFound);
     assert_eq!(error.to_string(), "`/a.txt` does not exist.");
 }
 
 #[test]
-fn an_inspection_failure_keeps_its_message() {
-    let error = FileError::Inspect {
-        message: "`/a.txt` is a fifo.".to_owned(),
+fn an_unreadable_file_names_its_source() {
+    let error = InspectError::Unreadable {
+        path: PathBuf::from("/a.txt"),
+        source: io::Error::other("disk gone"),
     };
     assert_eq!(error.code(), ErrorCode::ToolError);
-    assert_eq!(error.to_string(), "`/a.txt` is a fifo.");
+    assert_eq!(error.to_string(), "`/a.txt` could not be read: disk gone.");
+}
+
+#[test]
+fn a_size_that_overflows_names_the_file() {
+    let error = InspectError::SizeOverflow {
+        path: PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`/a.txt` could not be read: its size does not fit in 64 bits."
+    );
+}
+
+#[test]
+fn a_path_that_does_not_resolve_names_its_case() {
+    let error = ResolveError::DotDotThroughMissing {
+        raw: "nope/../a.txt".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`nope/../a.txt` cannot be resolved: `..` points through a directory that does not exist."
+    );
+    let error = ResolveError::TooManyLinks {
+        raw: "link0".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`link0` could not be resolved: too many levels of symbolic links."
+    );
+    let error = ResolveError::Unreadable {
+        path: PathBuf::from("/d/a"),
+        source: io::Error::other("denied"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "`/d/a` could not be resolved: denied.");
+    let error = ResolveError::EmptyLink {
+        path: PathBuf::from("/d/link"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`/d/link` could not be resolved: the symbolic link is empty."
+    );
+    let error = ResolveError::NotADirectory {
+        raw: "f/../a.txt".to_owned(),
+        path: PathBuf::from("/d/f"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`f/../a.txt` could not be resolved: `/d/f` is not a directory."
+    );
+}
+
+#[test]
+fn a_root_path_error_keeps_its_code() {
+    let root = ToolError::from(ReadError::from(FileError::from(
+        ResolveError::DotDotThroughMissing {
+            raw: "x/../y".to_owned(),
+        },
+    )));
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
 }
 
 #[test]
@@ -616,22 +685,6 @@ fn pages_on_a_non_pdf_names_the_file() {
         error.to_string(),
         "`pages` applies only to a PDF, and `/a.txt` is not one."
     );
-}
-
-#[test]
-fn an_unresolvable_path_keeps_its_text() {
-    let error = FileError::PathInvalid {
-        message: "`..` escapes the workspace.".to_owned(),
-    };
-    assert_eq!(error.code(), ErrorCode::InvalidArguments);
-    assert_eq!(error.to_string(), "`..` escapes the workspace.");
-    let error = FileError::PathUnresolved {
-        message: "`/a.txt` is a symlink loop.".to_owned(),
-    };
-    assert_eq!(error.code(), ErrorCode::ToolError);
-    assert_eq!(error.to_string(), "`/a.txt` is a symlink loop.");
-    let root = ToolError::from(ReadError::from(error));
-    assert_eq!(root.code(), ErrorCode::ToolError);
 }
 
 #[derive(Debug, serde::Deserialize)]

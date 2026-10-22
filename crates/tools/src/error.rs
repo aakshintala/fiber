@@ -138,36 +138,12 @@ pub(crate) enum FileError {
         /// The path as the call named it.
         raw: String,
     },
-    /// The path does not resolve: `..` in the part that does not exist yet.
-    /// The text is made in `files.rs`; part 5 of #923 types it.
-    // debt: part 5 of #923 types `ResolveError`/`InspectError`
-    #[error("{message}")]
-    PathInvalid {
-        /// `ResolveError::Arguments`'s text.
-        message: String,
-    },
-    /// The path resolves nowhere honest. The text is made in `files.rs`;
-    /// part 5 of #923 types it.
-    // debt: part 5 of #923 types `ResolveError`/`InspectError`
-    #[error("{message}")]
-    PathUnresolved {
-        /// `ResolveError::Tool`'s text.
-        message: String,
-    },
-    /// The file does not exist.
-    #[error("`{}` does not exist.", path.display())]
-    NotFound {
-        /// The file as resolved.
-        path: std::path::PathBuf,
-    },
-    /// Inspecting the file failed. The text is made in `files.rs`; part 5
-    /// of #923 types it.
-    // debt: part 5 of #923 types `ResolveError`/`InspectError`
-    #[error("{message}")]
-    Inspect {
-        /// `InspectError::Tool`'s text.
-        message: String,
-    },
+    /// The path does not resolve.
+    #[error(transparent)]
+    Resolve(#[from] ResolveError),
+    /// The file cannot be inspected.
+    #[error(transparent)]
+    Inspect(#[from] InspectError),
     /// The file could not be written.
     #[error("`{}` could not be written: {source}.", path.display())]
     CouldNotWrite {
@@ -207,12 +183,101 @@ impl FileError {
             Self::ChangedBeforeRead { .. } | Self::ChangedBeforeWrite { .. } => {
                 ErrorCode::PathChanged
             }
-            Self::CouldNotWrite { .. } | Self::PathUnresolved { .. } | Self::Inspect { .. } => {
-                ErrorCode::ToolError
-            }
-            Self::PathInvalid { .. } => ErrorCode::InvalidArguments,
-            Self::NotFound { .. } => ErrorCode::NotFound,
+            Self::CouldNotWrite { .. } => ErrorCode::ToolError,
+            Self::Resolve(error) => error.code(),
+            Self::Inspect(error) => error.code(),
             Self::Unsupported { .. } | Self::PdfOverCap { .. } => ErrorCode::UnsupportedFile,
+        }
+    }
+}
+
+/// Why a path could not be resolved (`files::resolve`).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ResolveError {
+    /// `..` in the part of the path that does not exist yet.
+    #[error("`{raw}` cannot be resolved: `..` points through a directory that does not exist.")]
+    DotDotThroughMissing {
+        /// The path as the call named it.
+        raw: String,
+    },
+    /// A symbolic link chain past the link cap, or a loop.
+    #[error("`{raw}` could not be resolved: too many levels of symbolic links.")]
+    TooManyLinks {
+        /// The path as the call named it.
+        raw: String,
+    },
+    /// A component could not be read.
+    #[error("`{}` could not be resolved: {source}.", path.display())]
+    Unreadable {
+        /// The component that failed.
+        path: std::path::PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// A symbolic link whose target is empty.
+    #[error("`{}` could not be resolved: the symbolic link is empty.", path.display())]
+    EmptyLink {
+        /// The link.
+        path: std::path::PathBuf,
+    },
+    /// A file sits where a directory is needed.
+    #[error("`{raw}` could not be resolved: `{}` is not a directory.", path.display())]
+    NotADirectory {
+        /// The path as the call named it.
+        raw: String,
+        /// The component that is a file.
+        path: std::path::PathBuf,
+    },
+}
+
+impl ResolveError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::DotDotThroughMissing { .. } => ErrorCode::InvalidArguments,
+            Self::TooManyLinks { .. }
+            | Self::Unreadable { .. }
+            | Self::EmptyLink { .. }
+            | Self::NotADirectory { .. } => ErrorCode::ToolError,
+        }
+    }
+}
+
+/// Why a file could not be inspected (`files::inspect`).
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InspectError {
+    /// The path does not exist.
+    #[error("`{}` does not exist.", path.display())]
+    NotFound {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+    },
+    /// A filesystem failure.
+    #[error("`{}` could not be read: {source}.", path.display())]
+    Unreadable {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+        /// The filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The file's size does not fit in 64 bits.
+    #[error("`{}` could not be read: its size does not fit in 64 bits.", path.display())]
+    SizeOverflow {
+        /// The file as resolved.
+        path: std::path::PathBuf,
+    },
+}
+
+impl InspectError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::NotFound { .. } => ErrorCode::NotFound,
+            Self::Unreadable { .. } | Self::SizeOverflow { .. } => ErrorCode::ToolError,
         }
     }
 }
