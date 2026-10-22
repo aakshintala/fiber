@@ -682,6 +682,16 @@ The runner reads each `*.json` file directly inside `tests/`, in filename byte
 order. Each file is one case. Its optional `name` defaults to the file stem.
 Each case runs with a fresh Fiber home and workspace.
 
+Before any case, the runner checks each provider that has a `providers/<name>.json`
+file against its Lua. It loads the package in a temporary Fiber home and reads which
+functions the provider registered; it calls none of them. If `credential()` is
+registered and the data declares neither `login` nor `credential_label`, or if
+`credential_label` is declared and `credential()` is not registered, the run prints
+one `fiber: ` line on stderr for each mismatch, naming the field to add or remove,
+runs no case and exits 1. Malformed provider data or a provider script that fails to
+load fails the run the same way, with one line. A provider with no data file is
+exempt.
+
 ### Session cases
 
 A session case requires `script`, `prompt` and `expect`. `script` uses the
