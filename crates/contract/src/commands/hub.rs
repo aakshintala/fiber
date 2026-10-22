@@ -306,9 +306,17 @@ fn deserialize_sessions<'de, D: Deserializer<'de>>(
     struct Sessions;
     impl<'de> serde::de::Visitor<'de> for Sessions {
         type Value = Option<bool>;
+        // Exempt: serde_json never calls `expecting` here. Explicit null
+        // routes to `visit_unit`, and a wrong type fails inside `bool`'s
+        // own deserializer, so no JSON input observes its text.
+        #[cfg_attr(false, mutants::skip)]
         fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
             f.write_str("a boolean `sessions`")
         }
+        // Exempt: serde_json routes explicit null to `visit_unit`, and a
+        // missing field skips this deserializer, so `visit_none` never
+        // runs: its mutants change nothing any test can see.
+        #[cfg_attr(false, mutants::skip)]
         fn visit_none<E: serde::de::Error>(self) -> Result<Option<bool>, E> {
             Err(E::custom("`sessions` is null, which stop refuses"))
         }

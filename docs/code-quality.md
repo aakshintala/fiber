@@ -121,6 +121,7 @@ the code and the list disagree.
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
 | `hub` | `crates/hub/src/sessions_stop.rs` | the bounded session-socket calls: a non-blocking `socket` + `connect` with readiness `poll` and the deferred `SO_ERROR` read |
+| `hub` | `crates/hub/src/sessions_stop_tests.rs` | the stop-loop pins open probe sockets by hand: an unconnected socket, refused and reset dials, a linger-zero reset, and a path-only fd, forcing the error paths the loop reads |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.

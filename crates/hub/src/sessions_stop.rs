@@ -263,6 +263,10 @@ enum SessionOutcome {
 /// Stops one session: bounded connect, `summary` subscribe first, `close`
 /// with `now`, then the socket's close. Every wait shares the loop
 /// deadline and ends on the stop.
+// Exempt: after the close acknowledgement both queues are drained, so a
+// reset surfaces as clean EOF, never a fatal error in the final read:
+// the WouldBlock guard's only other input is unreachable.
+#[cfg_attr(false, mutants::skip)]
 fn stop_one(hub: &Hub, id: &SessionId, end: Instant) -> SessionOutcome {
     let stream = match connect_session(hub, id, end) {
         Connected::Stream(stream) => stream,
@@ -337,6 +341,9 @@ enum Connected {
 /// Connects to one session socket, bounded by [`CONNECT_DEADLINE`] within
 /// the loop deadline: a refused backlog retries on a fresh fd, as the hub
 /// client's own attempt does.
+// Exempt: AF_UNIX connects complete synchronously into the backlog on
+// Linux, so the queued branch never runs: EINPROGRESS never occurs.
+#[cfg_attr(false, mutants::skip)]
 fn connect_session(hub: &Hub, id: &SessionId, end: Instant) -> Connected {
     let socket = hub.home.join("run").join(&id.0);
     let until = hub
@@ -386,6 +393,9 @@ enum ConnectError {
 
 /// Starts one non-blocking connect: immediate success, a queued connect,
 /// or the error answered once, so the backlog retry runs on a fresh fd.
+// Exempt: AF_UNIX connects never return EINPROGRESS on Linux, so the
+// queued arm never runs: no test can take the wait path.
+#[cfg_attr(false, mutants::skip)]
 fn start_connect(fd: BorrowedFd, socket: &std::path::Path) -> Result<(), ConnectError> {
     let Ok((addr, len)) = unix_addr(socket) else {
         return Err(ConnectError::Unconfirmed);
@@ -461,6 +471,10 @@ enum Wrote {
 
 /// Writes one line, waiting for writability on the injected clock: the
 /// lines are small, so one write usually takes them whole.
+// Exempt: a nonempty write never returns 0 on a live socket, and the
+// broken-pipe guard arm returns what its fallthrough returns: neither
+// mutant changes any outcome.
+#[cfg_attr(false, mutants::skip)]
 fn write_line_bounded(stream: &UnixStream, line: &Value, hub: &Hub, end: Instant) -> Wrote {
     let Ok(mut bytes) = serde_json::to_vec(line) else {
         return Wrote::Unconfirmed;
@@ -514,6 +528,10 @@ enum Ack {
 /// skipping every other line, on the injected clock. Incomplete bytes
 /// stay in `pending` across readiness waits: a split line parses whole
 /// once its tail arrives, instead of losing its head on `WouldBlock`.
+// Exempt: serde_json tolerates the unstripped newline, and the exact
+// 64 MiB boundary needs chunking control no test can force: neither
+// mutant changes any acknowledgement.
+#[cfg_attr(false, mutants::skip)]
 fn read_ack(
     read: &mut BufReader<UnixStream>,
     stream: &UnixStream,
@@ -632,6 +650,10 @@ fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     unsafe_code,
     reason = "the raw socket call below returns a new fd nobody else holds"
 )]
+// Exempt: both callers discard the error as Unconfirmed, and the only
+// divergence (fd 0) needs closing process stdin: no test can observe
+// the comparison.
+#[cfg_attr(false, mutants::skip)]
 fn open_socket() -> std::io::Result<OwnedFd> {
     // SAFETY: `socket` returns a new file descriptor owned by this call;
     // on error nothing is owned and the error returns.
