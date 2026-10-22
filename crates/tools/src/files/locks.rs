@@ -59,17 +59,12 @@ impl PathLocks {
     /// How many callers are blocked in [`PathLocks::lock`].
     ///
     /// Raised before the wait, so a test can observe that a second lock is
-    /// blocked rather than sleeping.
+    /// blocked. No outside seam reaches this: a caller parked in
+    /// `Condvar::wait` shows nothing outside the lock, and a sleep until it
+    /// parks is barred (`docs/testing.md`, "Waits and timeouts").
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
         guard(&self.state).waiting
-    }
-
-    /// No path is held and nobody is waiting.
-    #[cfg(test)]
-    pub(crate) fn is_clear(&self) -> bool {
-        let state = guard(&self.state);
-        state.held.is_empty() && state.waiting == 0
     }
 }
 

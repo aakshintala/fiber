@@ -3,9 +3,10 @@
 //! reported in `usage_recorded`, whether uncached, read from the cache or
 //! written to it, over that request's input size in bytes. A request that
 //! reported no input tokens, as one that failed before the provider named
-//! its generation, is skipped for the next. [`Log`](crate::Log) folds one
-//! from every line it appends and every line [`Log::open`](crate::Log)
-//! replays.
+//! its generation, is skipped for the next. [`Log::open`](crate::Log) folds
+//! one over the events it replays; the appends after it are not folded here,
+//! so whoever wants the rate to follow them folds the events
+//! [`Log::subscribe`](crate::Log) offers.
 
 use std::collections::HashSet;
 
@@ -40,7 +41,7 @@ impl Rate {
 /// What `log` keeps to fold the rate: the rate, the last build's model, and
 /// the action ids of the `assistant_message_started` lines since the latest
 /// build while its numerator is unset.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RateFold {
     rate: Rate,
     model: Option<String>,

@@ -382,12 +382,15 @@ fn files_timing_reaches_the_built_child() {
 
     assert_eq!(code(&output), None);
     assert_eq!(message(&output), "Image: 80x60 image/png.\n");
-    // `resolve` canonicalises the workspace prefix, so the seen lookup
-    // uses the canonical path too.
-    let seen = fs::canonicalize(fixture.path().join("a.png")).expect("the path");
+    let replaced = files.write().run(
+        &fakes::tool_args(json!({"path": "a.png", "content": "w\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
     assert!(
-        files.seen_hash(&seen).is_some(),
-        "the read marks the file seen for a later write"
+        replaced.error.is_none(),
+        "the read marks the file seen for a later write: {}",
+        fakes::text_of(&replaced)
     );
     assert_eq!(probe.calls(), 1);
     let record = closed(&records, deadline);
