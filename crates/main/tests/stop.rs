@@ -54,6 +54,11 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
     let workspace = setup.workspace().to_string_lossy().into_owned();
     let guard = SessionGuard::arm(setup.deadline, &workspace);
     let session = start_session(&client, &workspace, PROMPT);
+    // The first model request lands only after the pre-send fsync, which
+    // makes the appended first log line durable: without this wait the
+    // stop below can land in the append-to-fsync window and the resume
+    // finds no session.
+    await_first_request(&server, setup.deadline);
     drop(client);
 
     let output = run_to_exit(setup.deadline, "fiber stop", setup.fiber(&["stop"]));
