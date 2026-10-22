@@ -131,6 +131,22 @@ local function register(name, entry)
       fiber.hook("tools", { entry = name })
       return
     end
+    -- A `tools` list names exact tool names in order: a keyed or sparse
+    -- table would silently drop entries under `ipairs`, so only a dense
+    -- string list registers, and anything else is refused like above.
+    local len = #entry.tools
+    local count = 0
+    for key, tool in pairs(entry.tools) do
+      if type(key) ~= "number" or key < 1 or key % 1 ~= 0 or key > len or type(tool) ~= "string" then
+        fiber.hook("tools", { entry = name })
+        return
+      end
+      count = count + 1
+    end
+    if count ~= len then
+      fiber.hook("tools", { entry = name })
+      return
+    end
     tools_set = {}
     for _, tool in ipairs(entry.tools) do
       if type(tool) == "string" then
