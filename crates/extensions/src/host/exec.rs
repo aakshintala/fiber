@@ -331,21 +331,19 @@ pub(crate) fn run(
             source,
         ));
     }
-    // The stdin writer's sender lives until this scope ends: every return
-    // below drops it, which tells the writer the run ended.
-    let _stdin_stop = match start_stdin_writer(req, &mut child) {
-        Ok(writer) => writer,
-        Err(source) => {
-            return Err(abort_startup(
-                req,
-                listing.take(),
-                child,
-                &shared,
-                clock,
-                [true, true],
-                source,
-            ));
-        }
+    // The stdin writer is detached: the run never waits for it. A full
+    // pipe parks it until the group stop breaks the pipe; a closed pipe
+    // ends the write at once.
+    if let Err(source) = start_stdin_writer(req, &mut child) {
+        return Err(abort_startup(
+            req,
+            listing.take(),
+            child,
+            &shared,
+            clock,
+            [true, true],
+            source,
+        ));
     };
     if req.own_group {
         // The waiter takes the child through a handoff, so a spawn failure
@@ -814,77 +812,30 @@ fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
 /// Starts the thread streaming `req`'s input to the child's stdin, then
 /// closing it (EOF). `None` when no input was given: stdin stays null.
 /// The writer owns the child's stdin and touches no shared state. The
-/// returned sender stops it: dropping it tells the writer the run ended,
-/// and the run never waits for that exit — every loop iteration in
-/// `write_input` checks the sender first and the poll is bounded by
-/// `GROUP_POLL`, so the writer stops on its own within one poll. A
+/// run never waits for it: a full pipe parks the writer until the group
+/// stop breaks the pipe, and a closed pipe ends the write at once. A
 /// thread that cannot start is a post-spawn failure like a reader that
 /// cannot start: the group stops and the run is still logged.
-fn start_stdin_writer(
-    req: &ExecRequest,
-    child: &mut Child,
-) -> Result<Option<mpsc::Sender<()>>, std::io::Error> {
+fn start_stdin_writer(req: &ExecRequest, child: &mut Child) -> Result<(), std::io::Error> {
     let Some(input) = req.input.clone() else {
-        return Ok(None);
+        return Ok(());
     };
-    let Some(stdin) = child.stdin.take() else {
+    let Some(mut stdin) = child.stdin.take() else {
         return Err(std::io::Error::other("host.exec pipes missing"));
     };
-    let (stop_tx, stop_rx) = mpsc::channel::<()>();
     match std::thread::Builder::new()
         .name("exec stdin".into())
         .spawn(move || {
-            write_input(stdin, &input, &stop_rx);
+            use std::io::Write as _;
+            // A broken pipe just ends the write, since the child is gone.
+            if stdin.write_all(&input).is_err() {}
+            // Dropping `stdin` closes it (EOF).
         }) {
-        Ok(_) => Ok(Some(stop_tx)),
+        Ok(_) => Ok(()),
         Err(source) => {
             // The closure never ran: dropping it closes stdin (EOF), and
             // no writer exists, so the run's teardown waits on nothing.
             Err(source)
-        }
-    }
-}
-
-/// Streams `input` to `stdin`, then closes it (EOF). The pipe is
-/// non-blocking, so a full pipe never parks the writer: the loop polls
-/// writable and stops when the input is written, the pipe breaks, or the
-/// run ends (`stop` drops). Bytes already written are kept; a broken pipe
-/// just ends the write, since the child is gone.
-fn write_input(stdin: std::process::ChildStdin, input: &[u8], stop: &mpsc::Receiver<()>) {
-    use std::os::fd::AsFd as _;
-    let fd = stdin.as_fd();
-    if rustix::fs::fcntl_setfl(fd, rustix::fs::OFlags::NONBLOCK).is_err() {
-        return;
-    }
-    let mut remaining = input;
-    while !remaining.is_empty() {
-        if matches!(
-            stop.try_recv(),
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected)
-        ) {
-            return;
-        }
-        let slice = support::group::GROUP_POLL;
-        let timeout = rustix::event::Timespec::try_from(slice).unwrap_or_default();
-        let mut fds = [rustix::event::PollFd::new(
-            &fd,
-            rustix::event::PollFlags::OUT,
-        )];
-        match rustix::event::poll(&mut fds, Some(&timeout)) {
-            Ok(0) => {}
-            Ok(_) => match rustix::io::write(fd, remaining) {
-                Ok(0) => return,
-                Ok(n) => {
-                    let Some(next) = remaining.get(n..) else {
-                        return;
-                    };
-                    remaining = next;
-                }
-                Err(rustix::io::Errno::AGAIN) => {}
-                Err(_) => return,
-            },
-            Err(rustix::io::Errno::INTR) => {}
-            Err(_) => return,
         }
     }
 }

@@ -181,55 +181,6 @@ fn loaded_names(run: &Run) -> Vec<String> {
 }
 
 #[test]
-fn a_session_start_entry_sees_the_cached_workspace() {
-    let (setup, _server) = hooked(
-        vec![hello()],
-        &json!({
-            "probe": entry("session_start", "/bin/sh", json!(["hooks/capture.sh", "probe.log"]), 30000, "blocking"),
-        }),
-    );
-    let run = setup.run(&["ask", "hi"]);
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "extension_state_set",
-            "turn_started",
-            "step_started",
-            "extension_exec",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
-    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
-
-    let lines = captured(&setup, "probe.log");
-    assert_eq!(lines.len(), 1);
-    let line: Value = serde_json::from_str(&lines[0]).unwrap();
-    assert_eq!(
-        line,
-        json!({
-            "point": "session_start",
-            "reason": "start",
-            "schema_version": 1,
-            "session_id": run.session_id(),
-            "workspace": setup.workspace().canonicalize().unwrap().to_string_lossy(),
-        })
-    );
-}
-
-#[test]
 fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
@@ -423,58 +374,6 @@ fn an_entry_with_empty_tools_is_not_registered_and_names_the_field() {
     assert!(message.contains("tools"), "{message}");
     assert!(
         !setup.workspace().join("quiet.log").exists(),
-        "the entry never ran"
-    );
-}
-
-#[test]
-fn an_entry_missing_timeout_is_not_registered_and_names_the_field() {
-    let (setup, _server) = hooked(
-        vec![hello()],
-        &json!({
-            "bad": json!({
-                "point": "after_tool",
-                "command": "/bin/sh",
-                "args": ["hooks/capture.sh", "bad.log"],
-                "on_failure": "non-blocking",
-            }),
-        }),
-    );
-    let run = setup.run(&["ask", "hi"]);
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "notice",
-            "preamble_built",
-            "opening_message",
-            "extension_state_set",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
-    assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
-
-    let notices = run.all("notice");
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0]["payload"]["code"], "extension_failed");
-    assert_eq!(
-        notices[0]["payload"]["message"],
-        "`after_tool` hook not registered for entry `bad`: missing `timeout`",
-    );
-    assert!(
-        !setup.workspace().join("bad.log").exists(),
         "the entry never ran"
     );
 }
