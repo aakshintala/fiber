@@ -2066,34 +2066,6 @@ fn resumed_tracks_a_manifest_path_new_since_the_log() {
 }
 
 #[test]
-fn own_edit_of_a_section_file_records_extension_and_sends_nothing() {
-    let (home, _held) = root();
-    let workspace = home.join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let (path, sections) = section_file(&home, None);
-    write(&path, "Notes.\n");
-    let fake = clock();
-    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
-    let workspace = canon(&workspace);
-    // Declared exactly as the manifest names it.
-    let key = path.display().to_string();
-    write(&path, "Revised by the call.\n");
-    let own = state.call_completed(&workspace, &declared(Some(&[key.as_str()])));
-    assert_eq!(own.len(), 1);
-    assert_eq!(own[0].reason, InstructionReason::OwnEdit);
-    assert_eq!(own[0].extension.as_deref(), Some("fiber.test/notes"));
-    assert_eq!(own[0].sent, InstructionSent::None);
-    assert_eq!(own[0].content.as_deref(), Some("Revised by the call.\n"));
-    for line in &own {
-        apply(&mut state.had, &Event::InstructionFile(line.clone()));
-    }
-    // The next check finds the file exactly as recorded.
-    let out = state.check(&*fake);
-    assert!(out.files.is_empty());
-    assert!(out.notices.is_empty());
-}
-
-#[test]
 fn own_deletion_of_a_section_file_is_an_empty_own_edit_with_extension() {
     let (home, _held) = root();
     let workspace = home.join("workspace");

@@ -1,5 +1,27 @@
 {
   "credential_label": {
+    "credential_paths": [
+      {
+        "env": "CLOUDSDK_CONFIG",
+        "join": "access_tokens.db",
+        "path": "~/.config/gcloud"
+      },
+      {
+        "env": "CLOUDSDK_CONFIG",
+        "join": "application_default_credentials.json",
+        "path": "~/.config/gcloud"
+      },
+      {
+        "env": "CLOUDSDK_CONFIG",
+        "join": "credentials.db",
+        "path": "~/.config/gcloud"
+      },
+      {
+        "env": "CLOUDSDK_CONFIG",
+        "join": "legacy_credentials",
+        "path": "~/.config/gcloud"
+      }
+    ],
     "default": "the active gcloud configuration, or Application Default Credentials",
     "names": "gcloud configuration"
   },

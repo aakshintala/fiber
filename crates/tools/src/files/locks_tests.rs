@@ -23,6 +23,12 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     );
 }
 
+/// No path is held and nobody is waiting, read under one lock of the state.
+fn nothing_held_or_waiting(locks: &PathLocks) -> bool {
+    let state = super::guard(&locks.state);
+    state.held.is_empty() && state.waiting == 0
+}
+
 #[test]
 fn a_guard_releases_on_drop() {
     let locks = Arc::new(PathLocks::new());
@@ -41,7 +47,7 @@ fn a_guard_releases_on_drop() {
         "waited {DEADLINE:?} for the lock, release and relock to run"
     );
     handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -74,7 +80,7 @@ fn two_paths_do_not_block_each_other() {
     release.send(()).unwrap();
     holder.join().unwrap();
     handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -116,7 +122,7 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
     );
     holder.join().unwrap();
     handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -134,7 +140,7 @@ fn no_entry_remains_after_release() {
         "waited {DEADLINE:?} for the lock and release to run"
     );
     handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -179,7 +185,7 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         "waited {DEADLINE:?} for the second hold to run"
     );
     second_handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -216,7 +222,7 @@ fn a_dyn_hold_does_not_block_a_different_path() {
     release.send(()).unwrap();
     handle.join().unwrap();
     second_handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -286,7 +292,7 @@ fn an_alias_contends_with_the_built_in_key() {
         holder.join().unwrap();
         handle.join().unwrap();
     }
-    assert!(locks.is_clear());
+    assert!(nothing_held_or_waiting(&locks));
 }
 
 #[test]
@@ -334,6 +340,6 @@ fn hold_all_dedupes_paths_that_resolve_to_one_key() {
             1,
             "hold_all on an alias pair ran once"
         );
-        assert!(locks.is_clear());
+        assert!(nothing_held_or_waiting(&locks));
     }
 }

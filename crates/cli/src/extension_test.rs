@@ -136,6 +136,9 @@ fn extension_test_with(
             return 2;
         }
     };
+    if let Err(code) = check_credential_declarations(&package, options, err) {
+        return code;
+    }
     let cases = match discover_cases(&package) {
         Ok(cases) => cases,
         Err(error) => {
@@ -235,18 +238,8 @@ fn run_case(
         {
             return outcome(format!("temporary case files: {error}"));
         }
-        let plan = match extensions::plan(
-            &home,
-            &Request::Path(package.to_path_buf()),
-            env!("CARGO_PKG_VERSION"),
-            &Origin::github(),
-            options.clock.as_ref(),
-        ) {
-            Ok(plan) => plan,
-            Err(error) => return outcome(format!("installing the package: {error}")),
-        };
-        if let Err(error) = plan.commit() {
-            return outcome(format!("installing the package: {error}"));
+        if let Err(error) = install_package(&home, package, options) {
+            return outcome(error);
         }
         let stdout = directory.path.join("o");
         let output = match run_child(fiber, case, &home, &workspace, &stdout, options) {
@@ -298,6 +291,103 @@ fn run_case(
         };
     }
     result
+}
+
+fn install_package(home: &Path, package: &Path, options: &RunOptions) -> Result<(), String> {
+    extensions::plan(
+        home,
+        &Request::Path(package.to_path_buf()),
+        env!("CARGO_PKG_VERSION"),
+        &Origin::github(),
+        options.clock.as_ref(),
+    )
+    .and_then(|plan| plan.commit())
+    .map(|_notices| ())
+    .map_err(|error| format!("installing the package: {error}"))
+}
+
+/// Checks each provider that has a data file against its Lua before any
+/// case runs (`docs/extensions.md`, "Testing an extension"): `credential()`
+/// needs `login` or `credential_label` in the data, and `credential_label`
+/// needs `credential()`. A provider with no data file is exempt. Loads the
+/// package from a temporary home as a session does and only reads which
+/// functions the script registered; no registered function runs. Prints one
+/// `fiber: ` line on `err` per drift, or one for a failure to check, and
+/// returns the exit code.
+fn check_credential_declarations(
+    package: &Path,
+    options: &RunOptions,
+    err: &mut dyn Write,
+) -> Result<(), i32> {
+    let mut fail = |lines: &[String]| {
+        for line in lines {
+            writeln!(err, "fiber: {line}").unwrap_or(());
+        }
+        Err(1)
+    };
+    let providers = match config::read_providers(package) {
+        Ok(providers) => providers,
+        Err(error) => return fail(&[error.to_string()]),
+    };
+    if providers.is_empty() {
+        return Ok(());
+    }
+    let manifest = match config::read_manifest(package) {
+        Ok(manifest) => manifest,
+        Err(error) => return fail(&[error.to_string()]),
+    };
+    let directory = match RunDirectory::new(&options.temp_root) {
+        Ok(directory) => directory,
+        Err(error) => return fail(&[format!("temporary provider check directory: {error}")]),
+    };
+    let home = directory.path.join("h");
+    if let Err(error) = fs::create_dir_all(&home) {
+        return fail(&[format!("temporary provider check files: {error}")]);
+    }
+    if let Err(error) = install_package(&home, package, options) {
+        return fail(&[error]);
+    }
+    let dir = config::extensions_dir(&home).join(config::dir_name(&manifest.name));
+    let deps = extensions::dep_dirs(&home, &dir, &manifest.depends, false);
+    let extension =
+        extensions::LuaExtension::new(manifest.name.clone(), dir, home, Arc::clone(&options.clock))
+            .with_dependencies(deps);
+    let mut drift = Vec::new();
+    for data in &providers {
+        let registered = match extension.provider_functions(&data.name) {
+            Ok(functions) => functions.iter().any(|function| function == "credential"),
+            Err(error) => return fail(&[format!("provider `{}`: {error}", data.name)]),
+        };
+        let name = &data.name;
+        if registered
+            && !declares_login(&data.credential_from)
+            && !declares_credential_label(&data.credential_from)
+        {
+            drift.push(format!(
+                "provider `{name}` registers credential() but its data declares neither `login` nor `credential_label`: add `credential_label` to providers/{name}.json"
+            ));
+        } else if !registered && declares_credential_label(&data.credential_from) {
+            drift.push(format!(
+                "provider `{name}` declares `credential_label` but does not register credential(): remove `credential_label` from providers/{name}.json"
+            ));
+        }
+    }
+    if drift.is_empty() {
+        Ok(())
+    } else {
+        fail(&drift)
+    }
+}
+
+fn declares_login(credential_from: &config::CredentialFrom) -> bool {
+    matches!(
+        credential_from,
+        config::CredentialFrom::Stored { login: Some(_), .. }
+    )
+}
+
+fn declares_credential_label(credential_from: &config::CredentialFrom) -> bool {
+    matches!(credential_from, config::CredentialFrom::Function(_))
 }
 
 fn parse_verdict(lines: &[&str], fallback_name: &str) -> (String, Vec<String>) {

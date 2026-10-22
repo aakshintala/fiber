@@ -10,7 +10,7 @@ serde_json.workspace = true
 skrifa.workspace = true
 tiny-skia.workspace = true
 proc-macro2 = { workspace = true, features = ["span-locations"] }
-pulldown-cmark.workspace = true
+pulldown-cmark = { workspace = true, features = ["html"] }
 
 [dev-dependencies]
 fakes = { path = "../crates/fakes" }

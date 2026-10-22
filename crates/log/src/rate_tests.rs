@@ -597,15 +597,19 @@ fn input_tokens_sums_every_kind_saturating() {
 }
 
 #[test]
-fn the_rate_folds_appended_lines_and_survives_a_reopen() {
+fn open_replays_the_rate_and_appends_leave_it() {
     let sessions = fakes::TempDir::new("log-unit-rate");
     let id = SessionId("s_1".into());
     let log =
         crate::write::Log::create(sessions.path(), id.clone(), fakes::clock::FakeClock::new())
             .unwrap();
-    let build = built(PreambleReason::Start, "hi");
-    log.append(&Event::PreambleBuilt(build), None, None)
-        .unwrap();
+    assert_eq!(log.replayed_rate().rate().tokens(12), None);
+    log.append(
+        &Event::PreambleBuilt(built(PreambleReason::Start, "hi")),
+        None,
+        None,
+    )
+    .unwrap();
     log.append(
         &Event::AssistantMessageStarted(Empty {}),
         None,
@@ -618,10 +622,17 @@ fn the_rate_folds_appended_lines_and_survives_a_reopen() {
         Some(ActionId("a_1".into())),
     )
     .unwrap();
-    let rate = log.rate();
-    assert_eq!(rate.tokens(12), Some(11));
+    assert_eq!(log.replayed_rate().rate().tokens(12), None);
     drop(log);
     let opened =
         crate::write::Log::open(sessions.path(), id, fakes::clock::FakeClock::new()).unwrap();
-    assert_eq!(opened.rate(), rate);
+    assert_eq!(opened.replayed_rate().rate().tokens(12), Some(11));
+    opened
+        .append(
+            &Event::PreambleBuilt(built(PreambleReason::Reload, "hi")),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(opened.replayed_rate().rate().tokens(12), Some(11));
 }

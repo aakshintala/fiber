@@ -93,6 +93,7 @@ impl Transcript<'_> {
                 model,
                 self.had,
                 self.carry,
+                line.seq,
             );
             if !was_summary && !self.carry.in_summary() {
                 crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq);

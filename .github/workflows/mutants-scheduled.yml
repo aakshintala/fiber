@@ -43,9 +43,40 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
-      - name: Install zsh and fish
+      - &shell-debs-key
+        name: Key the zsh and fish archive cache
+        id: shell-debs-key
         timeout-minutes: 5
-        run: scripts/install-shells
+        run: echo "key=shell-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-zsh-fish" >> "$GITHUB_OUTPUT"
+      - &shell-debs-restore
+        name: Restore the zsh and fish archives
+        id: shell-debs
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
+      - &install-shells
+        name: Install zsh and fish
+        timeout-minutes: 5
+        env:
+          # Every apt-get call retries and gives up on a silent mirror.
+          APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+          SHELL_DEBS_CACHE_HIT: ${{ steps.shell-debs.outputs.cache-hit }}
+        run: |
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$SHELL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/shell-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/shell-debs"
+      - &shell-debs-save
+        name: Save the zsh and fish archives
+        if: steps.shell-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
       - name: Run the workspace baseline
         timeout-minutes: 300
         run: cargo nextest run --workspace --no-fail-fast --profile ci
@@ -121,9 +152,10 @@ jobs:
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-mutants,cargo-nextest
-      - name: Install zsh and fish
-        timeout-minutes: 5
-        run: scripts/install-shells
+      - *shell-debs-key
+      - *shell-debs-restore
+      - *install-shells
+      - *shell-debs-save
       - name: List and run workspace mutants
         timeout-minutes: 300
         env:

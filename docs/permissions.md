@@ -154,6 +154,25 @@ one of them is refused too. It refuses, the same way, every tool call
 whose declared paths touch the resolved path of a configured `file`
 credential source.
 
+It refuses, the same way, every tool call whose declared paths touch a path
+a provider package declares its `credential()` draws secrets from, when that
+function reads nothing Fiber stores (`credential_paths`,
+[A provider's data](configuration.md#a-providers-data)). The loop names no
+provider: the paths are the package's data. AWS Bedrock declares
+`$AWS_SHARED_CREDENTIALS_FILE`, else `~/.aws/credentials`, and the
+directories `~/.aws/sso/cache/` and `~/.aws/cli/cache/`. Google Vertex
+declares `credentials.db`, `access_tokens.db`, `legacy_credentials/` and
+`application_default_credentials.json` in the gcloud configuration
+directory, `$CLOUDSDK_CONFIG`, else `~/.config/gcloud`. A declared path
+that is a directory contains its files, and a path that contains a
+declared one touches it, as for the credential directory: a read of
+`~/.aws`, `~/.config/gcloud`, `$HOME` or `/` is refused, while a read of a
+file beside the declared ones, such as gcloud's `configurations/`, is not.
+The paths and their variables are read when the session starts, so a
+changed variable needs a restart. A `credential_process` that
+`AWS_CONFIG_FILE`'s profiles name is not covered, nor is gcloud's Windows
+directory.
+
 Fiber does not confine tools ([Confinement](#confinement)), so without this
 deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
 alternative protection: any process running as the person can read a keychain
@@ -213,8 +232,9 @@ message answers is the model's text directly before it, marked as the agent's.
 A tool call between that text and the human message breaks the link, so no reply is shown.
 The model's other prose and every tool result are stripped before the prompt
 is built. The
-reviewer also gets the call under review, its declared effects, the
-workspace root, and the person's own notes about their environment ("What the
+reviewer also gets the call under review, its declared effects, for a shell
+call the commands in it that were not shown read-only (`docs/tools.md`,
+"Shell", "Effects"), the workspace root, and the person's own notes about their environment ("What the
 person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
@@ -460,8 +480,8 @@ its rule matches the tool by name. A call a rule cannot safely match, such as
 a shell command with more than one part, returns no subject, and no rule or
 session grant matches it, a deny or an ask included. A shell rule matches a
 command's text, not what it does: a deny on `rm -rf ~/` misses `rm -fr ~`,
-and a command of more than one part, or one the classifier cannot read
-plainly, is matched by no rule: unless every part is read-only, which takes
+and a command of more than one part, or one the classifier does not
+accept, is matched by no rule: unless every part is read-only, which takes
 the fast path, it reaches the reviewer, which judges what it does.
 
 Approving `npm test -- --watch` can remember the subject, or the prefix

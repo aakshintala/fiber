@@ -111,7 +111,7 @@ groups, then the flags and examples.
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
-| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. |
+| `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one notice per provider and missing setting on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
@@ -225,7 +225,7 @@ prints each such notice.
 | `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. Run in a project on a repository's extension, it removes that and records never for its content. |
 | `extension reinstall <name>` | Removes an extension and installs it again, from its recorded source and commit, or from `<name>` as given when it is damaged (`docs/extensions.md`, "Installing"). |
 | `extension list` | Lists installed extensions: name, version and commit; and each repository extension with its project, its path in the repository and the content it loads. |
-| `extension test [<path>]` | Runs an extension's session and provider-call cases from its directory or the current one in a temporary Fiber home, and exits non-zero if any case fails (`docs/testing.md`, "Testing an extension"). |
+| `extension test [<path>]` | Runs an extension's session and provider-call cases from its directory or the current one in a temporary Fiber home, and exits non-zero if any case fails. Before any case it checks each provider's data against its Lua `credential()` registration and exits 1 on drift (`docs/testing.md`, "Testing an extension"). |
 
 **MCP servers.** `fiber mcp` manages MCP servers (`docs/mcp.md`).
 
