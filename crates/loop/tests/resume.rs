@@ -114,17 +114,14 @@ impl support::History {
     }
 
     /// Resumes on `model` with `prompt`: the single `Loop::resume` the
-    /// wrappers share. Renews the inbox, as a second resume in one test
-    /// must.
+    /// wrappers share. Takes the inbox as it is: `resume_with` renews it
+    /// first, while `resume_on` keeps a delivery queued before the resume.
     fn resume_session(
         &mut self,
         tools: Vec<(String, Arc<dyn Tool>)>,
         model: Model,
         prompt: r#loop::PromptInputs,
     ) -> Loop {
-        let (tx, rx) = mpsc::channel();
-        self.inbox_tx = tx;
-        self.inbox_rx = Some(rx);
         Loop::resume(
             r#loop::Session {
                 log: Arc::clone(&self.log),
@@ -4442,6 +4439,11 @@ impl support::History {
         model: &str,
         thinking: Option<contract::ThinkingLevel>,
     ) -> Loop {
+        // A second resume in one test: the first took the inbox, so renew
+        // it before resuming.
+        let (tx, rx) = mpsc::channel();
+        self.inbox_tx = tx;
+        self.inbox_rx = Some(rx);
         let recorded = r#loop::resumed(&self.dir).unwrap().credential;
         let mut prompt = self.prompt();
         prompt.credential = recorded;
