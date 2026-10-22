@@ -386,7 +386,7 @@ fn no_starter() -> impl FnMut() -> std::io::Result<()> {
 
 #[test]
 fn no_hub_and_no_entries_reports_nothing_running() {
-    let dir = fakes::TempDir::new("cli-stop-empty");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-empty");
     fs::create_dir_all(dir.path().join("run")).unwrap();
     let stub = Stub::new(|_| panic!("no hub and no unit file: the service is untouched"));
     let clock = System;
@@ -399,14 +399,14 @@ fn no_hub_and_no_entries_reports_nothing_running() {
 
 #[test]
 fn local_stop_returns_zero_when_no_hub_runs() {
-    let dir = fakes::TempDir::new("cli-stop-local-zero");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-zero");
     let clock = FakeClock::new();
     assert_eq!(stop_local(dir.path(), &mut no_starter(), &*clock,), 0);
 }
 
 #[test]
 fn local_stop_returns_nonzero_when_the_hub_goes_quiet() {
-    let dir = fakes::TempDir::new("cli-stop-local-quiet");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-quiet");
     fs::create_dir_all(dir.path().join("run")).unwrap();
     let listener = UnixListener::bind(dir.path().join("run/hub")).unwrap();
     thread::spawn(move || {
@@ -426,7 +426,7 @@ fn local_stop_returns_nonzero_when_the_hub_goes_quiet() {
 
 #[test]
 fn a_probed_hub_answering_zero_reports_zero_stopped() {
-    let dir = fakes::TempDir::new("cli-stop-probed-zero");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-probed-zero");
     fs::create_dir_all(dir.path().join("run")).unwrap();
     let (got, _hub) = fake_listener(dir.path(), 0);
     let stub = Stub::new(|_| panic!("no unit file: the service is untouched"));
@@ -449,7 +449,7 @@ fn a_probed_hub_answering_zero_reports_zero_stopped() {
 
 #[test]
 fn session_entries_start_one_hub_that_reports_its_count() {
-    let dir = fakes::TempDir::new("cli-stop-started");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-started");
     let run = dir.path().join("run");
     fs::create_dir_all(&run).unwrap();
     // Two session sockets the CLI must never connect to: they stay
@@ -505,7 +505,7 @@ fn session_entries_start_one_hub_that_reports_its_count() {
 
 #[test]
 fn a_started_hub_answering_zero_reports_nothing_running() {
-    let dir = fakes::TempDir::new("cli-stop-started-zero");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-started-zero");
     let run = dir.path().join("run");
     fs::create_dir_all(&run).unwrap();
     let held = UnixListener::bind(run.join("s_0000000000000001")).unwrap();
@@ -537,7 +537,7 @@ fn a_started_hub_answering_zero_reports_nothing_running() {
 
 #[test]
 fn a_transport_failure_skips_the_service_step() {
-    let dir = fakes::TempDir::new("cli-stop-transport");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-transport");
     fs::create_dir_all(dir.path().join("run")).unwrap();
     // A hub that says hello, reads the stop, then closes before
     // answering: no answer arrives at all.
@@ -816,7 +816,7 @@ fn setup(home: &Path, user: &Path, unit: bool, socket: bool) {
 
 #[test]
 fn an_installed_unit_with_no_hub_still_stops_the_service() {
-    let dir = fakes::TempDir::new("cli-stop-installed-empty");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-installed-empty");
     let home = dir.path().join("home");
     setup(&home, &dir.path().join("user"), true, false);
     check_child(
@@ -829,7 +829,7 @@ fn an_installed_unit_with_no_hub_still_stops_the_service() {
 
 #[test]
 fn an_installed_unit_with_entries_starts_one_hub_and_stops_it() {
-    let dir = fakes::TempDir::new("cli-stop-installed-started");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-installed-started");
     let home = dir.path().join("home");
     setup(&home, &dir.path().join("user"), true, true);
     check_child(
@@ -842,7 +842,7 @@ fn an_installed_unit_with_entries_starts_one_hub_and_stops_it() {
 
 #[test]
 fn a_rejected_stop_still_stops_the_service_then_fails() {
-    let dir = fakes::TempDir::new("cli-stop-installed-rejected");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-installed-rejected");
     let home = dir.path().join("home");
     setup(&home, &dir.path().join("user"), true, true);
     let user = dir.path().join("user");
@@ -930,7 +930,7 @@ fn installed_rejected_service_error(home: &Path, out: &mut dyn Write) {
 
 #[test]
 fn a_rejected_stop_with_a_manager_error_reports_it_beside_the_rejection() {
-    let dir = fakes::TempDir::new("cli-stop-rejected-service-error-child");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-rejected-service-error-child");
     let home = dir.path().join("home");
     setup(&home, &dir.path().join("user"), true, true);
     let user = dir.path().join("user");
@@ -978,7 +978,7 @@ fn advance_to_close_expiry(clock: &FakeClock, due: std::time::Instant) {
 #[test]
 #[allow(unsafe_code, reason = "a write-only fd fails the close read by hand")]
 fn a_failed_close_read_is_lost_not_late() {
-    let dir = fakes::TempDir::new("cli-stop-lost");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-lost");
     let file = fs::File::create(dir.path().join("wronly")).unwrap();
     // SAFETY: `file` is the open write-only file above, owned by no one
     // after this: the stream below is its only owner, and the fd stays
@@ -1121,7 +1121,7 @@ fn stalled_local(
 
 #[test]
 fn a_local_stalled_close_after_a_rejection_still_reports_the_rejection() {
-    let dir = fakes::TempDir::new("cli-stop-local-stalled-rejected");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-stalled-rejected");
     let (result, out, release, handle) = stalled_local(rejected(), dir);
     let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
@@ -1133,7 +1133,7 @@ fn a_local_stalled_close_after_a_rejection_still_reports_the_rejection() {
 
 #[test]
 fn a_local_stalled_close_after_an_answer_fails_at_the_deadline() {
-    let dir = fakes::TempDir::new("cli-stop-local-stalled-accepted");
+    let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-stalled-accepted");
     let (result, out, release, handle) = stalled_local(accepted(2), dir);
     let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
