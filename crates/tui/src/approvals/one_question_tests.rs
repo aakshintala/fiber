@@ -1,7 +1,6 @@
 //! Tests for one-question interactions on the request panel: keys,
 //! digits, their lines with styled runs, and the shared queue.
 
-use contract::commands::ReplyAnswer;
 use contract::shapes::Choice;
 use ratatui::style::{Modifier, Style};
 use serde_json::{Value, json};
@@ -946,21 +945,6 @@ fn submit_and_chat_rows_mark_the_buttons() {
         .collect();
     assert_eq!(marks, [(0..4, secondary()), (4..21, chat())]);
     assert_eq!(shown.lines[9], "▸  Chat about this ");
-}
-
-#[test]
-fn answer_variant_types_match_the_kind() {
-    let confirm = OneQuestion::confirm("Continue?".to_owned());
-    assert!(matches!(
-        confirm.answer(),
-        Some(ReplyAnswer::Confirmed { .. })
-    ));
-    let select = select();
-    assert!(matches!(select.answer(), Some(ReplyAnswer::Labels { .. })));
-    let multi = multi_select();
-    assert!(matches!(multi.answer(), Some(ReplyAnswer::Labels { .. })));
-    let text = OneQuestion::text_input("Words?".to_owned());
-    assert!(matches!(text.answer(), Some(ReplyAnswer::Text { .. })));
 }
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";

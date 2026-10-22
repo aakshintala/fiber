@@ -440,7 +440,8 @@ Fiber.
 
 ### Other command-line tools
 
-- Every operand of a command configured at `shell.read_only` is a path. A
+- Every operand after the command and any subcommand path configured at
+  `shell.read_only` is a path. A
   flag written ending in `=`, such as `--format=`, takes a value, after the
   `=` or as the next word; any other flag takes none.
 - An operand under `/proc/` makes a call not read-only, so it goes to
@@ -626,23 +627,67 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 ### Effects
 
 - The shell tool classifies each call (`docs/permissions.md`, "Effects").
-  It splits the command on `&&`, `||`, `;` and `|`, and checks each part
-  against a list of read-only commands and the flags allowed for each:
-  Fiber's own list, plus any the person's configuration adds ("Search",
-  "Other command-line tools"). If every part is on the list, the call
-  declares `reads`, reversible, with the paths the command names, resolved
-  against `workdir`. Otherwise it declares `executes`, with no paths.
-- It declares `executes` whenever it finds something it cannot read
-  plainly: command substitution (`$( )` or backticks), process
-  substitution, a redirect other than `2>/dev/null` or `2>&1`, or anything else outside the list.
-- The only redirects a read-only part may carry are `2>/dev/null` and
-  `2>&1`, each written as a word of its own after the command name. Any
-  other redirect (`>/dev/null`, `1>/dev/null`, `2>file`, `>file`,
-  `&>file`, `2>>/dev/null`), and either accepted redirect first in a part
-  or joined to another word, makes the call `executes`.
-- Inside double quotes a backslash before any character other than `$`, a
-  backtick, `"`, `\` or a newline is literal, as bash reads it. Before
-  one of those five the command is not read plainly.
+  It parses the command with tree-sitter-bash (`docs/dependencies.md`) and
+  checks each command in it against a list of read-only commands and the
+  flags allowed for each: Fiber's own list, plus any the person's
+  configuration adds ("Search", "Other command-line tools"). If every
+  command is on the list, the call declares `reads`, reversible, with the
+  paths the command names, resolved against `workdir`. Otherwise it
+  declares `executes`, with no paths.
+- The recogniser accepts only a listed set of syntax: simple commands,
+  pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
+  variable assignments before a command, and the redirects below. Any
+  other node, and any `ERROR` or `MISSING` node the parser leaves, makes
+  the call `executes`. That covers subshells `( )`, process substitution,
+  heredocs, loops, functions, a trailing `&`, and variable expansion
+  (`$HOME`, `${x}`).
+- Command substitution (`$( )` or backticks) always makes the call
+  `executes`. Its arguments are known only when it runs, so the path checks
+  cannot see them: `cat $(echo ~/.ssh/id_rsa)` reads the key while every
+  command in it is read-only.
+- A read-only command stays read-only with only these redirects: output
+  sent to `/dev/null` (`>/dev/null`, `2>/dev/null`), one stream merged into
+  another (`2>&1`, `>&2`), and input read from a file (`<file`), whose path
+  takes the same checks as any path the call reads. Any other redirect makes
+  the call `executes`, including `>` or `>>` into a file and `/dev/tcp/...`
+  or `/dev/udp/...` in either direction.
+- An entry on the list, built in or from `shell.read_only`, is a command, an
+  optional subcommand path such as `pr view`, and the flags allowed with it.
+  A flag not listed makes the call `executes`. For a command whose entries
+  name subcommands, a subcommand with no entry of its own does too, so
+  allowing `gh pr view` does not allow `gh pr merge`.
+- `cd <dir>` is a read-only step, and its directory is a path the call
+  reads. Paths in later commands joined by `&&` are resolved against the new
+  directory. After `;` or `||` the `cd` may have failed, so a later
+  command's paths must pass the checks against both the old and the new
+  directory. A `cd` inside a pipeline moves nothing. A `cd` with no
+  argument, with `-`, or with command substitution, and any `cd` followed
+  later in the call by `git`, make the call `executes`: the new directory
+  can hold git hooks or configuration the person never saw.
+- A wrapper is classified by the command it runs. `timeout <duration>
+  <command>` and `env <assignments> <command>` are read-only when the inner
+  command is, and so is `NAME=value <command>`. An assignment is allowed
+  only for a name on a fixed list of names that change no code a command
+  runs, such as `RUST_BACKTRACE`, `LANG`, `LC_ALL`, `TZ`, `TERM`, `CI` and
+  `GIT_TERMINAL_PROMPT`. Any other name, such as `PATH`, `LD_PRELOAD`,
+  `PAGER` or a `GIT_CONFIG_*` variable, makes the call `executes`. `env`
+  with a flag of its own does too.
+- `xargs` is read-only only when the command it runs is one of `echo`,
+  `printf`, `wc`, `grep`, `head` and `tail`, with that command's own
+  allowed flags: `git ls-files | xargs wc -l` declares `reads`. `find -exec`
+  and `find -delete` declare `executes` (below).
+- `gh pr view`, `gh pr list`, `gh pr diff`, `gh pr checks`, `gh issue view`,
+  `gh issue list`, `gh repo view`, `gh run view` and `gh run list` are
+  read-only, each with only its listed flags, such as `--json`,
+  `--comments` and `--repo` for `gh pr view`. `gh api` and `curl` declare
+  `executes`: a flag such as `-f` turns a `gh api` read into a write, and a
+  GraphQL query can carry a mutation.
+- When some commands in a call are read-only and others are not, the
+  reviewer's prompt for that call names the ones that were not, as
+  ``Not shown read-only: `npm test` ``. The reviewer still gets the whole
+  command (`docs/permissions.md`, "What it is shown"). The line is part of
+  the one review request, never the system prompt or a tool definition, so
+  the session's cache is untouched.
 - `sed` is read-only with only `-n`, `-E`, `-r` and `-e`, where every
   script is addresses (line numbers, `$`, `/regex/`, ranges) followed by
   `p`. A short-flag cluster may hold only those letters, with `-e` taking
@@ -663,13 +708,20 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `git log`, `git show`, `git diff`, `git status`, `git rev-parse`,
   `git ls-files`, `git blame` and `git branch --show-current` are read-only.
   `git log` also accepts `-<number>`, such as `-8`. A global flag before
-  the subcommand (`-c`, `--exec-path`, `-p`/`--paginate`, `--git-dir`,
-  `--work-tree`), a subcommand flag `--ext-diff`, `--textconv`, `--output`
-  or `--output=<file>`, any other `git branch` form, and any other
-  subcommand make the call `executes`. Operands of `git rev-parse` are
-  revisions, not paths, so they declare no paths. Repository git config can
-  make `diff`, `log -p`, `show`, `blame` and `status` run a program, and
-  the `.git/` review covers it (`docs/permissions.md`, "Fast paths").
+  the subcommand (`-c`, `--config-env`, `--exec-path`, `-p`/`--paginate`,
+  `--git-dir`, `--work-tree`), a `GIT_CONFIG_*` variable, a subcommand flag
+  `--ext-diff`, `--textconv`, `--output` or `--output=<file>`, any other
+  `git branch` form, and any other subcommand make the call `executes`. So
+  does a git read in a bare repository, or where `.git` is a file whose
+  target Fiber cannot verify. Operands of `git rev-parse` are revisions,
+  not paths, so they declare no paths.
+- Repository git config can make `diff`, `log -p`, `show`, `blame` and
+  `status` run a program: `core.fsmonitor`, `core.pager` or a `filter.*`
+  driver, including one reached through `include.path`. Fiber neither
+  reads that config nor rewrites the model's command, so such a call still
+  takes the fast path. The agent's own writes under `.git/` are reviewed
+  (`docs/permissions.md`, "Fast paths"); config already in place, or pulled
+  in from a file outside `.git/`, runs unreviewed.
 - `echo` reads a word as an option only when it is `-` followed by one or
   more of `n`, `e`, `E`; every other word is text, and of the option words
   only `-n` (and clusters of `n`, such as `-nn`) is accepted, so `echo ---`
@@ -684,7 +736,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   declare `executes`. The new forms run the system `find` unreviewed: the
   built-in search ("Search", "Flags") handles none of them, so the
   call runs `find` unchanged while the `reads` declaration skips review.
-- A part with a path under `/proc/`, resolved against `workdir`, is not
+- A command with a path under `/proc/`, resolved against `workdir`, is not
   read-only, so the call is reviewed: `/proc/<pid>/environ` holds the
   process's environment, a key from an `env` source among it
   (`docs/configuration.md`, "Secrets").
@@ -694,8 +746,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `sort -o` writes. The list and its flag rules are part of building the
   shell tool.
 - A call declared `reads` takes the permission fast path.
-- A command of one part, with nothing the classifier cannot read plainly,
-  has the command as its subject. The prefix offered is its first word, and
+- A call of one simple command, with nothing the recogniser does not
+  accept, has the command as its subject. The prefix offered is its first word, and
   the second word too when it is a plain word, starting with no `-` and
   holding no `/`, `.`, `=` or `>`: `npm test -- --watch` offers `npm test`, and
   `rm -rf build` offers `rm`. Any other command has no subject, so no allow

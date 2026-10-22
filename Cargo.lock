@@ -1652,6 +1652,7 @@ dependencies = [
  "extensions",
  "fakes",
  "hub",
+ "insta",
  "jobs",
  "log 0.0.0",
  "loop",
