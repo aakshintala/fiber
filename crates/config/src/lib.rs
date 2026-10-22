@@ -48,15 +48,16 @@ pub use cache::{
 };
 pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
-pub use credential::{Credentials, Read, Runner};
+pub use credential::{Credentials, Read, Runner, resolve_declared};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use credential_origin::{Origin, Presence};
 pub use editable::is_editable_config_path;
 pub use error::ConfigError;
 pub use extension::{
-    Binary, CredentialFrom, CredentialLabelSources, DeclaredSettings, Login, Manifest, ModelData,
-    Opening, Placeholder, Process, Protocol, ProviderData, declared_settings_in, has_manifest,
-    host_shape, installed_dir, provider_files, read_manifest, read_package_text, read_providers,
+    Binary, CredentialFrom, CredentialLabelSources, CredentialPath, DeclaredSettings, Login,
+    Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
+    declared_settings_in, has_manifest, host_shape, installed_dir, provider_files, read_manifest,
+    read_package_text, read_providers,
 };
 pub use extension_settings::{ExtensionSettings, settings_key};
 pub use home::{

@@ -966,6 +966,109 @@ fn a_configured_file_credential_source_is_denied_for_a_read() {
     assert_session_has_no_marker(&run.session_dir(&setup));
 }
 
+/// AWS's documented example key lines, then [`MARKER`] on a line of its
+/// own: the text a shared credentials file holds.
+fn aws_credentials() -> String {
+    format!(
+        "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n{MARKER}\n"
+    )
+}
+
+/// Installs the shipped Bedrock package beside the `fake` provider the
+/// session runs on, so only Bedrock's declared credential paths protect.
+fn bedrock_beside_fake(setup: &Setup, server: &ProviderServer) {
+    setup.provider_with_defaults(server);
+    let to = setup.root.path().join("pkg-bedrock");
+    support::package::copy_package(
+        "bedrock",
+        &to,
+        "https://bedrock-runtime.{region}.amazonaws.com",
+        "http://{region}",
+    );
+    let mut install = setup.fiber(&["extension", "install", to.to_str().unwrap()]);
+    install.current_dir(setup.workspace());
+    let installed = support::run_to_exit(setup.deadline, "fiber extension install", install);
+    assert!(installed.status.success(), "{installed:?}");
+}
+
+/// `fiber ask` as [`Setup::run`] runs it, with `env` added. Bedrock's
+/// region is set so its models load without a notice; nothing calls it.
+fn run_with_env(setup: &Setup, args: &[&str], env: &[(&str, &Path)]) -> StdoutRun {
+    let mut command = setup.fiber(args);
+    command
+        .current_dir(setup.workspace())
+        .env("AWS_REGION", "test-region")
+        .envs(env.iter().copied());
+    StdoutRun::from(support::run_to_exit(
+        setup.deadline,
+        &format!("fiber {}", args.join(" ")),
+        command,
+    ))
+}
+
+/// The model reads `path`, and the credential deny refuses it before it
+/// runs: no byte of [`MARKER`] leaves the file.
+fn assert_read_is_denied(setup: &Setup, path: &str, env: &[(&str, &Path)]) {
+    let events = vec![function_call("read_0", "read", &json!({"path": path}))];
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    bedrock_beside_fake(setup, &server);
+
+    let run = run_with_env(setup, &["ask", "show the secret"], env);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), denied_kinds(1));
+    let resolved = run.first("permission_resolved");
+    assert_eq!(resolved["payload"]["decided_by"], "credential_deny");
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The call touches a configured credential file."
+    );
+    let completed = run.first("tool_call_completed");
+    assert_eq!(completed["payload"]["status"], "denied");
+    assert_eq!(completed["payload"]["reason"], "credentials");
+    assert!(
+        !run.kinds().contains(&"tool_call_started"),
+        "a denied call never starts"
+    );
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert_no_marker("stderr", run.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(setup));
+}
+
+#[test]
+fn a_read_through_a_workspace_link_of_the_aws_credentials_file_is_denied_by_the_shipped_bedrock_declaration()
+ {
+    // `HOME` is the test's root: the AWS CLI's default credentials file
+    // sits under it, outside Fiber home and the workspace, and only a link
+    // in the workspace leads there.
+    let setup = Setup::new_with_started_deadline();
+    let file = setup.root.path().join(".aws").join("credentials");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, aws_credentials()).unwrap();
+    std::os::unix::fs::symlink(&file, setup.workspace().join("aws-creds")).unwrap();
+
+    assert_read_is_denied(&setup, "./aws-creds", &[]);
+}
+
+#[test]
+fn an_aws_shared_credentials_file_variable_moves_the_denied_path() {
+    let setup = Setup::new_with_started_deadline();
+    let file = setup.root.path().join("elsewhere").join("creds");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, aws_credentials()).unwrap();
+    let path = fs::canonicalize(&file)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(!path.contains(MARKER), "{path}");
+
+    assert_read_is_denied(&setup, &path, &[("AWS_SHARED_CREDENTIALS_FILE", &file)]);
+}
+
 #[test]
 fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed() {
     let setup = Setup::new_with_started_deadline();

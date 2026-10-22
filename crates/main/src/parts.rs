@@ -289,9 +289,12 @@ pub(crate) fn parts_in(
     // stands (`docs/permissions.md`, "Credentials").
     let credential_files: Vec<PathBuf> = config
         .credentials()
-        .credential_files(providers.names().filter_map(|name| providers.get(name)))
+        .credential_files(
+            providers.names().filter_map(|name| providers.get(name)),
+            &|name| std::env::var(name).ok(),
+        )
         .into_iter()
-        .map(|file| workspace.join(file))
+        .map(|file| config::resolve_declared(&workspace.join(file)))
         .collect();
     // The per-run layer first (`--model`, then `-c model=`), then the
     // recorded model, then configuration's `model`

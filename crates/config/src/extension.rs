@@ -180,6 +180,15 @@ impl CredentialFrom {
             Self::Function(_) => None,
         }
     }
+
+    /// The paths a `credential()` that reads nothing Fiber stores draws
+    /// secrets from; none for a stored credential.
+    pub fn credential_paths(&self) -> &[CredentialPath] {
+        match self {
+            Self::Stored { .. } => &[],
+            Self::Function(sources) => &sources.credential_paths,
+        }
+    }
 }
 
 /// The data's `credential`, `login` and `credential_label` as written.
@@ -216,6 +225,33 @@ pub struct CredentialLabelSources {
     pub names: String,
     /// What the `default` label reads, such as the environment.
     pub default: String,
+    /// The paths its `credential()` draws secrets from, which the
+    /// credential deny protects (`docs/permissions.md`, "Credentials").
+    #[serde(default)]
+    pub credential_paths: Vec<CredentialPath>,
+}
+
+/// One path a provider's `credential()` draws secrets from
+/// (`docs/configuration.md`, "A provider's data").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialPath {
+    /// The path, such as `~/.aws/credentials`.
+    pub path: String,
+    /// A variable whose value, when set and not empty, replaces `path`.
+    #[serde(default)]
+    pub env: Option<String>,
+    /// One name appended after that choice, such as a file in a directory
+    /// the variable moves.
+    #[serde(default)]
+    pub join: Option<String>,
+}
+
+impl CredentialPath {
+    /// The path this entry names under `lookup`'s environment.
+    pub fn resolve(&self, _lookup: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// How `fiber login` signs in for a provider

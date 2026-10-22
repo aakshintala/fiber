@@ -313,6 +313,7 @@ impl Credentials {
     pub fn credential_files<'a>(
         &self,
         providers: impl IntoIterator<Item = &'a ProviderData>,
+        _lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Vec<PathBuf> {
         let names = self.providers.as_object().into_iter().flat_map(Map::keys);
         let labelled = names
@@ -331,6 +332,11 @@ impl Credentials {
             .collect();
         files.into_iter().collect()
     }
+}
+
+/// `path`, absolute, with its longest existing ancestor canonicalised.
+pub fn resolve_declared(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 /// Every `(label, source)` pair `providers."<name>".credentials`
