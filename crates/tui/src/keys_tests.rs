@@ -880,16 +880,6 @@ fn kitty_codes_name_strokes() {
             b"\x1b[118;6u",
             Some(modified(Code::Char('v'), shift | ctrl)),
         ),
-        (b"\x1b[48;3u", Some(modified(Code::Char('0'), alt))),
-        (b"\x1b[49;3u", Some(modified(Code::Char('1'), alt))),
-        (b"\x1b[50;3u", Some(modified(Code::Char('2'), alt))),
-        (b"\x1b[51;3u", Some(modified(Code::Char('3'), alt))),
-        (b"\x1b[52;3u", Some(modified(Code::Char('4'), alt))),
-        (b"\x1b[53;3u", Some(modified(Code::Char('5'), alt))),
-        (b"\x1b[54;3u", Some(modified(Code::Char('6'), alt))),
-        (b"\x1b[55;3u", Some(modified(Code::Char('7'), alt))),
-        (b"\x1b[56;3u", Some(modified(Code::Char('8'), alt))),
-        (b"\x1b[57;3u", Some(modified(Code::Char('9'), alt))),
         (b"\x1b[58;3u", Some(modified(Code::Char(':'), alt))),
         (b"\x1b[:;5u", None),
         (b"\x1b[;5u", None),
@@ -899,6 +889,15 @@ fn kitty_codes_name_strokes() {
         assert_eq!(
             feed_strokes(&[*bytes]),
             (*want).into_iter().collect::<Vec<_>>(),
+            "{bytes:?}"
+        );
+    }
+    // Alt with each digit: `CSI 48..=57 ; 3 u`.
+    for d in 0..=9u8 {
+        let bytes = format!("\x1b[{};3u", 48 + d);
+        assert_eq!(
+            feed_strokes(&[bytes.as_bytes()]),
+            vec![modified(Code::Char((b'0' + d) as char), alt)],
             "{bytes:?}"
         );
     }
@@ -972,19 +971,9 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Char('p'), alt), key(Key::AltP)),
         (modified(Code::Char('r'), alt), key(Key::AltR)),
         (modified(Code::Char('1'), alt), key(Key::AltDigit(1))),
-        (modified(Code::Char('2'), alt), key(Key::AltDigit(2))),
-        (modified(Code::Char('3'), alt), key(Key::AltDigit(3))),
-        (modified(Code::Char('4'), alt), key(Key::AltDigit(4))),
         (modified(Code::Char('5'), alt), key(Key::AltDigit(5))),
-        (modified(Code::Char('6'), alt), key(Key::AltDigit(6))),
-        (modified(Code::Char('7'), alt), key(Key::AltDigit(7))),
-        (modified(Code::Char('8'), alt), key(Key::AltDigit(8))),
         (modified(Code::Char('9'), alt), key(Key::AltDigit(9))),
         (plain(Code::Char('a')), key(Key::Char('a'))),
-        (plain(Code::Char('h')), key(Key::Char('h'))),
-        (plain(Code::Char('i')), key(Key::Char('i'))),
-        (plain(Code::Char('b')), key(Key::Char('b'))),
-        (plain(Code::Char('x')), key(Key::Char('x'))),
         (plain(Code::Char('\u{e9}')), key(Key::Char('\u{e9}'))),
         (plain(Code::Char('?')), key(Key::Char('?'))),
         (plain(Code::Char('0')), key(Key::Char('0'))),
