@@ -642,6 +642,155 @@ fn resume_with_an_unknown_model_fails_before_any_session_line() {
     assert_eq!(fs::read(&events).unwrap(), before);
 }
 
+/// As [`Setup::provider_models`], with every model declaring the `low`
+/// and `high` thinking levels and defaulting to `low`.
+fn provider_models_with_thinking(
+    setup: &Setup,
+    server: &ProviderServer,
+    models: &[&str],
+    default: &str,
+) {
+    let source = setup.root.path().join("src");
+    let ids: Vec<Value> = models
+        .iter()
+        .map(|m| {
+            json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+                "thinking_levels": ["low", "high"], "thinking_default": "low"})
+        })
+        .collect();
+    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
+    write(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": ids,
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": default}),
+    );
+}
+
+/// Appends a `model_changed` recording the session's move from `before`
+/// to `after`, with no thinking on either side.
+fn record_switch(setup: &Setup, id: &str, before: &str, after: &str) {
+    let sessions = setup.sessions();
+    let log = log::Log::open(
+        &sessions,
+        SessionId(id.into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    log.append(
+        &Event::ModelChanged(contract::events::ModelChanged {
+            before: contract::events::ModelSettings {
+                model: before.into(),
+                thinking: None,
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                credential: None,
+            },
+            after: contract::events::ModelSettings {
+                model: after.into(),
+                thinking: None,
+                cache_lifetime: contract::events::CacheLifetime::OneHour,
+                credential: None,
+            },
+            source: contract::events::SwitchSource::Driver,
+        }),
+        Some(t()),
+        Some(a("a_1")),
+    )
+    .unwrap();
+}
+
+#[test]
+fn resume_with_a_model_level_suffix_applies_it_for_the_session() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_models_with_thinking(&setup, &server, &["m1", "m2"], "fake/m1");
+    hand_built(&setup, "s_model1", vec![]);
+    record_switch(&setup, "s_model1", "fake/m1", "fake/m2");
+
+    let run = setup.run_in_workspace(&[
+        "ask",
+        "--resume",
+        "s_model1",
+        "--model",
+        "fake/m1:high",
+        "two",
+    ]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "fake/m1");
+    assert_eq!(built["payload"]["thinking"], "high");
+}
+
+#[test]
+fn resume_with_a_level_the_new_model_does_not_declare_fails_first() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_models_with_thinking(&setup, &server, &["m1", "m2"], "fake/m1");
+    hand_built(&setup, "s_model1", vec![]);
+    record_switch(&setup, "s_model1", "fake/m1", "fake/m2");
+    let events = setup.sessions().join("s_model1").join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    let run = setup.run_in_workspace(&[
+        "ask",
+        "--resume",
+        "s_model1",
+        "--model",
+        "fake/m1:max",
+        "two",
+    ]);
+    assert_pre_session(&run, 1, "invalid_arguments");
+    assert_eq!(fs::read(&events).unwrap(), before);
+}
+
+#[test]
+fn resume_without_a_suffix_keeps_the_recorded_thinking_choice() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider_models_with_thinking(&setup, &server, &["m1", "m2"], "fake/m1");
+
+    let first = setup.run_in_workspace(&["ask", "--model", "fake/m2:low", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    let built = second
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "fake/m2");
+    assert_eq!(built["payload"]["thinking"], "low");
+}
+
 /// Installs providers `fake` (models `m1`, `m2`) and `other` (model `m1`)
 /// on `openai-responses` at the fake server, and makes `fake/m1` the
 /// configured model.
