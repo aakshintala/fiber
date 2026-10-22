@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::BufRead;
 use std::os::unix::net::UnixStream;
 
@@ -510,9 +511,7 @@ fn join_within_deadline(thread: std::thread::JoinHandle<()>) {
     let (ended_tx, ended) = std::sync::mpsc::channel();
     std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
     assert_eq!(
-        Deadline::after(std::time::Duration::from_secs(4))
-            .recv(&ended)
-            .ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&ended).ok(),
         Some(true),
         "the relay thread to end after its session closed"
     );
@@ -1540,7 +1539,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
 fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
     const EPOCH: u64 = 7;
@@ -1615,7 +1614,7 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
     use std::io::{BufRead, BufReader};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
 
     let held = fakes::TempDir::new("rn");
@@ -1667,7 +1666,7 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
 fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
     use std::sync::{Arc, mpsc};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
     const EPOCH: u64 = 7;
@@ -1717,7 +1716,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
     const NEWER: u64 = 8;
@@ -1787,7 +1786,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     use std::io::Write;
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
 
@@ -1919,7 +1918,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
     use std::io::{BufRead, Write};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
     let held = fakes::TempDir::new("rp");
@@ -1987,7 +1986,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
 fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rd");
     let hub = Arc::new(hub(&held));
@@ -2037,7 +2036,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     use std::io::{BufRead, Write};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    const DEADLINE: Duration = Duration::from_secs(4);
+    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rk");
     let hub = Arc::new(hub(&held));
@@ -2085,7 +2084,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     session_peer.flush().unwrap();
     // The relay forwards in stream order, so a forwarded unknown
     // acknowledgement would be the first line: the first line is the
-    // known one. The read keeps the 4 s socket deadline.
+    // known one. The read keeps the 10 s socket deadline.
     let mut first = String::new();
     read.read_line(&mut first).unwrap();
     // Closing the session's end ends the relay's read, as a session's
