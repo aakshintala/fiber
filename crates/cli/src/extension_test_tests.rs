@@ -1051,20 +1051,8 @@ fn label() -> serde_json::Value {
 fn run_with_case(setup: &Setup) -> (i32, String, String) {
     setup.case("one.json");
     let options = setup.options(fakes::clock::FakeClock::new(), Vec::new());
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = extension_test_with(
-        Some(&setup.package),
-        Path::new("/bin/false"),
-        &options,
-        &mut out,
-        &mut err,
-    );
-    (
-        code,
-        String::from_utf8(out).unwrap(),
-        String::from_utf8(err).unwrap(),
-    )
+    let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/false"), options);
+    Deadline::after(TEST_WAIT).recv_or_fail(&receive, "the extension test runner to finish")
 }
 
 #[test]

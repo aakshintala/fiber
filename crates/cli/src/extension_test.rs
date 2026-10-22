@@ -358,16 +358,15 @@ fn check_credential_declarations(
             Ok(functions) => functions.iter().any(|function| function == "credential"),
             Err(error) => return fail(&[format!("provider `{}`: {error}", data.name)]),
         };
-        let declared = match &data.credential_from {
-            config::CredentialFrom::Function(_) => Some(true),
-            config::CredentialFrom::Stored { login, .. } => login.map(|_| false),
-        };
         let name = &data.name;
-        if registered && declared.is_none() {
+        if registered
+            && !declares_login(&data.credential_from)
+            && !declares_credential_label(&data.credential_from)
+        {
             drift.push(format!(
                 "provider `{name}` registers credential() but its data declares neither `login` nor `credential_label`: add `credential_label` to providers/{name}.json"
             ));
-        } else if !registered && declared == Some(true) {
+        } else if !registered && declares_credential_label(&data.credential_from) {
             drift.push(format!(
                 "provider `{name}` declares `credential_label` but does not register credential(): remove `credential_label` from providers/{name}.json"
             ));
@@ -378,6 +377,17 @@ fn check_credential_declarations(
     } else {
         fail(&drift)
     }
+}
+
+fn declares_login(credential_from: &config::CredentialFrom) -> bool {
+    matches!(
+        credential_from,
+        config::CredentialFrom::Stored { login: Some(_), .. }
+    )
+}
+
+fn declares_credential_label(credential_from: &config::CredentialFrom) -> bool {
+    matches!(credential_from, config::CredentialFrom::Function(_))
 }
 
 fn parse_verdict(lines: &[&str], fallback_name: &str) -> (String, Vec<String>) {
