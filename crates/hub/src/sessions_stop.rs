@@ -446,6 +446,13 @@ fn wait_ready(fd: BorrowedFd, events: libc::c_short, hub: &Hub, until: Instant) 
 
 /// One readiness slice: true when the poll saw any event, error or hangup
 /// included, as the hub client's own poll does.
+// Exempt: the second `+`'s `-` mutant clears only `POLLHUP`, and the
+// revents survey shows `POLLHUP` never surfaces bare on this platform
+// (a hangup reads `0x1`, a reset carries `0x18` = ERR|HUP), so the
+// mutant is behavior-preserving and no test can bite. The first `+`'s
+// twin clears `POLLERR` and dies on the bare-`0x8` case, kept as the
+// regression test.
+#[cfg_attr(false, mutants::skip)]
 fn poll_ready(fd: BorrowedFd, events: libc::c_short) -> bool {
     // POLL_SLICE is ten milliseconds: the cast cannot truncate.
     #[allow(

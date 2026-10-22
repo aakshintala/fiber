@@ -961,6 +961,37 @@ fn a_closed_fd_fails_nonblocking() {
     );
 }
 
+/// A closed fd cannot go close-on-exec: `set_cloexec` answers nonzero,
+/// which is what the `open_socket` caller checks to fail the open.
+/// Replacing the call with `Default::default` answers 0, reporting
+/// success on the failure.
+#[test]
+#[allow(
+    unsafe_code,
+    reason = "the probe fd is closed by hand to fail the call"
+)]
+fn a_closed_fd_fails_close_on_exec() {
+    // SAFETY: a fresh socket fd this test owns; the assert below
+    // checks the call before the fd is used.
+    let raw = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    assert!(raw >= 0, "the probe socket opens");
+    // SAFETY: `raw` is the open socket above, owned by no one yet.
+    let owned = unsafe { OwnedFd::from_raw_fd(raw) };
+    let number = owned.into_raw_fd();
+    // SAFETY: `number` is the fd just released; closing it touches
+    // nothing else, and the borrow below makes no call that could
+    // hand it out before the check runs.
+    unsafe { libc::close(number) };
+    // SAFETY: the fd stays closed through the check below: nothing
+    // runs between the close and the call it fails.
+    let closed = unsafe { BorrowedFd::borrow_raw(number) };
+    assert_ne!(
+        set_cloexec(closed),
+        0,
+        "a closed fd cannot go close-on-exec"
+    );
+}
+
 /// An address beside the family still computes its bound: family bytes
 /// plus path bytes plus the NUL.
 #[test]
