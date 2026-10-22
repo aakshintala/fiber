@@ -391,10 +391,10 @@ fn contents(value: Value) -> Option<CallResult> {
 /// The servers that offer resources, sorted by name: `list` with no
 /// server names them and starts none.
 fn servers_text(slots: &[Arc<Slot>]) -> String {
-    let mut names: Vec<&str> = slots
+    let mut names: Vec<String> = slots
         .iter()
         .filter(|slot| slot.offers_resources())
-        .map(|slot| slot.spec().name.as_str())
+        .map(|slot| slot.spec().name)
         .collect();
     names.sort();
     let servers = serde_json::to_string(&names).unwrap_or_default();

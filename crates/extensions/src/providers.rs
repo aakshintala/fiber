@@ -2,6 +2,7 @@
 //! model chosen from them (`docs/model-routing.md`, "Naming a model" and
 //! "Choosing the model").
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -21,6 +22,17 @@ mod placeholders;
 mod scripted;
 
 pub(crate) use declared::{first_undeclared, provider_scripts};
+pub use placeholders::Unconfigured;
+
+/// One model a placeholder fill left out: its per-model notice, and, for a
+/// placeholder with no value, its group of one.
+struct LeftOut {
+    /// The per-model `model_unconfigured` notice.
+    notice: Notice,
+    /// The model as an [`Unconfigured`] of one, when its placeholder has
+    /// no value; `None` when the value is not a host.
+    missing: Option<Unconfigured>,
+}
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
@@ -807,7 +819,49 @@ impl Providers {
         config: &Config,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Vec<Notice>, Error> {
+        Ok(self
+            .fill_each(config, env)?
+            .into_iter()
+            .map(|left| left.notice)
+            .collect())
+    }
+
+    /// As [`Providers::fill_placeholders`], removing and recording the same
+    /// models, but grouping those whose placeholder has no value: one
+    /// [`Unconfigured`] per provider and setting, ordered by provider then
+    /// setting, for `fiber models` to print once each. The notices are the
+    /// per-model ones for a value that is not a host, in provider and model
+    /// order.
+    pub fn fill_placeholders_grouped(
+        &mut self,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(Vec<Notice>, Vec<Unconfigured>), Error> {
         let mut notices = Vec::new();
+        let mut groups: BTreeMap<(String, String), Unconfigured> = BTreeMap::new();
+        for left in self.fill_each(config, env)? {
+            match left.missing {
+                Some(one) => match groups.entry((one.provider.clone(), one.setting.clone())) {
+                    Entry::Occupied(mut group) => group.get_mut().models.extend(one.models),
+                    Entry::Vacant(group) => {
+                        group.insert(one);
+                    }
+                },
+                None => notices.push(left.notice),
+            }
+        }
+        Ok((notices, groups.into_values().collect()))
+    }
+
+    /// The pass behind both fills: fills every model it can, removes the
+    /// rest, records each removed model's id and message for `resolve`,
+    /// and returns what it left out, in provider and model order.
+    fn fill_each(
+        &mut self,
+        config: &Config,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<LeftOut>, Error> {
+        let mut out = Vec::new();
         let names: Vec<String> = self.by_name.keys().cloned().collect();
         for provider_name in names {
             let extension = self
@@ -847,7 +901,17 @@ impl Providers {
                                 login,
                             );
                             left_out.push((model.id.clone(), notice.message.clone()));
-                            notices.push(notice);
+                            out.push(LeftOut {
+                                notice,
+                                missing: Some(Unconfigured {
+                                    provider: provider_name.clone(),
+                                    extension: extension.clone(),
+                                    setting: name.clone(),
+                                    variable: variable.map(str::to_owned),
+                                    login,
+                                    models: vec![model.id.clone()],
+                                }),
+                            });
                         }
                         placeholders::Filled::NotHost { name, source } => {
                             let notice = placeholders::not_a_host(
@@ -858,7 +922,10 @@ impl Providers {
                                 &source,
                             );
                             left_out.push((model.id.clone(), notice.message.clone()));
-                            notices.push(notice);
+                            out.push(LeftOut {
+                                notice,
+                                missing: None,
+                            });
                         }
                     }
                 }
@@ -868,7 +935,7 @@ impl Providers {
                 self.unconfigured.insert(provider_name, left_out);
             }
         }
-        Ok(notices)
+        Ok(out)
     }
 
     /// Each declared placeholder of provider `name` with no present

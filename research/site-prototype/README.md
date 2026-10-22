@@ -2,7 +2,7 @@
 
 A static, dark product page for #2926. Open `index.html` in a browser.
 There is no build step. The page makes no third-party requests. Fonts come
-from the system. Links to the docs and source open GitHub when followed.
+from the system. The Docs link opens the rendered guide on the site; the other links to the docs and source open GitHub when followed.
 
 The page stays readable with JavaScript off. JavaScript only copies the
 install command. If clipboard access fails, it selects the command for

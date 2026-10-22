@@ -11,6 +11,7 @@ use contract::tool::ServerRecord;
 use fakes::Deadline;
 use serde_json::json;
 
+use crate::Hints;
 use crate::slot::Served;
 use crate::test_support::FakeImages;
 use crate::test_support::{Setup, WITHIN};
@@ -898,5 +899,178 @@ fn plan_declares_no_resources_for_a_keep_offering_none() {
         "a keep offering no resources declares none"
     );
     apply_sync(staged, &servers, &owned.inputs());
+    setup.stop(servers);
+}
+
+#[test]
+fn keep_redeclare_with_a_newly_disabled_tool_drops_it_and_keeps_the_new_spec() {
+    // A declare-only change re-declares in place: the disabled tool
+    // disappears from the planned set, the commit files the server as
+    // kept on the same live slot, and the slot carries the new spec so
+    // the next classify reads it.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
+    setup.result("echo", HI);
+    setup.result("plus", HI);
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let pid = setup.pid();
+    let mut changed = setup.spec("fx");
+    changed.disabled = vec!["plus".to_owned()];
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(rows.as_slice(), [SyncRow::Keep { .. }]),
+        "a declare-only change keeps the server connected"
+    );
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
+    assert!(synced.servers.restarted.is_empty());
+    let names: Vec<String> = synced
+        .tools
+        .iter()
+        .map(|(_, _, info)| info.name.clone())
+        .collect();
+    assert_eq!(names, vec!["mcp__fx__echo".to_owned()]);
+    apply_sync(staged, &servers, &owned.inputs());
+    let kept = servers.slot("fx").expect("the kept slot");
+    assert!(
+        Arc::ptr_eq(&slot, &kept),
+        "the keep restarts nothing: the slot is identical"
+    );
+    assert!(kept.is_live(), "the kept slot still serves");
+    assert_eq!(
+        kept.spec().disabled,
+        vec!["plus".to_owned()],
+        "the keep persists the new spec on the slot"
+    );
+    assert_eq!(setup.pid(), pid, "the keep spawns nothing");
+    setup.stop(servers);
+}
+
+#[test]
+fn keep_redeclare_with_a_newly_enabled_tool_adds_it_and_keeps_the_new_spec() {
+    // The newly-enabled polarity: starting from an `enabled` allow-list
+    // and reloading with the allow-list lifted declares the newly
+    // enabled tool, still on the same live slot carrying the new spec.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}, {"name": "plus"}]));
+    setup.result("echo", HI);
+    setup.result("plus", HI);
+    let mut spec = setup.spec("fx");
+    spec.enabled = Some(vec!["echo".to_owned()]);
+    let started = setup.start(vec![spec]);
+    let slot = setup.running(&started);
+    let pid = setup.pid();
+    let changed = setup.spec("fx");
+    assert_eq!(changed.enabled, None, "the reload lifts the allow-list");
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(rows.as_slice(), [SyncRow::Keep { .. }]),
+        "lifting the allow-list keeps the server connected"
+    );
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
+    let mut names: Vec<String> = synced
+        .tools
+        .iter()
+        .map(|(_, _, info)| info.name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["mcp__fx__echo".to_owned(), "mcp__fx__plus".to_owned()]
+    );
+    apply_sync(staged, &servers, &owned.inputs());
+    let kept = servers.slot("fx").expect("the kept slot");
+    assert!(
+        Arc::ptr_eq(&slot, &kept),
+        "the keep restarts nothing: the slot is identical"
+    );
+    assert_eq!(
+        kept.spec().enabled,
+        None,
+        "the keep persists the lifted allow-list on the slot"
+    );
+    assert_eq!(setup.pid(), pid, "the keep spawns nothing");
+    setup.stop(servers);
+}
+
+#[test]
+fn keep_redeclare_with_a_changed_hint_shows_in_the_declared_effects() {
+    // A hint-only change re-declares in place: the tool row carries the
+    // person's override in its declared effects, and the slot carries
+    // the new hints so the next classify reads them.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    setup.result("echo", HI);
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    let mut changed = setup.spec("fx");
+    changed.hints.insert(
+        "echo".to_owned(),
+        Hints {
+            read_only: None,
+            destructive: Some(false),
+            open_world: None,
+        },
+    );
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(rows.as_slice(), [SyncRow::Keep { .. }]),
+        "a hint-only change keeps the server connected"
+    );
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
+    let (_, tool, _) = synced
+        .tools
+        .iter()
+        .find(|(_, _, info)| info.name == "mcp__fx__echo")
+        .expect("the staged lists still declare");
+    let effects = tool.effects(&Default::default()).expect("classifiable");
+    assert_eq!(
+        effects.declared.effects,
+        vec![
+            contract::shapes::Effect::Writes,
+            contract::shapes::Effect::Network
+        ],
+        "the re-declaration carries the person's override"
+    );
+    assert!(effects.declared.reversible);
+    apply_sync(staged, &servers, &owned.inputs());
+    let kept = servers.slot("fx").expect("the kept slot");
+    assert!(
+        Arc::ptr_eq(&slot, &kept),
+        "the keep restarts nothing: the slot is identical"
+    );
+    assert_eq!(
+        kept.spec().hints.get("echo"),
+        Some(&Hints {
+            read_only: None,
+            destructive: Some(false),
+            open_world: None,
+        }),
+        "the keep persists the new hints on the slot"
+    );
     setup.stop(servers);
 }

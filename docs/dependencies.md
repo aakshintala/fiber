@@ -432,7 +432,7 @@ dependency.
 | xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`), and `cargo xtask models-dev`, which regenerates the first-party model lists (`docs/model-routing.md`), and `cargo xtask site`, which builds the docs site (`docs/ci.md`, "The user docs site"). It uses serde_json, proc-macro2, pulldown-cmark, skrifa and tiny-skia, `fakes` in its tests, and no Fiber crate depends on it |
 | curl | tool | `cargo xtask models-dev` fetches models.dev with it; its test reads a `file://` URL. macOS and GitHub's runners ship it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
-| pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |
+| pulldown-cmark | xtask dependency | reading Markdown for the docs check and rendering the docs site (`docs/ci.md`, "The docs check" and "The user docs site"); the terminal's use is in the runtime table |
 | skrifa | xtask dependency | reading JetBrains Mono's outlines for the logo's mask (`cargo xtask logo-mask`) |
 | tiny-skia | xtask dependency | rasterising those outlines into the logo's mask (`cargo xtask logo-mask`) |
 
