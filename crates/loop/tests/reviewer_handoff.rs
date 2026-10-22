@@ -122,6 +122,32 @@ fn texts(request: &ModelRequest) -> Vec<&str> {
         .collect()
 }
 
+/// The first agent request whose conversation holds the handoff's note
+/// `note`: the first request after the handoff.
+fn noted_request(session: &Session, note: &str) -> ModelRequest {
+    session
+        .requests()
+        .into_iter()
+        .find(|request| user_texts(request).contains(&note))
+        .expect("a request after the handoff")
+}
+
+/// A request's user item texts, in order.
+fn user_texts(request: &ModelRequest) -> Vec<&str> {
+    request
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text, .. } => Some(text.as_str()),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => None,
+        })
+        .collect()
+}
+
 fn failed(message: &str) -> Scripted {
     Scripted::failed(Failure {
         code: ErrorCode::RateLimited,
@@ -252,6 +278,17 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
             .filter(|text| text.starts_with("Tool call: "))
             .count(),
         1
+    );
+
+    // The agent's first request after the handoff holds the same kept
+    // message word for word, between the opening and the note, and not the
+    // dropped one.
+    let first = noted_request(&session, "The note.");
+    let agent = user_texts(&first);
+    assert!(agent[0].starts_with("This message is from Fiber"));
+    assert_eq!(
+        agent[1..],
+        ["never push to main", "The note.", "now run it"]
     );
 }
 
@@ -857,6 +894,12 @@ fn without_a_reviewer_a_handoff_writes_no_selection() {
     assert!(kept_lines(&lines).is_empty());
     assert!(notice(&lines, "reviewer_selection_failed").is_none());
     lines.extend(prompt_turn(&mut session, "after"));
+    // Nothing earlier is carried without a selection: the first request
+    // after the handoff holds the opening, the note and this turn's input.
+    let first = noted_request(&session, "The note.");
+    let agent = user_texts(&first);
+    assert!(agent[0].starts_with("This message is from Fiber"));
+    assert_eq!(agent[1..], ["The note.", "after"]);
     // The handoff writes no selection without a reviewer, then the prompt turn.
     assert_eq!(
         kinds(&lines),
@@ -1503,4 +1546,51 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
     assert_eq!(reviewer.requests().len(), 1);
     drop(session.looped.take());
     drop(reviewer);
+}
+
+#[test]
+fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
+    // 8,000 bytes are 2,000 tokens: the kept message alone is over a
+    // trigger of 1,000.
+    let long = format!("never push to main. {}", "x".repeat(8_000));
+    let trigger = 1_000;
+    assert!(long.len() as u64 / 4 > trigger);
+    let mut session = Session::with_tools(
+        vec![
+            support::with_tokens(Scripted::text("Hi."), trigger, 0),
+            Scripted::text("The note."),
+            support::with_tokens(Scripted::text("Done."), 50, 0),
+        ],
+        None,
+        Vec::new(),
+    )
+    .handoff(r#loop::HandoffSettings {
+        tokens: trigger,
+        nudge: false,
+        ..r#loop::HandoffSettings::default()
+    });
+    session.reviewer(vec![Scripted::text("1, 2")]);
+    prompt_turn(&mut session, &long);
+    let lines = prompt_turn(&mut session, "second");
+    // The second turn starts over the trigger: one handoff, and the
+    // context it starts is over the trigger too, which does not hand off again
+    // in that step.
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "handoff_completed").len(), 1);
+    let kept = kept_lines(&lines);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].payload["kept"].as_array().unwrap().len(), 2);
+    let first = noted_request(&session, "The note.");
+    let agent = user_texts(&first);
+    assert!(agent[0].starts_with("This message is from Fiber"));
+    // The kept message is carried whole, before the turn's input and the
+    // note.
+    assert_eq!(agent[2..], ["second", "The note."]);
+    assert!(
+        agent[1] == long,
+        "the kept message is carried whole: {} bytes of {}",
+        agent[1].len(),
+        long.len()
+    );
+    assert_eq!(session.requests().len(), 3);
 }

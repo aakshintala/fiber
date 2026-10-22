@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use contract::ActionId;
 use contract::events::{
-    ContextNudged, Control, Event, HandoffCompleted, Note, ShellCommand, SkillLoad,
+    ContextNudged, Control, Event, HandoffCompleted, KeptMessage, Note, ShellCommand, SkillLoad,
 };
 use contract::provider::Input;
 use contract::shapes::Question;
@@ -66,6 +66,25 @@ pub(crate) struct Carry {
     /// line `seq`s, in written order: the next `turn_started` names each
     /// one once (`docs/events.md`, `turn_started`).
     pub(crate) shells: Vec<(u64, ShellCommand)>,
+    /// Where the person's kept messages go in the context a completed
+    /// handoff started: right after the opening message and its
+    /// `session_start` contexts, before the carried input
+    /// (`docs/handoff.md`, "What the model sees after a handoff"). Only a
+    /// completed handoff arms it, at 0; the opening and each
+    /// `session_start` context placed while it is armed move it on by one;
+    /// the `reviewer_kept` line takes it.
+    pub(crate) input_at: Option<usize>,
+    /// The person's messages the reviewer still holds, oldest first, each
+    /// under the `seq` and item of the line that holds it: the driver
+    /// messages outside a rewind summary turn, pruned to the kept ones at
+    /// every `reviewer_kept`, as the reviewer's own transcript is.
+    pub(crate) person: Vec<(KeptMessage, Input)>,
+    /// The index in `person` where this turn's messages start: the turn's
+    /// input is carried whole, so a kept message at or after it is not
+    /// inserted again. A position, never a key: a fork's log counts `seq`
+    /// from its own start, so a parent's message can share a key with this
+    /// turn's, and the reviewer keeps both.
+    pub(crate) turn_from: usize,
 }
 
 impl Carry {
@@ -116,6 +135,9 @@ impl Carry {
     /// goes right after it, at index 1.
     pub(crate) fn opened(&mut self) {
         self.after_opening = Some(1);
+        if let Some(at) = &mut self.input_at {
+            *at += 1;
+        }
     }
 
     /// Where a `context_added` with hook `hook` goes given the taken
@@ -126,6 +148,9 @@ impl Carry {
         match (slot, hook) {
             (Some(at), "session_start") => {
                 self.after_opening = Some(at + 1);
+                if let Some(input_at) = &mut self.input_at {
+                    *input_at += 1;
+                }
                 Some(at)
             }
             _ => None,
@@ -221,7 +246,43 @@ impl Carry {
             )
         });
         self.nudged = false;
+        self.input_at = Some(0);
         conversation
+    }
+
+    /// Records a person's message the reviewer holds, under its line's key.
+    pub(crate) fn record_person(&mut self, key: KeptMessage, input: Input) {
+        self.person.push((key, input));
+    }
+
+    /// Keeps only the entries `kept` names, in their current order, and
+    /// moves `turn_from` to the count kept from before it.
+    pub(crate) fn prune(&mut self, kept: &[KeptMessage]) {
+        let before = self
+            .person
+            .iter()
+            .take(self.turn_from)
+            .filter(|(key, _)| kept.contains(key))
+            .count();
+        self.person.retain(|(key, _)| kept.contains(key));
+        self.turn_from = before;
+    }
+
+    /// Carries the messages a `reviewer_kept` line names into the context a
+    /// completed handoff started, at the armed spot and in the reviewer's
+    /// order, then prunes the index to them. Nothing is inserted when no
+    /// completed handoff armed the spot, a message of this turn stays where
+    /// the turn's input put it, and a key naming no entry matches nothing.
+    pub(crate) fn keep(&mut self, kept: &[KeptMessage], conversation: &mut Vec<Input>) {
+        if let Some(mut at) = self.input_at.take() {
+            for (key, input) in self.person.iter().take(self.turn_from) {
+                if kept.contains(key) {
+                    conversation.insert(at.min(conversation.len()), input.clone());
+                    at += 1;
+                }
+            }
+        }
+        self.prune(kept);
     }
 
     /// A call of the last reply was requested.

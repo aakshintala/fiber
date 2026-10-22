@@ -431,8 +431,9 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
     );
     let through_files = files.locks();
     let (done, done_rx) = mpsc::channel();
+    let thread_path = path.clone();
     let handle = std::thread::spawn(move || {
-        let guard = through_files.lock(&path);
+        let guard = through_files.lock(&thread_path);
         done.send(()).unwrap();
         drop(guard);
     });
@@ -459,7 +460,17 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
     );
     holder.join().unwrap();
     handle.join().unwrap();
-    assert!(locks.is_clear());
+    assert_eq!(locks.waiting(), 0);
+    let (relocked, relocked_rx) = mpsc::channel();
+    let relock = Arc::clone(&locks);
+    std::thread::spawn(move || {
+        drop(relock.lock(&path));
+        relocked.send(()).unwrap();
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&relocked_rx).is_ok(),
+        "waited {DEADLINE:?} for the path to lock again after both holders left"
+    );
 }
 
 #[test]

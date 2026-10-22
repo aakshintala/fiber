@@ -41,7 +41,7 @@ const MAX_REDIRECTS: u32 = 10;
 const REQUEST_LIMIT: Duration = Duration::from_secs(60);
 const FETCH_LIMIT: Duration = Duration::from_secs(5 * 60);
 
-/// Looks a name up. Tests inject their own.
+/// Looks a name up. Tests choose the answer, see [`WebFetch`]'s `resolve`.
 type Resolve = Arc<dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync>;
 
 /// The call's arguments, checked against the schema before the call runs.
@@ -54,11 +54,16 @@ struct Args {
 pub struct WebFetch {
     artifacts: PathBuf,
     clock: Arc<dyn Clock>,
+    /// Looks names up. No outside seam chooses the system resolver's answer,
+    /// and the blocked-address checks after resolution (`hop`) need a chosen
+    /// answer, so tests set this field.
     resolve: Resolve,
     /// `Some` fixes the proxy: tests, so a developer's environment does not
     /// reach them. `None` reads it from the environment on every call.
     proxy: Option<Option<ureq::Proxy>>,
-    /// Wraps each artifact's file: tests only.
+    /// Wraps each artifact's file. A write that fails partway, or a hold
+    /// during an artifact's save, cannot be made from outside the process, so
+    /// tests set this field.
     wrap: Option<Wrap>,
 }
 
@@ -77,20 +82,6 @@ impl WebFetch {
             proxy: None,
             wrap: None,
         }
-    }
-
-    /// Looks names up with `resolve`.
-    #[cfg(test)]
-    pub(crate) fn with_resolver(mut self, resolve: Resolve) -> Self {
-        self.resolve = resolve;
-        self
-    }
-
-    /// Writes each artifact through `wrap`'s writer around its file.
-    #[cfg(test)]
-    pub(crate) fn with_artifact_writer(mut self, wrap: Wrap) -> Self {
-        self.wrap = Some(wrap);
-        self
     }
 
     /// Fixes the proxy, `None` meaning a direct connection, so the proxy

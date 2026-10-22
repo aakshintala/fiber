@@ -455,13 +455,6 @@ impl Files {
     }
 }
 
-#[cfg(test)]
-impl Files {
-    pub(crate) fn seen_hash(&self, path: &Path) -> Option<u64> {
-        self.shared.seen(path)
-    }
-}
-
 impl Shared {
     pub(crate) fn workspace(&self) -> &Path {
         &self.workspace

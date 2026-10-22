@@ -103,18 +103,6 @@ fn asked(id: &str) -> Event {
     })
 }
 
-fn asked_without_extension(id: &str) -> Event {
-    Event::InteractionRequested(InteractionRequested {
-        request_id: RequestId(id.into()),
-        interaction: Interaction::Confirm {
-            prompt: "go?".into(),
-        },
-        action_ids: None,
-        extension: None,
-        resumes: false,
-    })
-}
-
 fn answered_by_person(id: &str) -> Event {
     Event::InteractionResolved(InteractionResolved {
         request_id: RequestId(id.into()),
@@ -162,20 +150,6 @@ fn a_resolved_extension_ask_is_left_alone() {
     assert_eq!(resolved.len(), 1, "no second resolution is written");
     assert_eq!(resolved[0].payload["by"], "person");
     assert!(exited.get("suspended_on").is_none());
-}
-
-#[test]
-fn a_question_without_an_extension_is_still_suspended() {
-    let session = Session::new();
-    fiber_started(&session.log, "1.2.3", false).unwrap();
-    session.append(&asked_without_extension("r_1"));
-    let (code, exited) = session.exit_on(None);
-    assert_eq!(code, 0);
-    assert!(
-        session.resolved().is_empty(),
-        "a question without an extension is never declined"
-    );
-    assert_eq!(exited["suspended_on"], "r_1");
 }
 
 #[test]

@@ -1108,6 +1108,45 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
     }
 }
 
+/// `Inner` that answers a fixed `defers`. `Inner` keeps the trait default, so
+/// a wrapper that forwarded nothing would look the same as the inner provider.
+struct Deferring(bool);
+
+impl Provider for Deferring {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        crate::test_support::Inner::default().call(request)
+    }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        crate::test_support::Inner::default().wire_tools(tools)
+    }
+
+    fn defers(&self) -> bool {
+        self.0
+    }
+}
+
+#[test]
+fn quoted_forwards_whether_the_inner_provider_defers() {
+    let root = fakes::TempDir::new("fiber-quota-defers");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
+    for defers in [false, true] {
+        let inner: Arc<dyn Provider> = Arc::new(Deferring(defers));
+        let wrapped = {
+            let lua = Arc::clone(&lua);
+            let pair = pair();
+            fakes::within(
+                "lua.with_quota",
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                move || lua.with_quota(inner, pair, None),
+            )
+            .unwrap()
+        };
+        assert_eq!(wrapped.defers(), defers);
+    }
+}
+
 #[test]
 fn a_failed_fetch_never_reaches_the_caller() {
     let root = fakes::TempDir::new("fiber-quota-trigger-error");
