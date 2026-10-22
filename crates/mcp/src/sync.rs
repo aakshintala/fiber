@@ -147,16 +147,14 @@ pub fn classify_sync(new_specs: Vec<ServerSpec>, servers: &Servers) -> Vec<SyncR
                 };
                 // A lazy slot never answers a reload: force a real start.
                 // A changed key or timeouts replace even a slot that never
-                // served: serving in place would run the old spec.
+                // served: serving in place would run the old spec. The
+                // commit files the replacement by whether the slot served.
                 if old.key() != spec.key()
                     || old.startup_timeout != spec.startup_timeout
                     || old.call_timeout != spec.call_timeout
                     || old.required != spec.required
                 {
-                    SyncRow::Shadow {
-                        spec,
-                        disposition: Disposition::Restarted,
-                    }
+                    SyncRow::Shadow { spec, disposition }
                 } else if slot.is_live() {
                     SyncRow::Keep { spec }
                 } else {
