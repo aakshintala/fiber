@@ -79,6 +79,18 @@ fn a_closing_row_reads_the_same_with_a_duration_or_without() {
 }
 
 #[test]
+fn a_framed_closing_row_reads_the_same_whatever_the_duration_width() {
+    // The three rows are drawn at the same frame width: a present
+    // duration of n bytes leaves n + 3 fewer padding spaces.
+    let absent = format!("⋮  ▣ completed · 13 tokens{}⋮", " ".repeat(60));
+    let narrow = format!("⋮  ▣ completed · 5s · 13 tokens{}⋮", " ".repeat(55));
+    let wide = format!("⋮  ▣ completed · 12s · 13 tokens{}⋮", " ".repeat(54));
+    let want = one(&absent, &[]);
+    assert_eq!(one(&narrow, &[]), want);
+    assert_eq!(one(&wide, &[]), want);
+}
+
+#[test]
 fn an_interrupted_row_reads_the_same_with_a_duration_or_without() {
     assert_eq!(
         one("  ▣ interrupted · 4s", &[]),
@@ -129,6 +141,15 @@ fn a_tool_group_summary_reads_its_duration_as_a_placeholder() {
         one("  ● 4s ran 3 questions ▸", &[]),
         "  ● 4s ran 3 questions ▸"
     );
+}
+
+#[test]
+fn a_full_width_tool_group_reads_the_same_whatever_the_duration_width() {
+    // Both rows fill the same width: the 3-char duration leaves one
+    // fewer padding space than the 2-char one.
+    let two = format!("  ● Asked 3 questions{}4s ▸", " ".repeat(10));
+    let three = format!("  ● Asked 3 questions{}12s ▸", " ".repeat(9));
+    assert_eq!(one(&three, &[]), one(&two, &[]));
 }
 
 #[test]
