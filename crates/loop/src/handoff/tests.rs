@@ -164,6 +164,17 @@ fn the_note_request_is_the_note_section_alone_without_instructions() {
 }
 
 #[test]
+fn the_note_request_asks_for_the_standing_orders() {
+    let text = note_request_text("/log", None);
+    assert!(text.contains(
+        "- Quote the person's standing orders and limits, such as \"read-only\" or \"don't touch X\", and say which of the person's messages each one came from."
+    ));
+    assert!(text.contains(
+        "the person's latest message and, when the session keeps them, the person's earlier messages that still bind, besides."
+    ));
+}
+
+#[test]
 fn instructions_follow_the_note_section_after_a_blank_line() {
     let plain = note_request_text("/log", None);
     let text = note_request_text("/log", Some("focus on tests"));
@@ -464,6 +475,27 @@ fn two_session_start_contexts_take_the_opening_slot_in_order() {
 }
 
 #[test]
+fn the_kept_spot_moves_on_for_the_opening_and_each_session_start_context() {
+    let mut carry = Carry::default();
+    // Nothing armed it: the opening and a context leave it unset.
+    carry.opened();
+    assert_eq!(carry.place_context(Some(1), "session_start"), Some(1));
+    assert_eq!(carry.input_at, None);
+    // A completed handoff arms it at 0; the opening, then each
+    // `session_start` context, move it on by one.
+    carry.input_at = Some(0);
+    carry.opened();
+    assert_eq!(carry.input_at, Some(1));
+    assert_eq!(carry.place_context(Some(1), "session_start"), Some(1));
+    assert_eq!(carry.input_at, Some(2));
+    assert_eq!(carry.place_context(Some(2), "session_start"), Some(2));
+    assert_eq!(carry.input_at, Some(3));
+    // Any other hook leaves it where it is.
+    assert_eq!(carry.place_context(Some(3), "turn_start"), None);
+    assert_eq!(carry.input_at, Some(3));
+}
+
+#[test]
 fn only_a_session_start_context_honours_the_opening_slot() {
     let mut carry = Carry::default();
     carry.opened();
@@ -535,6 +567,7 @@ fn render_into(
         "fake/model-1",
         &mut std::collections::BTreeMap::new(),
         carry,
+        None,
     );
 }
 
