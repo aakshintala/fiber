@@ -45,17 +45,20 @@ pub(crate) const SESSIONS_STOP_WITHIN: Duration = Duration::from_secs(10);
 /// session holds one session, never the stop.
 const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
 
-/// What one sessions stop found.
-pub(crate) struct Outcome {
-    /// The sessions whose sockets closed after their `close` with `now`
-    /// was accepted, in id order.
-    pub(crate) confirmed: Vec<SessionId>,
-    /// Every listed session neither confirmed nor skipped as refused, in
-    /// id order: still running, or gone past the bound.
-    pub(crate) unconfirmed: Vec<SessionId>,
+/// What one sessions stop found: either the listing failed, or the
+/// stop ran over the listings. The lists exist only on the success
+/// variant, so a failed listing can never read as an empty count.
+pub(crate) enum Outcome {
     /// The `run/` listing failed: no session is named, stopped or
     /// running, and the stop answers `io_failed` instead of a count.
-    pub(crate) list_failed: bool,
+    ListFailed,
+    /// The stop ran: the sessions whose sockets closed after their
+    /// `close` with `now` was accepted, in id order, and every listed
+    /// session neither confirmed nor skipped as refused, in id order.
+    Listed {
+        confirmed: Vec<SessionId>,
+        unconfirmed: Vec<SessionId>,
+    },
 }
 
 /// Shuts down every running session the hub knows of in `run/`, each
@@ -76,11 +79,7 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     let first = match list(hub) {
         Ok(first) => first,
         Err(_) => {
-            return Outcome {
-                confirmed: Vec::new(),
-                unconfirmed: Vec::new(),
-                list_failed: true,
-            };
+            return Outcome::ListFailed;
         }
     };
     #[cfg(test)]
@@ -101,11 +100,7 @@ pub(crate) fn run(hub: &Arc<Hub>) -> Outcome {
     let second = match list(hub) {
         Ok(second) => second,
         Err(_) => {
-            return Outcome {
-                confirmed: Vec::new(),
-                unconfirmed: Vec::new(),
-                list_failed: true,
-            };
+            return Outcome::ListFailed;
         }
     };
     let fresh: Vec<SessionId> = second
@@ -172,11 +167,7 @@ fn probe(hub: &Hub) -> Outcome {
     let ids = match list(hub) {
         Ok(ids) => ids,
         Err(_) => {
-            return Outcome {
-                confirmed: Vec::new(),
-                unconfirmed: Vec::new(),
-                list_failed: true,
-            };
+            return Outcome::ListFailed;
         }
     };
     for id in ids {
@@ -184,10 +175,9 @@ fn probe(hub: &Hub) -> Outcome {
             unconfirmed.push(id);
         }
     }
-    Outcome {
+    Outcome::Listed {
         confirmed: Vec::new(),
         unconfirmed,
-        list_failed: false,
     }
 }
 
@@ -433,10 +423,9 @@ fn finish(
         }
     }
     let confirmed = confirmed.iter().map(|id| SessionId(id.clone())).collect();
-    Outcome {
+    Outcome::Listed {
         confirmed,
         unconfirmed,
-        list_failed: false,
     }
 }
 

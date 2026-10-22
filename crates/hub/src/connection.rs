@@ -1088,43 +1088,53 @@ fn on_stop(
             hook();
         }
     }
-    if outcome.list_failed {
-        let message = "The session list could not be read.";
-        match web {
-            Some(web) => drain_web(
-                hub,
-                writer,
-                web,
-                "command_rejected",
-                rejection(Some(id), &ErrorCode::IoFailed, message),
-            ),
-            None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, message),
-        }
-    } else if outcome.unconfirmed.is_empty() {
-        let result = CommandResult::Stop {
-            sessions_stopped: outcome.confirmed.len(),
-        };
-        let result = serde_json::to_value(&result).unwrap_or(Value::Null);
-        match web {
-            Some(web) => {
-                let mut payload =
-                    Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
-                payload.insert("result".to_owned(), result);
-                drain_web(hub, writer, web, "command_accepted", payload);
+    match outcome {
+        crate::sessions_stop::Outcome::ListFailed => {
+            let message = "The session list could not be read.";
+            match web {
+                Some(web) => drain_web(
+                    hub,
+                    writer,
+                    web,
+                    "command_rejected",
+                    rejection(Some(id), &ErrorCode::IoFailed, message),
+                ),
+                None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, message),
             }
-            None => accept_result(writer, hub, id, result),
         }
-    } else {
-        let message = unconfirmed_message(&outcome.unconfirmed);
-        match web {
-            Some(web) => drain_web(
-                hub,
-                writer,
-                web,
-                "command_rejected",
-                rejection(Some(id), &ErrorCode::IoFailed, &message),
-            ),
-            None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, &message),
+        crate::sessions_stop::Outcome::Listed {
+            confirmed,
+            unconfirmed,
+        } if unconfirmed.is_empty() => {
+            let result = CommandResult::Stop {
+                sessions_stopped: confirmed.len(),
+            };
+            let result = serde_json::to_value(&result).unwrap_or(Value::Null);
+            match web {
+                Some(web) => {
+                    let mut payload =
+                        Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
+                    payload.insert("result".to_owned(), result);
+                    drain_web(hub, writer, web, "command_accepted", payload);
+                }
+                None => accept_result(writer, hub, id, result),
+            }
+        }
+        crate::sessions_stop::Outcome::Listed {
+            confirmed: _,
+            unconfirmed,
+        } => {
+            let message = unconfirmed_message(&unconfirmed);
+            match web {
+                Some(web) => drain_web(
+                    hub,
+                    writer,
+                    web,
+                    "command_rejected",
+                    rejection(Some(id), &ErrorCode::IoFailed, &message),
+                ),
+                None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, &message),
+            }
         }
     }
     hub.request_stop();

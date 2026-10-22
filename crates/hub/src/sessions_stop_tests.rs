@@ -94,9 +94,7 @@ fn an_unreadable_run_directory_fails_the_stop() {
     fs::write(temp.dir.join("run"), b"").unwrap();
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let outcome = join(stop_async(&hub));
-    assert!(outcome.list_failed);
-    assert!(outcome.confirmed.is_empty());
-    assert!(outcome.unconfirmed.is_empty());
+    assert!(matches!(outcome, Outcome::ListFailed));
 }
 
 /// A missing `run/` is no sessions: a home that never started one stops
@@ -107,15 +105,27 @@ fn a_missing_run_directory_stops_nothing() {
     fs::remove_dir(temp.dir.join("run")).unwrap();
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let outcome = join(stop_async(&hub));
-    assert!(!outcome.list_failed);
-    assert!(outcome.confirmed.is_empty());
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert!(confirmed.is_empty());
+    assert!(unconfirmed.is_empty());
 }
 
 /// Joins a loop thread under one deadline: a loop that waits out the
 /// bound instead of answering fails here.
 fn join(rx: mpsc::Receiver<Outcome>) -> Outcome {
     Deadline::after(DEADLINE).recv_or_fail(&rx, "the sessions stop")
+}
+
+/// Splits a listed outcome: panics on `ListFailed`, so a listing
+/// failure can never read as an empty count.
+fn listed(outcome: Outcome) -> (Vec<SessionId>, Vec<SessionId>) {
+    match outcome {
+        Outcome::Listed {
+            confirmed,
+            unconfirmed,
+        } => (confirmed, unconfirmed),
+        Outcome::ListFailed => panic!("the listing succeeded"),
+    }
 }
 
 fn command_of(line: &str) -> Value {
@@ -130,8 +140,9 @@ fn stops_a_running_session_through_subscribe_then_close() {
     let id = start(&starter, 1);
     let hub = temp.hub(starter);
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![id.clone()]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![id.clone()]);
+    assert!(unconfirmed.is_empty());
     // The socket is gone, as a session's exit leaves it.
     assert!(UnixStream::connect(temp.run(&id)).is_err());
     // This connection subscribed before it closed, each line on a fresh
@@ -189,8 +200,9 @@ fn an_expired_end_with_no_stop_finishes_the_partial_round() {
     temp.clock
         .advance(SESSIONS_STOP_WITHIN + Duration::from_secs(1));
     let outcome = join(rx);
-    assert!(outcome.confirmed.is_empty());
-    assert_eq!(outcome.unconfirmed, vec![id]);
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert!(confirmed.is_empty());
+    assert_eq!(unconfirmed, vec![id]);
 }
 
 #[test]
@@ -201,8 +213,9 @@ fn stops_every_running_session_leaving_no_socket_behind() {
     let second = start(&starter, 2);
     let hub = temp.hub(starter);
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![first.clone(), second.clone()]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![first.clone(), second.clone()]);
+    assert!(unconfirmed.is_empty());
     assert!(UnixStream::connect(temp.run(&first)).is_err());
     assert!(UnixStream::connect(temp.run(&second)).is_err());
 }
@@ -240,8 +253,9 @@ fn a_refused_socket_is_skipped() {
     drop(stale_listener);
     let hub = temp.hub(starter);
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![live]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![live]);
+    assert!(unconfirmed.is_empty());
     assert!(temp.run(&stale).exists());
 }
 
@@ -260,8 +274,9 @@ fn a_session_that_exits_between_enumeration_and_connect_is_skipped() {
         fs::remove_file(&path).unwrap();
     }));
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![live]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![live]);
+    assert!(unconfirmed.is_empty());
 }
 
 #[test]
@@ -281,8 +296,9 @@ fn a_session_started_mid_scan_is_shut_down_by_the_rescan() {
             .unwrap();
     }));
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![first.clone(), second.clone()]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![first.clone(), second.clone()]);
+    assert!(unconfirmed.is_empty());
     assert!(UnixStream::connect(temp.run(&second)).is_err());
 }
 
@@ -307,8 +323,9 @@ fn the_loop_waits_for_binds_in_flight_before_scanning() {
     hub.inflight_binds.fetch_sub(1, Ordering::SeqCst);
     hub.tick.wake();
     let outcome = join(rx);
-    assert_eq!(outcome.confirmed, vec![id]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![id]);
+    assert!(unconfirmed.is_empty());
 }
 
 #[test]
@@ -327,8 +344,9 @@ fn abort_mid_fan_out_names_the_session_still_running() {
     hub.request_stop();
     hub.tick.wake();
     let outcome = join(rx);
-    assert!(outcome.confirmed.is_empty());
-    assert_eq!(outcome.unconfirmed, vec![id.clone()]);
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert!(confirmed.is_empty());
+    assert_eq!(unconfirmed, vec![id.clone()]);
     // Still running: its socket accepts, and the clock never moved.
     assert!(UnixStream::connect(temp.run(&id)).is_ok());
     assert_eq!(temp.clock.now(), started);
@@ -357,9 +375,10 @@ fn abort_in_the_first_zero_wait_probes_without_waiting() {
     hub.request_stop();
     hub.tick.wake();
     let outcome = join(rx);
-    assert!(outcome.confirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert!(confirmed.is_empty());
     // The live listener is named; the stale path is skipped, never named.
-    assert_eq!(outcome.unconfirmed, vec![live]);
+    assert_eq!(unconfirmed, vec![live]);
     assert_eq!(temp.clock.now(), started);
 }
 
@@ -529,8 +548,9 @@ fn a_reset_after_the_close_ack_still_confirms() {
         }
     });
     let outcome = join(stop_async(&hub));
-    assert_eq!(outcome.confirmed, vec![id]);
-    assert!(outcome.unconfirmed.is_empty());
+    let (confirmed, unconfirmed) = listed(outcome);
+    assert_eq!(confirmed, vec![id]);
+    assert!(unconfirmed.is_empty());
 }
 
 /// A reset loopback connection reads neither refused nor connected: the
