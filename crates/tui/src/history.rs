@@ -45,16 +45,14 @@ struct Search {
     selected: usize,
 }
 
-/// The recall list built for one attached session: the entries and each
-/// one's lowercase form, in the same order.
+/// The recall list built for one attached session.
 #[derive(Debug)]
 struct Recall {
     /// The session the list was built for.
     session: Option<SessionId>,
-    entries: Vec<String>,
-    /// `entries[i].to_lowercase()`, kept so a search never lowercases an
-    /// entry again.
-    lower: Vec<String>,
+    /// Each entry with its lowercase form, kept so a search never
+    /// lowercases an entry again.
+    entries: Vec<(String, String)>,
 }
 
 /// The recall list's sources, the paging state, browsing and search.
@@ -152,22 +150,22 @@ impl History {
             .filter(|(from, _)| session.is_none_or(|attached| attached.0 != *from))
             .map(|(_, text)| text);
         let mut seen = HashSet::new();
-        let entries: Vec<String> = own
+        let entries = own
             .chain(hub)
             .filter(|text| !text.is_empty() && seen.insert(text.as_str()))
-            .cloned()
+            .map(|text| (text.clone(), text.to_lowercase()))
             .collect();
-        let lower = entries.iter().map(|entry| entry.to_lowercase()).collect();
         Recall {
             session: session.cloned(),
             entries,
-            lower,
         }
     }
 
     /// The recall entry at `at` with `session` attached.
     fn entry(&self, session: Option<&SessionId>, at: usize) -> Option<String> {
-        self.recall(session, |list| list.entries.get(at).cloned())
+        self.recall(session, |list| {
+            list.entries.get(at).map(|(text, _)| text.clone())
+        })
     }
 
     /// The search panel's matches: entries holding the query, ignoring
@@ -180,9 +178,8 @@ impl History {
         self.recall(session, |list| {
             list.entries
                 .iter()
-                .zip(&list.lower)
                 .filter(|(_, lower)| lower.contains(&query))
-                .map(|(entry, _)| entry.clone())
+                .map(|(text, _)| text.clone())
                 .collect()
         })
     }

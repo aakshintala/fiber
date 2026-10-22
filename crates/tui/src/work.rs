@@ -2,8 +2,9 @@
 //! reply renders, row builds and page counts, with the index's page
 //! walks, the usage lines' turn lookups, the prompt recall lists built
 //! and the workspace paths lowercased for file search. The `paging` jig
-//! prints them beside its fold time, and tests assert them: a test of how
-//! much work something does counts the work (`docs/testing.md`). Each
+//! prints the paging counts (not the recall or path counts) beside its
+//! fold time, and tests assert every count: a test of how much work
+//! something does counts the work (`docs/testing.md`). Each
 //! count is one thread-local add, nothing beside the work it counts, and
 //! every count has a test asserting its exact number, so no count
 //! survives that no test can tell apart.
