@@ -51,6 +51,14 @@ impl Home {
         Self::start(fiber, [], None)
     }
 
+    /// [`Home::new`] with `diagnostics.level` set to `debug`. The home's
+    /// `logs/` are read into the returned sink when it drops.
+    pub(crate) fn debug(fiber: &Path) -> Result<(Self, DiagnosticLogs), String> {
+        let logs = DiagnosticLogs::default();
+        let home = Self::start(fiber, [], Some(Rc::clone(&logs)))?;
+        Ok((home, logs))
+    }
+
     /// A new home from this home's copy of `fiber`, its provider answering
     /// each request with the next response of `script`. It shares this
     /// home's sink, so it is debug when this home is.
