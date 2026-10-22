@@ -84,9 +84,8 @@ impl EventLog {
 
 impl Emit for EventLog {
     fn emit(&self, event: &Event) {
-        lock(&self.inner).push(event.clone());
-        // The lock is released before the send: a receiver that is slow to
-        // take the event does not hold up the next emitter.
+        let mut inner = lock(&self.inner);
+        inner.push(event.clone());
         if let Some(tx) = &self.tx {
             let _sent = tx.send(event.clone());
         }

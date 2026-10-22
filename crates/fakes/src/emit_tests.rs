@@ -6,7 +6,7 @@ use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::{Event, Progress, TextDelta, ToolCallStarted};
+use contract::events::{Empty, Event, Progress, TextDelta, ToolCallStarted};
 use contract::shapes::DeclaredEffects;
 use serde_json::json;
 
@@ -113,38 +113,28 @@ fn event_log_records_durable_and_ephemeral_events_in_order() {
 }
 
 #[test]
-fn channel_hands_each_durable_and_ephemeral_event_over_and_keeps_it_logged() {
+fn channel_hands_events_over_in_log_order_and_keeps_logging_after_a_drop() {
     let (log, rx) = EventLog::channel();
-    let started = Event::ToolCallStarted(ToolCallStarted {
-        always_reviewed: false,
-        declared: DeclaredEffects {
-            effects: vec![],
-            reversible: true,
-            paths: None,
-        },
-        arguments: None,
-        changed_by: None,
-    });
-    let delta = Event::ToolCallDelta(Progress {
+    log.emit(&Event::StepStarted(Empty {}));
+    log.emit(&Event::ToolCallDelta(Progress {
         text: Some("half".into()),
         details: None,
-    });
-    log.emit(&started);
-    log.emit(&delta);
+    }));
     // try_recv: each event is already queued, so the hand-off needs no wait.
-    assert!(matches!(rx.try_recv(), Ok(Event::ToolCallStarted(_))));
+    assert!(matches!(rx.try_recv(), Ok(Event::StepStarted(_))));
     assert!(matches!(rx.try_recv(), Ok(Event::ToolCallDelta(_))));
     assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-    assert_eq!(log.events().len(), 2);
-}
-
-#[test]
-fn channel_emit_survives_a_dropped_receiver() {
-    let (log, rx) = EventLog::channel();
+    let events = log.events();
+    assert!(matches!(events[0], Event::StepStarted(_)));
+    assert!(matches!(events[1], Event::ToolCallDelta(_)));
     drop(rx);
     log.emit(&Event::ToolCallDelta(Progress {
         text: Some("late".into()),
         details: None,
     }));
-    assert_eq!(log.events().len(), 1, "the event is still logged");
+    assert_eq!(
+        log.events().len(),
+        3,
+        "the event after the drop is still logged"
+    );
 }
