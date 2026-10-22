@@ -583,3 +583,57 @@ fn no_nightly_tag_writes_no_nightly_tree() {
         "{text}"
     );
 }
+
+#[test]
+fn nightly_pages_open_with_a_banner_while_stable_pages_carry_none() {
+    let fixture = Fixture::new();
+    tag_both_trees(&fixture);
+    let out = TempDir::new("xtask-site-out");
+    let out_dir = out.path().join("site");
+    let (code, text) = site_out(&fixture.repo, &out_dir);
+    assert_eq!(code, Some(0), "{text}");
+
+    let nightly = read_site(&out_dir, "nightly/user/install.html");
+    assert!(
+        nightly.contains("Nightly docs, v0.4.1-nightly.20261101."),
+        "the banner names the nightly tag: {nightly}"
+    );
+    assert!(
+        nightly.contains("href=\"../../user/\""),
+        "the banner links the stable guide: {nightly}"
+    );
+    assert!(
+        nightly.find("Nightly docs").unwrap() < nightly.find("Nightly first.").unwrap(),
+        "the page opens with the banner: {text}"
+    );
+    assert!(
+        read_site(&out_dir, "nightly/index.html").contains("href=\"../user/\""),
+        "the contents page banners the stable guide too: {text}"
+    );
+    assert!(
+        !read_site(&out_dir, "user/install.html").contains("Nightly docs"),
+        "stable pages carry no banner: {text}"
+    );
+}
+
+#[test]
+fn before_the_first_stable_the_root_tree_has_no_banner() {
+    let fixture = Fixture::new();
+    fixture.commit_front_page("nightly-front");
+    fixture.commit_docs_text("user/install.md", INSTALL_NIGHTLY, "nightly docs");
+    fixture.commit_docs_text("user/README.md", "# Guide\n", "nightly guide");
+    fixture.tag("v0.1.0-nightly.20261023");
+    let out = TempDir::new("xtask-site-out");
+    let out_dir = out.path().join("site");
+    let (code, text) = site_out(&fixture.repo, &out_dir);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(
+        !read_site(&out_dir, "user/install.html").contains("Nightly docs"),
+        "the root tree never banners, even from a nightly tag: {text}"
+    );
+    assert!(
+        read_site(&out_dir, "nightly/user/install.html")
+            .contains("Nightly docs, v0.1.0-nightly.20261023."),
+        "the nightly tree banners: {text}"
+    );
+}

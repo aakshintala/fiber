@@ -144,3 +144,12 @@ fn relative_url_climbs_and_strips_shared_prefixes() {
 fn escape_quotes_a_title_for_html() {
     assert_eq!(escape("a&b<c>d\"e"), "a&amp;b&lt;c&gt;d&quot;e");
 }
+
+#[test]
+fn the_banner_names_the_tag_and_climbs_past_the_nightly_tree() {
+    let one = banner("v0.4.1-nightly.20261101", 1);
+    assert!(one.contains("Nightly docs, v0.4.1-nightly.20261101."));
+    assert!(one.contains("href=\"../../user/\""), "{one}");
+    let root = banner("v0.4.1-nightly.20261101", 0);
+    assert!(root.contains("href=\"../user/\""), "{root}");
+}

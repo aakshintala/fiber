@@ -77,7 +77,7 @@ fn build(root: &Path, out: &Path) -> Result<(), String> {
         )?;
         let mut nightly_pages = Vec::new();
         render_tree(root, tag, &tree, true, &mut nightly_pages)?;
-        write_contents(&nightly_pages, &tree)?;
+        write_contents(tag, &nightly_pages, &tree)?;
     }
     Ok(())
 }
@@ -200,7 +200,11 @@ fn render_tree(
         } else {
             up.clone()
         };
-        let page = shell(&title, &body, &up, &root_href, None);
+        let page = if nightly {
+            shell(&title, &body, &up, &root_href, Some(&banner(tag, depth)))
+        } else {
+            shell(&title, &body, &up, &root_href, None)
+        };
         let dest = tree.join(&out_rel);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -238,7 +242,7 @@ fn page_name(source: &str) -> Option<String> {
 
 /// Writes the nightly contents page: the guide link first, then every
 /// rendered page grouped by directory, each linked by its first heading.
-fn write_contents(pages: &[(String, String)], tree: &Path) -> Result<(), String> {
+fn write_contents(tag: &str, pages: &[(String, String)], tree: &Path) -> Result<(), String> {
     let mut groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
     for (path, title) in pages {
@@ -263,19 +267,29 @@ fn write_contents(pages: &[(String, String)], tree: &Path) -> Result<(), String>
         }
         body.push_str("</ul>\n");
     }
-    let page = shell("Nightly docs", &body, "", "../", None);
+    let page = shell("Nightly docs", &body, "", "../", Some(&banner(tag, 0)));
     std::fs::write(tree.join("index.html"), page.as_bytes())
         .map_err(|error| format!("{}: {error}", tree.join("index.html").display()))?;
     Ok(())
 }
 
 /// One docs page: the front page's wordmark over the rendered Markdown
-/// in the docs shell.
+/// in the docs shell, with the nightly banner first on nightly pages.
 fn shell(title: &str, body: &str, up: &str, root: &str, banner: Option<&str>) -> String {
     let banner = banner.unwrap_or_default();
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"dark\">\n<title>{}</title>\n<link rel=\"stylesheet\" href=\"{up}style.css\">\n<link rel=\"stylesheet\" href=\"{up}docs.css\">\n</head>\n<body>\n<header class=\"column\">\n<a class=\"wordmark\" href=\"{root}\"><img src=\"{up}fiber-logo.png\" width=\"640\" height=\"160\" alt=\"fiber\"></a>\n</header>\n{banner}<main class=\"fiber-docs\">\n{body}</main>\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"color-scheme\" content=\"dark\">\n<title>{}</title>\n<link rel=\"stylesheet\" href=\"{up}style.css\">\n<link rel=\"stylesheet\" href=\"{up}docs.css\">\n</head>\n<body>\n<header class=\"column\">\n<a class=\"wordmark\" href=\"{root}\"><img src=\"{up}fiber-logo.png\" width=\"640\" height=\"160\" alt=\"fiber\"></a>\n</header>\n<main class=\"fiber-docs\">\n{banner}{body}</main>\n</body>\n</html>\n",
         escape(title)
+    )
+}
+
+/// The banner opening each nightly page: it names the nightly tag, and
+/// its link opens the stable guide, one level past the nightly tree plus
+/// `depth` climbs to the page itself.
+fn banner(tag: &str, depth: usize) -> String {
+    let guide = format!("{}user/", "../".repeat(depth + 1));
+    format!(
+        "<p class=\"nightly-banner\">Nightly docs, {tag}. <a href=\"{guide}\">Stable docs</a></p>\n"
     )
 }
 
