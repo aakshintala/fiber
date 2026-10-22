@@ -313,7 +313,7 @@ fn a_provider_that_is_not_installed_is_extension_missing() {
 }
 
 #[test]
-fn the_model_is_chosen_resumed_first_then_configuration() {
+fn the_model_is_chosen_per_run_first_then_recorded_then_configuration() {
     let setup = Setup::new();
     let providers = installed(&setup, &[("openai", provider("openai", &["a", "b", "c"]))]);
     write(
@@ -335,6 +335,13 @@ fn the_model_is_chosen_resumed_first_then_configuration() {
             .choose(Some("openai/c"), &flag)
             .unwrap()
             .reference(),
+        "openai/b"
+    );
+    assert_eq!(
+        providers
+            .choose(Some("openai/c"), &global)
+            .unwrap()
+            .reference(),
         "openai/c"
     );
 }
@@ -354,20 +361,6 @@ fn a_persistent_default_does_not_beat_the_recorded_model() {
             .unwrap()
             .reference(),
         "openai/c"
-    );
-}
-
-#[test]
-fn a_per_run_model_beats_the_recorded_model() {
-    let setup = Setup::new();
-    let providers = installed(&setup, &[("openai", provider("openai", &["a", "b", "c"]))]);
-    let flag = config(&setup, &["model=openai/b"]);
-    assert_eq!(
-        providers
-            .choose(Some("openai/c"), &flag)
-            .unwrap()
-            .reference(),
-        "openai/b"
     );
 }
 

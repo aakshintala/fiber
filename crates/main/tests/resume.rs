@@ -628,6 +628,125 @@ fn resume_with_c_model_beats_the_logs_last_model() {
 }
 
 #[test]
+fn resume_with_an_unknown_model_fails_before_any_session_line() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_models(&server, &["m1", "m2"], "fake/m1");
+    hand_built(&setup, "s_model1", vec![]);
+    let events = setup.sessions().join("s_model1").join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    let run =
+        setup.run_in_workspace(&["ask", "--resume", "s_model1", "--model", "fake/nope", "two"]);
+    assert_pre_session(&run, 1, "no_model");
+    assert_eq!(fs::read(&events).unwrap(), before);
+}
+
+/// Installs providers `fake` (models `m1`, `m2`) and `other` (model `m1`)
+/// on `openai-responses` at the fake server, and makes `fake/m1` the
+/// configured model.
+fn two_providers(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src2");
+    let url = format!("{}/v1", server.url());
+    let models = |ids: &[&str]| {
+        ids.iter()
+            .map(|m| {
+                json!({"id": m, "protocol": "openai-responses", "base_url": url, "context_window": 100000})
+            })
+            .collect::<Vec<Value>>()
+    };
+    let manifest = json!({"name": "two", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {"fake": [url], "other": [url]}});
+    write(&source.join("extension.json"), &manifest);
+    write(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": models(&["m1", "m2"]),
+        }),
+    );
+    write(
+        &source.join("providers/other.json"),
+        &json!({
+            "name": "other",
+            "credential": {"env": "FIBER_TEST_OTHER_KEY"},
+            "models": models(&["m1"]),
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m1"}),
+    );
+}
+
+#[test]
+fn resume_with_model_to_a_new_provider_keeps_or_asks_the_label() {
+    let setup = Setup::new_with_fa_root();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    two_providers(&setup, &server);
+    config::store_credential(
+        &setup.home(),
+        "fake",
+        "work",
+        &config::Secret::new("work-key\n".into()),
+    )
+    .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "other",
+        "home",
+        &config::Secret::new("home-key\n".into()),
+    )
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m1", "providers": {"fake": {"credential": "work"}}}),
+    );
+    let first = setup.run_in_workspace(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let events = setup.sessions().join(&id).join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    // The recorded label `work` names no credential on `other`: resolving
+    // fails before any session line is written.
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "--model", "other/m1", "two"]);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert_eq!(fs::read(&events).unwrap(), before);
+
+    // The asked label resolves against the new provider instead.
+    let run = setup.run_in_workspace(&[
+        "ask",
+        "--resume",
+        &id,
+        "--model",
+        "other/m1",
+        "--credential",
+        "home",
+        "two",
+    ]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["model"], "other/m1");
+    assert_eq!(built["payload"]["credential"], "home");
+}
+
+#[test]
 fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
     let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
