@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use super::{Outcome, run};
+use fakes::Deadline;
 
 fn tree(files: &BTreeMap<&str, &str>) -> fakes::TempDir {
     let dir = fakes::TempDir::new("fiber-search-find");
@@ -658,7 +659,7 @@ fn globs_match_bytes() {
         (b"[[:foo:]]", b"f]", false, true),
         (b"[[:foo:]]", b"x", false, false),
     ];
-    fakes::within("the glob match", GLOB_LIMIT, || {
+    fakes::within("the glob match", Deadline::after(GLOB_LIMIT), || {
         for (pattern, text, ignore_case, expected) in CASES {
             assert_eq!(
                 glob_match(pattern, text, *ignore_case),
@@ -690,7 +691,7 @@ const GLOB_LIMIT: Duration = Duration::from_secs(10);
 #[test]
 fn a_glob_of_many_stars_against_a_long_run_matches_within_the_limit() {
     use super::glob_match;
-    fakes::within("the glob match", GLOB_LIMIT, || {
+    fakes::within("the glob match", Deadline::after(GLOB_LIMIT), || {
         assert!(!glob_match(b"*a*a*a*a*b", &[b'a'; 4096], false));
         assert!(glob_match(b"*a*a*a*a*", &[b'a'; 4096], false));
         // Every `[:` opens a class no `:]` closes nearby: the members are

@@ -1,6 +1,7 @@
 use std::fs;
 
 use config::{CredentialSource, ProjectKey, ProviderData, Sources};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::*;
@@ -64,7 +65,7 @@ fn models_arg_returns_a_credential_read_failure() {
     .unwrap();
     let error = fakes::within(
         "providers.models_arg",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             providers.models_arg(
                 "ext",

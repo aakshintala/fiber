@@ -64,7 +64,7 @@ fn at_default_no_debug_line_is_written() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(!server.requests().is_empty());
@@ -87,7 +87,7 @@ fn a_repository_diagnostics_level_is_ignored_with_a_notice() {
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "the model request arrived: a passing test really asked"
     );
     assert!(run.kinds().contains(&"fiber_exited"), "{:?}", run.kinds());

@@ -2620,8 +2620,8 @@ fn short_home_slash_keeps_its_selection_barred() {
     );
     let row = row_text(&buf, selected, 80);
     assert!(row.contains("credential"), "{shown}");
-    // `/feedback`, `/mcp`, `/credential`, `/logout` and `/theme` are five more rows in the list.
-    assert!(shown.contains("of 31"), "{shown}");
+    // Every built-in is a row of the list.
+    assert!(shown.contains("of 33"), "{shown}");
 }
 
 /// A git home at 80x24 with two live rows in the launch project and no

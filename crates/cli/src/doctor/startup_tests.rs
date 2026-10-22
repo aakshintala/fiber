@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{Checked, Startup, startup};
 use crate::doctor::fix_at;
@@ -21,7 +21,7 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
-        let root = fakes::TempDir::new("fiber-doctor-startup");
+        let root = fakes::TempDir::under(Path::new("/tmp"), "fiber-doctor-startup");
         fs::create_dir_all(root.path().join("home")).unwrap();
         fs::create_dir_all(root.path().join("workspace")).unwrap();
         Self { root }

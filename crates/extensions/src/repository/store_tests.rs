@@ -705,12 +705,12 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
             let _sent = done_tx.send(store.approve(&item, &worker_hash));
         })
         .unwrap();
-    let pid = ready.wait(WITHIN)[0];
+    let pid = ready.wait(fakes::Deadline::after(WITHIN))[0];
     // The spinner shares this test's group: match its argv by pid alone,
     // so a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        clock.await_parked(clock.now() + GROUP_POLL, fakes::Deadline::after(WITHIN)),
         "waited {WITHIN:?} for the step to park while running"
     );
     // At the install-step deadline the run stops.
@@ -718,9 +718,8 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
     clock.advance(INSTALL_STEP_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
-    if answered.is_none() {
-        clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(WITHIN));
-    }
+    let answered =
+        crate::stall::advance_past_grace_or_answer(&clock, &done_rx, kill_at, GRACE, answered);
     let answer = match answered {
         Some(answer) => answer,
         None => Deadline::after(WITHIN)
@@ -744,7 +743,7 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped step is gone"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 /// The `Debug` names the store and every field it prints: a body replaced

@@ -49,7 +49,9 @@ fn stop_for_shutdown_queues_the_extension_exec_before_the_callback_returns() {
     assert_eq!(line.program, "sh");
     assert!(line.process.signal.is_some());
     release.send(()).unwrap();
-    running.watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    running
+        .watchdog
+        .stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 fn timer_exec(
@@ -123,7 +125,11 @@ fn wait_for_execs_waits_for_a_timer_run_to_queue_its_line() {
         .recv(&started)
         .expect("the waiter started");
     assert!(
-        clock.await_thread_parked(waiter_id, None, fakes::MUST_SUCCEED_WITHIN),
+        clock.await_thread_parked(
+            waiter_id,
+            None,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the barrier parks while the run is held"
     );
     assert!(
@@ -231,7 +237,7 @@ end }})
     std::thread::spawn(move || {
         drop(tx.send(caller.command("run", "")));
     });
-    let group = ready.wait(fakes::MUST_SUCCEED_WITHIN)[0];
+    let group = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let watchdog = fakes::Watchdog::group(group);
     {
         let shared = extension.hub.lock();
@@ -271,7 +277,9 @@ fn assert_shutdown_stopped(running: RunningExec) {
         !fakes::kill_group(running.group, "0").unwrap(),
         "the exec process group is empty when the callback completes"
     );
-    running.watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    running
+        .watchdog
+        .stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// `stop_every_callback` reaches a real command callback and its
@@ -322,7 +330,7 @@ fn in_child(name: &str) -> bool {
         Err(_) => {
             fakes::within(
                 "kill -KILL on the child",
-                fakes::MUST_SUCCEED_WITHIN,
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
                 move || {
                     drop(fakes::kill_pid(pid, "KILL"));
                 },

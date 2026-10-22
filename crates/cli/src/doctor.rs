@@ -20,6 +20,10 @@ pub(crate) use startup::startup;
 #[path = "doctor/doctor_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "doctor/socket_path_tests.rs"]
+mod socket_path_tests;
+
 /// The hub's state for one report: the injected seam `run` tests through,
 /// and the bounded `probe` production fills.
 #[derive(Clone)]

@@ -13,6 +13,7 @@ use crate::CliError;
 use config::{Secret, store_credential};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use fakes::Deadline;
 use serde_json::{Value, json};
 
 /// The version line the literals pin.
@@ -59,7 +60,7 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
-        let root = fakes::TempDir::new("fiber-doctor-report");
+        let root = fakes::TempDir::under(Path::new("/tmp"), "fiber-doctor-report");
         fs::create_dir_all(root.path().join("home")).unwrap();
         fs::create_dir_all(root.path().join("workspace")).unwrap();
         Self { root }
@@ -491,7 +492,7 @@ fn child_output(test: &str, home: &Path, extra: &[(&str, &str)]) -> std::process
     fakes::rerun_prepared(
         &format!("{module}::{test}"),
         &[(CHILD, "1")],
-        CHILD_DEADLINE,
+        Deadline::after(CHILD_DEADLINE),
         |command| {
             command.env("FIBER_HOME", home);
             command.env_remove("FIBER_TEST_FAKE_KEY");

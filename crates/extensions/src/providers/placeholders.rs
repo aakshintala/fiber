@@ -106,33 +106,13 @@ fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
-/// `value` as a host: at most one leading `https://` and one trailing `/`
-/// are stripped, and what remains must be letters, digits, `.` and `-`,
-/// with an optional `:` and a port from 0 to 65535. The result is a
-/// sub-slice of `value`, never a copy of anything else.
+/// `value` as a host, by the one rule in [`config::host_shape`]: at most
+/// one leading `https://` and one trailing `/` are stripped, and what
+/// remains must be letters, digits, `.` and `-`, with an optional `:` and
+/// a port from 0 to 65535. The result is a sub-slice of `value`, never a
+/// copy of anything else.
 pub(super) fn host(value: &str) -> Option<&str> {
-    let rest = value.strip_prefix("https://").unwrap_or(value);
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    let (host, port) = match rest.split_once(':') {
-        Some((host, port)) => (host, Some(port)),
-        None => (rest, None),
-    };
-    if host.is_empty()
-        || !host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    {
-        return None;
-    }
-    if let Some(port) = port {
-        if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
-            return None;
-        }
-        if port.parse::<u16>().is_err() {
-            return None;
-        }
-    }
-    Some(rest)
+    config::host_shape(value)
 }
 
 /// `template` with each `{name}` replaced by the host `lookup(name)` gives;

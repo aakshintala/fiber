@@ -2,7 +2,7 @@
 //! "An extension's manifest" and "A provider's data"). Only this crate reads
 //! either file; `extensions` installs and registers what they describe.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::error::ConfigError;
 use crate::home::one_file_name;
+use crate::names::dir_name;
 use crate::secret::CredentialSource;
 
 /// The fields of `extension.json` that installing and loading read. Fields
@@ -521,3 +522,93 @@ fn read_typed<T: DeserializeOwned>(file: &Path, expected: &'static str) -> Resul
         }
     })
 }
+
+/// An extension's declared setting keys: the manifest's `repo_settings`
+/// plus every placeholder name across its `providers/*.json`
+/// (`docs/configuration.md`, "Extension settings" and
+/// `docs/model-routing.md`, "A per-account host"). The only two declared
+/// key lists in the code, so the unknown-setting gate checks a key's
+/// first segment against this union.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredSettings {
+    /// The top-level settings keys a repository's file may set, never a
+    /// placeholder name: a placeholder's setting is never a
+    /// `repo_settings` key, so a repository never sets it.
+    pub repo_settings: Vec<String>,
+    /// Every placeholder name the provider data declares.
+    pub placeholders: BTreeSet<String>,
+}
+
+/// Reads the declared settings of the extension in `dir`: the manifest's
+/// `repo_settings` and the placeholder names of every provider file. An
+/// unreadable manifest or provider file is an error, writing nothing: the
+/// caller writes nothing on any `Err`. Never a repository's working
+/// files: the caller passes the installed or approved directory.
+pub fn declared_settings_in(dir: &Path) -> Result<DeclaredSettings, ConfigError> {
+    let manifest = read_manifest(dir)?;
+    let mut placeholders = BTreeSet::new();
+    for provider in read_providers(dir)? {
+        placeholders.extend(provider.placeholders.into_keys());
+    }
+    // A placeholder's setting is never a `repo_settings` key: even a
+    // manifest listing one there keeps it out, so the repository gate
+    // and the read filter refuse it as undeclared there.
+    let repo_settings = manifest
+        .repo_settings
+        .into_iter()
+        .filter(|name| !placeholders.contains(name))
+        .collect();
+    Ok(DeclaredSettings {
+        repo_settings,
+        placeholders,
+    })
+}
+
+/// The installed directory of the extension `extension` spells, when its
+/// manifest is present: `extensions/<slug>/` under Fiber home, the slug
+/// naming a first-party extension by its short name. A probe only, never
+/// a read and never an error.
+pub fn installed_dir(home: &Path, extension: &str) -> Option<PathBuf> {
+    let dir = home
+        .join("extensions")
+        .join(dir_name(&crate::names::full_name(extension)));
+    dir.join("extension.json").is_file().then_some(dir)
+}
+
+/// `value` as a host: at most one leading `https://` and one trailing `/`
+/// are stripped, and what remains must be ASCII letters, digits, `.` and
+/// `-`, with an optional `:` and a port from 0 to 65535
+/// (`docs/model-routing.md`, "A per-account host"). The result is a
+/// sub-slice of `value`, never a copy. A pure string function: no I/O,
+/// and the refusal never repeats the value.
+pub fn host_shape(value: &str) -> Option<&str> {
+    let rest = value.strip_prefix("https://").unwrap_or(value);
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let (host, port) = match rest.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (rest, None),
+    };
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    if let Some(port) = port {
+        // Only digits read as a port: `u16` parsing alone would take a
+        // leading `+`, so the digit check stays while the empty check
+        // goes, an empty port failing the parse below just the same.
+        if !port.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        if port.parse::<u16>().is_err() {
+            return None;
+        }
+    }
+    Some(rest)
+}
+
+#[cfg(test)]
+#[path = "extension_set_tests.rs"]
+mod extension_set_tests;

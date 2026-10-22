@@ -111,18 +111,22 @@ fn next(
 fn await_opened(path: &str, url: &str) {
     let path = path.to_owned();
     let url = url.to_owned();
-    fakes::within("the opener to write its file", WAIT, move || {
-        // The park between polls reads no clock.
-        let (_pace_tx, pace) = std::sync::mpsc::channel::<()>();
-        loop {
-            if std::fs::read_to_string(&path).ok().as_deref() == Some(url.as_str()) {
-                return;
+    fakes::within(
+        "the opener to write its file",
+        Deadline::after(WAIT),
+        move || {
+            // The park between polls reads no clock.
+            let (_pace_tx, pace) = std::sync::mpsc::channel::<()>();
+            loop {
+                if std::fs::read_to_string(&path).ok().as_deref() == Some(url.as_str()) {
+                    return;
+                }
+                Deadline::after(Duration::from_millis(1))
+                    .recv(&pace)
+                    .unwrap_or(());
             }
-            Deadline::after(Duration::from_millis(1))
-                .recv(&pace)
-                .unwrap_or(());
-        }
-    });
+        },
+    );
 }
 
 #[test]
@@ -228,7 +232,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
         seam.reviewer_saves(),
         [("codex".to_owned(), "m1".to_owned())]
     );
-    watchdog.stand_down(WAIT);
+    watchdog.stand_down(fakes::Deadline::after(WAIT));
 }
 
 #[test]

@@ -1075,7 +1075,7 @@ fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pen
             // without a disconnect instead. The park wait takes
             // [`support::DEADLINE`].
             assert!(
-                clock.await_parked_unbounded(support::DEADLINE),
+                clock.await_parked_unbounded(fakes::Deadline::after(support::DEADLINE)),
                 "the standing ask's wait parked in recv"
             );
             cancel.shutdown(143);

@@ -383,7 +383,7 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
     let watcher = world.watcher.take().unwrap();
     let (watcher, streamed) = fakes::within(
         "a turn_completed line or the log's end",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut watcher = watcher;
             let mut streamed = Vec::new();

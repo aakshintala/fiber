@@ -335,7 +335,7 @@ fn the_bound_kills_and_exits_at_4_9_seconds_with_no_writer() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(until), DEADLINE),
+        clock.await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
         "short of the bound it waits again"
     );
     assert!(calls.try_recv().is_err(), "nothing killed before the bound");
@@ -369,7 +369,7 @@ fn the_bound_kills_at_4_9_seconds_then_writes_its_line_then_exits() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(kill_at), DEADLINE),
+        clock.await_parked_since(&mark, Some(kill_at), fakes::Deadline::after(DEADLINE)),
         "short of the kill point it waits again"
     );
     assert!(
@@ -438,7 +438,7 @@ fn a_stalled_bound_line_still_exits_at_5_seconds() {
         &Deadline::after(DEADLINE),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(exit_by), DEADLINE),
+        clock.await_parked_since(&mark, Some(exit_by), fakes::Deadline::after(DEADLINE)),
         "short of 5 s it waits again"
     );
     assert!(did.try_recv().is_err(), "no exit before 5 s");
@@ -887,7 +887,7 @@ fn a_real_sigterm_while_booting_exits_143() {
     let output = fakes::rerun_within(
         &format!("{name}::a_real_sigterm_while_booting_exits_143"),
         &[(CHILD, "1")],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }
@@ -1583,7 +1583,7 @@ fn install_with_a_writer_records_a_real_sigterm() {
     let output = fakes::rerun_within(
         &format!("{name}::install_with_a_writer_records_a_real_sigterm"),
         &[(WRITER_CHILD, "1"), (WRITER_HOME, held.as_str())],
-        CHILD_WITHIN,
+        Deadline::after(CHILD_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
     // The child runs in its own process group under the rerun's watchdog,

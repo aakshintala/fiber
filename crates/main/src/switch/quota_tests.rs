@@ -307,7 +307,7 @@ fn quota_load_uses_the_reloaded_set_and_startup_credential_labels() {
     let held = store.clone();
     fakes::within(
         "quota loading from the current set",
-        MUST_SUCCEED_WITHIN,
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || held.load(),
     );
     let rows = store.answer_with_spawn(|_| Ok(())).0;
@@ -1034,7 +1034,7 @@ fn the_door_reader_fetches_only_with_the_flag() {
     let fetch = Arc::clone(&readers.door);
     let (rows, notice_at) = fakes::within(
         "the door reader's fetch answer",
-        MUST_SUCCEED_WITHIN,
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || fetch(true),
     );
     assert_eq!(fixture.server.requests().len(), 1, "no fetch started");
@@ -1046,7 +1046,7 @@ fn the_door_reader_fetches_only_with_the_flag() {
     let cached = Arc::clone(&readers.door);
     let (rows, _) = fakes::within(
         "the door reader's cached answer",
-        MUST_SUCCEED_WITHIN,
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || cached(false),
     );
     assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
@@ -1057,7 +1057,7 @@ fn the_door_reader_fetches_only_with_the_flag() {
     let refetch = Arc::clone(&readers.door);
     let (rows, _) = fakes::within(
         "the door reader's refetch answer",
-        MUST_SUCCEED_WITHIN,
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || refetch(true),
     );
     assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
@@ -1102,10 +1102,11 @@ fn fetch_true_starts_a_fetch_on_a_fresh_cache() {
     // one; the frozen clock keeps the primed cache fresh by itself.) The
     // fetch path still starts one fetch per label and answers its value.
     let fetch = Arc::clone(&store);
-    let (rows, notice_at) =
-        fakes::within("the fetch path's answer", MUST_SUCCEED_WITHIN, move || {
-            fetch.answer_fetch()
-        });
+    let (rows, notice_at) = fakes::within(
+        "the fetch path's answer",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || fetch.answer_fetch(),
+    );
     assert_eq!(fixture.server.requests().len(), 2, "no fetch started");
     assert_eq!(notice_at, 80.0);
     assert_eq!(
@@ -1140,9 +1141,11 @@ fn without_fetch_the_answer_comes_from_cache_with_no_new_fetch() {
     );
     assert_eq!(fixture.server.requests().len(), 1);
     let cached = Arc::clone(&store);
-    let (rows, notice_at) = fakes::within("the cached answer", MUST_SUCCEED_WITHIN, move || {
-        cached.answer()
-    });
+    let (rows, notice_at) = fakes::within(
+        "the cached answer",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || cached.answer(),
+    );
     assert_eq!(fixture.server.requests().len(), 1, "a fetch started");
     assert_eq!(notice_at, 80.0);
     assert_eq!(
@@ -1165,7 +1168,7 @@ fn a_failed_fetch_without_a_last_value_answers_unreachable() {
     assert_eq!(
         fakes::within(
             "the failed fetch's answer",
-            MUST_SUCCEED_WITHIN,
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || failed_fetch.answer_fetch()
         ),
         (vec![failed("qp", "work")], 80.0)
@@ -1191,7 +1194,7 @@ fn a_failed_fetch_with_a_last_value_answers_unreachable_with_it() {
     assert_eq!(
         fakes::within(
             "the failed fetch's answer",
-            MUST_SUCCEED_WITHIN,
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || failed_fetch.answer_fetch()
         ),
         (
@@ -1237,7 +1240,7 @@ fn fetch_true_waits_for_a_held_loader_then_answers() {
         .checked_add(LOADER_BUDGET)
         .expect("the loader budget fits the clock");
     assert!(
-        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        loader_clock.await_parked(end, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the fetch path parked on the loader wait"
     );
     release.send(()).unwrap();
@@ -1287,7 +1290,7 @@ fn fetch_true_answers_unreachable_when_the_loader_budget_expires() {
         .checked_add(LOADER_BUDGET)
         .expect("the loader budget fits the clock");
     assert!(
-        loader_clock.await_parked(end, MUST_SUCCEED_WITHIN),
+        loader_clock.await_parked(end, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the fetch path parked on the loader wait"
     );
     loader_clock.advance_when_parked(
@@ -1322,7 +1325,7 @@ fn fetch_true_answers_unreachable_when_shutdown_fires_while_unchecked() {
     assert_eq!(
         fakes::within(
             "the shutdown fetch's answer",
-            MUST_SUCCEED_WITHIN,
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || unreachable.answer_fetch()
         ),
         (
@@ -1338,19 +1341,32 @@ fn fetch_true_answers_unreachable_when_shutdown_fires_while_unchecked() {
 
 #[test]
 fn a_fetched_no_quota_stays_absent() {
-    let fixture = http_fixture(vec![fakes::Response::status(200, b"null".to_vec())]);
+    let fixture = http_fixture(vec![
+        fakes::Response::status(200, b"null".to_vec()),
+        fakes::Response::status(200, b"null".to_vec()),
+    ]);
     let store = fixture.switching.quota_store();
     let (done, ended) = mpsc::channel();
     store.note_loaded(done);
     assert!(matches!(store.entries(), QuotaView::Loading));
     receive(&ended, "the loader's end");
+    // Land the loader's fetch first, so each scripted reply answers one request.
+    let lua = store.held_instance("qp");
+    assert_eq!(
+        read_to_end(Arc::clone(&lua), pair_of("work")),
+        QuotaEntry::NoQuota
+    );
+    assert_eq!(fixture.server.requests().len(), 1);
     // The forced fetch resolves no quota: the label stays absent, as in
     // the cached path, instead of answering `unreachable`.
     let empty = Arc::clone(&store);
     assert_eq!(
-        fakes::within("the empty fetch's answer", MUST_SUCCEED_WITHIN, move || {
-            empty.answer_fetch()
-        }),
+        fakes::within(
+            "the empty fetch's answer",
+            Deadline::after(MUST_SUCCEED_WITHIN),
+            move || { empty.answer_fetch() }
+        ),
         (Vec::new(), 80.0)
     );
+    assert_eq!(fixture.server.requests().len(), 2);
 }

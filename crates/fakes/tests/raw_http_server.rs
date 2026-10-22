@@ -139,7 +139,7 @@ fn raw_replies_preserve_the_three_migrated_wire_fixtures() {
             "{name}: the reply is the fixture bytes through EOF"
         );
         assert!(
-            server.await_replies(1, DEADLINE),
+            server.await_replies(1, Deadline::after(DEADLINE)),
             "{name}: the reply completed"
         );
     }
@@ -203,25 +203,25 @@ fn raw_request_credentials_are_fingerprinted() {
 fn raw_reply_completion_is_observed_after_the_send() {
     let server = RawHttpServer::start(LENGTHLESS).unwrap();
     assert!(
-        server.await_replies(0, Duration::ZERO),
+        server.await_replies(0, Deadline::after(Duration::ZERO)),
         "zero replies admit at once"
     );
     assert!(
-        !server.await_replies(1, Duration::ZERO),
+        !server.await_replies(1, Deadline::after(Duration::ZERO)),
         "no reply completed before any request"
     );
     exchange(&server, b"GET /one HTTP/1.1\r\nHost: fake\r\n\r\n", true);
     assert!(
-        server.await_replies(1, DEADLINE),
+        server.await_replies(1, Deadline::after(DEADLINE)),
         "one reply completed after one exchange"
     );
     assert!(
-        !server.await_replies(2, Duration::ZERO),
+        !server.await_replies(2, Deadline::after(Duration::ZERO)),
         "one reply does not satisfy two"
     );
     exchange(&server, b"GET /two HTTP/1.1\r\nHost: fake\r\n\r\n", true);
     assert!(
-        server.await_replies(2, DEADLINE),
+        server.await_replies(2, Deadline::after(DEADLINE)),
         "two replies completed after two exchanges"
     );
 }
@@ -249,9 +249,12 @@ fn an_interrupted_reply_send_publishes_no_completion() {
     // flush into a non-reading peer, so the send ends stopped, whether
     // the close lands as a reset or a graceful end.
     drop(stream);
-    assert!(server.await_idle(DEADLINE), "the send attempt ended");
     assert!(
-        !server.await_replies(1, Duration::ZERO),
+        server.await_idle(Deadline::after(DEADLINE)),
+        "the send attempt ended"
+    );
+    assert!(
+        !server.await_replies(1, Deadline::after(Duration::ZERO)),
         "a reply cut short publishes no completion"
     );
 }

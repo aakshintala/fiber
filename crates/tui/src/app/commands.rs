@@ -53,6 +53,12 @@ pub(crate) struct CommandEntry {
 /// read it beside the table.
 pub(crate) fn alias_of(name: &str) -> Option<&'static str> {
     match name {
+        "thinking" => Some("effort"),
+        "usage" => Some("cost"),
+        "settings" => Some("config"),
+        "keys" => Some("keybindings"),
+        "name" => Some("rename"),
+        "feedback" => Some("bug"),
         "quit" => Some("exit"),
         _ => None,
     }
@@ -132,6 +138,18 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         description: "Opens the quota view and fetches every label's quota.",
         hint: None,
         run: run_quota,
+    },
+    CommandEntry {
+        name: "diff",
+        description: "Opens the Changed files view.",
+        hint: None,
+        run: run_diff,
+    },
+    CommandEntry {
+        name: "copy",
+        description: "Copies the newest reply.",
+        hint: None,
+        run: run_copy,
     },
     CommandEntry {
         name: "panel",
@@ -387,6 +405,15 @@ fn run_quota(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.quota_view())
 }
 
+fn run_diff(app: &mut App, _rest: &str) -> Option<Effect> {
+    app.draft.clear();
+    Some(app.open_session_view(super::SessionView::ChangedFiles))
+}
+
+fn run_copy(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.copy_last_reply())
+}
+
 fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
@@ -428,6 +455,7 @@ impl App {
     /// no more.
     pub(crate) fn on_edit(&mut self, edit: Edit) -> Effect {
         self.armed_at = None;
+        self.copy_owed = false;
         self.history.cancel();
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
@@ -601,6 +629,7 @@ impl App {
         self.completion.slash_rows = slash::rows(&[]);
         self.completion.extensions.clear();
         self.completion.commands_id = None;
+        self.copy_owed = false;
         true
     }
 
@@ -888,6 +917,18 @@ pub(crate) mod commands_testkit;
 #[cfg(test)]
 #[path = "exit_alias_tests.rs"]
 mod exit_alias;
+
+#[cfg(test)]
+#[path = "aliases_tests.rs"]
+mod aliases;
+
+#[cfg(test)]
+#[path = "diff_command_tests.rs"]
+mod diff_command;
+
+#[cfg(test)]
+#[path = "copy_command_tests.rs"]
+mod copy_command;
 
 #[cfg(test)]
 #[path = "commands_tests.rs"]

@@ -6,6 +6,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -64,7 +65,7 @@ fn constructing_a_login_provider_runs_no_lua() {
     let marker_copy = marker.clone();
     fakes::within(
         "lazy login construction",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || {
             let provider = login_provider(
                 &home,
@@ -145,7 +146,7 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
 
     let functions = fakes::within(
         "provider VM registration",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || provider.functions(),
     );
     assert_eq!(functions.unwrap(), ["credential"]);
@@ -231,7 +232,7 @@ fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
     .unwrap();
     let err = fakes::within(
         "refused provider login",
-        Duration::from_secs(5),
+        Deadline::after(Duration::from_secs(5)),
         move || provider.login("acme", None, crate::LoginMethod::Browser),
     )
     .unwrap_err();
@@ -524,4 +525,40 @@ fn a_login_provider_serves_a_copy_local_dependency() {
     // fail the load, so listing its functions proves the copy-local require
     // served.
     assert_eq!(provider.functions().unwrap(), ["credential"]);
+}
+
+#[test]
+fn extension_source_dir_prefers_the_pinned_copy_then_the_install() {
+    let root = fakes::TempDir::new("extension-source-dir");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    let clock = FakeClock::new();
+    let project = config::ProjectKey::new("pin").unwrap();
+    install(&home, "acme-ext", "acme");
+    // The personal install resolves while no repository copy is pinned.
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
+    assert_eq!(
+        providers.extension_source_dir("acme-ext"),
+        Some(home.join("extensions").join("acme-ext"))
+    );
+    assert_eq!(providers.extension_source_dir("nobody"), None);
+    // The approved copy wins once one is pinned: the directory the load
+    // already admitted, never a repository's working files.
+    declare_repo(&workspace, "acme-ext", "acme");
+    let items = crate::declared_items(&workspace, &*clock).unwrap();
+    let item = items
+        .into_iter()
+        .find(|found| found.name == "acme-ext")
+        .unwrap();
+    let mut index = crate::Index::load(&home);
+    let digest = crate::hash(&mut index, &item).unwrap();
+    crate::Store::new(&home, &project, clock.clone())
+        .approve(&item, &digest)
+        .unwrap();
+    let copy = crate::Store::new(&home, &project, clock.clone()).copy_dir(&digest);
+    let set = crate::RepositorySet::load_pinned(&home, &project, &workspace, clock.clone());
+    let (providers, _) = Providers::load_all_repository(&home, &set).unwrap();
+    assert_eq!(providers.extension_source_dir("acme-ext"), Some(copy));
+    assert_eq!(providers.extension_source_dir("nobody"), None);
 }

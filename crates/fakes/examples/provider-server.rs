@@ -16,7 +16,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-use fakes::ProviderServer;
+use fakes::{Deadline, ProviderServer};
 
 #[path = "../tests/support/provider_server.rs"]
 mod support;
@@ -50,7 +50,10 @@ fn main() -> ExitCode {
     let mut printed = 0;
     loop {
         // Blocks until the next request, or a day passes and it looks again.
-        if !server.await_requests(printed + 1, Duration::from_secs(24 * 60 * 60)) {
+        if !server.await_requests(
+            printed + 1,
+            Deadline::after(Duration::from_secs(24 * 60 * 60)),
+        ) {
             continue;
         }
         for request in server.requests().iter().skip(printed) {

@@ -321,7 +321,7 @@ fn a_hub_spawned_session_keeps_its_startup_snapshot_across_a_refresh() {
             (SNAPSHOT_HOME, home_str.as_str()),
             (SNAPSHOT_WORKSPACE, workspace_str.as_str()),
         ],
-        SNAPSHOT_WITHIN,
+        Deadline::after(SNAPSHOT_WITHIN),
     );
     assert_eq!(
         out.status.code(),

@@ -136,7 +136,7 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     drop(theirs);
     watched(&frames, "the drop notice", &Deadline::after(DEADLINE));
     assert!(
-        clock.await_parked(clock.origin() + HALF, DEADLINE),
+        clock.await_parked(clock.origin() + HALF, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
     assert!(called.try_recv().is_err());
@@ -254,7 +254,7 @@ fn run_stops_retrying_after_a_refused_schema() {
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     watched(&frames, "the refusal notice", &Deadline::after(DEADLINE));
     // No permit: the thread never waits on the clock or connects again.
-    assert!(!clock.await_parked(clock.origin() + HALF, QUIET));
+    assert!(!clock.await_parked(clock.origin() + HALF, fakes::Deadline::after(QUIET)));
     assert!(clock.parked().is_empty());
     assert!(called.try_recv().is_err());
     assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
@@ -272,7 +272,7 @@ fn quitting_during_backoff_ends_the_hub_thread() {
     watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     assert!(
-        clock.await_parked(clock.origin() + HALF, DEADLINE),
+        clock.await_parked(clock.origin() + HALF, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
     assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);

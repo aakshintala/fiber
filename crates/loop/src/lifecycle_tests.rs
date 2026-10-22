@@ -899,22 +899,26 @@ fn state_lines_tool_rewrites_survive_only_accepted_model_and_inner_calls() {
             if inner_call {
                 let mut looped = world.looped.take().unwrap();
                 let (tx, rx) = mpsc::channel();
-                looped = fakes::within("state inner call returned", TURN_DEADLINE, move || {
-                    looped
-                        .run_alone(contract::inbox::InnerCallRequest {
-                            extension: "other".into(),
-                            command: CommandId("state-inner".into()),
-                            name: "probe".into(),
-                            arguments: serde_json::json!({"path":"x"}),
-                            cancel: Arc::new(fakes::CancelToken::new()),
-                            taken: Box::new(|| {}),
-                            answer: Box::new(move |done| {
-                                let _sent = tx.send(done);
-                            }),
-                        })
-                        .unwrap();
-                    looped
-                });
+                looped = fakes::within(
+                    "state inner call returned",
+                    Deadline::after(TURN_DEADLINE),
+                    move || {
+                        looped
+                            .run_alone(contract::inbox::InnerCallRequest {
+                                extension: "other".into(),
+                                command: CommandId("state-inner".into()),
+                                name: "probe".into(),
+                                arguments: serde_json::json!({"path":"x"}),
+                                cancel: Arc::new(fakes::CancelToken::new()),
+                                taken: Box::new(|| {}),
+                                answer: Box::new(move |done| {
+                                    let _sent = tx.send(done);
+                                }),
+                            })
+                            .unwrap();
+                        looped
+                    },
+                );
                 assert!(rx.try_recv().is_ok(), "inner completion: {mode}");
                 world.looped = Some(looped);
             } else {
@@ -1926,7 +1930,7 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
     let watcher = world.watcher.take().unwrap();
     let (watcher, streamed) = fakes::within(
         "a turn_completed line or the log's end",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut watcher = watcher;
             let mut streamed = Vec::new();

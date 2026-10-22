@@ -195,7 +195,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
         })
         .unwrap();
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        clock.await_parked(clock.now() + GROUP_POLL, fakes::Deadline::after(WITHIN)),
         "waited {WITHIN:?} for diff to park while running"
     );
     // The stall proves it is stuck before the clock first moves: stopping
@@ -208,9 +208,8 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     clock.advance(GIT_DEADLINE);
     let kill_at = clock.now() + GRACE;
     let answered = crate::stall::await_grace_or_answer(&clock, &done_rx, kill_at);
-    if answered.is_none() {
-        clock.advance_when_parked(Some(kill_at), None, GRACE, &Deadline::after(WITHIN));
-    }
+    let answered =
+        crate::stall::advance_past_grace_or_answer(&clock, &done_rx, kill_at, GRACE, answered);
     let answer = match answered {
         Some(answer) => answer,
         None => Deadline::after(WITHIN).recv(&done_rx).unwrap(),
@@ -241,7 +240,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
         leftovers.is_empty(),
         "the stalled diff is gone: {leftovers:?}"
     );
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A `diff` that fails at once keeps the missing-commit fallback: only a

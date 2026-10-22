@@ -152,7 +152,7 @@ impl Setup {
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         StdoutRun::from(output)
     }
 }
@@ -383,7 +383,7 @@ fn login_with_callback(setup: &Setup, name: &str, empty_path: &Path) -> (Option<
             "`fiber` left a process behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(setup.deadline.cleanup());
+        watchdog.stand_down(setup.deadline.cleanup_phase());
         (status.code(), lines)
     })
 }

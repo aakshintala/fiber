@@ -455,7 +455,7 @@ fn run_with_home(
     drop(inbox);
     let streamed = fakes::within(
         "a turn_completed line or the log's end",
-        TURN_DEADLINE,
+        Deadline::after(TURN_DEADLINE),
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {

@@ -95,7 +95,7 @@ fn ask_once(setup: &Setup) -> String {
     let output = finish(setup, "`fiber ask hi` to exit", pid, child);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     let id = lines(&output)[0]["session_id"].as_str().unwrap().to_owned();
-    watchdog.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
     id
 }
 
@@ -117,7 +117,7 @@ fn a_credential_command_still_running_at_its_timeout_fails_session_start() {
         }}}}}),
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "hi"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     let output = finish(&setup, "`fiber ask hi` to exit", fiber_pid, child);
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
@@ -141,11 +141,11 @@ fn a_credential_command_still_running_at_its_timeout_fails_session_start() {
         "{}",
         stderr(&output)
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
+    assert!(fakes::group_empties(pgid, setup.deadline));
     assert_no_session_dir(&setup);
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn a_signal_while_a_startup_credential_command_runs_kills_it_and_writes_nothing(
         }}}}}),
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "hi"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask hi` to exit", fiber_pid, child);
@@ -179,11 +179,11 @@ fn a_signal_while_a_startup_credential_command_runs_kills_it_and_writes_nothing(
         stderr(&output).is_empty(),
         "a recorded signal writes nothing"
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
+    assert!(fakes::group_empties(pgid, setup.deadline));
     assert_no_session_dir(&setup);
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn a_signal_while_a_resumed_sessions_credential_command_runs_kills_it_and_leaves
         }}}}}),
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "--resume", &id, "hi"]);
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask --resume` to exit", fiber_pid, child);
@@ -219,11 +219,11 @@ fn a_signal_while_a_resumed_sessions_credential_command_runs_kills_it_and_leaves
         stderr(&output).is_empty(),
         "a recorded signal writes nothing"
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
+    assert!(fakes::group_empties(pgid, setup.deadline));
     assert_eq!(fs::read(&events).unwrap(), before);
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn a_signal_while_a_resumed_session_starts_its_mcp_server_exits_143_writing_noth
         }}}}),
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "--resume", &id, "hi"]);
-    ready.wait(setup.deadline.left());
+    ready.wait(setup.deadline);
     support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask --resume` to exit", fiber_pid, child);
     assert_eq!(
@@ -268,8 +268,8 @@ fn a_signal_while_a_resumed_session_starts_its_mcp_server_exits_143_writing_noth
         "a recorded signal writes nothing"
     );
     assert_eq!(fs::read(&events).unwrap(), before);
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }
 
 #[test]
@@ -296,7 +296,7 @@ fn a_startup_failure_after_a_credential_command_kills_what_it_left() {
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "hi"]);
     // The line proves the credential command ran before the failure below.
-    let pgid = ready.wait(setup.deadline.left())[0];
+    let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
     let output = finish(&setup, "`fiber ask hi` to exit", fiber_pid, child);
     assert_eq!(output.status.code(), Some(1), "stderr: {}", stderr(&output));
@@ -305,8 +305,8 @@ fn a_startup_failure_after_a_credential_command_kills_what_it_left() {
         lines.last().unwrap()["payload"]["error"]["code"],
         "config_invalid"
     );
-    assert!(fakes::group_empties(pgid, setup.deadline.left()));
-    group.stand_down(setup.deadline.cleanup());
-    watchdog.stand_down(setup.deadline.cleanup());
-    matching.stand_down(setup.deadline.cleanup());
+    assert!(fakes::group_empties(pgid, setup.deadline));
+    group.stand_down(setup.deadline.cleanup_phase());
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    matching.stand_down(setup.deadline.cleanup_phase());
 }

@@ -120,7 +120,7 @@ impl Setup {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Run::from(output)
     }
 }
@@ -388,7 +388,7 @@ fn a_dropped_connection_is_retried() {
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert_eq!(run.retried(), ["connection_failed"]);
     assert!(
-        server.await_requests(2, setup.deadline.left()),
+        server.await_requests(2, setup.deadline),
         "both attempts reach the server"
     );
     assert_eq!(server.requests().len(), 2);

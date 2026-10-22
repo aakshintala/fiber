@@ -21,6 +21,7 @@ use contract::clock::Clock;
 use common::{Repos, Setup, drive, manifest, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
+use fakes::Deadline;
 use fakes::git::git;
 use serde_json::{Value, json};
 
@@ -84,94 +85,98 @@ const LIB: &str = "example.com/acme/lib";
 
 #[test]
 fn final_plan_freshness_excludes_existing_and_upgraded_dependencies() {
-    fakes::within("final plan freshness", Duration::from_secs(40), || {
-        let setup = Setup::new();
-        let mut repos = Repos::new(&setup);
-        let root = "example.com/acme/root";
-        let dep = "example.com/acme/dep";
-        let aux = "example.com/acme/aux";
-        let new = "example.com/acme/new";
-        repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
-        repos.tag(aux, "", "v1.0.0", &manifest(aux), &[]);
-        repos.tag(
-            root,
-            "",
-            "v1.0.0",
-            &named(root, &[(aux, "1.0"), (dep, "1.0")]),
-            &[],
-        );
-        let clock = fakes::clock::SystemClock;
-        let origin = repos.origin();
-        let p = plan(
-            &setup.home(),
-            &Request::Install(root.into()),
-            FIBER,
-            &origin,
-            &clock,
-        )
-        .unwrap();
-        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [aux, dep, root]);
-        assert_eq!(
-            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            [aux, dep, root]
-        );
-        p.commit().unwrap();
-        assert_eq!(
-            versions(&setup),
-            BTreeMap::from([
-                (aux.into(), "v1.0.0".into()),
-                (dep.into(), "v1.0.0".into()),
-                (root.into(), "v1.0.0".into())
-            ])
-        );
-        let p = plan(
-            &setup.home(),
-            &Request::Install(root.into()),
-            FIBER,
-            &origin,
-            &clock,
-        )
-        .unwrap();
-        assert_eq!(p.fresh_names().collect::<Vec<_>>(), Vec::<&str>::new());
-        assert_eq!(
-            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            [root]
-        );
-        p.commit().unwrap();
-        repos.tag(dep, "", "v1.1.0", &manifest(dep), &[]);
-        repos.tag(new, "", "v1.0.0", &manifest(new), &[]);
-        repos.tag(
-            root,
-            "",
-            "v1.1.0",
-            &named(root, &[(dep, "1.1"), (new, "1.0")]),
-            &[],
-        );
-        let origin = repos.origin();
-        let p = plan(
-            &setup.home(),
-            &Request::Install(root.into()),
-            FIBER,
-            &origin,
-            &clock,
-        )
-        .unwrap();
-        assert_eq!(p.fresh_names().collect::<Vec<_>>(), [new]);
-        assert_eq!(
-            p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            [dep, new, root]
-        );
-        p.commit().unwrap();
-        assert_eq!(versions(&setup)[dep], "v1.1.0");
-        assert_eq!(versions(&setup)[new], "v1.0.0");
-    });
+    fakes::within(
+        "final plan freshness",
+        Deadline::after(Duration::from_secs(40)),
+        || {
+            let setup = Setup::new();
+            let mut repos = Repos::new(&setup);
+            let root = "example.com/acme/root";
+            let dep = "example.com/acme/dep";
+            let aux = "example.com/acme/aux";
+            let new = "example.com/acme/new";
+            repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
+            repos.tag(aux, "", "v1.0.0", &manifest(aux), &[]);
+            repos.tag(
+                root,
+                "",
+                "v1.0.0",
+                &named(root, &[(aux, "1.0"), (dep, "1.0")]),
+                &[],
+            );
+            let clock = fakes::clock::SystemClock;
+            let origin = repos.origin();
+            let p = plan(
+                &setup.home(),
+                &Request::Install(root.into()),
+                FIBER,
+                &origin,
+                &clock,
+            )
+            .unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), [aux, dep, root]);
+            assert_eq!(
+                p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+                [aux, dep, root]
+            );
+            p.commit().unwrap();
+            assert_eq!(
+                versions(&setup),
+                BTreeMap::from([
+                    (aux.into(), "v1.0.0".into()),
+                    (dep.into(), "v1.0.0".into()),
+                    (root.into(), "v1.0.0".into())
+                ])
+            );
+            let p = plan(
+                &setup.home(),
+                &Request::Install(root.into()),
+                FIBER,
+                &origin,
+                &clock,
+            )
+            .unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), Vec::<&str>::new());
+            assert_eq!(
+                p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+                [root]
+            );
+            p.commit().unwrap();
+            repos.tag(dep, "", "v1.1.0", &manifest(dep), &[]);
+            repos.tag(new, "", "v1.0.0", &manifest(new), &[]);
+            repos.tag(
+                root,
+                "",
+                "v1.1.0",
+                &named(root, &[(dep, "1.1"), (new, "1.0")]),
+                &[],
+            );
+            let origin = repos.origin();
+            let p = plan(
+                &setup.home(),
+                &Request::Install(root.into()),
+                FIBER,
+                &origin,
+                &clock,
+            )
+            .unwrap();
+            assert_eq!(p.fresh_names().collect::<Vec<_>>(), [new]);
+            assert_eq!(
+                p.items().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+                [dep, new, root]
+            );
+            p.commit().unwrap();
+            assert_eq!(versions(&setup)[dep], "v1.1.0");
+            assert_eq!(versions(&setup)[new], "v1.0.0");
+        },
+    );
 }
 
 #[test]
 fn local_plan_freshness_and_drop_do_not_install_a_package() {
     fakes::within(
         "local plan freshness and drop",
-        Duration::from_secs(10),
+        Deadline::after(Duration::from_secs(10)),
         || {
             let setup = Setup::new();
             let source = setup.root().join("source");
@@ -1923,7 +1928,7 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
     let source = setup.source("local", &m, &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     assert!(
-        server.await_requests(1, Duration::from_secs(10)),
+        server.await_requests(1, Deadline::after(Duration::from_secs(10))),
         "waited for the binary to be downloaded"
     );
     let file = setup.home().join("extensions/acme/bin/acme");
@@ -1945,7 +1950,7 @@ fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
     assert!(matches!(err, Error::BinaryChecksum { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(
-        server.await_requests(1, Duration::from_secs(10)),
+        server.await_requests(1, Deadline::after(Duration::from_secs(10))),
         "waited for the binary download"
     );
     assert!(dirs(&setup).is_empty());
@@ -2309,7 +2314,7 @@ fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
         "the failure names the stop: {err}"
     );
     no_stall_left(&watching);
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A `clone` that never finishes fails the plan at the git deadline: the
@@ -2359,7 +2364,7 @@ fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
         "the failure names the stop: {err}"
     );
     no_stall_left(&watching);
-    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]

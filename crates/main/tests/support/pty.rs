@@ -964,7 +964,7 @@ impl Run {
             Err(_) => expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
         assert!(
-            fakes::group_empties(group, self.deadline.left()),
+            fakes::group_empties(group, self.deadline),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -981,7 +981,7 @@ impl Run {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(self.deadline.cleanup());
+            .stand_down(self.deadline.cleanup_phase());
         until_hub_exits(
             self.deadline,
             &self.hub_socket,
@@ -995,12 +995,12 @@ impl Run {
             if let Err(err) = fakes::kill_matching(&workspace) {
                 panic!("killing the sessions in the workspace: {err}");
             }
-            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline.left()) {
+            if let Err(err) = fakes::try_matching_exits(&workspace, self.deadline) {
                 panic!(
                     "waited until the deadline for every process holding the workspace path to exit: {err}"
                 );
             }
-            sessions.stand_down(self.deadline.cleanup());
+            sessions.stand_down(self.deadline.cleanup_phase());
         }
         Exited {
             status: output.status,
@@ -1127,8 +1127,12 @@ pub(crate) fn list_processes(within: Duration) -> String {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let output = fakes::within("ps to list every process", within, move || command.output())
-        .expect("ps to list every process");
+    let output = fakes::within(
+        "ps to list every process",
+        Deadline::after(within),
+        move || command.output(),
+    )
+    .expect("ps to list every process");
     assert!(
         output.status.success(),
         "ps to list every process failed: {}",

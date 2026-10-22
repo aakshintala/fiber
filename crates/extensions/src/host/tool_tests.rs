@@ -145,7 +145,7 @@ fn tool_call(
     let tool = tool.to_owned();
     fakes::within(
         "ext.tool_run_asking",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let cancel = fakes::CancelToken::new();
             ext.tool_run_asking(
@@ -432,7 +432,7 @@ fn args_nested_past_the_cap_raise_and_reach_no_runner() {
         let runner = runner_calls.clone();
         fakes::within(
             "held.tool_run_asking",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let cancel = fakes::CancelToken::new();
                 held.tool_run_asking(
@@ -611,8 +611,11 @@ fn tool_in_the_entry_script_raises_before_it_yields() {
     // The entry script ran: `host.tool` raised a string before any yield.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("go", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("go", "")
+        )
         .unwrap(),
         "false/true"
     );
@@ -701,7 +704,7 @@ fn outcome_names_only_status_content_and_reason_or_error() {
 #[track_caller]
 fn wait_parked(clock: &FakeClock, caller: std::thread::ThreadId, until: Instant) {
     assert!(
-        clock.await_thread_parked(caller, Some(until), WAIT),
+        clock.await_thread_parked(caller, Some(until), fakes::Deadline::after(WAIT)),
         "the caller never parked on the extension's clock within {WAIT:?}"
     );
 }
@@ -757,19 +760,22 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     // A hook has no outer call to anchor one.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.hook", fakes::MUST_SUCCEED_WITHIN, move || held.hook(
-            "before_tool",
-            0,
-            json!({})
-        ))
+        fakes::within(
+            "held.hook",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.hook("before_tool", 0, json!({}))
+        )
         .unwrap(),
         Value::String(OUTSIDE.to_owned())
     );
     // A command is no tool call.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("via_command", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("via_command", "")
+        )
         .unwrap(),
         OUTSIDE
     );
@@ -780,14 +786,17 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     });
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("arm", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("arm", "")
+        )
         .unwrap(),
         "armed"
     );
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, WAIT),
+        clock.await_parked(due, fakes::Deadline::after(WAIT)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
@@ -802,35 +811,52 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     crate::lua::clear_timer_done_hook();
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("read_timer", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("read_timer", "")
+        )
         .unwrap(),
         OUTSIDE
     );
     // An effects function is no tool call.
     let held = Arc::clone(&ext);
-    fakes::within("held.tool_effects", fakes::MUST_SUCCEED_WITHIN, move || {
-        held.tool_effects("via_effects", json!({}))
-            .expect("the effects function ran")
-    });
+    fakes::within(
+        "held.tool_effects",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            held.tool_effects("via_effects", json!({}))
+                .expect("the effects function ran")
+        },
+    );
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("read_effects", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("read_effects", "")
+        )
         .unwrap(),
         OUTSIDE
     );
     // A search backend is no tool call.
     let held = Arc::clone(&ext);
-    fakes::within("held.search_run", fakes::MUST_SUCCEED_WITHIN, move || {
-        let cancel = fakes::CancelToken::new();
-        held.search_run("via_search", json!({}), &cancel)
-    })
+    fakes::within(
+        "held.search_run",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let cancel = fakes::CancelToken::new();
+            held.search_run("via_search", json!({}), &cancel)
+        },
+    )
     .expect("the search backend ran");
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.command", fakes::MUST_SUCCEED_WITHIN, move || held
-            .command("read_search", ""))
+        fakes::within(
+            "held.command",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.command("read_search", "")
+        )
         .unwrap(),
         OUTSIDE
     );
@@ -839,7 +865,7 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     assert_eq!(
         fakes::within(
             "held.provider_call",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || held.provider_call("p", "sign", Value::Null)
         )
         .unwrap(),
@@ -848,8 +874,11 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     // A tool call with no runner is none either.
     let held = Arc::clone(&ext);
     assert_eq!(
-        fakes::within("held.tool_run", fakes::MUST_SUCCEED_WITHIN, move || held
-            .tool_run("via_tool", json!({}), &fakes::CancelToken::new()))
+        fakes::within(
+            "held.tool_run",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || held.tool_run("via_tool", json!({}), &fakes::CancelToken::new())
+        )
         .unwrap(),
         Some(Value::String(OUTSIDE.to_owned()))
     );
@@ -961,7 +990,7 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
     assert_eq!(
         fakes::within(
             "held.tool_run_asking",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let cancel = fakes::CancelToken::new();
                 held.tool_run_asking("fast", json!({}), &cancel, None)
@@ -1026,7 +1055,7 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
     assert_eq!(
         fakes::within(
             "held.tool_run_asking",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let cancel = fakes::CancelToken::new();
                 held.tool_run_asking("fast", json!({}), &cancel, None)
@@ -1082,7 +1111,7 @@ fn a_hook_runs_while_a_tool_waits_on_its_inner_call() {
     assert_eq!(
         fakes::within(
             "caller.tool_run_asking",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let cancel = fakes::CancelToken::new();
                 caller.tool_run_asking(
@@ -1142,7 +1171,7 @@ fn a_tool_runs_while_another_tool_waits_on_its_inner_call() {
     assert_eq!(
         fakes::within(
             "caller.tool_run_asking",
-            fakes::MUST_SUCCEED_WITHIN,
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             move || {
                 let cancel = fakes::CancelToken::new();
                 caller.tool_run_asking(

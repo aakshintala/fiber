@@ -111,7 +111,10 @@ fn finish_past_one_park<D>(
         // The caller drained every bump before releasing the first pass,
         // and each advance wakes the one waiter once, so a marked park is
         // still held when the advance looks: only this advance can end it.
-        if let Some(mark) = fake.mark_parked(poll, drive.left().min(Duration::from_millis(200))) {
+        if let Some(mark) = fake.mark_parked(
+            poll,
+            Deadline::after(drive.left().min(Duration::from_millis(200))),
+        ) {
             let threads = mark.threads();
             assert!(
                 threads.len() == 1,
@@ -158,7 +161,7 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
         let reads = Arc::clone(&reads);
         std::thread::spawn(move || reads.command(&mut sh(&script)))
     };
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     Deadline::after(DEADLINE)
         .recv(&is_listed_entered)
@@ -226,26 +229,26 @@ fn the_watcher_drains_a_listed_group_before_it_finishes() {
     );
     assert_eq!(signal, SIGTERM);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the finish came after the group drained"
     );
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
     let error = late.expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-    let _listed = fakes::within("the killed command", DEADLINE, move || {
+    let _listed = fakes::within("the killed command", Deadline::after(DEADLINE), move || {
         listed.join().unwrap()
     });
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary.
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
-    watchdog.stand_down(DEADLINE);
-    holding.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    holding.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Repeat signals and the normal-return guard share the first shutdown
@@ -286,7 +289,7 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The exact park pins the stored end: no fresh bound starts here.
     assert!(
-        fake.await_parked(end, DEADLINE),
+        fake.await_parked(end, fakes::Deadline::after(DEADLINE)),
         "the first shutdown parked at its end"
     );
     // Raised while the first shutdown still parks, so it queues behind
@@ -316,9 +319,13 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
     // The normal-return guard drops onto the same spent end: it answers at
     // once instead of parking, so the bounded drop below would fail it.
     let plain = CancelAndSettle(Arc::clone(&reads), Arc::clone(&clock));
-    fakes::within("the return guard's drop", DEADLINE, move || {
-        drop(plain);
-    });
+    fakes::within(
+        "the return guard's drop",
+        Deadline::after(DEADLINE),
+        move || {
+            drop(plain);
+        },
+    );
     release.send(()).expect("the spawn's release");
     let error = Deadline::after(DEADLINE)
         .recv(&late)
@@ -326,13 +333,13 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
         .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
-    holding.stand_down(DEADLINE);
+    holding.stand_down(fakes::Deadline::after(DEADLINE));
 }
 /// arrives on, and the guard. The recorder is the only injected part.
 fn arm_recording(
@@ -413,7 +420,7 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
     let (noted, notes) = mpsc::channel::<()>();
     reads.note_completions(noted);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
     let _release = ReleaseOnDrop(Arc::clone(&releases));
@@ -454,7 +461,7 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
     // The guard's drop joins the watcher: bounded on its own thread, so a
     // hung settle fails here instead of hanging the binary. `within` never
     // joins its thread.
-    fakes::within("the guard's drop", DEADLINE, move || {
+    fakes::within("the guard's drop", Deadline::after(DEADLINE), move || {
         drop(guard);
     });
     assert_eq!(fired, SIGTERM);
@@ -464,11 +471,11 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
         .expect_err("a cancelled read");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the cancel killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -517,7 +524,7 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
     // The watcher took the signal once the cancel landed: a `run` past a
     // cancel refuses without starting its read. The spin ends on the
     // refusal, never on the clock.
-    fakes::within("the watcher's cancel", DEADLINE, {
+    fakes::within("the watcher's cancel", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || loop {
             if reads.run("credential read", || ()).is_err() {
@@ -569,10 +576,10 @@ fn the_watcher_settles_an_in_flight_spawn_before_it_finishes() {
     let error = late.expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::matching_exits(&marker, DEADLINE),
+        fakes::matching_exits(&marker, fakes::Deadline::after(DEADLINE)),
         "the late group is gone"
     );
-    watching.stand_down(DEADLINE);
+    watching.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -796,7 +803,7 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(resume);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
         .expect("the test's registration");
@@ -849,11 +856,11 @@ fn a_reapers_and_a_readers_bumps_before_the_settles_park_still_wake_it() {
         .expect_err("a cancelled read");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the cancel killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The terminal watcher's cancel-settle-drop run, shared by the plain test
@@ -896,7 +903,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(resume);
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let guard = CancelOnSignal::watch(Arc::clone(&reads), Arc::clone(&clock), &[SIGTERM])
         .expect("the test's registration");
@@ -909,7 +916,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
     // exiting: survival past the cancel proves no exit, and the
     // cancelled read proves the production calls ran. The spin ends on
     // the refusal, never on the clock.
-    fakes::within("the watcher's cancel", DEADLINE, {
+    fakes::within("the watcher's cancel", Deadline::after(DEADLINE), {
         let reads = Arc::clone(&reads);
         move || loop {
             if reads.run("credential read", || ()).is_err() {
@@ -963,7 +970,10 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
             standin_done.send(()).unwrap_or(());
         });
         assert!(
-            fake.await_parked(fake.origin() + STANDIN_PARK, DEADLINE),
+            fake.await_parked(
+                fake.origin() + STANDIN_PARK,
+                fakes::Deadline::after(DEADLINE)
+            ),
             "the stand-in parked at its instant"
         );
         assert!(
@@ -976,7 +986,7 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         let hold_end = fake.origin() + held_for;
         let mut poll = fake.origin() + GROUP_POLL;
         let settle = fake
-            .mark_parked(poll, DEADLINE)
+            .mark_parked(poll, fakes::Deadline::after(DEADLINE))
             .expect("the settle parked at its poll with the reaper held");
         let threads = settle.threads();
         assert!(
@@ -1001,7 +1011,11 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
             poll = poll.checked_add(GROUP_POLL).expect("the hold is countable");
         }
         assert!(
-            fake.await_parked_since(&mark, Some(hold_end + GROUP_POLL), DEADLINE),
+            fake.await_parked_since(
+                &mark,
+                Some(hold_end + GROUP_POLL),
+                fakes::Deadline::after(DEADLINE)
+            ),
             "the settle parked again past the old bound"
         );
         assert!(
@@ -1046,9 +1060,9 @@ fn terminal_watcher_run(held_for: Option<Duration>) {
         .expect_err("a cancelled read");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the cancel killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }

@@ -152,7 +152,7 @@ impl Setup {
                 &format!("`fiber extension {}` to exit", args.join(" ")),
             ),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 
@@ -185,7 +185,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         let lines = String::from_utf8(output.stdout)
             .unwrap()
             .lines()
@@ -235,7 +235,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
     }
 }

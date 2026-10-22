@@ -34,7 +34,10 @@ fn arm(session: &mut Session, after: Option<Duration>) {
 }
 
 fn parked(clock: &fakes::clock::FakeClock, until: Instant, what: &str) {
-    assert!(clock.await_parked(until, DEADLINE), "{what}");
+    assert!(
+        clock.await_parked(until, fakes::Deadline::after(DEADLINE)),
+        "{what}"
+    );
 }
 
 fn wake(session: &Session) {
@@ -280,7 +283,7 @@ fn no_deadline_never_expires() {
         "a reply while idle is rejected"
     );
     assert!(
-        clock.await_parked_since(&m, None, DEADLINE),
+        clock.await_parked_since(&m, None, fakes::Deadline::after(DEADLINE)),
         "a wake does not expire a loop with no idle delay"
     );
     assert!(

@@ -266,7 +266,9 @@ then from the hub's paged query for older ones, grouped by the `project` on
 each row.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
-the hub. A ✕ on a live row stops that session ("Quit"). Delete on a
+the hub. A resume the hub refuses because the workspace is gone shows
+"Cannot resume: <path> no longer exists. Delete removes the session.": it
+adds no rail card, and the row stays under "exited". A ✕ on a live row stops that session ("Quit"). Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). A row whose
@@ -507,7 +509,7 @@ never from `details`, which has no fixed shape a client may rely on
 
 ⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
-file's diff, or the quota view. The same views back `/model`, `/context`, `/usage`, `/tools` and `/quota`.
+file's diff, or the quota view. The same views back `/model`, `/context`, `/usage`, `/tools`, `/quota` and `/diff`.
 
 There is no built-in task list
 ([Task list](https://github.com/aakshintala/fiber/issues/56)).
@@ -1408,6 +1410,20 @@ The copy goes through OSC 52 and, on a local session, the system clipboard
 command as well. tmux's default `set-clipboard external` drops OSC 52
 silently, and over SSH only OSC 52 reaches the person's clipboard.
 
+`/copy` copies the newest reply in the conversation on screen the same way,
+and "Copied" shows: the text parts of the model's latest message that has
+text, as the model wrote them, Markdown included, joined by a blank line.
+With no reply yet, a notice says "No reply to copy yet." When the window
+holds no reply newer than a page it has dropped ("History and paging"), the
+newest reply may be on that page, so nothing is copied and a notice says "The
+last reply is paged out; jump to the end, then /copy again." While an opening
+pass folds a session's history ("History and paging"), the conversation on
+screen stays as it was, so `/copy` waits and copies in the frame after the
+pass ends. The next key, edit or click, a view opening or closing, leaving the
+session, a session attaching and a lost connection each drop the wait, so it
+never copies from a screen the person has moved on from. A job's view, and a delegate's view with no transcript, hold no
+reply: there `/copy` says "No reply to copy in this view."
+
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
 
@@ -1747,42 +1763,50 @@ later release still applies.
 | `/new` | Goes home with the cursor in the input box, to pick the workspace, worktree, model and thinking level for a new session. The session left keeps running. |
 | `/resume` | Goes home, focused on the first exited row. |
 | `/model` | Opens the model picker. |
-| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. The notice appears when the choice is sent; if the session rejects the choice, the rejection's notice replaces it. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
+| `/thinking [<level>]`, `/effort [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. Sent while a turn runs, the choice applies when the turn ends. The notice appears when the choice is sent; if the session rejects the choice, the rejection's notice replaces it. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential [<label>]` | With no label, opens the credential picker ("Swapped views"): Enter switches to the chosen label and saves it as the provider's `credential`, Ctrl+S switches for this session only and saves nothing. With a label, switches to it and saves it. The label is saved under the provider the session accepted the switch on. The terminal first says the switch rebuilds the cache, with its size (`docs/model-routing.md`, "Which credential a session uses"). |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/tools` | Opens the tools view. |
 | `/mcp` | Opens the MCP servers view. |
 | `/context` | Opens the context breakdown. |
-| `/usage` | Opens the usage view. |
+| `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
+| `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
+| `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
-| `/settings` | Opens the configuration keys. |
+| `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
-| `/keys` | Opens the rebinding screen ("Bindings"). |
+| `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
-| `/name <text>` | Names the session. |
+| `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/close` | Stops the session on screen ("Quit"). |
-| `/feedback <description>` | Writes a feedback report with the description, version, platform and doctor output, and prints its path and the issue link. |
+| `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform and doctor output, and prints its path and the issue link. |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
 | `/?`, `/help` | Opens the key map. |
 
 The `/` list shows built-in commands in this order.
 
+A row's second name, such as `/exit`, is an alias: typing it runs the same
+command, and the `/` list shows it after the name on that command's row,
+never as a row of its own.
+
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates
 and extension commands, each with the tag the answer gives. The terminal sends
-`commands` when it attaches to a session and again after each `reloaded`, and
+`commands` when it attaches to a session and again after each `reloaded` and
+each `extensions_loaded`, which an offer's approval writes with no `reloaded`
+(`docs/events.md`, "`extensions_loaded`"), and
 fills the list from the answer to the latest one it sent; until that answer
-arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's commands run
+arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and
 screens").
 

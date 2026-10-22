@@ -19,6 +19,7 @@ use config::{
     store_credential,
 };
 use contract::ErrorCode;
+use fakes::Deadline;
 
 fn fake(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
@@ -74,7 +75,7 @@ fn origins(config: &Config, provider: &ProviderData) -> Vec<(String, Result<Orig
     let provider = provider.clone();
     fakes::within(
         "credential_origins",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || credentials.credential_origins(&provider),
     )
 }
@@ -100,9 +101,11 @@ fn presence(
     let provider = provider.clone();
     let label = label.to_owned();
     let values = values.clone();
-    fakes::within("key_presence", fakes::MUST_SUCCEED_WITHIN, move || {
-        credentials.key_presence(&provider, &label, &|name| values.get(name).cloned())
-    })
+    fakes::within(
+        "key_presence",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || credentials.key_presence(&provider, &label, &|name| values.get(name).cloned()),
+    )
 }
 
 fn put(setup: &Setup, name: &str, label: &str, value: &str) {
@@ -227,7 +230,7 @@ fn a_fifo_or_link_in_the_stored_directory_is_no_label() {
     let (home, workspace) = (setup.home(), setup.workspace());
     let found = fakes::within(
         "credential_origins",
-        fakes::MUST_SUCCEED_WITHIN,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let config = Config::load(Sources {
                 home,
@@ -275,19 +278,23 @@ fn credential_with_never_reads_another_labels_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
-        let config = Config::load(Sources {
-            home,
-            workspace,
-            project: common::key(),
-            overrides: Vec::new(),
-        })
-        .unwrap();
-        config
-            .credentials()
-            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-            .unwrap_err()
-    });
+    let missing = fakes::within(
+        "credential_with",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let config = Config::load(Sources {
+                home,
+                workspace,
+                project: common::key(),
+                overrides: Vec::new(),
+            })
+            .unwrap();
+            config
+                .credentials()
+                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+                .unwrap_err()
+        },
+    );
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(
@@ -308,19 +315,23 @@ fn credential_with_lists_labels_by_name_even_past_a_fifo() {
     );
     mkfifo(&setup.home().join("credentials/fake/bad"));
     let (home, workspace) = (setup.home(), setup.workspace());
-    let missing = fakes::within("credential_with", fakes::MUST_SUCCEED_WITHIN, move || {
-        let config = Config::load(Sources {
-            home,
-            workspace,
-            project: common::key(),
-            overrides: Vec::new(),
-        })
-        .unwrap();
-        config
-            .credentials()
-            .credential_with(&fake(None), "work", &fakes::children::grouped_output)
-            .unwrap_err()
-    });
+    let missing = fakes::within(
+        "credential_with",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            let config = Config::load(Sources {
+                home,
+                workspace,
+                project: common::key(),
+                overrides: Vec::new(),
+            })
+            .unwrap();
+            config
+                .credentials()
+                .credential_with(&fake(None), "work", &fakes::children::grouped_output)
+                .unwrap_err()
+        },
+    );
     assert_eq!(missing.code(), ErrorCode::CredentialMissing);
     let message = missing.to_string();
     assert!(

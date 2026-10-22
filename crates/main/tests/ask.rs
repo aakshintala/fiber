@@ -197,7 +197,7 @@ impl Setup {
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup());
+        watchdog.stand_down(self.deadline.cleanup_phase());
         TextRun::from(output)
     }
 
@@ -2911,7 +2911,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     assert_eq!(exited["exit_code"], 0);
     assert_eq!(exited["text"], "Hello.");
     assert!(
-        server.await_requests(3, setup.deadline.left()),
+        server.await_requests(3, setup.deadline),
         "waited for the refresh, the token and the model request"
     );
     let mut paths: Vec<String> = server
@@ -2995,7 +2995,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "waited for the model request"
     );
     let requests = server.requests();
@@ -3040,7 +3040,7 @@ fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
     let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
-        server.await_requests(1, setup.deadline.left()),
+        server.await_requests(1, setup.deadline),
         "waited for the model request"
     );
     let requests = server.requests();

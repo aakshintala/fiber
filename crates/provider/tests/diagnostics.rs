@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use contract::diag::{DebugLog, ProviderRequest};
 use contract::events::CacheLifetime;
 use contract::provider::{ModelCall, ModelRequest};
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::json;
 
@@ -211,7 +211,7 @@ fn with_the_setting_off_no_diagnostic_field_is_written() {
         );
         let (reply, _) = harness::run(call);
         assert!(reply.is_ok(), "the completed stream reads on {protocol}");
-        assert!(server.await_requests(1, harness::DEADLINE));
+        assert!(server.await_requests(1, Deadline::after(harness::DEADLINE)));
         let lines = log.lines();
         assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
         assert_eq!(lines[0].prefix_hashes, None, "nothing new on {protocol}");
@@ -233,7 +233,7 @@ fn each_protocol_writes_one_complete_record() {
         let call = observed(protocol, &endpoint, &request, observation(&log, &clock, 2));
         let (reply, _) = harness::run(call);
         let reply = reply.expect("the completed stream reads");
-        assert!(server.await_requests(1, harness::DEADLINE));
+        assert!(server.await_requests(1, Deadline::after(harness::DEADLINE)));
         let lines = log.lines();
         assert_eq!(lines.len(), 1, "one call writes one line on {protocol}");
         let line = &lines[0];
@@ -354,14 +354,18 @@ fn an_open_reads_and_finishes_once() {
     let call = provider::openai_completions::Completions::new(endpoint)
         .request(&harness::request())
         .observed(observation(&log, &clock, 1).with_model("m".to_owned()));
-    let text = fakes::within("the open read", harness::DEADLINE, move || {
-        let mut body = call.open().expect("the open sends");
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
-        text
-    });
+    let text = fakes::within(
+        "the open read",
+        Deadline::after(harness::DEADLINE),
+        move || {
+            let mut body = call.open().expect("the open sends");
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+            text
+        },
+    );
     assert!(!text.is_empty());
-    assert!(server.await_requests(1, harness::DEADLINE));
+    assert!(server.await_requests(1, Deadline::after(harness::DEADLINE)));
     let lines = log.lines();
     assert_eq!(lines.len(), 1, "the read and the drop write one line");
     assert_eq!(lines[0].response_bytes, body_len);
@@ -698,7 +702,7 @@ fn a_retry_writes_one_line_per_attempt_with_usage_only_on_success() {
         let second = observed_flagged(protocol, &endpoint, &request, &log, &clock, 2);
         let (reply, _) = harness::run(second);
         assert!(reply.is_ok(), "the second attempt reads on {protocol}");
-        assert!(server.await_requests(2, harness::DEADLINE));
+        assert!(server.await_requests(2, Deadline::after(harness::DEADLINE)));
         let lines = log.lines();
         assert_eq!(lines.len(), 2, "one line per attempt on {protocol}");
         assert_eq!(lines[0].attempt, 1);

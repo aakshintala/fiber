@@ -296,14 +296,17 @@ fn close_during_a_hung_first_capture_returns_with_the_fallback() {
         get(&environment.vars, "FIBER_HOME").as_deref(),
         Some(temp.home.to_string_lossy().as_ref())
     );
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     assert!(
         temp.log_lines()
             .iter()
             .all(|line| line["code"] != "environment_built"),
         "a cancelled capture writes no line"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -388,7 +391,10 @@ fn a_capture_queued_on_the_lock_spawns_nothing_after_close() {
     environments.close();
     first_done.join().expect("the first capture ends");
     second_done.join().expect("the queued capture ends");
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     assert!(
         !temp.dir.join("pid").exists(),
         "the queued capture spawned nothing"
@@ -399,7 +405,7 @@ fn a_capture_queued_on_the_lock_spawns_nothing_after_close() {
             .all(|line| line["code"] != "environment_built"),
         "a cancelled capture writes no line"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]
@@ -812,7 +818,10 @@ fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
         .recv(&refresh_rx)
         .expect("the queued refresh returns");
     assert_eq!(refreshed.source, VariablesSource::Inherited);
-    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        "the shell is reaped"
+    );
     assert!(
         !temp.dir.join("pid").exists(),
         "the queued refresh spawned nothing"
@@ -823,7 +832,7 @@ fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
             .all(|line| line["code"] != "environment_built"),
         "a cancelled refresh writes no line"
     );
-    watchdog.stand_down(WITHIN);
+    watchdog.stand_down(fakes::Deadline::after(WITHIN));
 }
 
 #[test]

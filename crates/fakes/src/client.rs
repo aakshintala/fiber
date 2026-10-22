@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::deadline::Deadline;
+
 /// How long `Drop` waits for the reader thread to stop, in real time.
 ///
 /// The `shutdown(Both)` just before wakes the reader's `read` at once, so
@@ -134,8 +136,13 @@ impl Client {
 
     /// The first line `matches` accepts, parsed as JSON, or as a string when it
     /// is not JSON. The lines before it are dropped. `None` when none arrives
-    /// within `within` or the socket closes first; then nothing is consumed.
-    pub fn recv_until(&self, within: Duration, matches: impl Fn(&Value) -> bool) -> Option<Value> {
+    /// within `deadline` or the socket closes first; then nothing is consumed.
+    pub fn recv_until(
+        &self,
+        deadline: Deadline,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Option<Value> {
+        let within = deadline.left();
         self.ensure_reader();
         let guard = lock(&self.state);
         let (mut guard, _) = self
@@ -158,10 +165,10 @@ impl Client {
     }
 
     /// The next line, parsed as JSON, or `None` when none arrives within
-    /// `within` or the socket is closed. A line that is not JSON is returned
+    /// `deadline` or the socket is closed. A line that is not JSON is returned
     /// as a string, so a test can see what arrived.
-    pub fn recv(&self, within: Duration) -> Option<Value> {
-        self.recv_until(within, |_| true)
+    pub fn recv(&self, deadline: Deadline) -> Option<Value> {
+        self.recv_until(deadline, |_| true)
     }
 
     /// Test-only pause point for the unwind regression test: the reader
@@ -225,9 +232,11 @@ fn stop_reader(handle: JoinHandle<()>, deadline: Duration) {
     if std::thread::panicking() {
         return;
     }
-    match crate::within("the fake client's reader to stop", deadline, move || {
-        handle.join()
-    }) {
+    match crate::within(
+        "the fake client's reader to stop",
+        Deadline::after(deadline),
+        move || handle.join(),
+    ) {
         Ok(()) | Err(_) => {}
     }
 }

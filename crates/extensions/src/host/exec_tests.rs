@@ -35,7 +35,7 @@ fn group_lives(pgid: u32) -> bool {
 #[track_caller]
 fn ready_in(dir: &std::path::Path) -> fakes::children::Ready {
     let dir = dir.to_path_buf();
-    fakes::within("the ready fifo", DEADLINE, move || {
+    fakes::within("the ready fifo", Deadline::after(DEADLINE), move || {
         fakes::children::Ready::new(&dir)
     })
 }
@@ -294,7 +294,7 @@ fn a_deadline_stop_reports_timed_out() {
     );
     let deadline = clock.now() + Duration::from_millis(500);
     let (_cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), Some(deadline));
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     // At the callback's deadline the run stops, although nothing
     // dropped its cancel.
@@ -312,7 +312,7 @@ fn a_deadline_stop_reports_timed_out() {
         .expect("the timed-out run stops");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     assert!(ran.timed_out, "the deadline stopped the run");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -325,11 +325,11 @@ fn cancel_sends_term_then_kill_after_800_ms() {
         ready.path().display()
     );
     let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let running_until = clock.now() + GROUP_POLL;
     assert!(
-        clock.await_parked(running_until, DEADLINE),
+        clock.await_parked(running_until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park while running"
     );
     // The run polls its cancel every `GROUP_POLL` of real time, so it sees
@@ -337,7 +337,7 @@ fn cancel_sends_term_then_kill_after_800_ms() {
     drop(cancel);
     let kill_at = clock.now() + Duration::from_millis(800);
     assert!(
-        clock.await_parked(kill_at, DEADLINE),
+        clock.await_parked(kill_at, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
     assert!(group_lives(pgid), "SIGTERM leaves the ignoring group alive");
@@ -354,7 +354,7 @@ fn cancel_sends_term_then_kill_after_800_ms() {
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
     assert_eq!(ran.exit_code, None);
     assert!(!ran.timed_out, "a drop is not the deadline");
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -364,12 +364,12 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     let ready = ready_in(&cwd);
     let script = fakes::children::escapes_group(ready.path());
     let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
-    let first = ready.wait(DEADLINE)[0];
-    let _second = ready.wait(DEADLINE);
+    let first = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let _second = ready.wait(fakes::Deadline::after(DEADLINE));
     let watchdog = fakes::Watchdog::group(first);
     let running_until = clock.now() + GROUP_POLL;
     assert!(
-        clock.await_parked(running_until, DEADLINE),
+        clock.await_parked(running_until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park while running"
     );
     // The run sees the drop on its own poll, at the frozen now.
@@ -378,7 +378,7 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     // the run drains until the 2 s bound.
     let drain_until = clock.now() + Duration::from_secs(2);
     assert!(
-        clock.await_parked(drain_until, DEADLINE),
+        clock.await_parked(drain_until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
     clock.advance_when_parked(
@@ -396,7 +396,7 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     for pid in _second {
         drop(fakes::kill_pid(pid, "KILL"));
     }
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The child's marker: set, a test that signals every listed group runs its
@@ -442,7 +442,7 @@ fn in_child(name: &str) {
         stdout.contains("1 passed"),
         "the child ran exactly {name}: {stdout}"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -469,7 +469,7 @@ fn kill_every_group_kills_a_listed_live_group() {
         .unwrap();
     use std::os::unix::process::ExitStatusExt as _;
     assert_eq!(status.signal(), Some(9));
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Group ids no process can have (above `i32::MAX`): never signalled, so a
@@ -559,13 +559,13 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
          exit 0\n"
     );
     let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    let _member = ready.wait(DEADLINE);
+    let _member = ready.wait(fakes::Deadline::after(DEADLINE));
     drop(cancel);
     let kill_at = clock.now() + Duration::from_millis(800);
     assert!(
-        clock.await_parked(kill_at, DEADLINE),
+        clock.await_parked(kill_at, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
     assert!(
@@ -586,7 +586,7 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
         !group_lives(pgid),
         "the run returned only once the group was empty"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A stream still open keeps a stopped run draining although the group is
@@ -606,13 +606,13 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
          exit 0\n"
     );
     let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
-    let pgid = ready.wait(DEADLINE)[0];
-    let escaped = ready.wait(DEADLINE);
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let escaped = ready.wait(fakes::Deadline::after(DEADLINE));
     let watchdog = fakes::Watchdog::group(pgid);
     drop(cancel);
     let drain_until = clock.now() + Duration::from_secs(2);
     assert!(
-        clock.await_parked(drain_until, DEADLINE),
+        clock.await_parked(drain_until, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the run to park for the 2 s drain"
     );
     clock.advance_when_parked(
@@ -628,7 +628,7 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
     for pid in escaped {
         drop(fakes::kill_pid(pid, "KILL"));
     }
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Spawns `script` under `sh` in its own listed group, as `run` does, with
@@ -681,12 +681,12 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         ready.path().display()
     );
     let (child, listing) = spawned(&script, &cwd);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let kill_at = clock.now() + Duration::from_millis(800);
     let done = abort(child, listing, cwd, Arc::clone(&clock));
     assert!(
-        clock.await_parked(kill_at, DEADLINE),
+        clock.await_parked(kill_at, fakes::Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the abort to park for the 800 ms grace"
     );
     assert!(
@@ -711,7 +711,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         !group::live().contains(pgid),
         "the group leaves the list once seen empty"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -724,7 +724,7 @@ fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
         ready.path().display()
     );
     let (child, listing) = spawned(&script, &cwd);
-    let pgid = ready.wait(DEADLINE)[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let done = abort(child, listing, cwd, Arc::clone(&clock));
     // No clock move: the group ends on SIGTERM inside the grace.
@@ -737,7 +737,7 @@ fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
         !group::live().contains(pgid),
         "the group leaves the list once seen empty"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -837,7 +837,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
         Arc::clone(&clock),
         Some(deadline),
     );
-    let pid = ready.wait(DEADLINE)[0];
+    let pid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     // The spinner shares this test's group, so the guard matches its argv
     // by pid alone, never the group: a panic anywhere below still kills it.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
@@ -845,14 +845,13 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     step_to_deadline(&clock, deadline);
     let kill_at = clock.now() + Duration::from_millis(800);
     let early = crate::stall::await_grace_or_answer(&clock, &done, kill_at);
-    if early.is_none() {
-        clock.advance_when_parked(
-            Some(kill_at),
-            None,
-            Duration::from_millis(800),
-            &Deadline::after(DEADLINE),
-        );
-    }
+    let early = crate::stall::advance_past_grace_or_answer(
+        &clock,
+        &done,
+        kill_at,
+        Duration::from_millis(800),
+        early,
+    );
     let outcome = match early {
         Some(outcome) => Ok(outcome),
         None => Deadline::after(DEADLINE).recv(&done),
@@ -869,7 +868,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped program is gone"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A run without its own group is never listed: neither while it runs nor
@@ -884,7 +883,7 @@ fn a_pid_mode_run_is_never_listed() {
         ready.path().display()
     );
     let (cancel, done) = spawn(sh_pid(&script, cwd, CAP), Arc::clone(&clock), None);
-    let pid = ready.wait(DEADLINE)[0];
+    let pid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
@@ -907,7 +906,7 @@ fn a_pid_mode_run_is_never_listed() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the cancelled program is gone"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A program that cannot start reports its spawn failure, whatever group it
@@ -960,13 +959,17 @@ fn stop_pid_reaps_an_exited_child_without_signalling() {
         i32::try_from(child.id()).expect("the exited child's pid fits in an i32"),
     )
     .expect("the exited child's pid is not zero");
-    fakes::within("the exited child", fakes::MUST_SUCCEED_WITHIN, move || {
-        rustix::process::waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-        )
-        .expect("waitid sees the exit");
-    });
+    fakes::within(
+        "the exited child",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            rustix::process::waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            )
+            .expect("waitid sees the exit");
+        },
+    );
     let shared = super::Shared::default();
     assert!(
         !super::stop_pid(&mut child, &shared, Signal::TERM),
@@ -1017,7 +1020,7 @@ fn stop_pid_signals_a_running_child() {
                 Some(15),
                 "the running child dies of SIGTERM"
             );
-            watchdog.stand_down(DEADLINE);
+            watchdog.stand_down(fakes::Deadline::after(DEADLINE));
         }
         Err(_) => {
             drop(fakes::kill_pid(pid, "KILL"));
@@ -1050,7 +1053,7 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     // The reap starts the 2 s drain on the fake clock.
     let drain_until = clock.now() + DRAIN;
     clock
-        .mark_parked(drain_until, DEADLINE)
+        .mark_parked(drain_until, fakes::Deadline::after(DEADLINE))
         .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
     Deadline::after(DRAIN_BOUNDARY_DEADLINE)
         .recv(&stdout_read_rx)
@@ -1081,12 +1084,15 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         "the run returned well before its deadline"
     );
     let holder = holder.expect("the script wrote its holder's pid");
-    assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
+    assert!(
+        fakes::pids_exit(&[holder], fakes::Deadline::after(DEADLINE)),
+        "the holder is gone"
+    );
     assert!(
         unanswered_before_advance,
         "the run is unanswered while it is still draining"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A pid-mode drain that crosses the deadline still returns the child's
@@ -1126,7 +1132,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
         // The reap starts the 2 s drain on the fake clock.
         clock
-            .mark_parked(drain_until, DRAIN_BOUNDARY_DEADLINE)
+            .mark_parked(drain_until, fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE))
             .unwrap_or_else(|| {
                 panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})")
             });
@@ -1149,7 +1155,11 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             &Deadline::after(DEADLINE),
         );
         assert!(
-            clock.await_parked_since(&mark, Some(drain_until), DRAIN_BOUNDARY_DEADLINE),
+            clock.await_parked_since(
+                &mark,
+                Some(drain_until),
+                fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+            ),
             "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to keep draining ({case})"
         );
         let unanswered_before_bound = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
@@ -1181,7 +1191,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         assert!(!ran.timed_out, "no stop started, so no timeout ({case})");
         let holder = holder.expect("the script wrote its holder's pid");
         assert!(
-            fakes::pids_exit(&[holder], DRAIN_BOUNDARY_DEADLINE),
+            fakes::pids_exit(&[holder], fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE)),
             "the holder is gone ({case})"
         );
         assert!(
@@ -1193,7 +1203,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             "the pid-mode run is still draining just before the bound ({case})"
         );
     }
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A run without its own group is stopped by a signal to its pid: the
@@ -1213,7 +1223,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
         Arc::clone(&clock),
         Some(deadline),
     );
-    let pid = ready.wait(DEADLINE)[0];
+    let pid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     // At the deadline the run stops, although nothing dropped its cancel.
@@ -1231,7 +1241,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped program is gone"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A startup abort without its own group signals only the pid: the child
@@ -1255,7 +1265,7 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let child = cmd.spawn().expect("the pid-mode child spawns");
-    let pid = ready.wait(DEADLINE)[0];
+    let pid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     // The spinner shares this test's group: match its argv by pid alone.
     let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     let (done_tx, done_rx) = mpsc::channel();
@@ -1288,7 +1298,7 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the aborted program is gone"
     );
-    watchdog.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// A run that starts after the kill pass is killed at its listing: the
@@ -1316,7 +1326,7 @@ fn a_run_after_the_kill_pass_is_killed_at_its_listing() {
         .expect("waited {DEADLINE:?} for the killed child")
         .unwrap();
     assert!(
-        fakes::group_empties(pgid_a, DEADLINE),
+        fakes::group_empties(pgid_a, fakes::Deadline::after(DEADLINE)),
         "the pass killed group A"
     );
     use std::os::unix::process::ExitStatusExt as _;
@@ -1334,7 +1344,7 @@ fn a_run_after_the_kill_pass_is_killed_at_its_listing() {
         .expect("waited {DEADLINE:?} for the post-kill run")
         .expect("the post-kill run ends with its signal");
     assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
-    watchdog_a.stand_down(DEADLINE);
+    watchdog_a.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// The package directory, canonicalized as `Vm::load` does, with its guard.

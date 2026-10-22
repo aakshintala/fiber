@@ -293,6 +293,13 @@ fn stable_already_newest_keeps_the_binary_but_moves_members_and_docs() {
         .count();
     assert_eq!(docs, 2, "{err}");
     assert!(err.contains("fiber: updated docs"), "{err}");
+    assert_eq!(
+        fs::read_dir(world.binary.parent().unwrap())
+            .unwrap()
+            .count(),
+        1,
+        "{err}"
+    );
 }
 
 /// An already-newest run with its docs present stages no docs: the

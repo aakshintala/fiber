@@ -396,10 +396,32 @@ impl App {
         }
     }
 
+    /// The workspace path a missing-workspace resume refusal names, when
+    /// `code` and `message` have exactly the hub's unrecoverable-workspace
+    /// shape (`docs/invocation.md`, "Lifecycle"): `io_failed` with
+    /// `Session <id> could not resume: <path> no longer exists`, with no
+    /// trailing period. A refusal carrying the starter-error wrapper's
+    /// trailing period is the race the ruling leaves alone, which renders
+    /// like any other refusal. Else `None`.
+    fn missing_workspace<'message>(code: &str, message: &'message str) -> Option<&'message str> {
+        if code != "io_failed" {
+            return None;
+        }
+        let rest = message
+            .strip_prefix("Session ")?
+            .strip_suffix(" no longer exists")?;
+        let (id, path) = rest.split_once(" could not resume: ")?;
+        if id.is_empty() || path.is_empty() {
+            return None;
+        }
+        Some(path)
+    }
+
     /// A rejection of the open's subscribe in flight fails the open:
     /// home again when still attached, with the message as the row's
-    /// note and a notice. A rejection of an earlier step changes nothing
-    /// by itself.
+    /// note and a notice. A missing-workspace refusal renders the ruled
+    /// sentence instead, naming the path. A rejection of an earlier step
+    /// changes nothing by itself.
     fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
         let session = self
             .home
@@ -409,11 +431,17 @@ impl App {
         let Some(session) = session else {
             return Vec::new();
         };
+        let text = match Self::missing_workspace(code, &message) {
+            Some(path) => {
+                format!("Cannot resume: {path} no longer exists. Delete removes the session.")
+            }
+            None => message,
+        };
         if let Some(home) = self.home.as_mut() {
-            home.sessions.note(&session, message.clone());
+            home.sessions.note(&session, text.clone());
         }
         let attached = self.session() == Some(&session);
-        self.notices.push(code, message);
+        self.notices.push(code, text);
         if attached {
             self.go_home();
         }

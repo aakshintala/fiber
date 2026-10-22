@@ -54,13 +54,17 @@ fn cost_provider(root: &fakes::TempDir, body: &str) -> Arc<LuaProvider> {
 fn cost(provider: &Arc<LuaProvider>, key: Option<&str>) -> Result<Option<f64>, Error> {
     let provider = Arc::clone(provider);
     let key = key.map(|k| Secret::new(k.to_owned()));
-    fakes::within("provider.cost", fakes::MUST_SUCCEED_WITHIN, move || {
-        provider.cost(
-            &GenerationId("gen-1".into()),
-            "http://127.0.0.1:1/api/v1",
-            key.as_ref(),
-        )
-    })
+    fakes::within(
+        "provider.cost",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            provider.cost(
+                &GenerationId("gen-1".into()),
+                "http://127.0.0.1:1/api/v1",
+                key.as_ref(),
+            )
+        },
+    )
 }
 
 #[test]
@@ -143,7 +147,10 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     assert!(
-        clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
+        clock.await_parked(
+            asked + Duration::from_millis(50) + GRACE,
+            fakes::Deadline::after(WAIT)
+        ),
         "waited for the caller to park at the grace"
     );
     clock.advance_when_parked(
@@ -210,9 +217,11 @@ fn costed_without_cost_is_the_inner_provider_itself() {
     let inner: Arc<dyn Provider> = Arc::new(Inner::default());
     let wrapped = {
         let inner = Arc::clone(&inner);
-        fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.costed(inner, "http://h/v1", None)
-        })
+        fakes::within(
+            "lua.costed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.costed(inner, "http://h/v1", None),
+        )
         .unwrap()
     };
     assert!(std::ptr::addr_eq(
@@ -235,9 +244,11 @@ fn costed_with_cost_delegates_calls_and_tools_and_looks_up_through_cost() {
     let inner = Arc::new(Inner::default());
     let wrapped = {
         let inner = Arc::clone(&inner) as Arc<dyn Provider>;
-        fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.costed(inner, "http://h/v1", Some(Secret::new("sk-1".into())))
-        })
+        fakes::within(
+            "lua.costed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.costed(inner, "http://h/v1", Some(Secret::new("sk-1".into()))),
+        )
         .unwrap()
     };
     let tools = [tool("b"), tool("a")];
@@ -248,15 +259,19 @@ fn costed_with_cost_delegates_calls_and_tools_and_looks_up_through_cost() {
     let lookup = wrapped.cost_lookup().unwrap();
     let found = {
         let lookup = Arc::clone(&lookup);
-        fakes::within("lookup.cost", fakes::MUST_SUCCEED_WITHIN, move || {
-            lookup.cost(&GenerationId("gen-ok".into()))
-        })
+        fakes::within(
+            "lookup.cost",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lookup.cost(&GenerationId("gen-ok".into())),
+        )
     };
     assert_eq!(found, Some(0.125));
     // A raised error is nothing to the loop.
-    let missing = fakes::within("lookup.cost", fakes::MUST_SUCCEED_WITHIN, move || {
-        lookup.cost(&GenerationId("gen-gone".into()))
-    });
+    let missing = fakes::within(
+        "lookup.cost",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || lookup.cost(&GenerationId("gen-gone".into())),
+    );
     assert_eq!(missing, None);
 }
 
@@ -273,9 +288,11 @@ fn costed_forwards_whether_the_inner_provider_warms() {
             warms,
             ..Inner::default()
         });
-        let wrapped = fakes::within("lua.costed", fakes::MUST_SUCCEED_WITHIN, move || {
-            lua.costed(inner, "http://h/v1", None)
-        })
+        let wrapped = fakes::within(
+            "lua.costed",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || lua.costed(inner, "http://h/v1", None),
+        )
         .unwrap();
         assert!(wrapped.cost_lookup().is_some());
         assert_eq!(wrapped.warms(&request()), warms);

@@ -861,7 +861,7 @@ fn a_picker_read_cancelled_by_the_process_reads_returns_and_kills_its_group() {
     });
     // The first line proves the command ran: without it the cancel below
     // would end nothing and the read would hang.
-    let pgid = fixture.ready.wait(DEADLINE)[0];
+    let pgid = fixture.ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = fakes::Watchdog::group(pgid);
     fixture.reads.cancel();
     let catalogue = fakes::Deadline::after(DEADLINE)
@@ -876,11 +876,11 @@ fn a_picker_read_cancelled_by_the_process_reads_returns_and_kills_its_group() {
         "the cached list is kept: {catalogue:?}"
     );
     assert!(
-        fakes::group_empties(pgid, DEADLINE),
+        fakes::group_empties(pgid, fakes::Deadline::after(DEADLINE)),
         "the cancel killed the group"
     );
-    watchdog.stand_down(DEADLINE);
-    pre.stand_down(DEADLINE);
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    pre.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 /// Two picker reads share one cancel: past the process's cancel a second

@@ -5,7 +5,6 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::Duration;
 
 use contract::JobId;
 use contract::clock::Clock;
@@ -121,9 +120,10 @@ impl JobDeltas {
         text_of(&lock(&self.texts))
     }
 
-    /// Waits, at most `within` of real time, until the concatenated text
+    /// Waits, at most what remains of `deadline`, until the concatenated text
     /// contains `needle`. True once it does; false at the deadline.
-    pub fn wait_for_text(&self, needle: &str, within: Duration) -> bool {
+    pub fn wait_for_text(&self, needle: &str, deadline: Deadline) -> bool {
+        let within = deadline.left();
         let texts = lock(&self.texts);
         let (texts, _) = self
             .changed
@@ -224,9 +224,9 @@ impl FakeJobs {
         Some(input(bytes, clock, cancel))
     }
 
-    /// The next completion, or `None` when none arrives within `within`.
-    pub fn ended(&self, within: Duration) -> Option<JobCompleted> {
-        Deadline::after(within).recv(&lock(&self.completed_rx)).ok()
+    /// The next completion, or `None` when none arrives within `deadline`.
+    pub fn ended(&self, deadline: Deadline) -> Option<JobCompleted> {
+        deadline.recv(&lock(&self.completed_rx)).ok()
     }
 
     /// How many times `stop_delegates` ran: the loop calls it once per

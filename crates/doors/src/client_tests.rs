@@ -30,7 +30,7 @@ mod import_tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use fakes::{Client, TempDir};
+    use fakes::{Client, Deadline, TempDir};
     use serde_json::Value;
 
     use super::support::{Opened, kind, rejection, response, send, subscribe};
@@ -162,7 +162,7 @@ mod import_tests {
         let output = fakes::rerun_prepared(
             &format!("{}::{test}", child_name()),
             &[(CHILD, case)],
-            CHILD_WITHIN,
+            Deadline::after(CHILD_WITHIN),
             |command| match person {
                 Some(dir) => {
                     command.env("HOME", dir);
@@ -747,4 +747,13 @@ fn mcp_reconnect_delivers_the_server_to_the_inbox() {
         })
         .unwrap();
     opened.close();
+}
+
+#[test]
+fn until_carries_the_shared_must_succeed_bound() {
+    assert_eq!(
+        support::UNTIL,
+        fakes::MUST_SUCCEED_WITHIN,
+        "until's whole-wait bound matches the shared must-succeed bound"
+    );
 }
