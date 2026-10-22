@@ -938,8 +938,7 @@ fn space_types_a_space() {
     );
 }
 
-/// The event each default key name gave before `BINDINGS` carried it. A
-/// literal copy, so a change to the derivation cannot move its own answer.
+/// The literal name-to-event table of every default key, copied by hand.
 fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
     let key = |key: Key| Some(Event::Key(key));
     let edit = |edit: Edit| Some(Event::Edit(edit));
@@ -1003,9 +1002,9 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
     ]
 }
 
-/// Every default key name gives the event it gave before `BINDINGS`
-/// carried them, every default key in `BINDINGS` is one of those names,
-/// the typing rules hold, and anything else reads as nothing.
+/// Every default key name gives the event the table lists, every default
+/// key in `BINDINGS` is one of those names and carries that event, the
+/// typing rules hold, and anything else reads as nothing.
 #[test]
 fn default_event_matches_the_parity_table() {
     let key = |key: Key| Some(Event::Key(key));
@@ -1028,8 +1027,6 @@ fn default_event_matches_the_parity_table() {
                 .iter()
                 .find(|(listed, _)| listed == name)
                 .unwrap_or_else(|| panic!("{}: {name} is not in the table", binding.id));
-            let stroke = Stroke::parse(name).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(&default_event(&stroke), want, "{}: {name}", binding.id);
             assert_eq!(
                 &canon_event(canon),
                 want,
