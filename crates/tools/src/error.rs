@@ -11,11 +11,13 @@ mod file_tools;
 mod media;
 mod misc;
 mod session;
+mod web_fetch;
 
 pub(crate) use file_tools::{EditError, ReadError, WriteError};
 pub(crate) use media::{ImageReadError, PdfError};
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
+pub(crate) use web_fetch::{UrlError, WebFetchError};
 
 /// Every way a built-in tool call fails. The root is the one type that
 /// reaches `Output`. Cases arrive with their callers, so no case names a
@@ -58,6 +60,9 @@ pub(crate) enum ToolError {
     /// `web_search` has nothing to run or the backend failed.
     #[error(transparent)]
     WebSearch(#[from] WebSearchError),
+    /// `web_fetch` refused the URL, or the fetch failed.
+    #[error(transparent)]
+    WebFetch(#[from] WebFetchError),
 }
 
 impl ToolError {
@@ -77,6 +82,7 @@ impl ToolError {
             Self::Write(error) => error.code(),
             Self::Edit(error) => error.code(),
             Self::WebSearch(error) => error.code(),
+            Self::WebFetch(error) => error.code(),
         }
     }
 }
