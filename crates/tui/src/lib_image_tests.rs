@@ -1,11 +1,11 @@
 //! Run-level tests for opening an image: the click reads the file
 //! over the hub, and the worker opens the copy.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
 
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
@@ -19,9 +19,6 @@ use crate::screen::Screen;
 use fakes::Deadline;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
-
-/// One deadline per receive: the hub and the worker answer promptly.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A loop on a `TestBackend` with a paired hub, the viewer's script
 /// writing the copy's path to the marker file, and the worker answers
@@ -133,7 +130,7 @@ fn click(lp: &mut Loop<TestBackend>) -> Vec<String> {
 /// id; the hub answers it with the file in base64.
 fn answer(theirs: &UnixStream) -> String {
     theirs
-        .set_read_timeout(Some(DEADLINE))
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
         .unwrap_or_else(|err| panic!("timeout: {err}"));
     let reader = theirs
         .try_clone()
@@ -192,7 +189,7 @@ fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
-        Err(err) => panic!("waited {DEADLINE:?} for the worker: {err}"),
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),
     }
 }
 
@@ -205,7 +202,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
     lp.hub.send(&lines, &mut lp.app);
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
-    match completion(&rx, &Deadline::after(DEADLINE)) {
+    match completion(&rx, &Deadline::after(MUST_SUCCEED_WITHIN)) {
         Input::Viewed { name, result, .. } => {
             assert_eq!(name, "shot.png");
             assert_eq!(result, Ok(()));
@@ -250,7 +247,7 @@ fn a_failed_viewer_draws_the_notice() {
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     // The worker's completion arrives as its own input: stepping it
     // draws the notice.
-    let done = completion(&rx, &Deadline::after(DEADLINE));
+    let done = completion(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(matches!(done, Input::Viewed { result: Err(_), .. }));
     assert_eq!(lp.step(done, &idle), None);
     assert!(

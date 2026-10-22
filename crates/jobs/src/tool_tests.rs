@@ -2,6 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
@@ -21,8 +22,6 @@ use serde_json::{Map, Value, json};
 use super::JobsTool;
 use crate::Registry;
 
-const DEADLINE: Duration = Duration::from_secs(5);
-
 fn args(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
@@ -36,7 +35,9 @@ fn args(value: Value) -> Map<String, Value> {
 /// line: `#[track_caller]` cannot cross the `map` closure below.
 #[track_caller]
 fn take_output(rx: &mpsc::Receiver<Output>) -> Output {
-    Deadline::after(DEADLINE).recv(rx).expect("a wait returned")
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(rx)
+        .expect("a wait returned")
 }
 
 /// What the output's `Settle` takes: the run's news through its end
@@ -122,7 +123,7 @@ impl RecordingClock {
         let guard = self.untils.lock().unwrap();
         let (guard, timeout) = self
             .cv
-            .wait_timeout_while(guard, DEADLINE, |untils| untils.is_empty())
+            .wait_timeout_while(guard, MUST_SUCCEED_WITHIN, |untils| untils.is_empty())
             .unwrap();
         assert!(!timeout.timed_out(), "the wait did not reach the clock");
         guard.clone()
@@ -759,7 +760,7 @@ fn a_zero_timeout_on_a_running_job_returns_at_once() {
             &CancelToken::new(),
         ));
     });
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("a zero timeout returned");
     assert!(output.error.is_none());
@@ -833,7 +834,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         ));
     });
     assert!(
-        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait did not park at its deadline"
     );
     assert!(
@@ -845,9 +846,9 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         Some(deadline),
         None,
         Duration::from_millis(timeout_ms),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the timeout returned");
     assert!(output.error.is_none());
@@ -873,9 +874,9 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
             &CancelToken::new(),
         ));
     });
-    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)));
     (opened.end.0)(completed(&id, Outcome::Completed));
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the wait returned");
     assert!(output.error.is_none());
@@ -937,7 +938,7 @@ fn a_timeout_that_overflows_the_clock_waits_until_the_job_ends() {
     assert_eq!(clock.await_first(), vec![None]);
     assert!(rx.try_recv().is_err(), "the overflow wait returned early");
     (opened.end.0)(completed(&end_id, Outcome::Completed));
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the wait returned");
     assert!(output.error.is_none());
@@ -974,9 +975,9 @@ fn cancelling_a_wait_leaves_the_job_running() {
             &in_call,
         ));
     });
-    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)));
     cancel.cancel();
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the cancelled wait returned");
     assert!(output.error.is_none());
@@ -1023,7 +1024,7 @@ fn two_waits_deliver_the_completion_once() {
         handles.push(rx);
     }
     assert!(
-        clock.await_parked_count(deadline, 2, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_count(deadline, 2, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "both waits did not park"
     );
     (opened.end.0)(completed(&id, Outcome::Failed));
@@ -1108,7 +1109,9 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
             &CancelToken::new(),
         ));
     });
-    let output = Deadline::after(DEADLINE).recv(&rx).expect("stop returned");
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("stop returned");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(output.error.is_none());
     assert!(
@@ -1170,7 +1173,7 @@ fn cancelling_stop_after_the_stop_was_sent_returns_at_once() {
         "stop returned before it was cancelled"
     );
     cancel.cancel();
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the cancelled stop returned");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1311,7 +1314,7 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         let _sent = tx.send(run(&tool, arguments, &CancelToken::new()));
     });
     assert!(
-        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the write did not park {wait:?} out: {:?}",
         clock.parked()
     );
@@ -1321,10 +1324,14 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         Some(deadline),
         None,
         wait.checked_sub(Duration::from_millis(1)).unwrap(),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(deadline), fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_since(
+            &mark,
+            Some(deadline),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the write waits again a millisecond short: {:?}",
         clock.parked()
     );
@@ -1336,9 +1343,9 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         Some(deadline),
         None,
         Duration::from_millis(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned");
     assert!(output.error.is_none(), "{}", text_of(&output));

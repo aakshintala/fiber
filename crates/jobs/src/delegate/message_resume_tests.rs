@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,9 +28,6 @@ use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, exited};
 use crate::timing_tests::{Step, try_step};
 use contract::Envelope;
-
-/// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
@@ -183,7 +181,7 @@ fn resume_rig_with_steer(
                 reached,
             } => {
                 let _sent = reached.send(());
-                fakes::Deadline::after(DEADLINE)
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv(&release.lock().unwrap())
                     .expect("the test releases the launch");
                 let mut command = Command::new("sh");
@@ -432,7 +430,7 @@ fn take_notice(rig: &ResumeRig) -> contract::inbox::JobNotice {
 fn reported(rig: &ResumeRig) -> contract::inbox::JobNotice {
     let stop = AtomicBool::new(false);
     let clock = Arc::clone(&rig.clock);
-    let deadline = fakes::Deadline::after(DEADLINE);
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     thread::scope(|scope| {
         scope.spawn(|| drive(&clock, &stop, deadline));
         let result = deadline.recv(&rig.inbox);
@@ -456,7 +454,7 @@ fn stop_and_reap(rig: &ResumeRig, id: &JobId, watchdog: Watchdog) -> contract::i
     );
     let notice = reported(rig);
     assert_eq!(notice.completed.job_id, *id);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     notice
 }
 
@@ -483,7 +481,7 @@ fn call_async(
 }
 
 fn answered(rx: &mpsc::Receiver<Output>) -> Output {
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(rx)
         .expect("the call answered")
 }
@@ -639,7 +637,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     assert!(call(&output.settle.clone().expect("a resume settles")).is_empty());
     // The watch got the boundary the log read gave, and delivered the
     // live run's end past it.
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.delivered)
         .expect("the watch delivered");
     assert_eq!(
@@ -839,7 +837,7 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
         let _ = id;
         if reading.load(Ordering::SeqCst) {
             let _sent = read_tx.send(());
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&release_rx.lock().unwrap())
                 .expect("the test releases the read");
             return Err(format!("{log}: Permission denied (os error 13)"));
@@ -864,13 +862,13 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
         let output = tool.run(&args, &CancelToken::new(), &Recorder::default());
         let _sent = tx.send(output);
     });
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&read_rx)
         .expect("the boundary read ran");
     // Access is restored before the spawn.
     denied.store(false, Ordering::SeqCst);
     release_tx.send(()).unwrap();
-    let output = fakes::Deadline::after(DEADLINE)
+    let output = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the call answered");
     handle.join().unwrap();
@@ -906,7 +904,7 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
     );
     assert!(output.error.is_none());
     assert_eq!(rig.launched.lock().unwrap().len(), 1);
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.delivered)
         .expect("the watch delivered");
     assert_eq!(
@@ -935,7 +933,8 @@ fn closing_resumes_once_the_run_ends_before_the_bound() {
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi there", CancelToken::new());
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+        rig.clock
+            .await_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its closing wait"
     );
     end_resume_run(finish, &id, "Done.");
@@ -963,7 +962,7 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     assert!(
         rig.clock.await_parked(
             rig.clock.now() + Duration::from_millis(50),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the call parks its backoff"
     );
@@ -993,20 +992,21 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
         rig.clock
-            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
+            .await_parked(backoff, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
         Some(backoff),
         None,
         Duration::from_millis(50),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     // The closing rejection clears the committed mark; the closing wait
     // follows on the session clock.
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+        rig.clock
+            .await_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its closing wait"
     );
     end_resume_run(finish, &id, "Done.");
@@ -1072,7 +1072,7 @@ fn a_cancel_inside_the_start_still_commits_the_resume() {
     let watchdog = Watchdog::matching("fiber-message-cancel-start");
     let cancel = CancelToken::new();
     let (rx, handle) = call_async(&rig.tool, &id.0, "go again", cancel.clone());
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&reached_rx)
         .expect("the start held");
     cancel.cancel();

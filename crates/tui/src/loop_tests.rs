@@ -11,6 +11,7 @@ use crate::link::Line;
 use contract::clock::Clock;
 use contract::{Envelope, Seq};
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
@@ -1300,10 +1301,6 @@ fn two_finished_lines_in_one_batch_write_both_notifications_in_order() {
     assert!(at(one) < at(two));
 }
 
-/// How long the loop may take to drain the replay before the test fails
-/// it: a named receive deadline, never a sleep on the test thread.
-const DRAIN: Duration = Duration::from_secs(5);
-
 /// The resume test's hub thread's last step: the last command name it
 /// read and whether a socket write is in progress. The hub sets each
 /// field and drops the guard before any blocking call, so the panic
@@ -1475,8 +1472,14 @@ fn the_park_ends_the_pump_without_a_fold() {
         .send(())
         .unwrap_or_else(|err| panic!("park: {err}"));
     drop(parked_tx);
-    pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
-        .unwrap_or_else(|err| panic!("{err}"));
+    pump_until_stop(
+        MUST_SUCCEED_WITHIN,
+        &reached,
+        &release_tx,
+        &parked,
+        "no fold nor park",
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     assert!(release.try_recv().is_err(), "no fold was released");
 }
 
@@ -1489,8 +1492,14 @@ fn no_fold_and_no_park_fails_the_pump_window() {
     // the pump fails on the hangup without outlasting any window.
     drop(reached_tx);
     drop(parked_tx);
-    let err = pump_until_stop(DRAIN, &reached, &release_tx, &parked, "no fold nor park")
-        .expect_err("the pump ended with no fold and no park");
+    let err = pump_until_stop(
+        MUST_SUCCEED_WITHIN,
+        &reached,
+        &release_tx,
+        &parked,
+        "no fold nor park",
+    )
+    .expect_err("the pump ended with no fold and no park");
     assert!(err.contains("no fold nor park"), "{err}");
 }
 
@@ -1519,7 +1528,7 @@ fn a_held_fold_fails_the_no_progress_window() {
     .unwrap_or_else(|err| panic!("send: {err}"));
     drop(tx);
     // The loop holds before its first fold: one hang guard for the hold.
-    Deadline::after(DRAIN).recv_or_fail(&reached, "the loop to hold before the fold");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&reached, "the loop to hold before the fold");
     // No release is sent, so the pump fails its window instead of
     // waiting out the whole drain.
     let window = Duration::from_millis(200);
@@ -1531,7 +1540,8 @@ fn a_held_fold_fails_the_no_progress_window() {
     // Dropping the release sender lets the held fold through, so the
     // loop thread finishes; one hang guard for its return.
     drop(release_tx);
-    Deadline::after(DRAIN).recv_or_fail(&finished, "the loop to quit after the release");
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&finished, "the loop to quit after the release");
 }
 
 /// Lower-case words, the same for the seed.
@@ -1841,7 +1851,7 @@ fn resume_open_replays_the_log_to_the_tail() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // The hub parked at subscribe: one deadline for the whole wait.
-    let parked = Deadline::after(DRAIN);
+    let parked = Deadline::after(MUST_SUCCEED_WITHIN);
     parked.recv_or_fail(&subscribed, "the hub to park at subscribe");
     // The drain cannot answer while the subscribe answer is held: a
     // bounded receive of its own that must time out. This is a receive
@@ -1863,13 +1873,13 @@ fn resume_open_replays_the_log_to_the_tail() {
     // releases the held hub thread too.
     unpack_wait(
         pump_until_stop(
-            DRAIN,
+            MUST_SUCCEED_WITHIN,
             &fold_reached,
             &fold_release_tx,
             &history_parked,
             "no fold nor park",
         ),
-        format!("the loop neither folded nor parked at history for {DRAIN:?}"),
+        format!("the loop neither folded nor parked at history for {MUST_SUCCEED_WITHIN:?}"),
         &finished,
         &hub_progress,
         &hub_done,
@@ -1881,15 +1891,20 @@ fn resume_open_replays_the_log_to_the_tail() {
     drop(history_release_tx);
     // The drain pumps the fold chunk by chunk: each signal renews the
     // no-progress window, so a slow machine folds every chunk within
-    // `DRAIN` while the whole log takes what it takes. Panicking drops
+    // `MUST_SUCCEED_WITHIN` while the whole log takes what it takes. Panicking drops
     // the release sender, which releases the held loop thread too.
     // The run thread may have finished between the drain's check and
     // now: the drain error still panics, and the panic names the run
     // thread's state and each helper thread's last step, so the next
     // sighting shows which stall candidate happened.
     let (code, lp) = unpack_wait(
-        drain_by_chunk(DRAIN, &fold_reached, &fold_release_tx, &finished),
-        format!("the loop folded no chunk for {DRAIN:?}"),
+        drain_by_chunk(
+            MUST_SUCCEED_WITHIN,
+            &fold_reached,
+            &fold_release_tx,
+            &finished,
+        ),
+        format!("the loop folded no chunk for {MUST_SUCCEED_WITHIN:?}"),
         &finished,
         &hub_progress,
         &hub_done,
@@ -1898,8 +1913,9 @@ fn resume_open_replays_the_log_to_the_tail() {
     drop(fold_release_tx);
     // The hub's writes and the reader's EOF are ready once the loop has
     // returned: hang guards, not drain bounds.
-    Deadline::after(DRAIN).recv_or_fail(&hub_done, "the hub to finish streaming the log");
-    Deadline::after(DRAIN).recv_or_fail(&reader_done, "the reader to reach EOF");
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&hub_done, "the hub to finish streaming the log");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&reader_done, "the reader to reach EOF");
     assert_eq!(code, 0);
     // The one history command is the tail's first window: the replay
     // lands the whole session, so no page fetch follows.
@@ -2004,9 +2020,9 @@ fn a_key_that_opens_a_delegate_leaves_nothing_held() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = Deadline::after(DRAIN)
+    let (code, lp) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+        .unwrap_or_else(|err| panic!("waited {MUST_SUCCEED_WITHIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     assert!(lp.app.item_open());
     assert!(!lp.app.pages().holding());
@@ -2029,9 +2045,9 @@ fn a_quit_in_its_own_batch_leaves_nothing_held() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = Deadline::after(DRAIN)
+    let (code, lp) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+        .unwrap_or_else(|err| panic!("waited {MUST_SUCCEED_WITHIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     assert!(!lp.app.pages().holding());
 }
@@ -2073,9 +2089,9 @@ fn a_hub_batch_holds_while_folding() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = Deadline::after(DRAIN)
+    let (code, lp) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
+        .unwrap_or_else(|err| panic!("waited {MUST_SUCCEED_WITHIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     // Both lines folded before the count: one recount for the batch.
     assert_eq!(lp.app.pages().recounts - before, 1);

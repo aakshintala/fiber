@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -115,7 +116,7 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
             }
         })
         .unwrap();
-    let wait = Deadline::after(Duration::from_secs(5));
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     for n in 1..=2 {
         wait.recv(&read_rx)
             .unwrap_or_else(|_| panic!("the reader is about to read for the {n}th time"));
@@ -125,7 +126,7 @@ fn a_trickling_hub_cannot_extend_the_handshake_deadline() {
     // the handshake.
     clock.advance_when_parked(Some(due), None, DEADLINE, &Deadline::after(DEADLINE));
     peer.write_all(&line[1..2]).unwrap();
-    let got = Deadline::after(Duration::from_secs(5))
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the reader returns once the deadline has passed");
     let Err(Poll::Failed(error)) = got else {

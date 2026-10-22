@@ -16,6 +16,7 @@
 mod paging_args;
 
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -108,7 +109,7 @@ fn run(exe: &Path, args: &[&str]) -> Output {
         .recv(&finished)
         .expect("the paging jig finished: the paging example")
         .unwrap();
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 
