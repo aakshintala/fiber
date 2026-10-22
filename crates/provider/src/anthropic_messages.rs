@@ -18,7 +18,7 @@ use std::path::Path;
 use contract::ActionId;
 use contract::diag::PrefixHashes;
 use contract::events::CacheLifetime;
-use contract::provider::{Input, ModelCall, ModelRequest, Provider, ToolDefinition};
+use contract::provider::{Input, ModelCall, ModelRequest, Provider, TOOL_SEARCH, ToolDefinition};
 use serde_json::{Map, Value, json};
 
 pub use crate::anthropic_messages_decode::decode;
@@ -45,6 +45,7 @@ const VERTEX_VERSION: &str = "vertex-2023-10-16";
 pub struct Messages {
     endpoint: Endpoint,
     cache_key_header: Option<String>,
+    deferred_tools: bool,
 }
 
 impl Messages {
@@ -53,7 +54,19 @@ impl Messages {
         Self {
             endpoint,
             cache_key_header: None,
+            deferred_tools: false,
         }
+    }
+
+    /// Whether the model defers tools: its provider data says `defer_loading`
+    /// works (`docs/tools.md`, "Deferral is a property of the model"). Off,
+    /// every tool is declared in full. On, a deferred tool is declared with
+    /// `defer_loading` and `tool_search` results go back as `tool_reference`
+    /// blocks (`research/tool-search`).
+    #[must_use]
+    pub fn deferred_tools(mut self, on: bool) -> Self {
+        self.deferred_tools = on;
+        self
     }
 
     /// Also sends each request's cache key in the header `name`, for a
@@ -119,7 +132,7 @@ impl Messages {
             self.cache_key_header.as_deref(),
             &request.cache_key,
         );
-        let body = body(endpoint, request);
+        let body = body(endpoint, request, self.deferred_tools);
         let call = Call::new(endpoint, request, url, headers, body, decode);
         if endpoint.compat.vertex_raw_predict {
             call.on_error(unlisted)
@@ -142,7 +155,7 @@ impl Messages {
         // The digests cost a second encoding, so they run only with the
         // setting on; the hot path with it off is unchanged.
         if observation.cache_diagnostics() {
-            call = call.with_hashes(hashes(&self.endpoint, request));
+            call = call.with_hashes(hashes(&self.endpoint, request, self.deferred_tools));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }
@@ -154,7 +167,11 @@ impl Provider for Messages {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        wire_tools(tools)
+        wire_tools(tools, self.deferred_tools)
+    }
+
+    fn defers(&self) -> bool {
+        self.deferred_tools
     }
 
     fn warms(&self, request: &ModelRequest) -> bool {
@@ -181,7 +198,14 @@ impl Provider for Messages {
 /// "The maximum number of strict tools supported is 20"), so past 20 the
 /// rest are sent `strict: false`, in name order. This is the tools Fiber
 /// builds.
-fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+///
+/// With `deferring`, a deferred tool also carries `"defer_loading": true`,
+/// except `tool_search` (Anthropic: "Never set `defer_loading: true` on the
+/// tool search tool itself"), which an extension may mark deferred, and a
+/// hosted tool, which has no definition to load (`research/tool-search`).
+/// A deferred tool still spends a strict slot: the budget counts every
+/// tool that fits.
+fn wire_tools(tools: &[ToolDefinition], deferring: bool) -> Vec<Map<String, Value>> {
     let sorted = crate::wire::sorted_by_name(tools);
     let mut strict_left = MAX_STRICT_TOOLS;
     sorted
@@ -198,12 +222,16 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
             if strict {
                 strict_left -= 1;
             }
-            crate::wire::object(json!({
+            let mut wired = crate::wire::object(json!({
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.input_schema,
                 "strict": strict,
-            }))
+            }));
+            if deferring && tool.deferred && tool.name != TOOL_SEARCH {
+                wired.insert("defer_loading".into(), json!(true));
+            }
+            wired
         })
         .collect()
 }
@@ -211,11 +239,11 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// The tools as sent: the rewound build verbatim, else the tools Fiber
 /// builds. Shared by the body and the digests, so both hash the same
 /// bytes.
-fn wired_tools(request: &ModelRequest) -> Vec<Value> {
+fn wired_tools(request: &ModelRequest, deferring: bool) -> Vec<Value> {
     request
         .sent_tools
         .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools))
+        .unwrap_or_else(|| wire_tools(&request.tools, deferring))
         .into_iter()
         .map(Value::Object)
         .collect()
@@ -237,8 +265,8 @@ fn system(request: &ModelRequest) -> Option<Value> {
 /// tools and each cumulative messages prefix as sent. Tools are absent
 /// from the body when the request sends none, so their digest is absent
 /// too.
-fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
-    let tools = wired_tools(request);
+fn hashes(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> PrefixHashes {
+    let tools = wired_tools(request, deferring);
     PrefixHashes {
         system: system(request).map(|system| crate::cache_diagnostics::segment(&system)),
         tools: (!tools.is_empty()).then(|| crate::cache_diagnostics::segment(&Value::Array(tools))),
@@ -249,14 +277,11 @@ fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
 /// The request body. Its objects serialise with their keys sorted, because
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
-///
-/// debt: deferred tools are sent in full, without defer_loading, until tool
-/// search is built (#368); nothing defers a tool yet.
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
+fn body(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools = wired_tools(request);
+    let tools = wired_tools(request, deferring);
     let bedrock = endpoint.compat.bedrock_invoke;
     let mut body = Map::new();
     // Bedrock's Invoke API names the model in the path and streams by the
@@ -584,19 +609,16 @@ fn block_of(
             "name": call.name,
             "input": call.arguments,
         })],
-        Input::ToolSearchResult { action_id, loaded } => block_of(
-            &Input::ToolResult {
-                action_id: action_id.clone(),
-                text: contract::provider::loaded_text(loaded),
-                is_error: false,
-                images: Vec::new(),
-                pdfs: Vec::new(),
-            },
-            reference,
-            call_ids,
-            session_dir,
-            text_only,
-        ),
+        // The names the search loaded, as `tool_reference` blocks in
+        // `loaded` order (`research/tool-search`, probe A1).
+        Input::ToolSearchResult { action_id, loaded } => vec![json!({
+            "type": "tool_result",
+            "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
+            "content": loaded
+                .iter()
+                .map(|name| json!({"type": "tool_reference", "tool_name": name}))
+                .collect::<Vec<_>>(),
+        })],
         Input::ToolResult {
             action_id,
             text,

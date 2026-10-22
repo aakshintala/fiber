@@ -1269,6 +1269,7 @@ fn check_status_seeds_nothing(name: &str, status: CallStatus) {
             "fake/model-1",
             &mut had,
             &mut carry,
+            None,
         );
     }
     assert!(carry.skills.is_empty());
@@ -1478,6 +1479,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
             "fake/model-1",
             &mut had,
             &mut carry,
+            None,
         );
     }
     assert!(carry.skills.is_empty());
@@ -1582,4 +1584,137 @@ fn a_cut_handoff_renders_nothing_and_keeps_the_skills_loaded() {
         rebuild_and_sent(&lines[..3], "fake/model-1", &HashSet::new(), seed).unwrap();
     assert!(carry.resend.is_empty());
     assert_eq!(carry.skills, [alpha()]);
+}
+
+fn kept(keys: &[(u64, u64)]) -> Event {
+    Event::ReviewerKept(contract::events::ReviewerKept {
+        kept: keys
+            .iter()
+            .map(|&(seq, item)| contract::events::KeptMessage {
+                seq: Seq(seq),
+                item,
+            })
+            .collect(),
+        failed: None,
+    })
+}
+
+fn user(text: &str) -> Input {
+    Input::User {
+        text: text.into(),
+        images: Vec::new(),
+    }
+}
+
+/// Turn 1's message A, then the handoff turn's message B, its completed
+/// handoff, the new opening and the reviewer's selection of both.
+fn kept_log() -> Vec<Envelope> {
+    vec![
+        envelope(A, 0, None, None, &started("/w", None)),
+        envelope(A, 1, Some("t_1"), None, &message_turn("A")),
+        envelope(A, 2, Some("t_2"), None, &message_turn("B")),
+        envelope(A, 3, Some("t_2"), None, &begun()),
+        envelope(A, 4, Some("t_2"), None, &handoff()),
+        envelope(A, 5, Some("t_2"), None, &opening()),
+        envelope(A, 6, Some("t_2"), None, &kept(&[(1, 0), (2, 0)])),
+    ]
+}
+
+#[test]
+fn a_resume_seed_carries_the_kept_messages() {
+    let (_home, sessions) = sessions("seed-kept");
+    let lines = kept_log();
+    write_log(&sessions, A, &lines);
+    let folded = resumed(&sessions.join(A)).unwrap();
+    // The window starts at the handoff turn, so message A is only in the
+    // seed.
+    assert_eq!(folded.window, (0, 2));
+    let window = &lines[2..];
+    let (conversation, _, _, carry) =
+        rebuild_and_sent(window, "fake/model-1", &HashSet::new(), folded.seed).unwrap();
+    assert!(matches!(&conversation[0], Input::User { text, .. } if text.contains("2023-11-14")));
+    assert_eq!(conversation[1..], [user("A"), user("B"), user("")]);
+    // The same rebuild over the whole log holds the same index.
+    let (whole, _, _, whole_carry) = rebuild_and_sent(
+        &lines,
+        "fake/model-1",
+        &HashSet::new(),
+        crate::handoff::Carry::default(),
+    )
+    .unwrap();
+    assert_eq!(whole, conversation);
+    assert_eq!(whole_carry.person, carry.person);
+    assert_eq!(carry.person.len(), 2);
+}
+
+#[test]
+fn a_summary_turn_message_never_reaches_the_seed() {
+    let (_home, sessions) = sessions("seed-summary");
+    let summary = Event::TurnStarted(TurnStarted {
+        input: vec![
+            InputItem::Rewind {
+                command_id: contract::CommandId("c_r".into()),
+            },
+            InputItem::Message {
+                content: vec![ContentPart::Text {
+                    text: "summarise".into(),
+                }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: None,
+                },
+                changed_by: None,
+            },
+        ],
+    });
+    let completed = Event::TurnCompleted(contract::events::TurnCompleted {
+        outcome: contract::events::TurnOutcome::Completed,
+        error: None,
+        questions: None,
+    });
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &summary),
+            envelope(A, 2, Some("t_1"), None, &completed),
+            envelope(A, 3, Some("t_2"), None, &message_turn("ask")),
+            envelope(A, 4, Some("t_2"), None, &handoff()),
+        ],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert_eq!(folded.window, (0, 3));
+    assert!(folded.seed.person.is_empty(), "{:?}", folded.seed.person);
+}
+
+#[test]
+fn a_reviewer_kept_after_the_cut_inserts_nothing() {
+    let handoff_lines = |kept_line: bool| {
+        let mut lines = vec![
+            envelope(A, 0, Some("t_1"), None, &message_turn("A")),
+            envelope(A, 1, Some("t_2"), None, &message_turn("B")),
+            envelope(A, 2, Some("t_2"), None, &handoff()),
+            envelope(A, 3, Some("t_2"), None, &opening()),
+        ];
+        if kept_line {
+            lines.push(envelope(A, 4, Some("t_2"), None, &kept(&[(0, 0), (1, 0)])));
+        }
+        lines
+    };
+    let seed = crate::handoff::Carry::default();
+    // Cut before the handoff completes: it renders as failed, so the
+    // selection has nothing to join.
+    let (before, _) =
+        summary_conversation(&handoff_lines(true), 2, "fake/model-1", seed.clone()).unwrap();
+    let (without, _) =
+        summary_conversation(&handoff_lines(false), 2, "fake/model-1", seed.clone()).unwrap();
+    assert_eq!(before, without);
+    assert_eq!(before, [user("A"), user("B")]);
+    // Cut between the completed handoff and its selection: the selection
+    // is past the cut and inserts nothing.
+    let (after, _) = summary_conversation(&handoff_lines(true), 4, "fake/model-1", seed).unwrap();
+    assert_eq!(after.len(), 3);
+    assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
+    assert_eq!(after[1..], [user("B"), user("")]);
 }
