@@ -1445,8 +1445,9 @@ pass folds a session's history ("History and paging"), the conversation on
 screen stays as it was, so `/copy` waits and copies in the frame after the
 pass ends. The next key, edit or click, a view opening or closing, leaving the
 session, a session attaching and a lost connection each drop the wait, so it
-never copies from a screen the person has moved on from. A job's view, and a delegate's view with no transcript, hold no
-reply: there `/copy` says "No reply to copy in this view."
+never copies from a screen the person has moved on from. A job's view, and a
+delegate's view with no transcript, hold no reply: there `/copy` says "No
+reply to copy in this view."
 
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
