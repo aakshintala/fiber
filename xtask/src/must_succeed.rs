@@ -76,6 +76,11 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     kept("crates/hub/src/closed_tests.rs", "SLICE", SLICE),
     kept("crates/hub/src/rejoin_tests.rs", "SLICE", SLICE),
     kept("crates/main/tests/repository_offer.rs", "SLICE", SLICE),
+    kept(
+        "crates/main/tests/hub_remote_terminal.rs",
+        "HELLO_SLICE",
+        SLICE,
+    ),
     kept("crates/fakes/src/finished_tests.rs", "SHORT", ABSENT),
     kept("crates/main/src/read_signals_tests.rs", "SHORT", ABSENT),
     kept(
@@ -141,6 +146,7 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     held("crates/tui/src/lib_image_tests.rs", "held by #3152"),
     held("crates/tui/src/loop_tests.rs", "held by #3152"),
     held("crates/fakes/src/clock_tests.rs", "held by #3161"),
+    held("crates/loop/tests/review_jig.rs", "held by #3172"),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.
