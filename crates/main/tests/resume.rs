@@ -1415,8 +1415,14 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     // The session is held by the live first run, so the second attaches
     // instead of opening a second writer. The `clients` line proves it
     // subscribed before the release below: without it the first run could
-    // exit first and the second would resume as a writer.
-    let second = start(&setup, &["ask", "--resume", &id, "x"]);
+    // exit first and the second would resume as a writer. `--model` is
+    // ignored on the attach, as a live resume always is
+    // (`docs/invocation.md`, "Lifecycle"): even an unconfigured model
+    // attaches without resolving.
+    let second = start(
+        &setup,
+        &["ask", "--resume", &id, "--model", "fake/no-such-model", "x"],
+    );
     let attached = until_clients(setup.deadline, &running.stdout);
     assert_eq!(attached["payload"]["count"], 1);
     // Its prompt queues behind the held provider call, so the rejection
@@ -1478,6 +1484,12 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     );
     // The attach sent no provider request of its own.
     assert_eq!(server.requests().len(), 1);
+    // The ignored flag switched nothing: the attach records no
+    // `model_changed` either way.
+    assert!(
+        !kinds.contains(&"model_changed".to_owned()),
+        "the attach applies no model: {kinds:?}"
+    );
 }
 
 #[test]
