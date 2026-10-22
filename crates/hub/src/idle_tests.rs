@@ -917,7 +917,7 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
     }));
     let (flushed_tx, flushed) = mpsc::channel();
     *hub.on_abort_flush.lock().unwrap() = Some(Box::new(move || {
-        flushed_tx.send(()).unwrap_or(());
+        flushed_tx.send(thread::current().id()).unwrap_or(());
     }));
     // The serving thread blocks after the abort, before its answer.
     // Its entry proves it left the fan-out park, so the arm's flush
@@ -945,11 +945,16 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
         clock.await_parked(end, fakes::Deadline::after(WITHIN)),
         "the arm parks on the flush bound"
     );
-    assert!(Deadline::after(DEADLINE).recv(&flushed).is_ok());
+    // The hook records the arm thread, whose flush wait the advances
+    // below name: under load the re-woken fan-out worker can re-park
+    // at the sessions bound first.
+    let arm = Deadline::after(DEADLINE)
+        .recv(&flushed)
+        .expect("the arm parks in its flush wait");
     // One millisecond short of the bound the hub stays.
     clock.advance_when_parked(
         Some(end),
-        None,
+        Some(arm),
         SESSIONS_ABORT_FLUSH
             .checked_sub(Duration::from_millis(1))
             .expect("the flush bound exceeds a millisecond"),
@@ -958,7 +963,7 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
     assert!(done.try_recv().is_err(), "the hub stays before the bound");
     clock.advance_when_parked(
         Some(end),
-        None,
+        Some(arm),
         Duration::from_millis(1),
         &fakes::Deadline::after(DEADLINE),
     );

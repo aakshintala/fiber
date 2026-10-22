@@ -162,6 +162,23 @@ pub(crate) fn run_remote(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The stop case arms it, and `with_answer` runs it right after the
+    /// exchange collects the answer, before the service step below. The
+    /// log it appends to proves the answer came first, on this same
+    /// thread: the exchange and the service step never leave it.
+    static STOP_ANSWERED: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Arms the one-shot answer hook before the next answered stop.
+/// Test only: production has no seam there.
+#[cfg(test)]
+pub(crate) fn on_stop_answered(hook: impl FnOnce() + 'static) {
+    STOP_ANSWERED.with(|slot| slot.set(Some(Box::new(hook))));
+}
+
 /// The stop after the exchange answered: the installed service stops when
 /// the unit file is present, then the close is awaited. A started hub that
 /// stopped nothing reports nothing running, like the empty path.
@@ -183,6 +200,14 @@ fn with_answer(
     // Only a transport failure, where no answer arrives, returns
     // before it.
     let answered = exchange_stop(stream, deadline, clock)?;
+    // Tests only: the ordering cases log the collected answer ahead of
+    // the service step below, on this same thread.
+    #[cfg(test)]
+    STOP_ANSWERED.with(|slot| {
+        if let Some(hook) = slot.take() {
+            hook();
+        }
+    });
     match answered {
         Answered::Stopped(0) if started => {
             if installed {

@@ -33,7 +33,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 use support::clock::System;
 
-use super::{STOP_WITHIN, run_local, run_remote, stop_local, stop_remote};
+use super::{STOP_WITHIN, on_stop_answered, run_local, run_remote, stop_local, stop_remote};
 use crate::hub_service::{ManagerRun, Ran, manager};
 use crate::hub_unit::{Manager, name, unit_path};
 
@@ -659,31 +659,24 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     second.set_nonblocking(true).unwrap();
     let service = child_service(home);
     let stub = loaded_stub();
-    // The manager must run only after the hub answered: the stub fails
-    // the case when its first call lands before the answer signal.
-    let (answered_tx, answered_rx) = mpsc::channel::<()>();
+    // The manager must run only after the hub answered: the answer hook
+    // logs first, on the same thread that runs the stub below.
     let pushed = Rc::clone(&stub.calls);
+    on_stop_answered({
+        let pushed = Rc::clone(&pushed);
+        move || pushed.borrow_mut().push("answer".to_owned())
+    });
     let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
         let _ = line;
         Ok(ok())
     }));
     let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
         let line = format!("{program} {}", args.join(" "));
-        // Checked before recording: the push below empties nothing,
-        // so reading after it could never see the first call.
-        let first = pushed.borrow().is_empty();
         pushed.borrow_mut().push(line.clone());
-        if first {
-            answered_rx
-                .try_recv()
-                .expect("the exchange answers before any manager call");
-        }
         (inner.borrow_mut())(&line)
     });
     let home_owned = home.to_owned();
-    let mut answered_tx = Some(answered_tx);
     let mut start = move || -> std::io::Result<()> {
-        let answered_tx = answered_tx.take().expect("the starter runs once");
         let listener = UnixListener::bind(home_owned.join("run/hub"))?;
         thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -697,12 +690,11 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
             let mut answer = serde_json::to_vec(&accepted(2)).unwrap();
             answer.push(b'\n');
             (&stream).write_all(&answer).unwrap();
-            answered_tx.send(()).unwrap_or(());
         });
         Ok(())
     };
     run_local(out, home, &mut start, clock, &stub_run).unwrap();
-    let mut expected = vec![print_args(&service)];
+    let mut expected = vec!["answer".to_owned(), print_args(&service)];
     expected.extend(stop_args(&service));
     assert_eq!(stub.calls(), expected);
     for held in [&first, &second] {
@@ -716,23 +708,20 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
 fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     let service = child_service(home);
     let stub = loaded_stub();
-    let (answered_tx, answered_rx) = mpsc::channel::<()>();
+    // The manager must run only after the hub answered: the answer hook
+    // logs first, on the same thread that runs the stub below.
     let pushed = Rc::clone(&stub.calls);
+    on_stop_answered({
+        let pushed = Rc::clone(&pushed);
+        move || pushed.borrow_mut().push("answer".to_owned())
+    });
     let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
         let _ = line;
         Ok(ok())
     }));
     let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
         let line = format!("{program} {}", args.join(" "));
-        // Checked before recording: the push below empties nothing,
-        // so reading after it could never see the first call.
-        let first = pushed.borrow().is_empty();
         pushed.borrow_mut().push(line.clone());
-        if first {
-            answered_rx
-                .try_recv()
-                .expect("the exchange answers before any manager call");
-        }
         (inner.borrow_mut())(&line)
     });
     let listener = UnixListener::bind(home.join("run/hub")).unwrap();
@@ -750,7 +739,6 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
         let mut answer = serde_json::to_vec(&rejected()).unwrap();
         answer.push(b'\n');
         (&stream).write_all(&answer).unwrap_or(());
-        answered_tx.send(()).unwrap_or(());
     });
     let mut start = move || -> std::io::Result<()> {
         panic!("the probe answers: the starter never runs");
@@ -759,7 +747,7 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "s_aaa still running");
     assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
-    let mut expected = vec![print_args(&service)];
+    let mut expected = vec!["answer".to_owned(), print_args(&service)];
     expected.extend(stop_args(&service));
     assert_eq!(
         stub.calls(),
