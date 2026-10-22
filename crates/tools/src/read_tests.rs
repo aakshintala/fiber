@@ -9,7 +9,7 @@ use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Value, json};
 
 use crate::Files;
-use crate::files::{hash_bytes, path_text};
+use crate::files::path_text;
 
 fn run(dir: &Path, value: Value) -> contract::tool::Output {
     Files::new(dir.to_path_buf()).read().run(
@@ -461,8 +461,14 @@ fn a_ranged_read_records_the_whole_file() {
         &Recorder::default(),
     );
     assert!(output.error.is_none());
-    let resolved = canonical(dir.path()).join("a.txt");
-    assert_eq!(files.seen_hash(&resolved), Some(hash_bytes(&bytes)));
+    let replaced = files.write().run(
+        &fakes::tool_args(json!({"path": "a.txt", "content": "w\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(replaced.error.is_none(), "{}", fakes::text_of(&replaced));
+    assert!(fakes::text_of(&replaced).starts_with("Replaced"));
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"w\n");
 }
 
 #[test]
@@ -476,8 +482,13 @@ fn a_failed_read_records_nothing() {
         &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-    let resolved = canonical(dir.path()).join("a.txt");
-    assert_eq!(files.seen_hash(&resolved), None);
+    let refused = files.write().run(
+        &fakes::tool_args(json!({"path": "a.txt", "content": "w\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&refused), Some(ErrorCode::StaleFile));
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"a\nb\n");
 }
 
 #[test]
