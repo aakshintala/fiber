@@ -698,9 +698,17 @@ letters, digits, `.` and `-`, with an optional `:` and a port from 0 to
 variable.
 
 A model whose placeholder has no value, or a value that is not a host, is
-left out of the model list, with the notice `model_unconfigured` naming the
-model and the setting; for a value that is not a host it says so, without
-repeating the value. The model can still be named ("Naming a model"): a
+left out of the model list, with the notice `model_unconfigured`. For a
+value that is not a host the notice names the model and the setting and
+says so, without repeating the value. For a placeholder with no value,
+`fiber models` prints one notice per provider and setting, not one per
+model: it names the provider and the setting and counts the models it
+leaves out, then lists the models that are configured, possibly none. A
+search filters the count as it filters the list: the count holds the
+left-out models whose `provider/model` contains the text, and no notice
+prints when none does. Every other surface keeps the notice per model,
+naming the model: the terminal's model list, `fiber doctor`, a session that
+chooses it, and `fiber config set model`. The model can still be named ("Naming a model"): a
 session that chooses it exits with `model_unconfigured`, and
 `fiber config set model` accepts it with that notice
 (`docs/configuration.md`, "When Fiber writes"). The notice names three
