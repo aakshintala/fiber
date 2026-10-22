@@ -1076,6 +1076,18 @@ fn the_item_views_top_row_closes_them() {
             session_settled(grid) && panel_card_item_at(grid, card, description).is_some()
         });
         let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
+        // Repro: force the late-row shift between the read and the
+        // write. Collapsing the Jobs card removes its item row, standing
+        // in for the Session card's late `cache hits` row moving the
+        // cards down: the stored coordinates go stale, the hover below
+        // misses, and its wait fails every run.
+        if card == "Jobs" {
+            let (jx, jy) = panel_item_at(&grid, "Jobs").unwrap();
+            click(&mut run, jx, jy);
+            run.wait_screen("the collapsed Jobs card", |grid| {
+                panel_item_at(grid, "Jobs").is_some() && panel_item_at(grid, "head -n 1").is_none()
+            });
+        }
         // The hover frame acknowledges this cell as a live click target.
         // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
         run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
@@ -1096,4 +1108,15 @@ fn the_item_views_top_row_closes_them() {
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
         );
     }
+}
+
+#[test]
+fn probe_cache_hits_arrival() {
+    let (setup, _release, _guard, _command) = running_setup();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the delegate spend row", |grid| {
+        grid.contents.contains("cache hits")
+    });
 }
