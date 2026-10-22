@@ -309,6 +309,37 @@ fn a_good_tree_packs_ustar_archives_with_checksums() {
 }
 
 #[test]
+fn the_repository_tree_packs_init_into_the_extensions_archive() {
+    let pack = Pack::start();
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+    let run = pack.pack(&["pack-extensions", &repository.to_string_lossy(), "out"]);
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let members = pack.members("fiber-extensions.tar.gz");
+    let init: Vec<&str> = members
+        .iter()
+        .map(String::as_str)
+        .filter(|member| member.starts_with("init/"))
+        .collect();
+    assert_eq!(
+        init,
+        [
+            "init/",
+            "init/extension.json",
+            "init/prompts/",
+            "init/prompts/init/",
+            "init/prompts/init/SKILL.md",
+        ]
+    );
+    assert!(
+        members
+            .iter()
+            .any(|member| member == "memory/extension.json")
+    );
+}
+
+#[test]
 fn an_empty_extension_set_packs_nothing() {
     for missing in [false, true] {
         let pack = Pack::start();

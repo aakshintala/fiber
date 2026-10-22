@@ -37,6 +37,22 @@ fn full_inputs() -> PromptInputs {
     inputs
 }
 
+fn installed_inputs() -> PromptInputs {
+    let mut inputs = empty_inputs();
+    inputs.docs = Some(super::DocsPlace::Installed(PathBuf::from(
+        "/home/u/.fiber/docs",
+    )));
+    inputs
+}
+
+fn website_inputs() -> PromptInputs {
+    let mut inputs = empty_inputs();
+    inputs.docs = Some(super::DocsPlace::Website(
+        "https://aakshintala.com/fiber/nightly/",
+    ));
+    inputs
+}
+
 fn tools() -> Vec<(String, Option<String>, bool)> {
     vec![
         ("write".into(), Some("Write guide.".into()), false),
@@ -113,6 +129,55 @@ fn empty_parts_leave_no_blank_line() {
 }
 
 #[test]
+fn installed_docs_line_follows_the_model_line() {
+    let prompt = system_prompt(&installed_inputs(), "m", false, &[]);
+    let at = prompt.find("# Session").unwrap();
+    assert_eq!(
+        &prompt[at..],
+        "# Session\n\nYou are running as m.\n\nFiber's own documentation is in /home/u/.fiber/docs: `user/` for using Fiber, and the rest for how Fiber works, including the extension API. Read it with your file tools when a question is about Fiber itself."
+    );
+}
+
+#[test]
+fn website_docs_line_names_the_url() {
+    let prompt = system_prompt(&website_inputs(), "m", false, &[]);
+    let at = prompt.find("# Session").unwrap();
+    assert_eq!(
+        &prompt[at..],
+        "# Session\n\nYou are running as m.\n\nFiber's own documentation is at https://aakshintala.com/fiber/nightly/: `user/` for using Fiber, and the rest for how Fiber works, including the extension API. Read it there when a question is about Fiber itself."
+    );
+}
+
+#[test]
+fn docs_line_precedes_the_unattended_line() {
+    let prompt = system_prompt(&installed_inputs(), "m", true, &[]);
+    let docs_at = prompt.find("Fiber's own documentation").unwrap();
+    let away_at = prompt.find("Nobody is present").unwrap();
+    let session_at = prompt.find("# Session").unwrap();
+    assert!(session_at < docs_at && docs_at < away_at);
+}
+
+#[test]
+fn no_docs_place_keeps_todays_bytes() {
+    let prompt = system_prompt(&empty_inputs(), "m", false, &[]);
+    assert!(!prompt.contains("Fiber's own documentation"));
+    let at = prompt.find("# Session").unwrap();
+    assert_eq!(&prompt[at..], "# Session\n\nYou are running as m.");
+}
+
+#[test]
+fn same_docs_inputs_give_equal_strings_twice() {
+    assert_eq!(
+        system_prompt(&installed_inputs(), "m", true, &tools()),
+        system_prompt(&installed_inputs(), "m", true, &tools())
+    );
+    assert_eq!(
+        system_prompt(&website_inputs(), "m", true, &tools()),
+        system_prompt(&website_inputs(), "m", true, &tools())
+    );
+}
+
+#[test]
 fn same_inputs_give_equal_strings_twice() {
     let inputs = full_inputs();
     let tools = tools();
@@ -166,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        5824,
-        0x5b3e8974e46fa5d9,
+        6454,
+        0x7a572ed3056ab6b8,
     );
 }
 
@@ -186,6 +251,8 @@ fn messages_md_holds_every_section_the_doc_names() {
         "tools",
         "tool",
         "session",
+        "docs",
+        "docs-website",
         "unattended",
         "instruction-file",
         "no-instruction-files",

@@ -14,7 +14,7 @@ use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Value, json};
 
 use crate::Files;
-use crate::files::{hash_bytes, path_text};
+use crate::files::path_text;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -168,10 +168,13 @@ fn a_multi_block_edit_is_written_once() {
             removed: 2,
         }])
     );
-    assert_eq!(
-        files.seen_hash(&path),
-        Some(hash_bytes(&fs::read(&path).unwrap()))
+    let replaced = files.write().run(
+        &fakes::tool_args(json!({"path": "a.txt", "content": "w\n"})),
+        &CancelToken::new(),
+        &Recorder::default(),
     );
+    assert!(replaced.error.is_none(), "{}", fakes::text_of(&replaced));
+    assert!(fakes::text_of(&replaced).starts_with("Replaced"));
 }
 
 #[test]

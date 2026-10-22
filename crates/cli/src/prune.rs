@@ -11,8 +11,8 @@ use std::time::SystemTime;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
+use log::diag::{OldFile, old_diagnostics};
 
-mod diagnostics;
 mod ignored;
 mod pinned;
 mod sessions;
@@ -21,8 +21,6 @@ mod worktrees;
 use crate::approve::{confirmed, say};
 use crate::sessions::Ask;
 use crate::{CliError, with_dirs, write_line};
-
-pub(crate) use diagnostics::{OldFile, old_diagnostics};
 
 /// What the prompt asks.
 const PRUNE_PROMPT: &str = "prune? [y/N]";

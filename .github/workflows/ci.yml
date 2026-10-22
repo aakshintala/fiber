@@ -253,10 +253,45 @@ jobs:
           tool: cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
-      - name: Install zsh and fish
+      # The archives are cached per runner image and architecture. The key
+      # names the package list: change it here, in mutants-scheduled.yml and
+      # in scripts/install-shells together. ImageOS and ImageVersion are not in
+      # the `env` context, so a step builds the key.
+      - &shell-debs-key
+        name: Key the zsh and fish archive cache
+        id: shell-debs-key
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: scripts/install-shells
+        run: echo "key=shell-debs-${ImageOS:?}-${ImageVersion:?}-${RUNNER_ARCH:?}-zsh-fish" >> "$GITHUB_OUTPUT"
+      - &shell-debs-restore
+        name: Restore the zsh and fish archives
+        id: shell-debs
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
+      - &install-shells
+        name: Install zsh and fish
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        env:
+          SHELL_DEBS_CACHE_HIT: ${{ steps.shell-debs.outputs.cache-hit }}
+        run: |
+          # A restore that fails part way can leave files behind and report no hit.
+          if [ "$SHELL_DEBS_CACHE_HIT" != true ]; then
+            rm -rf "$RUNNER_TEMP/shell-debs"
+          fi
+          scripts/install-shells "$RUNNER_TEMP/shell-debs"
+      - &shell-debs-save
+        name: Save the zsh and fish archives
+        if: runner.os == 'Linux' && steps.shell-debs.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/shell-debs
+          key: ${{ steps.shell-debs-key.outputs.key }}
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -397,9 +432,10 @@ jobs:
           tool: cargo-mutants,cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
-      - name: Install zsh and fish
-        timeout-minutes: 5
-        run: scripts/install-shells
+      - *shell-debs-key
+      - *shell-debs-restore
+      - *install-shells
+      - *shell-debs-save
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -845,10 +881,14 @@ jobs:
           seen=$RUNNER_TEMP/flaky-seen.txt
           : > "$seen"
           base=""
+          head_sha=""
           compare_files=""
           pr_files=""
           if [ "${GITHUB_EVENT_NAME:-}" = pull_request ]; then
-            base=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" -q '.parents[0].sha // empty' || true)
+            # A pull request's merge commit has main as parents[0] and the
+            # pull request head as parents[1].
+            parents=$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA" -q '[.parents[].sha] | join(" ")' || true)
+            read -r base head_sha <<< "$parents" || true
             if [ -n "$base" ]; then
               compare_files=$(gh api --paginate "repos/$GH_REPO/compare/$base...main" -q '.files[].filename' || true)
             fi
@@ -856,6 +896,21 @@ jobs:
               pr_files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files" -q '.[].filename' || true)
             fi
           fi
+          # The tested commit, named in every body this step writes
+          # (docs/testing/running.md, "Flaky tests").
+          tested="tested $GITHUB_SHA"
+          if [ -n "$base" ] && [ -n "$head_sha" ]; then
+            tested="tested $GITHUB_SHA = main $base + head $head_sha"
+          fi
+          # The one body construction for the issue, the sighting comment
+          # and the pull request comment: the sentence, the tested commit,
+          # then the failure text in a fence when there is any.
+          flake_body() {
+            printf '%s\n%s' "$1" "$tested"
+            if [ -n "$detail" ]; then
+              printf "\n\`\`\`\n%s\n\`\`\`" "$detail"
+            fi
+          }
           for file in "$dir"/flaky-tests-*.txt; do
             [ -f "$file" ] || continue
             runner=${file#"$dir"/flaky-tests-}
@@ -890,22 +945,17 @@ jobs:
                   continue
                 fi
                 if [ -n "$pr_files" ] && printf '%s\n' "$pr_files" | grep -Fxq "$failing"; then
-                  pr_body="The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL."
-                  if [ -n "$detail" ]; then
-                    pr_body="$pr_body"$'\n```\n'"$detail"$'\n```'
-                  fi
+                  pr_body=$(flake_body "The test \`$name\` passed after a retry on $runner, but its failing file \`$failing\` belongs to #$PR rather than main: $RUN_URL.")
                   gh issue comment "$PR" --body "$pr_body"
                   printf '%s\n' "$title" >> "$seen"
                   continue
                 fi
               fi
-              body="The test \`$name\` passed after a retry on $runner: $RUN_URL."
+              text="The test \`$name\` passed after a retry on $runner: $RUN_URL."
               if [ -n "$PR" ]; then
-                body="$body (see #$PR)"
+                text="$text (see #$PR)"
               fi
-              if [ -n "$detail" ]; then
-                body="$body"$'\n```\n'"$detail"$'\n```'
-              fi
+              body=$(flake_body "$text")
               number=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
                 -q "map(select(.title == \"$title\")) | .[0].number // empty")
               if [ -n "$number" ]; then

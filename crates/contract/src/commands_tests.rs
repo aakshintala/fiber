@@ -735,6 +735,13 @@ fn built_in_commands_match_the_tui_doc_table() {
     }
 }
 
+/// `/init` is a first-party prompt template, not a built-in command.
+#[test]
+fn init_is_not_a_built_in_command() {
+    assert!(BUILT_IN_COMMANDS.contains(&"reload"));
+    assert!(!BUILT_IN_COMMANDS.contains(&"init"));
+}
+
 #[test]
 fn decisions_read_in_order_as_an_offers_answer() {
     let line =

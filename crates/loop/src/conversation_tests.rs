@@ -75,6 +75,7 @@ fn changed_with_diff_renders_the_recomputed_diff() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -102,6 +103,7 @@ fn changed_with_full_text_renders_the_replacement() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -126,6 +128,7 @@ fn created_renders_the_new_file() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -158,6 +161,7 @@ fn created_section_file_names_the_section() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -187,6 +191,7 @@ fn subdirectory_renders_the_reached_file() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -220,6 +225,7 @@ fn deleted_renders_one_line_and_forgets_the_path() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -243,6 +249,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     render(
         &mut conversation,
@@ -256,6 +263,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert!(conversation.is_empty());
     assert_eq!(
@@ -277,6 +285,7 @@ fn date_changed_renders_the_new_date() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     assert!(user_text(&conversation[0]).contains("2023-11-15"));
@@ -344,6 +353,7 @@ fn live_rendering_equals_rebuild() {
             "fake/model-1",
             &mut had,
             &mut crate::handoff::Carry::default(),
+            None,
         );
     }
     let lines: Vec<Envelope> = events
@@ -420,6 +430,7 @@ fn dir_of_falls_back_to_empty_without_a_parent() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     assert!(user_text(&conversation[0]).contains("Leaf.\n"));
@@ -487,6 +498,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut crate::handoff::Carry::default(),
+        None,
     );
     let mut whole = cut.clone();
     whole.push(line("job_completed", &orphaned("j_1"), None));
@@ -537,6 +549,7 @@ fn a_job_completed_renders_a_notice_only_without_an_action() {
             "fake/model-1",
             &mut BTreeMap::new(),
             &mut crate::handoff::Carry::default(),
+            None,
         );
     }
     assert_eq!(live, rebuilt);
@@ -584,6 +597,7 @@ fn a_rewritten_notice_rebuilds_as_the_model_saw_it() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(live, rebuilt);
 }
@@ -601,6 +615,7 @@ fn an_empty_notice_renders_nothing_and_holds_nothing() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert!(live.is_empty());
     // Behind an open batch the empty notice waits as nothing.
@@ -709,6 +724,7 @@ fn extension_job_ends_never_render_or_flush_batches_live_or_rebuilt() {
                         "fake/model-1",
                         &mut had,
                         &mut carry,
+                        None,
                     );
                 }
                 // Only an extension end is written live inside a batch;
@@ -817,6 +833,7 @@ fn a_delegate_finish_then_its_end_renders_two_messages_in_log_order() {
             "fake/model-1",
             &mut BTreeMap::new(),
             &mut crate::handoff::Carry::default(),
+            None,
         );
     }
     assert_eq!(live, rebuilt);
@@ -1078,6 +1095,7 @@ fn the_free_renderer_carries_image_refs_too() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(out, vec![expected_image_result()]);
 }
@@ -1242,6 +1260,7 @@ fn rebuild_stamps_a_tool_call_with_the_model_in_force() {
         "p/m",
         &mut BTreeMap::new(),
         &mut crate::handoff::Carry::default(),
+        None,
     );
     let Input::ToolCall { model, .. } = &live[0] else {
         panic!("{live:?}");
@@ -2040,6 +2059,7 @@ fn a_prompt_image_renders_on_the_user_message_and_the_carry() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut carry,
+        None,
     );
     let expected = Input::User {
         text: "look".into(),
@@ -2079,6 +2099,7 @@ fn a_steered_image_renders_on_the_user_message_and_the_carry() {
         "fake/model-1",
         &mut BTreeMap::new(),
         &mut carry,
+        None,
     );
     let expected = Input::User {
         text: String::new(),
@@ -2320,6 +2341,7 @@ fn rendering_line_by_line_and_rebuilding_agree_on_skills() {
             "fake/model-1",
             &mut had,
             &mut live,
+            None,
         );
     }
     let open = std::collections::HashSet::new();
@@ -2353,6 +2375,7 @@ fn a_skills_change_renders_the_added_then_the_removed_line() {
         "fake/model-1",
         &mut had,
         &mut crate::handoff::Carry::default(),
+        None,
     );
     assert_eq!(conversation.len(), 1);
     assert_eq!(
@@ -2805,6 +2828,7 @@ mod from_log {
                 MODEL,
                 &mut had,
                 &mut carry,
+                None,
             );
         }
         assert_eq!(live, rebuilt);
@@ -3570,6 +3594,7 @@ fn live_and_rebuilt_conversations_exclude_inner_calls_and_their_results() {
             "fake",
             &mut BTreeMap::new(),
             &mut carry,
+            None,
         );
     }
     assert_eq!(live, super::rebuild(&lines, "fake").unwrap());
@@ -3669,6 +3694,7 @@ fn inner_control_never_changes_the_skills_or_handoff_step() {
             "fake",
             &mut had,
             &mut carry,
+            None,
         );
     }
     assert_eq!(carry.skills, [kept]);
@@ -3741,7 +3767,15 @@ fn live_and_rebuilt(staged: &[(&str, Event)]) -> Vec<Input> {
     let mut had = BTreeMap::new();
     let mut carry = crate::handoff::Carry::default();
     for (_, event) in staged {
-        render(&mut live, event, None, "fake/model-1", &mut had, &mut carry);
+        render(
+            &mut live,
+            event,
+            None,
+            "fake/model-1",
+            &mut had,
+            &mut carry,
+            None,
+        );
     }
     let lines: Vec<Envelope> = staged
         .iter()
@@ -4024,4 +4058,309 @@ fn a_sent_shell_never_named_stays_held() {
     assert_eq!(conversation.len(), 1);
     assert_eq!(user_text(&conversation[0]), "first");
     assert_eq!(carry.pending(), vec![2]);
+}
+
+/// A handoff turn between turns: its `turn_started` holds only the
+/// `handoff` command.
+fn kept_handoff_turn() -> Event {
+    Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Handoff {
+            command_id: contract::CommandId("c_h".into()),
+        }],
+    })
+}
+
+fn kept_handoff_done(note: &str) -> Event {
+    Event::HandoffCompleted(contract::events::HandoffCompleted {
+        outcome: Outcome::Completed,
+        error: None,
+        note: Some(contract::events::Note::Hook {
+            note_text: note.into(),
+            extension: "fiber.test/note".into(),
+        }),
+        tokens_before: 1000,
+        instructions: None,
+    })
+}
+
+fn kept_of(keys: &[(u64, u64)]) -> Event {
+    Event::ReviewerKept(ReviewerKept {
+        kept: keys
+            .iter()
+            .map(|&(seq, item)| contract::events::KeptMessage {
+                seq: Seq(seq),
+                item,
+            })
+            .collect(),
+        failed: None,
+    })
+}
+
+/// Renders the `(seq, kind, event)` lines live, each under its own `seq`,
+/// and rebuilds them: the conversation and the render state agree, and the
+/// caller pins what the conversation holds.
+fn kept_run(staged: &[(u64, &str, Event)]) -> (Vec<Input>, crate::handoff::Carry) {
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    let mut carry = crate::handoff::Carry::default();
+    for (seq, _, event) in staged {
+        render(
+            &mut live,
+            event,
+            None,
+            "fake/model-1",
+            &mut had,
+            &mut carry,
+            Some(Seq(*seq)),
+        );
+    }
+    let lines: Vec<Envelope> = staged
+        .iter()
+        .map(|(seq, kind, event)| sent_line(*seq, kind, event))
+        .collect();
+    let (rebuilt, _, held, rebuilt_carry) = super::rebuild_and_sent(
+        &lines,
+        "fake/model-1",
+        &Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    assert!(held.is_empty());
+    assert_eq!(live, rebuilt, "live equals rebuild");
+    assert_eq!(carry, rebuilt_carry, "live carry equals rebuilt carry");
+    (rebuilt, carry)
+}
+
+fn texts(conversation: &[Input]) -> Vec<&str> {
+    conversation.iter().map(user_text).collect()
+}
+
+/// The texts after the opening message, which must come first.
+fn after_opening(conversation: &[Input]) -> Vec<&str> {
+    let texts = texts(conversation);
+    assert!(texts[0].starts_with("This message is from Fiber"));
+    texts[1..].to_vec()
+}
+
+#[test]
+fn a_kept_message_sits_between_the_opening_and_the_carried_input() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("read-only")),
+        (7, "turn_started", kept_handoff_turn()),
+        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "opening_message", start_opening()),
+        (10, "reviewer_kept", kept_of(&[(6, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["read-only", "NOTE"]);
+}
+
+#[test]
+fn kept_messages_go_in_oldest_first_order() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (12, "turn_started", start_turn("B")),
+        (13, "turn_started", kept_handoff_turn()),
+        (14, "handoff_completed", kept_handoff_done("NOTE")),
+        (15, "opening_message", start_opening()),
+        (16, "reviewer_kept", kept_of(&[(6, 0), (12, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["A", "B", "NOTE"]);
+}
+
+#[test]
+fn a_session_opening_arms_no_kept_slot() {
+    let (conversation, carry) = kept_run(&[
+        (5, "opening_message", start_opening()),
+        (6, "turn_started", start_turn("read-only")),
+        (7, "reviewer_kept", kept_of(&[(6, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["read-only"]);
+    assert_eq!(carry.input_at, None);
+}
+
+#[test]
+fn a_kept_message_follows_the_session_start_context() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("read-only")),
+        (7, "turn_started", kept_handoff_turn()),
+        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "opening_message", start_opening()),
+        (10, "context_added", start_context("session_start", "ctx")),
+        (11, "reviewer_kept", kept_of(&[(6, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["ctx", "read-only", "NOTE"]);
+}
+
+#[test]
+fn a_context_that_is_not_session_start_leaves_the_kept_spot_alone() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("read-only")),
+        (7, "turn_started", kept_handoff_turn()),
+        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "opening_message", start_opening()),
+        (10, "context_added", start_context("before_message", "late")),
+        (11, "reviewer_kept", kept_of(&[(6, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["read-only", "NOTE", "late"]);
+}
+
+#[test]
+fn a_kept_message_of_this_turn_is_not_repeated() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("read-only")),
+        (29, "turn_started", start_turn("this turn")),
+        (30, "handoff_completed", kept_handoff_done("NOTE")),
+        (31, "opening_message", start_opening()),
+        (32, "reviewer_kept", kept_of(&[(6, 0), (29, 0)])),
+    ]);
+    assert_eq!(
+        after_opening(&conversation),
+        ["read-only", "this turn", "NOTE"]
+    );
+}
+
+#[test]
+fn a_parent_message_sharing_a_key_with_this_turn_is_still_kept() {
+    // A fork's log counts `seq` from its own start, so a parent's message
+    // and this turn's can share `{seq, item}`; the reviewer keeps both.
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("parent: read-only")),
+        (6, "turn_started", start_turn("child")),
+        (7, "handoff_completed", kept_handoff_done("NOTE")),
+        (8, "opening_message", start_opening()),
+        (9, "reviewer_kept", kept_of(&[(6, 0)])),
+    ]);
+    assert_eq!(
+        after_opening(&conversation),
+        ["parent: read-only", "child", "NOTE"]
+    );
+}
+
+#[test]
+fn a_second_handoff_in_the_same_turn_does_not_repeat_this_turns_message() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (12, "turn_started", start_turn("B")),
+        (13, "handoff_completed", kept_handoff_done("NOTE 1")),
+        (14, "opening_message", start_opening()),
+        (15, "reviewer_kept", kept_of(&[(12, 0)])),
+        (16, "handoff_completed", kept_handoff_done("NOTE 2")),
+        (17, "opening_message", start_opening()),
+        (18, "reviewer_kept", kept_of(&[(12, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["B", "NOTE 2"]);
+}
+
+#[test]
+fn a_message_in_a_rewind_summary_turn_is_not_kept() {
+    let summary = Event::TurnStarted(TurnStarted {
+        input: vec![
+            InputItem::Rewind {
+                command_id: contract::CommandId("c_r".into()),
+            },
+            InputItem::Message {
+                content: vec![ContentPart::Text {
+                    text: "summarise".into(),
+                }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: None,
+                },
+                changed_by: None,
+            },
+        ],
+    });
+    let steering = Event::SteeringApplied(contract::events::SteeringApplied {
+        content: vec![ContentPart::Text {
+            text: "steered".into(),
+        }],
+        sender: Sender {
+            origin: Origin::Driver,
+            command_id: None,
+        },
+        changed_by: None,
+    });
+    let completed = Event::TurnCompleted(contract::events::TurnCompleted {
+        outcome: contract::events::TurnOutcome::Completed,
+        error: None,
+        questions: None,
+    });
+    let (conversation, carry) = kept_run(&[
+        (6, "turn_started", summary),
+        (7, "steering_applied", steering),
+        (8, "turn_completed", completed),
+        (9, "turn_started", kept_handoff_turn()),
+        (10, "handoff_completed", kept_handoff_done("NOTE")),
+        (11, "opening_message", start_opening()),
+        (12, "reviewer_kept", kept_of(&[(6, 1), (7, 0)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["NOTE"]);
+    assert!(carry.person.is_empty());
+}
+
+#[test]
+fn a_steering_message_outside_a_rewind_summary_is_kept_and_carried() {
+    let steer = |origin, text: &str| {
+        Event::SteeringApplied(contract::events::SteeringApplied {
+            content: vec![ContentPart::Text { text: text.into() }],
+            sender: Sender {
+                origin,
+                command_id: None,
+            },
+            changed_by: None,
+        })
+    };
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (7, "steering_applied", steer(Origin::Driver, "steered")),
+        (
+            8,
+            "steering_applied",
+            steer(
+                Origin::Extension {
+                    extension: "fiber.test/ext".into(),
+                },
+                "from an extension",
+            ),
+        ),
+        (9, "turn_started", kept_handoff_turn()),
+        (10, "handoff_completed", kept_handoff_done("NOTE")),
+        (11, "opening_message", start_opening()),
+        (12, "reviewer_kept", kept_of(&[(7, 0), (8, 0)])),
+    ]);
+    // The driver's steering is carried; the extension's is not the
+    // person's, so naming it keeps nothing.
+    assert_eq!(after_opening(&conversation), ["steered", "NOTE"]);
+}
+
+#[test]
+fn a_second_handoff_keeps_only_what_the_first_kept() {
+    let (conversation, carry) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (12, "turn_started", start_turn("B")),
+        (13, "turn_started", kept_handoff_turn()),
+        (14, "handoff_completed", kept_handoff_done("NOTE 1")),
+        (15, "opening_message", start_opening()),
+        (16, "reviewer_kept", kept_of(&[(6, 0)])),
+        (17, "turn_started", kept_handoff_turn()),
+        (18, "handoff_completed", kept_handoff_done("NOTE 2")),
+        (19, "opening_message", start_opening()),
+        (20, "reviewer_kept", kept_of(&[(12, 0)])),
+    ]);
+    // B was dropped at the first selection: the second names a message the
+    // index no longer holds, and carries nothing.
+    assert_eq!(after_opening(&conversation), ["NOTE 2"]);
+    assert!(carry.person.is_empty());
+}
+
+#[test]
+fn a_kept_key_naming_no_message_inserts_nothing() {
+    let (conversation, _) = kept_run(&[
+        (6, "turn_started", start_turn("A")),
+        (7, "turn_started", kept_handoff_turn()),
+        (8, "handoff_completed", kept_handoff_done("NOTE")),
+        (9, "opening_message", start_opening()),
+        (10, "reviewer_kept", kept_of(&[(99, 0), (6, 3)])),
+    ]);
+    assert_eq!(after_opening(&conversation), ["NOTE"]);
 }

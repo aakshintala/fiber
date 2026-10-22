@@ -4,7 +4,7 @@
 //! that ends with `response.completed`, `response.incomplete` or
 //! `response.failed`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 
 use contract::diag::PrefixHashes;
@@ -13,7 +13,7 @@ use contract::events::{
 };
 use contract::provider::{
     CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    Reply, ReplyAction, TOOL_SEARCH, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ProviderCallId};
@@ -29,6 +29,7 @@ use crate::{Endpoint, Error, sse, strict};
 pub struct Responses {
     endpoint: Endpoint,
     cache_key_header: Option<String>,
+    deferred_tools: bool,
 }
 
 impl Responses {
@@ -37,7 +38,20 @@ impl Responses {
         Self {
             endpoint,
             cache_key_header: None,
+            deferred_tools: false,
         }
+    }
+
+    /// Whether the model defers tools: its provider data says `defer_loading`
+    /// works (`docs/tools.md`, "Deferral is a property of the model"). Off,
+    /// every tool is declared in full. On, a deferred function is declared
+    /// with `defer_loading`, `tool_search` is declared natively, and a
+    /// search's result goes back as `tool_search_output`
+    /// (`research/tool-search`).
+    #[must_use]
+    pub fn deferred_tools(mut self, on: bool) -> Self {
+        self.deferred_tools = on;
+        self
     }
 
     /// Also sends each request's cache key in the header `name`, for a
@@ -68,7 +82,7 @@ impl Responses {
             self.cache_key_header.as_deref(),
             &request.cache_key,
         );
-        let body = body(endpoint, request);
+        let body = body(endpoint, request, self.deferred_tools);
         Call::new(
             endpoint,
             request,
@@ -93,7 +107,7 @@ impl Responses {
         // The digests cost a second encoding, so they run only with the
         // setting on; the hot path with it off is unchanged.
         if observation.cache_diagnostics() {
-            call = call.with_hashes(hashes(&self.endpoint, request));
+            call = call.with_hashes(hashes(&self.endpoint, request, self.deferred_tools));
         }
         Box::new(call.observed(observation.with_model(self.endpoint.model.clone())))
     }
@@ -105,14 +119,29 @@ impl Provider for Responses {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        wire_tools(tools)
+        wire_tools(tools, self.deferred_tools)
+    }
+
+    fn defers(&self) -> bool {
+        self.deferred_tools
     }
 }
 
 /// Each tool in Responses' shape, in name order: a hosted tool is the
 /// vendor's own type alone, with no name or schema (`docs/tools.md`,
 /// "Hosted by the provider"). This is the tools Fiber builds.
-fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+///
+/// With `deferring`, a deferred function also carries `"defer_loading":
+/// true`. `tool_search` and a hosted tool are never deferred: the first is
+/// what loads the rest, the second has no definition to load. While any
+/// function is deferred, `tool_search` is declared as OpenAI's client-executed
+/// tool search, with no name and no `strict`; otherwise it is an ordinary
+/// function (`research/tool-search`, probes B1 and B2).
+fn wire_tools(tools: &[ToolDefinition], deferring: bool) -> Vec<Map<String, Value>> {
+    let defers = |tool: &ToolDefinition| {
+        deferring && tool.deferred && tool.name != TOOL_SEARCH && tool.hosted.is_none()
+    };
+    let native_search = tools.iter().any(defers);
     let sorted = crate::wire::sorted_by_name(tools);
     sorted
         .into_iter()
@@ -120,15 +149,25 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
             if let Some(kind) = &tool.hosted {
                 return crate::wire::object(json!({"type": kind}));
             }
-            // debt: deferred tools are sent in full until tool search is built
-            // (#368); nothing defers a tool yet.
-            crate::wire::object(json!({
+            if native_search && tool.name == TOOL_SEARCH {
+                return crate::wire::object(json!({
+                    "type": "tool_search",
+                    "execution": "client",
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                }));
+            }
+            let mut wired = crate::wire::object(json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
-            }))
+            }));
+            if defers(tool) {
+                wired.insert("defer_loading".into(), json!(true));
+            }
+            wired
         })
         .collect()
 }
@@ -136,15 +175,18 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// The request body. Its objects serialise with their keys sorted, because
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
+fn body(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<u8> {
     // A rewound session's first request sends its parent's logged build
     // verbatim, so it matches the parent's bytes (`docs/events.md`,
     // "Rewind").
-    let tools = wired_tools(request);
+    let tools = wired_tools(request, deferring);
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
     body.insert("instructions".into(), json!(request.system_prompt));
-    body.insert("input".into(), Value::Array(input(endpoint, request)));
+    body.insert(
+        "input".into(),
+        Value::Array(input(endpoint, request, deferring)),
+    );
     body.insert("tools".into(), Value::Array(tools));
     body.insert("tool_choice".into(), json!(request.tool_choice));
     body.insert("prompt_cache_key".into(), json!(request.cache_key));
@@ -185,11 +227,11 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
 /// The tools as sent: the rewound build verbatim, else the tools Fiber
 /// builds. Shared by the body and the digests, so both hash the same
 /// bytes.
-fn wired_tools(request: &ModelRequest) -> Vec<Value> {
+fn wired_tools(request: &ModelRequest, deferring: bool) -> Vec<Value> {
     request
         .sent_tools
         .clone()
-        .unwrap_or_else(|| wire_tools(&request.tools))
+        .unwrap_or_else(|| wire_tools(&request.tools, deferring))
         .into_iter()
         .map(Value::Object)
         .collect()
@@ -199,21 +241,45 @@ fn wired_tools(request: &ModelRequest) -> Vec<Value> {
 /// the tools and each cumulative input prefix as sent. Responses always
 /// sends instructions and a tools list, so both digests are always
 /// present.
-fn hashes(endpoint: &Endpoint, request: &ModelRequest) -> PrefixHashes {
+fn hashes(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> PrefixHashes {
     PrefixHashes {
         system: Some(crate::cache_diagnostics::segment(&json!(
             request.system_prompt
         ))),
         tools: Some(crate::cache_diagnostics::segment(&Value::Array(
-            wired_tools(request),
+            wired_tools(request, deferring),
         ))),
-        messages: crate::cache_diagnostics::cumulative(&input(endpoint, request)),
+        messages: crate::cache_diagnostics::cumulative(&input(endpoint, request, deferring)),
     }
 }
 
 /// The conversation as Responses input items.
-fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
+///
+/// A `tool_search` call whose result in the request is a `ToolSearchResult`
+/// goes back as a `tool_search_call` and a `tool_search_output`; every other
+/// call to it, whether answered by zero matches, a failure or text, stays a
+/// `function_call` and its output (`research/tool-search`, probes B1, B2).
+fn input(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<Value> {
     let reference = endpoint.reference();
+    let searched: BTreeSet<&ActionId> = request
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolSearchResult { action_id, .. } => Some(action_id),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => None,
+        })
+        .collect();
+    // Each output tool is the object the request's own `tools` holds, so the
+    // two can never disagree.
+    let tools = if searched.is_empty() {
+        Vec::new()
+    } else {
+        wired_tools(request, deferring)
+    };
     // A call's `call_id` is the provider's id for it, or its action id when
     // the reply carried none; its result names the same one.
     let call_ids: BTreeMap<&ActionId, &str> = request
@@ -292,16 +358,39 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::Reasoning { .. } => None,
             Input::ToolCall {
                 action_id, call, ..
-            } => Some(json!({
-                "type": "function_call",
-                "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "name": call.name,
-                "arguments": arguments_text(&call.arguments),
-            })),
+            } => {
+                let call_id = call_ids
+                    .get(action_id)
+                    .copied()
+                    .unwrap_or(action_id.0.as_str());
+                if call.name == TOOL_SEARCH && searched.contains(action_id) {
+                    Some(json!({
+                        "type": "tool_search_call",
+                        "execution": "client",
+                        "call_id": call_id,
+                        "status": "completed",
+                        "arguments": call.arguments,
+                    }))
+                } else {
+                    Some(json!({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": call.name,
+                        "arguments": arguments_text(&call.arguments),
+                    }))
+                }
+            }
+            // A loaded name always names a deferred function the request
+            // sends (`ModelRequest::conversation`), so none is skipped.
             Input::ToolSearchResult { action_id, loaded } => Some(json!({
-                "type": "function_call_output",
+                "type": "tool_search_output",
+                "execution": "client",
                 "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "output": contract::provider::loaded_text(loaded),
+                "status": "completed",
+                "tools": loaded
+                    .iter()
+                    .filter_map(|name| tools.iter().find(|tool| tool["name"] == *name))
+                    .collect::<Vec<_>>(),
             })),
             // The flag is ignored: OpenAI's Responses API defines no error
             // field on a function-call output (openai-openapi
@@ -358,6 +447,16 @@ fn output(prepared: crate::images::Prepared) -> Value {
         }));
     }
     Value::Array(parts)
+}
+
+/// A call's arguments from the text Responses carries: the object it
+/// parses to, `{}` when empty, otherwise the raw text.
+fn parsed_arguments(raw: &str) -> Value {
+    match serde_json::from_str(raw) {
+        Ok(Value::Object(map)) => Value::Object(map),
+        _ if raw.is_empty() => Value::Object(Map::new()),
+        Ok(_) | Err(_) => Value::String(raw.to_owned()),
+    }
 }
 
 /// Arguments as the text Responses carries: a raw string as it was, an
@@ -457,7 +556,7 @@ impl Decoder {
         match str_at(event, "type") {
             "response.output_item.added" => {
                 let item = &event["item"];
-                if str_at(item, "type") == "function_call" {
+                if matches!(str_at(item, "type"), "function_call" | "tool_search_call") {
                     self.call(str_at(item, "id"), item.get("name").and_then(Value::as_str));
                 }
             }
@@ -557,14 +656,29 @@ impl Decoder {
                     .push(ReplyAction::Hosted(web_search_call(item)));
             }
             "function_call" => {
-                let raw = str_at(item, "arguments");
-                let arguments = match serde_json::from_str(raw) {
-                    Ok(Value::Object(map)) => Value::Object(map),
-                    _ if raw.is_empty() => Value::Object(serde_json::Map::new()),
-                    Ok(_) | Err(_) => Value::String(raw.to_owned()),
-                };
                 self.actions.push(ReplyAction::ToolCall(ToolCallRequested {
                     name: str_at(item, "name").to_owned(),
+                    arguments: parsed_arguments(str_at(item, "arguments")),
+                    provider_id: item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .map(|id| ProviderCallId(id.to_owned())),
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                }));
+            }
+            // The model's call to Fiber's own `tool_search`, declared as
+            // OpenAI's client-executed tool (`research/tool-search`).
+            "tool_search_call" => {
+                // An object is kept; a string reads as a `function_call`'s does.
+                let arguments = match item.get("arguments") {
+                    Some(Value::Object(map)) => Value::Object(map.clone()),
+                    Some(Value::String(raw)) => parsed_arguments(raw),
+                    _ => Value::Object(Map::new()),
+                };
+                self.actions.push(ReplyAction::ToolCall(ToolCallRequested {
+                    name: TOOL_SEARCH.to_owned(),
                     arguments,
                     provider_id: item
                         .get("call_id")
