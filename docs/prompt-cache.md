@@ -163,7 +163,7 @@ Anthropic stores 5-minute and 1-hour entries separately. Moving a session from
 one to the other rewrites the whole cache, and a request that puts a 1-hour
 marker after a 5-minute one is refused. So the lifetime cannot vary by turn.
 
-A 1-hour write costs 2 times base input, 2 times the selected tier's input price under tiers, against 1.25 times for 5 minutes. A
+A 1-hour write costs twice the selected tier's input price against 1.25 times for 5 minutes. A
 session that pauses longer than 5 minutes even once in about 100 requests is
 cheaper on 1 hour. The replay is
 [research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py).
@@ -293,8 +293,9 @@ unchanged.
 ### The reported use
 
 `cache_read` is the input tokens the response read from the cache, and
-`cache_write` the input tokens it wrote, keyed by cache lifetime
-(`"5m"`, `"1h"`), as the response reported them. Both are absent on a
+`cache_write` the input tokens it wrote, keyed by cache-write billing class
+(`"5m"`, `"1h"`), not the vendor lifetime: OpenAI's 30-minute cache reports
+under `"5m"`. Both are absent on a
 send or decode failure: an HTTP error keeps its status, a retry keeps
 its attempt number, and a request never sent keeps no line, so a miss
 count can leave those lines out. A line carrying usage always carries a

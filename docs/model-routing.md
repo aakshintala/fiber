@@ -756,7 +756,7 @@ Each protocol reads cache reads and writes from these usage fields:
 | `bedrock-converse` | `cacheReadInputTokens` | `cacheWriteInputTokens`, under `"5m"` |
 
 OpenAI keeps one 30-minute lifetime and Responses sends no lifetime, so a
-Responses write lands under `"5m"`, whatever the request carried. OpenAI's
+Responses write lands under `"5m"`. OpenAI's
 `input_tokens` includes both counts: a
 cache-warming request reported 2,347 input with 2,344 written, and the next
 reported 2,347 with 2,344 cached (`research/openai-responses-probe`).
@@ -875,7 +875,7 @@ A model priced by request size declares `tiers` (`docs/configuration.md`, "A
 provider's data"). The tier with the highest `input_tokens_above` that the
 call's whole input exceeds gives every price for the whole call; below every
 threshold, the base prices apply. A `"1h"` write costs twice that tier's
-`input` price, twice the base `input` price below every threshold. The whole input is `input` plus
+`input` price. The whole input is `input` plus
 `cache_read` plus `cache_write` from the call's `tokens`, because a vendor
 that prices by request size counts the whole prompt, cached or not.
 

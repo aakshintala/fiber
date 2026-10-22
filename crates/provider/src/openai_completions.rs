@@ -81,7 +81,7 @@ impl Completions {
             ),
             headers,
             body,
-            |stream, lifetime, sink| decode_tracked(stream, &lifetime, sink),
+            |stream, _, sink| decode_tracked(stream, sink),
         )
     }
     /// Builds the observed call for `request`: as the plain request, writing
@@ -230,10 +230,12 @@ fn tool_choice(choice: &str) -> Value {
 /// nothing it streamed, finished tool calls included.
 pub fn decode(
     stream: impl BufRead,
-    lifetime: &CacheLifetime,
+    _lifetime: &CacheLifetime,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, Error> {
-    decode_tracked(stream, lifetime, sink).map_err(|(error, _)| error)
+    // The lifetime stays on the public signature for the recorded-decode call
+    // sites; the write is always keyed `5m`, so it is ignored.
+    decode_tracked(stream, sink).map_err(|(error, _)| error)
 }
 
 /// As [`decode`], also carrying what the stream had seen when it failed:
@@ -244,13 +246,9 @@ pub fn decode(
 )]
 pub(crate) fn decode_tracked(
     stream: impl BufRead,
-    lifetime: &CacheLifetime,
     sink: &mut dyn FnMut(Delta),
 ) -> Result<Reply, (Error, Option<CallUsage>)> {
-    let mut reply = Decoder {
-        lifetime: Some(*lifetime),
-        ..Decoder::default()
-    };
+    let mut reply = Decoder::default();
     let mut done = false;
     let read = sse::read(stream, |data| {
         if data == "[DONE]" {
@@ -272,9 +270,7 @@ pub(crate) fn decode_tracked(
         ));
     }
     let partial = reply.partial();
-    reply
-        .finish(lifetime)
-        .map_err(|error| (error, Some(partial)))
+    reply.finish().map_err(|error| (error, Some(partial)))
 }
 
 /// One tool call as it streams in.
@@ -306,20 +302,15 @@ struct Decoder {
     annotations: Vec<Value>,
     finish: Option<String>,
     usage: Value,
-    /// The request's cache lifetime, set from `decode`'s `lifetime`. A
-    /// reported cache write is always counted under `5m`, so this only
-    /// rides along for the `tokens` signature.
-    lifetime: Option<CacheLifetime>,
 }
 
 impl Decoder {
     /// What the stream had seen: the generation once a chunk named it, and
     /// the usage so far.
     fn partial(&self) -> CallUsage {
-        let lifetime = self.lifetime.unwrap_or(CacheLifetime::FiveMinutes);
         CallUsage {
             generation_id: named(self.id.clone()),
-            tokens: tokens(&self.usage, &lifetime),
+            tokens: tokens(&self.usage),
             web_searches: None,
             input_size: InputSize::default(),
         }
@@ -491,7 +482,7 @@ impl Decoder {
     }
 
     /// The reply, once `[DONE]` has arrived.
-    fn finish(self, lifetime: &CacheLifetime) -> Result<Reply, Error> {
+    fn finish(self) -> Result<Reply, Error> {
         let finish = match self.finish.as_deref() {
             Some("stop" | "tool_calls" | "function_call") => Finish::Completed,
             Some("length") => Finish::OutputLimit,
@@ -562,7 +553,7 @@ impl Decoder {
             actions,
             finish,
             generation_id: named(self.id),
-            tokens: tokens(&self.usage, lifetime),
+            tokens: tokens(&self.usage),
             web_searches: web_searches(&self.usage),
             cost: cost(&self.usage),
             input_size: InputSize::default(),
@@ -620,8 +611,7 @@ fn web_searches(usage: &Value) -> Option<u64> {
 /// (`docs/model-routing.md`, "openai-completions facts"). The vendor does
 /// not say which lifetime a write was, so every write is counted under
 /// `5m`: OpenAI keeps one 30-minute lifetime, priced at the 5-minute rate.
-/// The request's cache lifetime rides along unused.
-fn tokens(usage: &Value, _lifetime: &CacheLifetime) -> Tokens {
+fn tokens(usage: &Value) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let read = count("/prompt_tokens_details/cached_tokens");
     let write = count("/prompt_tokens_details/cache_write_tokens");
