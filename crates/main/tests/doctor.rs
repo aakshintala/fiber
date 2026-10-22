@@ -244,20 +244,13 @@ fn doctor_with_package(
     run_to_exit(setup.deadline, &format!("doctor with {package}"), doctor)
 }
 
-#[test]
-fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
-    let setup = Setup::new();
-    // A key stored under the label, as `fiber login bedrock --as work`
-    // writes one, is never what Bedrock reads.
-    config::store_credential(
-        &setup.home(),
-        "bedrock",
-        "work",
-        &config::Secret::new("not-a-key".into()),
-    )
-    .unwrap();
+/// Runs `fiber doctor` with the bedrock package and the label `work`
+/// selected, and asserts what #3020 expects: the AWS profile as its source,
+/// unchecked, no stored file listed, no `fiber login` advice and exit 0.
+#[track_caller]
+fn assert_bedrock_profile_is_its_source(setup: &Setup) {
     let output = doctor_with_package(
-        &setup,
+        setup,
         "bedrock",
         "https://bedrock-runtime.{region}.amazonaws.com",
         &json!({
@@ -266,7 +259,6 @@ fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
         }),
         &[("AWS_REGION", "us-east-1")],
     );
-
     // Bedrock's `credential()` reads the AWS profile, which doctor cannot
     // check without running it, so nothing blocks (#3020).
     assert_eq!(
@@ -282,6 +274,25 @@ fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
     );
     assert!(!text.contains("credentials/bedrock"), "{text}");
     assert!(!text.contains("fiber login bedrock"), "{text}");
+}
+
+#[test]
+fn bedrock_s_aws_profile_is_its_source_and_never_a_missing_key() {
+    assert_bedrock_profile_is_its_source(&Setup::new());
+}
+
+#[test]
+fn a_key_stored_for_bedrock_is_never_listed_as_its_credential() {
+    let setup = Setup::new();
+    // As `fiber login bedrock --as work` writes one; Bedrock never reads it.
+    config::store_credential(
+        &setup.home(),
+        "bedrock",
+        "work",
+        &config::Secret::new("not-a-key".into()),
+    )
+    .unwrap();
+    assert_bedrock_profile_is_its_source(&setup);
 }
 
 #[test]
