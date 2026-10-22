@@ -1981,3 +1981,67 @@ fn relist_lists_an_advertised_empty_tool_section() {
     assert_eq!(names, vec!["echo".to_owned()]);
     setup.stop(started.servers);
 }
+
+// Reload, round 23: the re-list entry's guards and the idle-death read.
+
+#[test]
+fn relist_on_a_dead_server_advertising_nothing_carries_its_exit() {
+    // Bites the entry's `&&`→`||`: a dead server is gone but not
+    // expired, so the mutant routes it into the list path, where a pair
+    // of unadvertised lists reads as an empty success. The entry must
+    // take the replace path with the death instead.
+    let setup = Setup::new();
+    // No `tools.json` and no `prompts.json`: the handshake advertises
+    // neither section, so a list path would answer `Up` with empty lists.
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    assert!(slot.is_live(), "the tool-less server runs");
+    let cache_before = setup.cache_bytes();
+    setup.kill(&started);
+    let record = match relist_on_thread(&slot) {
+        Relisted::Up { .. } => panic!("a dead server never re-lists"),
+        Relisted::Replace { record } => record,
+    };
+    let Some(ServerRecord::Failed(failed)) = record else {
+        panic!("the exit rides a failed record")
+    };
+    assert_eq!(failed.server, "fx");
+    assert_eq!(failed.reason, ServerFailure::Died);
+    assert!(failed.will_restart, "a first death restarts");
+    assert!(slot.is_running(), "the re-list moves no slot");
+    assert_eq!(
+        setup.cache_bytes(),
+        cache_before,
+        "the re-list installs nothing"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn idle_death_reports_only_a_gone_server() {
+    // Bites the `!` deletion in `idle_death`: a live server carries no
+    // death, while a server that died while idle carries its exit. The
+    // stage reads this to carry the old death into the replacement's
+    // records, so either polarity failing misfiles the commit.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    let slot = setup.running(&started);
+    assert!(
+        slot.idle_death().is_none(),
+        "a live server carries no death"
+    );
+    setup.kill(&started);
+    let death = slot
+        .idle_death()
+        .expect("a server dead while idle carries its exit");
+    match death {
+        ServerRecord::Failed(failed) => {
+            assert_eq!(failed.server, "fx");
+            assert_eq!(failed.reason, ServerFailure::Died);
+            assert!(failed.will_restart, "a first death restarts");
+        }
+        ServerRecord::Ready(_) => panic!("a death never reads ready"),
+    }
+    setup.stop(started.servers);
+}

@@ -4,6 +4,7 @@
 
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
+use std::time::Duration;
 
 use contract::events::ServerFailure;
 use contract::tool::ServerRecord;
@@ -598,5 +599,304 @@ fn stage_sync_starts_shadows_in_parallel() {
         synced.servers.started,
         vec!["aa".to_owned(), "bb".to_owned()]
     );
+    setup.stop(servers);
+}
+
+// Reload, round 23: each `||` of the changed-spec chain is independently
+// decisive — a spec differing in only one of `startup_timeout`,
+// `call_timeout` or `required` takes the replace path, never Keep — the
+// unapplied stage stops its shadows, the required guard rejects, and the
+// resources scan counts only slots the apply keeps.
+
+#[test]
+fn classify_replaces_a_startup_timeout_only_change() {
+    // Bites the `:144` `||`→`&&`: under the mutant every unchanged
+    // comparison is false, so the chain reads false and the row stays
+    // Keep; the single differing timeout must replace.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    setup.running(&started);
+    let mut changed = setup.spec("fx");
+    changed.startup_timeout = Duration::from_secs(97);
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(
+            rows.as_slice(),
+            [SyncRow::Shadow {
+                disposition: Disposition::Restarted,
+                ..
+            }]
+        ),
+        "a startup-timeout-only change replaces"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn classify_replaces_a_call_timeout_only_change() {
+    // Bites the `:145` `||`→`&&`, as above for `call_timeout`.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    setup.running(&started);
+    let mut changed = setup.spec("fx");
+    changed.call_timeout = Duration::from_secs(97);
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(
+            rows.as_slice(),
+            [SyncRow::Shadow {
+                disposition: Disposition::Restarted,
+                ..
+            }]
+        ),
+        "a call-timeout-only change replaces"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn classify_replaces_a_required_only_change() {
+    // Bites the `:146` `||`→`&&`, as above for `required`.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    setup.running(&started);
+    let mut changed = setup.spec("fx");
+    changed.required = true;
+    let rows = classify_sync(vec![changed], &started.servers);
+    assert!(
+        matches!(
+            rows.as_slice(),
+            [SyncRow::Shadow {
+                disposition: Disposition::Restarted,
+                ..
+            }]
+        ),
+        "a required-only change replaces"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn dropping_an_unapplied_stage_stops_its_shadows() {
+    // Bites the `Drop for StagedSync`→`()` mutant: a staged sync dropped
+    // without `apply_sync` stops every held shadow, so no replacement
+    // child outlives the rejection while the old slots keep serving.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let empty = setup.start(vec![]);
+    let rows = classify_sync(vec![setup.spec("fx")], &empty.servers);
+    assert!(matches!(rows.as_slice(), [SyncRow::Shadow { .. }]));
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a fresh start stages");
+    let shadow = staged
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            super::StagedRow::ShadowUp { slot, .. } => Some(Arc::clone(slot)),
+            super::StagedRow::Keep { .. }
+            | super::StagedRow::ShadowFailed { .. }
+            | super::StagedRow::Remove { .. } => None,
+        })
+        .expect("a staged shadow");
+    assert!(shadow.is_live(), "the shadow serves before the drop");
+    drop(staged);
+    assert!(
+        !shadow.is_running(),
+        "dropping an unapplied stage stops every held shadow"
+    );
+    assert!(!shadow.is_live(), "the stopped shadow serves no more");
+    setup.stop(servers);
+}
+
+/// A spec refusing every spawn: the stage's shadow start fails without
+/// launching anything.
+fn refusing_spec(setup: &Setup, name: &str, required: bool) -> crate::ServerSpec {
+    let mut spec = setup.spec(name);
+    spec.required = required;
+    spec.stdio_mut().run = Some(crate::Program {
+        command: fakes::mcp_fixture().display().to_string(),
+        args: vec![setup.dir.path().display().to_string()],
+        guard: Arc::new(|| Err("the test refused the spawn".to_owned())),
+    });
+    spec
+}
+
+#[test]
+fn a_required_shadow_failure_rejects_and_stops_every_shadow() {
+    // Bites the `job.spec.required`→`false` guard: a required shadow
+    // that fails to start rejects with the start's code, and the stage
+    // stops every shadow it started, so no replacement child outlives
+    // the rejection.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let good_dirs = Setup::new();
+    good_dirs.tools(&serde_json::json!([{"name": "echo"}]));
+    let bad = refusing_spec(&setup, "bad", true);
+    let good = good_dirs.spec("good");
+    let empty = setup.start(vec![]);
+    let rows = vec![
+        SyncRow::Shadow {
+            spec: bad,
+            disposition: Disposition::Restarted,
+        },
+        SyncRow::Shadow {
+            spec: good,
+            disposition: Disposition::Started,
+        },
+    ];
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let failure = match outcome {
+        Err(failure) => failure,
+        Ok(_) => panic!("a required shadow failure rejects"),
+    };
+    assert_eq!(
+        failure.code,
+        contract::ErrorCode::McpRequiredServerFailed,
+        "the rejection carries the start's code"
+    );
+    assert!(!setup.spawned(), "the refused shadow spawns nothing");
+    assert!(
+        !fakes::pid_alive(good_dirs.pid()),
+        "the rejection stops every shadow it started"
+    );
+    setup.stop(servers);
+}
+
+#[test]
+fn an_optional_shadow_failure_stages_beside_a_live_shadow() {
+    // The required guard's other polarity: an optional shadow that fails
+    // to start stages its failure without stopping the shadow that
+    // started, and the plan files the failure beside the ready.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let good_dirs = Setup::new();
+    good_dirs.tools(&serde_json::json!([{"name": "echo"}]));
+    let bad = refusing_spec(&setup, "bad", false);
+    let good = good_dirs.spec("good");
+    let empty = setup.start(vec![]);
+    let rows = vec![
+        SyncRow::Shadow {
+            spec: bad,
+            disposition: Disposition::Started,
+        },
+        SyncRow::Shadow {
+            spec: good,
+            disposition: Disposition::Started,
+        },
+    ];
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, empty.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("an optional shadow failure stages");
+    let live = staged
+        .rows
+        .iter()
+        .find_map(|row| match row {
+            super::StagedRow::ShadowUp { slot, .. } => Some(Arc::clone(slot)),
+            super::StagedRow::Keep { .. }
+            | super::StagedRow::ShadowFailed { .. }
+            | super::StagedRow::Remove { .. } => None,
+        })
+        .expect("the successful shadow stages up");
+    assert!(live.is_live(), "an optional failure stops no other shadow");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert_eq!(synced.failed.len(), 1, "the failure rides the entry");
+    assert_eq!(
+        synced.servers.started,
+        vec!["bad".to_owned(), "good".to_owned()]
+    );
+    apply_sync(staged, &servers, &owned.inputs());
+    assert!(
+        servers.slot("good").is_some_and(|slot| slot.is_live()),
+        "the successful shadow installs live"
+    );
+    setup.stop(servers);
+}
+
+#[test]
+fn plan_ignores_resources_of_a_dropped_slot() {
+    // Bites the `:532` `&&`→`||`: the kept-slot scan counts only slots
+    // the apply keeps. The old slot offers resources through its cache
+    // but the row drops it, and the staged replacement offers none, so
+    // nothing declares `mcp_resources`; the mutant counts the dropped
+    // slot's offer.
+    let setup = Setup::new();
+    let spec = setup.spec("fx");
+    crate::cache::write(
+        &setup.cache(),
+        "fx",
+        &spec.key(),
+        &crate::cache::Cached {
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            resources: true,
+        },
+    );
+    let started = setup.start(vec![spec.clone()]);
+    assert!(!setup.spawned(), "the cache declares without spawning");
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let rows = classify_sync(vec![spec], &started.servers);
+    assert!(matches!(rows.as_slice(), [SyncRow::Shadow { .. }]));
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("a fresh start stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert!(
+        !synced
+            .tools
+            .iter()
+            .any(|(_, _, info)| info.name == crate::resources::RESOURCES_TOOL),
+        "a dropped slot's resources offer declares nothing"
+    );
+    apply_sync(staged, &servers, &owned.inputs());
+    setup.stop(servers);
+}
+
+#[test]
+fn plan_declares_no_resources_for_a_keep_offering_none() {
+    // The `:532` conjunction's other side: a kept live slot offering no
+    // resources declares no `mcp_resources`; the mutant drops the kept
+    // check and declares from the row alone.
+    let setup = Setup::new();
+    setup.tools(&serde_json::json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    setup.running(&started);
+    let rows = classify_sync(vec![setup.spec("fx")], &started.servers);
+    assert!(matches!(rows.as_slice(), [SyncRow::Keep { .. }]));
+    let images = FakeImages::ok();
+    let result = Setup::stage_on_thread(rows, started.servers, &setup, &images);
+    let (outcome, servers) = Deadline::after(WITHIN)
+        .recv(&result)
+        .expect("the stage ends");
+    let staged = outcome.expect("an unchanged keep stages");
+    let owned = setup.owned_inputs(&images);
+    let synced = plan_sync(&staged, &servers, &owned.inputs());
+    assert_eq!(synced.servers.kept, vec!["fx".to_owned()]);
+    assert!(
+        !synced
+            .tools
+            .iter()
+            .any(|(_, _, info)| info.name == crate::resources::RESOURCES_TOOL),
+        "a keep offering no resources declares none"
+    );
+    apply_sync(staged, &servers, &owned.inputs());
     setup.stop(servers);
 }

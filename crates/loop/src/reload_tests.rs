@@ -723,3 +723,37 @@ fn an_appended_prompt_row_fetches_through_the_carried_sources() {
         Some(ErrorCode::InvalidArguments)
     );
 }
+
+// Reload, round 23: every comparison of the prompt-row merge is
+// independently decisive — the first of each tag-and-name wins, and any
+// other combination appends.
+
+#[test]
+fn merge_command_rows_keeps_the_first_of_each_tag_and_name() {
+    // Bites the three merge-predicate mutants (`tag ==`→`!=`, `&&`→`||`,
+    // `name ==`→`!=`): an identical row appends nothing, while a row
+    // differing in either comparison appends. Each mutation misfiles at
+    // least one row below.
+    use contract::events::CommandInfo;
+    fn row(tag: &str, name: &str) -> CommandInfo {
+        CommandInfo {
+            name: name.into(),
+            description: "A prompt.".into(),
+            argument_hint: None,
+            tag: tag.into(),
+            extension: false,
+        }
+    }
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("old", "before")]);
+    assert_eq!(rows.len(), 1, "an identical row appends nothing");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("old", "after")]);
+    assert_eq!(rows.len(), 2, "the same tag with a new name appends");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("new", "before")]);
+    assert_eq!(rows.len(), 2, "a new tag with the same name appends");
+    let mut rows = vec![row("old", "before")];
+    ServerSync::merge_command_rows(&mut rows, &[row("new", "after")]);
+    assert_eq!(rows.len(), 2, "a new tag with a new name appends");
+}
