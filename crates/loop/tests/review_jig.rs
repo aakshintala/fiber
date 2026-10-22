@@ -1838,7 +1838,7 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
 /// released. Dropping this value without releasing kills the group
 /// through the watchdog. The exchange's finish bound is a carried
 /// wall-clock value stamped at release: the release step carries
-/// release plus [`JIG_DEADLINE`], so the held start takes none of it.
+/// release plus [`START_BOUND`], so the held start takes none of it.
 struct HeldExchange {
     /// The hold directory, kept alive while the FIFOs are held.
     _home: fakes::TempDir,
@@ -1848,25 +1848,32 @@ struct HeldExchange {
     group: u32,
     watchdog: Watchdog,
     finished: mpsc::Receiver<std::io::Result<Output>>,
-    /// The wall instant the exchange was spawned, before the stall.
-    spawned_at: Instant,
+    /// The carried finish expiry, stamped at release. `None` until
+    /// [`HeldExchange::release`] runs, so `finish` waits on the same
+    /// value the release step carried.
+    expiry: Option<Instant>,
 }
 
 impl HeldExchange {
     /// Writes the release line and stamps the exchange's finish bound
-    /// in the actual release path: release plus [`JIG_DEADLINE`].
+    /// in the actual release path: release plus [`START_BOUND`].
     /// The test reads the carried value before finishing.
     fn release(&mut self) -> Instant {
         self.hold.write_all(b"release\n").unwrap();
-        fakes::clock::SystemClock.now() + JIG_DEADLINE
+        let expiry = fakes::clock::SystemClock.now() + START_BOUND;
+        self.expiry = Some(expiry);
+        expiry
     }
 
-    /// Waits for the replayed exchange under a [`START_BOUND`] hang
-    /// guard: the guard asserts nothing about speed, it only fails a
-    /// hung child by name. The exchange's own bound started at release,
-    /// as [`HeldExchange::release`] carries it.
+    /// Waits only the remaining time until the carried expiry stamped
+    /// by [`HeldExchange::release`]: the carried deadline is the wait's
+    /// deadline, so the held start takes none of the exchange's bound.
+    /// The wait asserts nothing about speed, it only fails a hung child
+    /// by name.
     fn finish(self) -> Output {
-        let output = match Deadline::after(START_BOUND).recv(&self.finished) {
+        let expiry = self.expiry.expect("release before finish");
+        let remaining = expiry.saturating_duration_since(fakes::clock::SystemClock.now());
+        let output = match Deadline::after(remaining).recv(&self.finished) {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 kill_group(self.group, "KILL").unwrap_or(false);
@@ -1895,7 +1902,6 @@ impl HeldExchange {
 /// [`START_BOUND`] as the signal the child is blocked. Returns the
 /// exchange still held; the test releases it.
 fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> HeldExchange {
-    let spawned_at = fakes::clock::SystemClock.now();
     let home = fakes::TempDir::new("fiber-review-jig-hold");
     let ready = fakes::children::Ready::new(home.path());
     let release_path = home.path().join("release");
@@ -1942,7 +1948,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
         group,
         watchdog,
         finished,
-        spawned_at,
+        expiry: None,
     }
 }
 
@@ -1950,7 +1956,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
 /// start takes none of the exchange's own bound. The hold is a
 /// non-blocking empty check, never a sleep: nothing can complete while
 /// the release line is unwritten, and the carried deadline still lies a
-/// whole [`JIG_DEADLINE`] past release, so a single bound from spawn
+/// whole [`START_BOUND`] past release, so a single bound from spawn
 /// would already have expired.
 #[test]
 fn stalled_start_keeps_the_exchange_deadline_whole() {
@@ -1965,12 +1971,8 @@ fn stalled_start_keeps_the_exchange_deadline_whole() {
     let before_release = fakes::clock::SystemClock.now();
     let deadline = held.release();
     assert!(
-        deadline >= before_release + JIG_DEADLINE,
+        deadline >= before_release + START_BOUND,
         "the exchange deadline starts at release"
-    );
-    assert!(
-        deadline >= held.spawned_at + JIG_DEADLINE,
-        "the held start took none of the exchange bound"
     );
     let lines = stdout_lines(&held.finish());
     assert_eq!(lines.len(), 5);
