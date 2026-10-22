@@ -168,24 +168,30 @@ pub(super) fn idle_retry() -> Arc<crate::retry::Retry> {
 
 impl<B: Backend> Loop<B> {
     /// A loop on `screen` at today's test defaults: a fake clock, a read-only
-    /// `/dev/null` for a tty (every write to it fails and it has no size), no reader, hover on and no environment. A test sets
+    /// `/dev/null` for a tty (every write to it fails and it has no size) and
+    /// a reader on it, hover on and no environment. A test sets
     /// any other value by assigning the field.
     pub(super) fn for_test(app: App, screen: Screen<B>) -> Self {
         // The receiver is dropped: a worker's answer finds the channel
         // closed and is lost, and the channel `run` reads is the test's own.
         let (files_out, _) = mpsc::channel();
         let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+        let tty = File::open("/dev/null").unwrap_or_else(|err| panic!("/dev/null: {err}"));
+        // Its thread reads the end of the file at once and ends, so a pause
+        // returns and a resume does nothing.
+        let reader = super::Reader::spawn(&tty, files_out.clone())
+            .unwrap_or_else(|err| panic!("the reader started: {err}"));
         Self {
             app,
             parser: crate::keys::Parser::default(),
             screen,
             hub: Connection::new(crate::retry::Retry::new(&clock)),
-            tty: File::open("/dev/null").unwrap_or_else(|err| panic!("/dev/null: {err}")),
+            tty,
             on_attach: Box::new(|_| {}),
             clock,
             files_out,
             search: None,
-            reader: None,
+            reader,
             model_reader: crate::catalogue::Reader::new(None),
             pointer: crate::mouse::Pointer::default(),
             hover: true,
@@ -1234,10 +1240,8 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         .unwrap_or_else(|err| panic!("dup: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
     let (tx, rx) = mpsc::channel();
-    lp.reader = Some(
-        super::Reader::spawn(&pair.slave, tx)
-            .unwrap_or_else(|error| panic!("the reader started: {error}")),
-    );
+    lp.reader = super::Reader::spawn(&pair.slave, tx)
+        .unwrap_or_else(|error| panic!("the reader started: {error}"));
     lp.parser.set_kitty();
     let slave = pair
         .slave

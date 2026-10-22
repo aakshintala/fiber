@@ -182,7 +182,32 @@ pub(crate) fn run_with(
         ),
         images_dir,
     };
+    app.set_opener(programs.open.is_some());
+    let var: Var = Box::new(|name| std::env::var(name).ok());
+    app.set_osc9(crate::attention::supported(&var));
+    // Whether stripes draw is read once, before the first frame.
+    crate::surface::init(&|name| std::env::var(name).ok());
+    // The first frame's time: elapsed times and animation agree from it.
+    app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
+    // The first frame waits on nothing: the queries are out, and nothing
+    // reads the tty or the hub until it is drawn.
+    if screen.draw(&mut app, None).is_err() {
+        return Ok(1);
+    }
+    // Startup pushes (config reads, session restores) gain births and
+    // wakes before the first arm, so they fade like every other event.
+    app.sweep_notices(clock.now());
     let (tx, rx) = mpsc::channel();
+    // The cached lists are asked after the first frame, so the first
+    // frame draws at once and the picker lists them as soon as the read
+    // answers. The ask bypasses the owed picker reads, so it counts as
+    // owed, or its answer would clear a meanwhile taken read's mark.
+    app.note_catalogue_read();
+    let mut model_reader = catalogue::Reader::new(models);
+    model_reader.ask(catalogue::Refresh::Cached, &tx);
+    // Without the reader no key reaches the loop: fail instead of
+    // running deaf. The guard's drop restores the terminal.
+    let reader = spawn_reader(&tty, tx.clone())?;
     let mut terminal = Loop {
         app,
         parser: Parser::default(),
@@ -193,50 +218,17 @@ pub(crate) fn run_with(
         clock,
         files_out: tx.clone(),
         search: None,
-        reader: None,
-        model_reader: catalogue::Reader::new(models),
+        reader,
+        model_reader,
         pointer: Pointer::default(),
         hover,
-        var: Box::new(|name| std::env::var(name).ok()),
+        var,
         programs,
         title: osc::Title::default(),
         shape: osc::Shape::default(),
         tick: crate::tick::TickThread::idle(),
     };
-    terminal.app.set_opener(terminal.programs.open.is_some());
-    terminal
-        .app
-        .set_osc9(crate::attention::supported(&terminal.var));
-    // Whether stripes draw is read once, before the first frame.
-    crate::surface::init(&|name| std::env::var(name).ok());
-    // The first frame's time: elapsed times and animation agree from it.
-    terminal.app.set_now(
-        terminal.clock.now(),
-        contract::clock::wall_ms(terminal.clock.wall()),
-    );
-    // The first frame waits on nothing: the queries are out, and nothing
-    // reads the tty or the hub until it is drawn.
-    if terminal.screen.draw(&mut terminal.app, None).is_err() {
-        return Ok(1);
-    }
-    // Startup pushes (config reads, session restores) gain births and
-    // wakes before the first arm, so they fade like every other event.
-    terminal.app.sweep_notices(terminal.clock.now());
     terminal.write_title();
-    // The cached lists are asked after the first frame, so the first
-    // frame draws at once and the picker lists them as soon as the read
-    // answers. The ask bypasses the owed picker reads, so it counts as
-    // owed, or its answer would clear a meanwhile taken read's mark.
-    terminal.app.note_catalogue_read();
-    terminal.model_reader.ask(catalogue::Refresh::Cached, &tx);
-    match spawn_reader(&terminal.tty, tx.clone()) {
-        Ok(reader) => terminal.reader = Some(reader),
-        // Without the reader no key reaches the loop: fail instead of
-        // running deaf. The guard's drop restores the terminal.
-        Err(error) => {
-            return Err(Error::from(error));
-        }
-    }
     spawn_hub(
         connect,
         Feed::new(tx.clone(), terminal.hub.credits()).routed(Arc::clone(&router)),
@@ -337,7 +329,7 @@ struct Loop<B: Backend> {
     /// The `@` panel's search worker, while the panel is open.
     search: Option<files::Search>,
     /// The tty's reader, paused while the editor has the terminal.
-    reader: Option<Reader>,
+    reader: Reader,
     /// The one model-list read at a time.
     model_reader: catalogue::Reader,
     /// The pointer's last cell and a pending click.
@@ -993,9 +985,7 @@ impl<B: Backend> Loop<B> {
     /// back and the whole screen repainted at the size read again. `Some(1)`
     /// when the terminal cannot be taken back.
     fn hand_over(&mut self, program: impl FnOnce() -> Option<i32>) -> Option<i32> {
-        if let Some(reader) = &mut self.reader {
-            reader.pause();
-        }
+        self.reader.pause();
         // A failed suspend still runs the program: the terminal may be
         // left part set up, and resume sets it up whole.
         term::suspend().unwrap_or(());
@@ -1004,9 +994,7 @@ impl<B: Backend> Loop<B> {
         // terminal is gone. The reader still resumes, so its thread ends
         // with the test instead of parking past it.
         if let Some(code) = program() {
-            if let Some(reader) = &self.reader {
-                reader.resume();
-            }
+            self.reader.resume();
             return Some(code);
         }
         if term::resume(self.parser.kitty(), self.hover).is_err() {
@@ -1017,9 +1005,7 @@ impl<B: Backend> Loop<B> {
         // The restore put the default pointer back: the next frame writes
         // the shape again.
         self.shape.reset();
-        if let Some(reader) = &self.reader {
-            reader.resume();
-        }
+        self.reader.resume();
         let (width, height) = term::size(&self.tty)
             .unwrap_or_else(|_| (self.screen.area().width, self.screen.area().height));
         self.app.set_size(width, height);
