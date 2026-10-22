@@ -141,6 +141,21 @@ struct Job {
     ends: Vec<RunEnd>,
 }
 
+impl Inner {
+    /// The stop for a latched stop-all on a newly committed job: marks
+    /// it sent so no later scan repeats it, and returns its stop to run
+    /// with the lock released. Without a latched stop-all there is
+    /// nothing to run.
+    fn latched_stop(stop_all: bool, job: &mut Job) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        if stop_all {
+            job.stop_sent = true;
+            Some(Arc::clone(&job.stop))
+        } else {
+            None
+        }
+    }
+}
+
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
 /// A run's stop with its run's number: the closure to send, when this
@@ -322,13 +337,12 @@ impl Registry {
         // one-way trip unregistered. The stop runs with the lock
         // released; the admission gate stays held by the caller, as when
         // `retain_extensions` sends its stops.
-        let latched = if inner.stop_all_delegates {
-            inner.jobs.last_mut().map(|job| {
-                job.stop_sent = true;
-                Arc::clone(&job.stop)
-            })
-        } else {
-            None
+        let latched = {
+            let stop_all = inner.stop_all_delegates;
+            inner
+                .jobs
+                .last_mut()
+                .and_then(|job| Inner::latched_stop(stop_all, job))
         };
         drop(inner);
         if let Some(stop) = latched {
@@ -440,13 +454,12 @@ impl Registry {
         ));
         // As in `open_started`: a latched stop-all stops the starting
         // delegate at once, with the lock released.
-        let latched = if inner.stop_all_delegates {
-            inner.jobs.last_mut().map(|job| {
-                job.stop_sent = true;
-                Arc::clone(&job.stop)
-            })
-        } else {
-            None
+        let latched = {
+            let stop_all = inner.stop_all_delegates;
+            inner
+                .jobs
+                .last_mut()
+                .and_then(|job| Inner::latched_stop(stop_all, job))
         };
         drop(inner);
         if let Some(stop) = latched {

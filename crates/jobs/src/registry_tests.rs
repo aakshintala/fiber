@@ -1622,10 +1622,13 @@ fn a_stop_racing_a_gated_start_stops_the_starting_delegate() {
     let (_dir, registry) = world();
     let stops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (entered_tx, entered_rx) = mpsc::channel::<()>();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
     let (id_tx, id_rx) = mpsc::channel::<JobId>();
     let deadline = Deadline::after(DEADLINE);
     std::thread::scope(|scope| {
+        // Test-owned: on a panic this sender drops while the closure
+        // unwinds, before the scope joins the worker parked on it, so
+        // the join cannot hang behind a live sender.
+        let (release_tx, release_rx) = mpsc::channel::<()>();
         let worker = std::sync::Arc::clone(&registry);
         let worker_stops = std::sync::Arc::clone(&stops);
         scope.spawn(move || {

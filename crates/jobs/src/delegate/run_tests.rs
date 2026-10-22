@@ -30,7 +30,9 @@ use contract::shapes::{Failure, Usage};
 use contract::{ActionId, ErrorCode, JobId, PreSessionExit, Seq, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
+use fakes::{
+    MUST_SUCCEED_WITHIN, Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within,
+};
 
 use super::{
     Fold, Fresh, Launch, Launched, POLL, Runner, Shared, Start, Stat, Watch, Watched, Watcher,
@@ -464,13 +466,25 @@ fn drive_runner_clock(
 /// assertions; no timing is asserted here).
 #[track_caller]
 fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::inbox::JobNotice {
+    reported_with_usage_before(rig, horizon).0
+}
+
+/// [`reported_before`], also collecting the `DelegateUsage` deliveries
+/// the watcher's tap forwards ahead of the runner's report: one scoped
+/// clock driver and one shared take serve both.
+#[track_caller]
+fn reported_with_usage_before(
+    rig: &Rig,
+    horizon: Option<std::time::Instant>,
+) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(DEADLINE);
     thread::scope(|scope| {
         scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, horizon));
-        let mut discarded = Vec::new();
-        take_report(rig, &stop, "the runner did not report", &mut discarded)
+        let mut usages = Vec::new();
+        let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
+        (notice, usages)
     })
 }
 
@@ -2598,7 +2612,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     let shell = format!("printf '%s\\n' '{exit}'");
     // The forward parks until the report lands: a loaded machine
     // schedules the watcher after the drain otherwise (see #3051).
-    let release = Release::closed();
+    let (release, park) = Park::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -2606,7 +2620,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
             1 << 20,
             Some(1),
             None,
-            Some(parked_forward(&rig, &release)),
+            Some(parked_forward(&rig, &park)),
         )
         .0;
     let _waited = waited;
@@ -2614,7 +2628,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     // Nothing is stashed: both lines are still parked behind the
     // release, which proves the hold before the drain releases it.
     assert!(usages.is_empty(), "the parked forward holds every line");
-    release.release();
+    drop(release);
     // The Job can precede the watcher's forwards (see #3005): both
     // streamed lines always follow on the inbox, so the boundary
     // assertion reads them only after they land.
@@ -2628,65 +2642,55 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
 }
 
 /// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
-/// tap forwards ahead of the runner's report: the shared clock driver
-/// advances fake time exactly as `reported_before` does, while the shared
-/// take loops past those deliveries, stashing each, until the `Job`
-/// notice arrives.
+/// tap forwards ahead of the runner's report: the shared core stashes
+/// each while the take loops past them, until the `Job` notice arrives.
 #[track_caller]
 fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
-    let stop = Arc::new(AtomicBool::new(false));
-    let clock = Arc::clone(&rig.clock);
-    let deadline = Deadline::after(DEADLINE);
-    thread::scope(|scope| {
-        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, None));
-        let mut usages = Vec::new();
-        let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
-        (notice, usages)
-    })
+    reported_with_usage_before(rig, None)
 }
 
-/// A one-shot release latch for parked forwards: every watcher line
-/// waits until the test releases it, then all flow. Dropping the latch
-/// without releasing opens it too, so a failed test never leaves the
-/// watcher parked (as the `Block` watch reply). Parking forces the
-/// order a loaded machine produces by accident (see #3051): the report
-/// lands with nothing stashed, and the drain collects every line after
-/// the release, instead of racing the watcher's scheduling.
-struct Release {
-    tx: Mutex<Option<mpsc::Sender<()>>>,
+/// The parked forward's gate, shared with the watcher: the test owns
+/// the sender half and releases the park by dropping it, so a failed
+/// test unwinds the sender first and never leaves the watcher parked
+/// (as the `Block` watch reply). Parking forces the order a loaded
+/// machine produces by accident (see #3051): the report lands with
+/// nothing stashed, and the drain collects every line after the
+/// release, instead of racing the watcher's scheduling.
+struct Park {
     rx: Mutex<mpsc::Receiver<()>>,
 }
 
-impl Release {
-    fn closed() -> Arc<Self> {
+impl Park {
+    /// A closed gate: the sender half that releases it, and the shared
+    /// half the forward parks on.
+    fn closed() -> (mpsc::Sender<()>, Arc<Self>) {
         let (tx, rx) = mpsc::channel();
-        Arc::new(Self {
-            tx: Mutex::new(Some(tx)),
-            rx: Mutex::new(rx),
-        })
+        (tx, Arc::new(Self { rx: Mutex::new(rx) }))
     }
 
+    /// Waits for the release under the plan's bound: expiry names the
+    /// missing release instead of hanging the watcher, and a dropped
+    /// sender (a failed test's unwind) releases at once.
     fn wait(&self) {
-        // Blocks while the sender lives; dropping it (here or with
-        // this latch) unblocks every waiter at once.
-        let _released = self.rx.lock().unwrap().recv();
-    }
-
-    fn release(&self) {
-        self.tx.lock().unwrap().take();
+        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.rx.lock().unwrap()) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the report never released the parked forward")
+            }
+        }
     }
 }
 
-/// The registry's forward behind a release latch: every watcher line
-/// parks until the test releases it, then forwards as usual. The
-/// runner's reap and report never wait on the watcher, so parking
+/// The registry's forward behind a release gate: every watcher line
+/// parks until the test drops the sender half, then forwards as usual.
+/// The runner's reap and report never wait on the watcher, so parking
 /// cannot deadlock the report the release waits for.
-fn parked_forward(rig: &Rig, release: &Arc<Release>) -> super::UsageForward {
+fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
     let forward = rig.registry.usage_forward();
-    let release = Arc::clone(release);
+    let park = Arc::clone(park);
     Arc::new(
         move |session: SessionId, line: contract::events::UsageRecorded| {
-            release.wait();
+            park.wait();
             forward(session, line);
         },
     )
@@ -2734,7 +2738,7 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     let shell = format!("printf '%s\\n' '{exit}'");
     // The forward parks until the report lands: a loaded machine
     // schedules the watcher after the drain otherwise (see #3051).
-    let release = Release::closed();
+    let (release, park) = Park::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -2742,7 +2746,7 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &release)),
+            Some(parked_forward(&rig, &park)),
         )
         .0;
     let _waited = waited;
@@ -2750,7 +2754,7 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // Nothing is stashed: every line is still parked behind the
     // release, which proves the hold before the drain releases it.
     assert!(usages.is_empty(), "the parked forward holds every line");
-    release.release();
+    drop(release);
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
     // The Job can precede the watcher's forward, so the tap is read
@@ -2966,8 +2970,9 @@ fn the_watch_replay_wins_when_it_runs_first() {
     // The spawned thread stands for the watch-end backfill, this thread
     // for the reap-end replay: the watch claims the line before the reap
     // runs, the reap finds it sent and forwards nothing, so the line
-    // forwards exactly once. Flipping the claim back to check-then-act
-    // lets the reap claim inside the watch's forward and forwards twice.
+    // forwards exactly once. Both orders land on the one shared claim.
+    // Flipping the claim back to check-then-act lets the reap claim
+    // inside the watch's forward and forwards twice.
     let seen = raced_replays();
     assert_eq!(
         seen,
@@ -2976,24 +2981,11 @@ fn the_watch_replay_wins_when_it_runs_first() {
     );
 }
 
-#[test]
-fn the_reap_replay_wins_when_it_runs_first() {
-    // The spawned thread stands for the reap-end replay, this thread for
-    // the watch-end backfill: the reap claims the line before the watch
-    // runs, the backfill finds it sent and forwards nothing, so the lines
-    // forward exactly once. Both orders land on the one shared claim.
-    let seen = raced_replays();
-    assert_eq!(
-        seen,
-        ["g_9", "g_10"],
-        "the file lines forward once: {seen:?}"
-    );
-}
-
-/// The tripwire the tap drives: per-generation billed spend, a budget,
-/// and a stop-all counter standing in for the loop's delegate stop.
+/// The running spend the tap drives: a budget, and a stop-all counter
+/// standing in for the loop's delegate stop. Per-generation delta
+/// arithmetic is production logic owned loop-side (see the tripwire
+/// `pending_tests`); this fake only accumulates, never folds.
 struct TripTap {
-    billed: Mutex<std::collections::HashMap<String, f64>>,
     sum: Mutex<f64>,
     budget: f64,
     tripped: AtomicBool,
@@ -3002,15 +2994,12 @@ struct TripTap {
 
 impl TripTap {
     fn tap(&self, line: &contract::events::UsageRecorded) {
-        let billed = line.cost.unwrap_or(0.0);
-        {
-            let mut owned = self.billed.lock().unwrap();
+        let sum = {
             let mut sum = self.sum.lock().unwrap();
-            let before = owned.get(&line.generation_id.0).copied().unwrap_or(0.0);
-            *sum += billed - before;
-            owned.insert(line.generation_id.0.clone(), billed);
-        }
-        if *self.sum.lock().unwrap() >= self.budget && !self.tripped.swap(true, Ordering::SeqCst) {
+            *sum += line.cost.unwrap_or(0.0);
+            *sum
+        };
+        if sum >= self.budget && !self.tripped.swap(true, Ordering::SeqCst) {
             self.stops.fetch_add(1, Ordering::SeqCst);
         }
     }
@@ -3043,7 +3032,6 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     }
     std::fs::write(&rig.events, text).unwrap();
     let trip = Arc::new(TripTap {
-        billed: Mutex::new(std::collections::HashMap::new()),
         sum: Mutex::new(0.0),
         budget: 0.2,
         tripped: AtomicBool::new(false),
@@ -3084,7 +3072,6 @@ fn a_correction_applies_only_its_delta() {
         fiber_exited_line(3, "Done."),
     ])]);
     let trip = Arc::new(TripTap {
-        billed: Mutex::new(std::collections::HashMap::new()),
         sum: Mutex::new(0.0),
         budget: 10.0,
         tripped: AtomicBool::new(false),
@@ -3101,7 +3088,7 @@ fn a_correction_applies_only_its_delta() {
     let shell = format!("printf '%s\\n' '{exit}'");
     // The forward parks until the report lands: a loaded machine
     // schedules the watcher after the drain otherwise (see #3051).
-    let release = Release::closed();
+    let (release, park) = Park::closed();
     let waited = rig
         .start_timeout(
             &shell,
@@ -3109,7 +3096,7 @@ fn a_correction_applies_only_its_delta() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &release)),
+            Some(parked_forward(&rig, &park)),
         )
         .0;
     let _waited = waited;
@@ -3117,13 +3104,14 @@ fn a_correction_applies_only_its_delta() {
     // Nothing is stashed: both lines are still parked behind the
     // release, which proves the hold before the drain releases it.
     assert!(usages.is_empty(), "the parked forward holds every line");
-    release.release();
-    // The second arrival of the same generation adds only its delta, so
-    // the spend holds the latest billed figure once, not twice. The Job
-    // can precede the watcher's forwards, so the tap is read only
-    // after both streamed lines land on the inbox.
+    drop(release);
+    // Both arrivals of the corrected generation stream exactly once,
+    // and neither trips the budget. The delta arithmetic itself is
+    // production logic proved loop-side (the tripwire `pending_tests`),
+    // so no per-generation sum is asserted here. The Job can precede
+    // the watcher's forwards, so the tap is read only after both
+    // streamed lines land on the inbox.
     let usages = drain_streamed_usages(&rig, usages, 2);
-    assert_eq!(trip.sum(), 0.18);
     assert_eq!(trip.stops(), 0);
     assert_eq!(usages.len(), 2);
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -3135,7 +3123,6 @@ fn sibling_arrivals_racing_a_publication_lose_no_delta_and_trip_once() {
         1, "Done.",
     )])]);
     let trip = Arc::new(TripTap {
-        billed: Mutex::new(std::collections::HashMap::new()),
         sum: Mutex::new(0.0),
         budget: 0.5,
         tripped: AtomicBool::new(false),

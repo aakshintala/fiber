@@ -566,23 +566,19 @@ mod tests;
     reason = "test code signals ordering through channels"
 )]
 mod pending_tests {
+    use contract::GenerationId;
+    use contract::events::UsageRecorded;
+    use contract::shapes::Tokens;
+    use fakes::Deadline;
+    use fakes::MUST_SUCCEED_WITHIN;
     use std::collections::BTreeMap;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     };
-    use std::time::Duration;
-
-    use contract::GenerationId;
-    use contract::events::UsageRecorded;
-    use contract::shapes::Tokens;
-    use fakes::Deadline;
 
     use super::{Ledger, Tripwire};
-
-    /// How long a signal may take before the test fails naming it.
-    const WAIT: Duration = Duration::from_secs(5);
 
     /// A billed line for `id` at `cost`: what the tripwire folds is only
     /// the generation, the cost and the subscription flag.
@@ -662,7 +658,7 @@ mod pending_tests {
                     assert!(!tap(&trip, &stops, &cost_line("g", Some(1.0))));
                     assert!(!tap(&trip, &stops, &cost_line("g", Some(3.0))));
                     both_tapped_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&folded_g1_rx)
                         .expect("the loop folds g's $1 delivery");
                     // The sibling arrives before the correction folds: $3 + $1
@@ -678,7 +674,7 @@ mod pending_tests {
                 let ledger = Arc::clone(&ledger);
                 let stops = Arc::clone(&stops);
                 move || {
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&both_tapped_rx)
                         .expect("the watcher taps g twice");
                     // Folds only the older $1 delivery: the acknowledgment keeps
@@ -687,7 +683,7 @@ mod pending_tests {
                     assert!((sum_of(&trip) - 3.0).abs() < 1e-9);
                     assert_eq!(stops.load(Ordering::SeqCst), 0);
                     folded_g1_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&tapped_h_rx)
                         .expect("the watcher taps h");
                     // The watcher already stopped delegates exactly once at h;
@@ -702,7 +698,7 @@ mod pending_tests {
                     done_tx.send(()).unwrap();
                 }
             });
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the loop folds the correction and h");
         });
@@ -735,7 +731,7 @@ mod pending_tests {
                     assert!(!tap(&trip, &stops, &cost_line("g", Some(1.0))));
                     assert!(!tap(&trip, &stops, &cost_line("g", Some(3.0))));
                     both_tapped_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&folded_new_rx)
                         .expect("the loop folds g's $3 delivery");
                     assert!(tap(&trip, &stops, &cost_line("h", Some(1.0))));
@@ -748,13 +744,13 @@ mod pending_tests {
                 let ledger = Arc::clone(&ledger);
                 let stops = Arc::clone(&stops);
                 move || {
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&both_tapped_rx)
                         .expect("the watcher taps g twice");
                     assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(3.0))));
                     assert!((sum_of(&trip) - 3.0).abs() < 1e-9);
                     folded_new_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&tapped_h_rx)
                         .expect("the watcher taps h");
                     // The older $1 acknowledgment keeps the watcher's $3, so the
@@ -772,7 +768,7 @@ mod pending_tests {
                     done_tx.send(()).unwrap();
                 }
             });
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the loop folds the older correction");
         });
@@ -807,7 +803,7 @@ mod pending_tests {
                     // already claimed, the second claims nothing more.
                     assert_eq!(stops.load(Ordering::SeqCst), 1);
                     both_tapped_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&folded_old_rx)
                         .expect("the loop folds g's $3 delivery");
                     assert!(!tap(&trip, &stops, &cost_line("h", Some(1.0))));
@@ -820,14 +816,14 @@ mod pending_tests {
                 let ledger = Arc::clone(&ledger);
                 let stops = Arc::clone(&stops);
                 move || {
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&both_tapped_rx)
                         .expect("the watcher taps g twice");
                     // The older $3 acknowledgment keeps the watcher's $1.
                     assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(3.0))));
                     assert!((sum_of(&trip) - 1.0).abs() < 1e-9);
                     folded_old_tx.send(()).unwrap();
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv(&tapped_h_rx)
                         .expect("the watcher taps h");
                     assert!(!ack(&trip, &ledger, &stops, &cost_line("g", Some(1.0))));
@@ -838,7 +834,7 @@ mod pending_tests {
                     done_tx.send(()).unwrap();
                 }
             });
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the loop folds the correction");
         });

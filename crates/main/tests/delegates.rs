@@ -221,6 +221,8 @@ struct Running {
     lines: mpsc::Receiver<Value>,
     stderr: mpsc::Receiver<String>,
     deadline: Deadline,
+    /// The session `start` opened, for `connect`.
+    id: Option<String>,
     /// Every line `wait_line` has taken, so `wait` returns the whole stream.
     taken: Vec<Value>,
 }
@@ -234,7 +236,9 @@ impl Running {
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
         args.extend(extra);
-        Self::spawn(setup, &args)
+        let mut running = Self::spawn(setup, &args);
+        running.id = Some(id.to_owned());
+        running
     }
 
     /// Spawns `fiber` with `args`, draining stdout on a thread and keeping
@@ -290,15 +294,17 @@ impl Running {
                 lines,
                 stderr,
                 deadline: setup.deadline,
+                id: None,
                 taken: Vec::new(),
             },
             stdin,
         )
     }
 
-    /// Connects a client to the session's socket, on a thread bounded by
-    /// the deadline.
-    fn connect(&self, setup: &support::Setup, id: &str) -> support::Socket {
+    /// Connects a client to the started session's socket, on a thread
+    /// bounded by the deadline.
+    fn connect(&self, setup: &support::Setup) -> support::Socket {
+        let id = self.id.as_deref().expect("connect needs a started session");
         support::Socket::connect(setup.deadline, &setup.session_socket(id))
     }
 
@@ -1025,7 +1031,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
-    let client = running.connect(&setup, &id);
+    let client = running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
@@ -1192,7 +1198,7 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
-    let client = running.connect(&setup, &id);
+    let client = running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
@@ -1426,7 +1432,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     // A late spawn past the trip never runs: the next turn still fails on
     // the budget before any model call is sent, so no delegate starts.
-    let client = running.connect(&setup, &id);
+    let client = running.connect(&setup);
     subscribe(&client);
     client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
     let late = running.wait_line("the late turn", |line| {
@@ -4343,7 +4349,7 @@ fn fork_parent() -> ForkParent {
     parent_running.wait_line("the parent's turn completes", |line| {
         line["kind"] == "turn_completed"
     });
-    let client = parent_running.connect(&setup, &parent_id);
+    let client = parent_running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);

@@ -321,12 +321,7 @@ impl Registry {
             job.finished = None;
             // As in `open_started`: a latched stop-all stops the new
             // run at once, with the lock released.
-            if stop_all {
-                job.stop_sent = true;
-                Some(Arc::clone(&job.stop))
-            } else {
-                None
-            }
+            super::Inner::latched_stop(stop_all, job)
         };
         self.park.bump();
         if let Some(stop) = latched {
