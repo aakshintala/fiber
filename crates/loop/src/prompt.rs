@@ -265,6 +265,13 @@ fn present(text: &str) -> Option<String> {
     }
 }
 
+fn append_line(section: &mut String, line: &str) {
+    if !line.is_empty() {
+        section.push_str("\n\n");
+        section.push_str(line);
+    }
+}
+
 /// The system prompt (`docs/system-prompt.md`, "The system prompt", R1
 /// with R4, R5, P2 and P3). `tools` is `(name, guidelines, deferred)` in
 /// any order; a deferred tool's guidelines are left out and the rest go
@@ -316,17 +323,11 @@ pub(crate) fn system_prompt(
             }
             DocsPlace::Website(url) => fill(message("docs-website"), &[("url", url)]),
         };
-        if !line.is_empty() {
-            third.push_str("\n\n");
-            third.push_str(&line);
-        }
+        append_line(&mut third, &line);
     }
     if unattended {
         let line = message("unattended").to_owned();
-        if !line.is_empty() {
-            third.push_str("\n\n");
-            third.push_str(&line);
-        }
+        append_line(&mut third, &line);
     }
     if let Some(addendum) = inputs.addendum.as_deref().and_then(present) {
         third.push_str("\n\n");
