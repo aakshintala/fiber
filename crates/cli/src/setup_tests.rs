@@ -1697,3 +1697,76 @@ fn setup_terminal_run_model_and_completions_flag_failures_name_their_steps() {
         child_segment(&stderr, "### case elvish\n").contains("fiber: setup completions failed:")
     );
 }
+
+/// A placeholder variable name no test process sets.
+const UNCONFIGURED_HOST: &str = "FIBER_TEST_SETUP_UNCONFIGURED_HOST";
+
+/// Installs `acme`, whose one model's base URL fills `{workspace}` from
+/// [`UNCONFIGURED_HOST`]: unset, the model is left out with a
+/// `model_unconfigured` notice.
+fn install_unconfigured(setup: &Setup) {
+    let dir = setup.home().join("extensions").join("acme");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    let manifest = json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {"acme": ["https://{workspace}/v1"]}});
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    fs::write(
+        dir.join("providers/acme.json"),
+        json!({
+            "name": "acme",
+            "placeholders": {"workspace": {"env": UNCONFIGURED_HOST}},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn setup_terminal_run_prints_other_notices_but_no_model_unconfigured() {
+    if child_case().as_deref() == Some("runterm-notices") {
+        child_case_marker("notices");
+        let flags = SetupFlags::default();
+        let code = child_run_terminal(&flags, &mut Cursor::new("\n\n".to_owned()));
+        child_report("notices", code);
+        return;
+    }
+    let setup = Setup::new();
+    install_unconfigured(&setup);
+    // A cached model with no context window: a `model_invalid` notice.
+    setup.install("bad", models("m1"));
+    config::write_model_cache(
+        &setup.home(),
+        "bad",
+        &json!([{"id": "m1", "protocol": "openai-responses",
+                 "base_url": "http://x/v1", "context_window": 0}]),
+    )
+    .unwrap();
+    let output = spawn_child(
+        &setup,
+        "setup_terminal_run_prints_other_notices_but_no_model_unconfigured",
+        "runterm-notices",
+        &[
+            ("FIBER_HOME", setup.home().to_str().unwrap()),
+            ("HOME", setup.root.path().join("person").to_str().unwrap()),
+            ("WORKSPACE", setup.workspace().to_str().unwrap()),
+        ],
+        &["SHELL", UNCONFIGURED_HOST],
+        None,
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(child_result(&stdout, "notices"), 0, "{stderr:?}");
+    let segment = child_segment(&stderr, "### case notices\n");
+    let lines: Vec<&str> = segment.lines().collect();
+    // The invalid notice prints once, and the first question follows it.
+    assert_eq!(segment.matches("bad/m1").count(), 1, "{segment:?}");
+    assert!(lines[0].contains("bad/m1"), "{segment:?}");
+    assert!(lines[0].contains("context_window"), "{segment:?}");
+    assert_eq!(lines[1], "Providers:", "{segment:?}");
+    assert!(!segment.contains("acme/m"), "{segment:?}");
+    assert!(!segment.contains(UNCONFIGURED_HOST), "{segment:?}");
+    assert!(!segment.contains("needs the setting"), "{segment:?}");
+}

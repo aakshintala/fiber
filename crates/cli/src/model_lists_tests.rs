@@ -945,3 +945,57 @@ fn a_cached_list_leaves_out_what_no_hub_answers_when_the_client_lacks_it() {
         catalogue.notices
     );
 }
+
+#[test]
+fn model_lists_apart_returns_the_placeholder_notices_beside_the_others() {
+    assert!(
+        std::env::var_os(HUB_ENV_HOST).is_none(),
+        "the test process lacks {HUB_ENV_HOST}"
+    );
+    let setup = Setup::new("fiber-model-list-apart");
+    install_placeholder(&setup, "acme-ext", "acme", HUB_ENV_HOST);
+    // A cached model with no context window: a `model_invalid` notice
+    // from the cached admission, before the placeholder fill.
+    setup.install_data("bad-ext", "bad", &["m1"], &json!({}));
+    config::write_model_cache(
+        &setup.home(),
+        "bad",
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": "http://127.0.0.1:1/v1",
+            "context_window": 0,
+        }]),
+    )
+    .unwrap();
+    let called = Cell::new(false);
+    let read = || {
+        super::model_lists_apart(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+            &fakes::children::grouped_output,
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+    };
+    let (_providers, _config, others, unconfigured) = read();
+    assert_eq!(others.len(), 1, "{others:?}");
+    assert!(others[0].contains("bad/m1"), "{others:?}");
+    assert!(others[0].contains("context_window"), "{others:?}");
+    assert_eq!(unconfigured.len(), 1, "{unconfigured:?}");
+    assert!(unconfigured[0].contains("acme/m"), "{unconfigured:?}");
+    assert!(unconfigured[0].contains(HUB_ENV_HOST), "{unconfigured:?}");
+    // `model_lists` returns both, the others first.
+    let (_providers, _config, notices) = model_lists(
+        &setup.home(),
+        &setup.workspace(),
+        ModelLists::Cached,
+        &unloaded(&called),
+        &fakes::children::grouped_output,
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(notices, [others, unconfigured].concat());
+}
