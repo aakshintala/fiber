@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs zsh and fish on a Linux CI runner (docs/ci.md, "The backstop").
+# Installs zsh and fish on a Linux CI runner (docs/ci.md, "Job time limits").
 # With a cached archive directory holding .deb files, it installs them with
 # dpkg and makes no network call; a failure there fails the script, with no
 # network fallback. Otherwise the network part, `apt-get update` and
