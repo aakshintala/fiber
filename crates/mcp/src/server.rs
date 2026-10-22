@@ -79,27 +79,24 @@ pub(crate) fn shutting_down() -> StartError {
 /// Pages `method` (`tools/list` or `prompts/list`) to its end under the
 /// handshake's shared startup `deadline`: the deadline is checked before
 /// every page request, so a server answering every page at once with a
-/// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
-/// missed deadline fails the start; any other failure runs `fail` with
-/// the transport error (`None` for a page that is not a result), which
-/// fails the start for tools and keeps no prompts for prompts. The
-/// reload's re-list shares this with its own outcomes.
-pub(crate) fn list_pages<T: serde::de::DeserializeOwned, E>(
+/// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers").
+/// A miss or failure returns the transport error (`None` for a page that
+/// is not a result); the startup call sites map it once through
+/// `startup_list`, while the reload's re-list maps every failure to the
+/// replace path at its own call sites.
+pub(crate) fn list_pages<T: serde::de::DeserializeOwned>(
     server: &Server,
     clock: &Arc<dyn Clock>,
     method: &str,
     entry: &str,
     deadline: Instant,
     cancel: &dyn Cancel,
-    fail: impl Fn(Option<CallError>) -> Result<Vec<T>, E>,
-) -> Result<Vec<T>, E> {
+) -> Result<Vec<T>, Option<CallError>> {
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
-    // The deadline maps without `fail`: every caller ends a missed bound
-    // the same way, while `fail` maps the Timeout/Gone/other outcome.
     loop {
         if clock.now() >= deadline {
-            return fail(Some(CallError::Timeout));
+            return Err(Some(CallError::Timeout));
         }
         let params = match &cursor {
             Some(cursor) => serde_json::json!({"cursor": cursor}),
@@ -107,15 +104,15 @@ pub(crate) fn list_pages<T: serde::de::DeserializeOwned, E>(
         };
         let page = match server.request(method, &params, deadline, cancel, None) {
             Ok(value) => value,
-            Err(error) => return fail(Some(error)),
+            Err(error) => return Err(Some(error)),
         };
         let object = match page.as_object() {
             Some(object) => object,
-            None => return fail(None),
+            None => return Err(None),
         };
         match object.get(entry).and_then(Value::as_array) {
             Some(found) => listed.extend(entries(found.clone())),
-            None => return fail(None),
+            None => return Err(None),
         }
         cursor = object
             .get("nextCursor")
@@ -126,6 +123,26 @@ pub(crate) fn list_pages<T: serde::de::DeserializeOwned, E>(
         }
     }
     Ok(listed)
+}
+
+/// Maps a startup [`list_pages`] outcome: a missed deadline fails the
+/// start for both sections; any other prompts failure (`prompts` true)
+/// keeps no prompts while the start goes on, while a tools failure
+/// fails it with the login or the not-a-result sentence. The re-list
+/// never runs this: it maps every failure to the replace path instead.
+fn startup_list<T>(
+    pages: Result<Vec<T>, Option<CallError>>,
+    prompts: bool,
+) -> Result<Vec<T>, StartError> {
+    match pages {
+        Ok(listed) => Ok(listed),
+        Err(Some(CallError::Timeout)) => Err(StartError::Deadline),
+        Err(_) if prompts => Ok(Vec::new()),
+        Err(Some(CallError::Login(detail))) => Err(StartError::Login(detail)),
+        Err(_) => Err(StartError::StartFailed(
+            "The server's tool list was not a result.".to_owned(),
+        )),
+    }
 }
 
 /// Why [`Server::call`] failed.
@@ -347,8 +364,6 @@ impl Server {
         // One shutdown on `Err`: every failure path below returns through
         // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
         // `Cancelled` is just another failed start, not a deadline.
-        let not_a_list =
-            || StartError::StartFailed("The server's tool list was not a result.".to_owned());
         let mut handshake = |server: &Server| -> Result<(Cached, bool, bool), StartError> {
             let initialize = match server.request(
                 "initialize",
@@ -393,18 +408,9 @@ impl Server {
                 .and_then(|capabilities| capabilities.get("tools"))
                 .is_some_and(Value::is_object);
             let tools: Vec<ListedTool> = if advertises_tools {
-                list_pages(
-                    server,
-                    clock,
-                    "tools/list",
-                    "tools",
-                    deadline,
-                    &stopping,
-                    |error| match error {
-                        Some(CallError::Timeout) => Err(StartError::Deadline),
-                        Some(CallError::Login(detail)) => Err(StartError::Login(detail)),
-                        _ => Err(not_a_list()),
-                    },
+                startup_list(
+                    list_pages(server, clock, "tools/list", "tools", deadline, &stopping),
+                    false,
                 )?
             } else {
                 Vec::new()
@@ -416,27 +422,27 @@ impl Server {
             // same boundary.
             drop(connection.take());
             // `prompts/list` runs only when `initialize` advertises the
-            // `prompts` capability as an object, and a list that errors
-            // or is not a result leaves the server with no prompts while
-            // the start goes on; only a missed deadline fails it
-            // (`docs/mcp.md`, "Prompts and resources").
+            // `prompts` capability as an object. A list that errors
+            // (a login failure included) or is not a result leaves the
+            // server with no prompts while the start goes on; only a
+            // missed deadline fails it (`docs/mcp.md`, "Prompts and
+            // resources"). The re-list instead takes the replace path
+            // on any prompts/list failure, per the reload row (d).
             let advertises_prompts = initialize
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("prompts"))
                 .is_some_and(Value::is_object);
             let prompts: Vec<ListedPrompt> = if advertises_prompts {
-                list_pages(
-                    server,
-                    clock,
-                    "prompts/list",
-                    "prompts",
-                    deadline,
-                    &stopping,
-                    |error| match error {
-                        Some(CallError::Timeout) => Err(StartError::Deadline),
-                        Some(CallError::Login(detail)) => Err(StartError::Login(detail)),
-                        _ => Ok(Vec::new()),
-                    },
+                startup_list(
+                    list_pages(
+                        server,
+                        clock,
+                        "prompts/list",
+                        "prompts",
+                        deadline,
+                        &stopping,
+                    ),
+                    true,
                 )?
             } else {
                 Vec::new()
