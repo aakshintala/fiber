@@ -658,6 +658,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release-pack draft-delete "${{ needs.preflight.outputs.version }}"
 
+  # debt: site and nightly-site duplicate their five steps (two jobs); upgrade trigger: a third Pages deploy job appears, extract the shared steps into a composite action.
   site:
     name: Site
     needs: [preflight, publish]
