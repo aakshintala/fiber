@@ -87,7 +87,8 @@ file tools when a question is about Fiber itself.
 
 The path is fixed for the session, so the line never changes the preamble.
 When `docs/` is missing from Fiber home, as for a binary copied without the
-installer, the line names the website instead, and `fiber doctor` says the
+installer, the line names the website instead (`/fiber/nightly/` for a
+nightly build; `docs/ci.md`, "The user docs site"), and `fiber doctor` says the
 docs are not installed (`docs/invocation.md`, "Commands and flags"). The installed docs
 match the installed version (`docs/releasing.md`). They can describe
 behaviour the binary does not have yet, because the docs are written before

@@ -12,14 +12,15 @@ use contract::JobId;
 use mlua::{Lua, MultiValue, Table, Value as LuaValue};
 use serde_json::{Map, Value};
 
-/// `host.delegate` yields this tag, `"delegate"` and the call's spec. The
-/// extension's thread runs the delegate start off to the side and resumes
-/// the coroutine with the started job's id (`docs/extensions.md`, "A host
-/// call suspends the code that made it"). Refused in the entry script before
-/// it yields, like `host.exec`. The `{ timeout, run }` pair is kept in the
-/// chunk-local `handles` table under a handle numbered from 1, stored
-/// before the yield so a start that completes after its callback timed out
-/// still has its `run`; a failed reply clears it.
+/// `host.delegate` yields this tag, `"delegate"` and the call's spec, handle
+/// and per-call timeout. The extension's thread runs the delegate start off
+/// to the side and resumes the coroutine with the started job's id
+/// (`docs/extensions.md`, "A host call suspends the code that made it").
+/// Refused in the entry script before it yields, like `host.exec`. The
+/// `{ timeout, run }` pair is kept in the chunk-local `handles` table under
+/// a handle numbered from 1, stored before the yield so a start that
+/// completes after its callback timed out still has its `run`; a failed
+/// reply clears it, as the end's teardown does.
 const DELEGATE: &str = r#"
 local host, tag, in_entry, failure, snapshot, handles = ...
 function host.delegate(spec, opts)
@@ -41,7 +42,7 @@ function host.delegate(spec, opts)
   end
   local handle = #handles + 1
   handles[handle] = { timeout = opts.timeout, run = opts.run }
-  local id, code, message = coroutine.yield(tag, "delegate", { spec = text, handle = handle })
+  local id, code, message = coroutine.yield(tag, "delegate", { spec = text, handle = handle, timeout = opts.timeout })
   if id == nil then
     handles[handle] = nil
     error(failure(code, message), 0)
@@ -51,13 +52,15 @@ end
 "#;
 
 /// Sets `host.delegate` on `host`. `entry` is true while the entry script runs.
+/// Returns the chunk-local `handles` table, so the VM can reach the stored
+/// `{ timeout, run }` pair when the delegate ends.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
     entry: Rc<Cell<bool>>,
     failure: mlua::Function,
-) -> mlua::Result<()> {
+) -> mlua::Result<Table> {
     let in_entry = super::failure::in_entry(lua, &entry)?;
     // Reports its problem as a value, not a raise: a Rust raise would
     // reach the caller decorated with a stack traceback, and the chunk
@@ -74,8 +77,9 @@ pub(crate) fn install(
         in_entry,
         failure,
         snapshot,
-        handles,
-    ))
+        handles.clone(),
+    ))?;
+    Ok(handles)
 }
 
 /// The spec as the service sees it: its JSON object text. An empty table
@@ -108,16 +112,22 @@ fn snapshot(spec: &Table) -> mlua::Result<String> {
 }
 
 /// Reads a `host.delegate` yield: the snapshotted spec's text back into its
-/// argument map, and the `run` handle. It cannot fail after the Lua half's
-/// snapshot passed; an `Err` is an error in the calling code, raised as the
-/// string. The text came from `serde_json`, so the parse cannot fail; a
-/// failure would be a bug and is reported as an error in the calling code.
+/// argument map, the `run` handle and the per-call timeout. It cannot fail
+/// after the Lua half's snapshot passed; an `Err` is an error in the
+/// calling code, raised as the string. The text came from `serde_json`, so
+/// the parse cannot fail; a failure would be a bug and is reported as an
+/// error in the calling code.
 pub(crate) fn request(spec: &Table) -> mlua::Result<super::Request> {
     let text: String = spec.get("spec")?;
     let handle: u64 = spec.get("handle")?;
+    let timeout_ms: u64 = spec.get("timeout")?;
     let arguments: Map<String, Value> = serde_json::from_str(&text)
         .map_err(|e| mlua::Error::RuntimeError(format!("host.delegate: {e}")))?;
-    Ok(super::Request::Delegate { arguments, handle })
+    Ok(super::Request::Delegate {
+        arguments,
+        handle,
+        timeout: std::time::Duration::from_millis(timeout_ms),
+    })
 }
 
 /// The reply as Lua sees it: the started job's id, or `nil, code, message`

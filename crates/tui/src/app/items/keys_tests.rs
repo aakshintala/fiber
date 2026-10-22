@@ -87,6 +87,7 @@ fn every_edit_encodes_to_the_bytes_the_job_reads() {
         (Edit::ShiftEnter, "\r"),
         (Edit::CtrlJ, "\n"),
         (Edit::DeleteWord, "\x1b\x7f"),
+        (Edit::DeleteToLineStart, "\x15"),
         (Edit::Paste("a\nb".to_owned()), "a\rb"),
     ];
     for (edit, expected) in rows {

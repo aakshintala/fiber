@@ -61,13 +61,15 @@ impl Home {
 fn stored_provider() -> ProviderData {
     ProviderData {
         name: "fake".into(),
-        credential: None,
+        credential_from: crate::CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
         credential_name: None,
         headers: Default::default(),
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
-        login: None,
     }
 }
 

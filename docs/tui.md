@@ -61,7 +61,7 @@ its own. From the top:
    state's colour ("State glyphs") and joined by a dim " · ", leaving out a
    zero count, then the summed spend of the live sessions, dim: "2 waiting on
    you · 2 working · 1 retrying · 1 crashed · 2 ready · $5.78 live". With no
-   session it reads "no sessions yet", dim.
+   live session it reads "no live sessions", dim.
 2. the session list, filling the rows between the header and the input box
    ("The session list")
 3. the input box, at the bottom where a session's input box sits, so widening
@@ -82,7 +82,8 @@ On the first interactive run, with no import receipt yet
 another harness's configuration: Claude Code's or Codex's.
 The offer runs the same shared import `fiber import` runs, and imported
 items apply on the next `/reload` with the reload's usual cache cost
-(`docs/mcp.md`, "Reload"). A `1` or `2` pressed before the hub connects
+(`docs/mcp.md`, "Reload"). Accepting the offer opens one import report
+overlay ("Look", "Overlays") and adds no notices. A `1` or `2` pressed before the hub connects
 still imports once it does, so an early press is never lost. Over a
 remote hub connection the receipts are the hub machine's, where that
 import runs (`docs/configuration.md`, "Importing"). The offer fires once: answering it, or running
@@ -672,6 +673,30 @@ a click on it returns too. The views are:
   Opening the view sends `quota` with `fetch: true`.
   The view draws the cached answer at once and redraws on the fetch's
   answer, which also updates the panel card.
+- **The status view,** `/status`: what the terminal already holds about the
+  session on screen, asking nothing. The top row reads "Status" bold, "  /status"
+  dim and "Esc returns" dim, right-aligned. Each row is a name dim, padded to
+  one column, then the value:
+  - "session": the session's id, then " · " and its name;
+  - "workspace": its workspace, then " · branch " and the branch in a git
+    repository, or " · detached" when HEAD is detached;
+  - "model": the model, then " · thinking " and the level when it has one;
+  - "credential": the label the session's requests use, or "none" when its
+    provider takes no credential;
+  - "permissions": "auto", the one mode (`docs/permissions.md`, "One mode");
+  - "hub": "this machine", or the listed hub's name on a remote terminal;
+  - "version": Fiber's version;
+  - "context": the context's size and the model's window, "268k of 1M
+    tokens";
+  - "spend": "$1.35 billed · $0.00 subscription", delegates included;
+  - "turns": "3 turns · 12 calls", or the calls alone when the session
+    reports no turn count;
+  - "clients": the `full` connections attached.
+
+  The session's rows come from its latest `session_status`, and "credential"
+  from its latest `preamble_built` or `model_changed` (`docs/events.md`); a
+  value not received yet reads "not known yet", dim. The view redraws as
+  they change.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -1127,9 +1152,14 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
 
-An accepted `/import` answer is one notice per `fiber import` line,
-naming what the import copied and left behind, plus a `/reload` reminder
-(`docs/configuration.md`, "Importing").
+An accepted `/import` answer opens one import report overlay ("Look",
+"Overlays") and adds no notices. The report is titled "Imported from
+Claude Code" or "Imported from Codex", or "Imported" for a bare `/import`
+covering both sources. It has two sections, "Copied · N" grouped by kind
+(MCP servers, skills, commands, instructions) and "Left behind · N" in the
+hub's order with each reason dim, and its foot reads "Imported items apply
+on the next /reload · Esc closes" (`docs/configuration.md`, "Importing").
+A failed import is one notice, as any failed command is.
 
 When the hub sends `stream_closed` for the open session (it cannot read
 the session's log to serve this terminal), the conversation keeps every line
@@ -1421,8 +1451,9 @@ pass folds a session's history ("History and paging"), the conversation on
 screen stays as it was, so `/copy` waits and copies in the frame after the
 pass ends. The next key, edit or click, a view opening or closing, leaving the
 session, a session attaching and a lost connection each drop the wait, so it
-never copies from a screen the person has moved on from. A job's view, and a delegate's view with no transcript, hold no
-reply: there `/copy` says "No reply to copy in this view."
+never copies from a screen the person has moved on from. A job's view, and a
+delegate's view with no transcript, hold no reply: there `/copy` says "No
+reply to copy in this view."
 
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
@@ -1570,6 +1601,9 @@ search box and the draft shows without a cursor.
 - Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
   without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
   the screen, then scrolls.
+- Ctrl+U deletes from the start of the cursor's line to the cursor, the
+  line ending at a line break, not at the box's wrap; at a line's start it
+  deletes nothing.
 - ↑ in an empty box recalls earlier prompts: from this session, then the
   project's earlier sessions, newest first. Ctrl+R searches them. They come
   from the project's prompt history (`docs/state.md`), read through the hub,
@@ -1610,6 +1644,7 @@ search box and the draft shows without a cursor.
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
 | Delete a word | `delete_word` | ⌥Backspace | |
+| Delete to the start of the line | `delete_to_line_start` | Ctrl+U | |
 | Start or end of the line | `line_start_end` | ⌘← ⌘→, where the terminal passes them | |
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
@@ -1641,7 +1676,7 @@ so it does not redraw the screen as it does in some terminal programs.
 
 The key map docks at the bottom, full width, in the overlay frame ("Look",
 "Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
-binding by area, with its other paths." and the counts ("34 actions, 24 with
+binding by area, with its other paths." and the counts ("38 actions, 26 with
 other paths"). After a blank row comes a row of tabs, "All" and then each
 area, two columns apart: the chosen tab bold, drawn dark on white, the rest
 dim; ← and → move between them. Under the tabs, the search line reads "Type
@@ -1690,7 +1725,7 @@ A global action acts in all six. The rest act only where they are listed:
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
 - Input and Steering: `line_break`, `search_prompts`, `move_word`,
-  `delete_word`, `line_start_end`, `paste_image`.
+  `delete_word`, `delete_to_line_start`, `line_start_end`, `paste_image`.
 - Input: `send`, `recall_prompt`, `focus_rail`.
 - Steering: `amend_steering`.
 - Conversation: `delete_session`, `focus_next_prev`, `open_focused`,
@@ -1771,6 +1806,7 @@ later release still applies.
 | `/context` | Opens the context breakdown. |
 | `/usage`, `/cost` | Opens the usage view. |
 | `/quota` | Opens the quota view and fetches every label's quota. |
+| `/status` | Opens the status view ("Swapped views"). |
 | `/diff` | Opens the Changed files view ("Swapped views"), as the panel's card does. |
 | `/copy` | Copies the newest reply ("Selection and copy"). |
 | `/panel` | Shows or hides the panel ("The panel"). |
@@ -2039,7 +2075,7 @@ tui       212   9,804
 
 Every surface drawn over the screen shares one frame: the
 key map, the quit question, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,

@@ -91,8 +91,9 @@ pub struct ProviderRequest {
     /// Input tokens the response read from the cache, when reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read: Option<u64>,
-    /// Input tokens the response wrote to the cache, keyed by cache
-    /// lifetime (`"5m"`, `"1h"`), when reported.
+    /// Input tokens the response wrote to the cache, keyed by cache-write
+    /// billing class (`"5m"`, `"1h"`), not the vendor lifetime (OpenAI's
+    /// 30-minute cache reports under `"5m"`), when reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write: Option<BTreeMap<String, u64>>,
 }

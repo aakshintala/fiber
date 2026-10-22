@@ -347,7 +347,8 @@ fn resumed_session(
         Ok(folded) => folded,
         Err(e) => return Err(failed(e.code(), e)),
     };
-    // The recorded model first, `--model` and configuration after it. A
+    // The per-run layer first (`--model`, then `-c model=`), then the
+    // recorded model, then configuration's default. A
     // model that no longer resolves fails here, before any session line is
     // written. Configuration and the project key still come from the launch
     // directory; the workspace is the first `session_started`'s, wherever
@@ -684,6 +685,7 @@ fn resumed_session(
                         looped.jobs(jobs).quota(notice),
                         &current,
                     );
+                    let looped = crate::session_extensions::released(looped, Arc::clone(&current));
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)

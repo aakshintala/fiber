@@ -219,8 +219,8 @@ fn expected(bytes: &[u8]) -> Expected {
 
 /// `usage` as Fiber's tokens: OpenAI and OpenRouter count cache reads and
 /// writes inside `prompt_tokens` (`docs/model-routing.md`, "openai-completions
-/// facts"), and a write is the request's cache lifetime.
-fn tokens(usage: &Value, lifetime: &str) -> Tokens {
+/// facts"), and a write is always keyed `5m`.
+fn tokens(usage: &Value) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let read = count("/prompt_tokens_details/cached_tokens");
     let write = count("/prompt_tokens_details/cache_write_tokens");
@@ -228,7 +228,7 @@ fn tokens(usage: &Value, lifetime: &str) -> Tokens {
         input: count("/prompt_tokens") - read - write,
         cache_read: read,
         cache_write: if write > 0 {
-            BTreeMap::from([(lifetime.to_owned(), write)])
+            BTreeMap::from([("5m".to_owned(), write)])
         } else {
             BTreeMap::new()
         },
@@ -266,7 +266,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
             };
             assert_eq!(reply.finish, finish, "{label}");
             assert_eq!(reply.text(), want.text, "{label}");
-            assert_eq!(reply.tokens, tokens(&want.usage, "5m"), "{label}");
+            assert_eq!(reply.tokens, tokens(&want.usage), "{label}");
             assert!(reply.generation_id.is_some(), "{label}");
 
             // Text deltas add up to the reply's text.
@@ -358,13 +358,7 @@ fn cache_reads_and_writes_from_openrouter_to_anthropic_are_split_out_of_input() 
                 json!({"id": "gen-1", "choices": [], "usage": run["usage"]}),
             ]);
             let reply = decode(&bytes[..], &lifetime, &mut |_| {}).unwrap();
-            let key = if hour { "1h" } else { "5m" };
-            assert_eq!(
-                reply.tokens,
-                tokens(&run["usage"], key),
-                "{}",
-                path.display()
-            );
+            assert_eq!(reply.tokens, tokens(&run["usage"]), "{}", path.display());
             runs += 1;
         }
     }
@@ -1120,7 +1114,21 @@ fn a_declared_cache_key_field_carries_the_cache_key() {
 }
 
 #[test]
-fn a_cache_write_counts_under_the_requests_cache_lifetime() {
+fn a_write_decodes_under_five_minutes_for_an_hour_request() {
+    let bytes = stream(&[
+        chunk(json!({"content": "hi"}), Some("stop")),
+        json!({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 1,
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 8}}}),
+    ]);
+    let reply = decode(&bytes[..], &CacheLifetime::OneHour, &mut |_| {}).unwrap();
+    assert_eq!(
+        reply.tokens.cache_write,
+        BTreeMap::from([("5m".to_owned(), 8)])
+    );
+}
+
+#[test]
+fn a_cache_write_is_keyed_five_minutes_whatever_the_request_lifetime() {
     let written = || {
         Response::stream(stream(&[
             chunk(json!({"content": "hi"}), Some("stop")),
@@ -1139,8 +1147,7 @@ fn a_cache_write_counts_under_the_requests_cache_lifetime() {
     };
     let base_url = endpoint(&server).base_url;
     // Fiber's own markers, at the request's lifetime: 1 hour, then 5
-    // minutes. Without markers the write counts under the request's
-    // lifetime, 1 hour here.
+    // minutes. The write still counts under 5 minutes either way.
     let marked_hour = Endpoint {
         base_url: base_url.clone(),
         ..markers()
@@ -1160,7 +1167,7 @@ fn a_cache_write_counts_under_the_requests_cache_lifetime() {
             .unwrap();
         keys.push(reply.tokens.cache_write.into_keys().collect::<Vec<_>>());
     }
-    assert_eq!(keys, [["1h"], ["5m"], ["1h"]]);
+    assert_eq!(keys, [["5m"], ["5m"], ["5m"]]);
 }
 
 #[test]
@@ -1836,7 +1843,7 @@ fn an_openrouter_stream_decodes_its_inline_cost() {
         run["inline_usage"]["cost"].as_f64(),
         "the stream's own cost"
     );
-    assert_eq!(reply.tokens, tokens(&run["inline_usage"], "5m"));
+    assert_eq!(reply.tokens, tokens(&run["inline_usage"]));
 }
 
 #[test]

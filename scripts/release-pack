@@ -21,7 +21,12 @@
 # draft makes the tag as a side effect, so deleting a draft always removes
 # its tag too (`--cleanup-tag`): a failed run ends with no tag and no
 # published Release, and a re-run deletes any leftover draft first. A
-# published `v<version>` refuses before anything builds.
+# published `v<version>` refuses before anything builds. The rehearsal
+# job's cleanup deletes only the release its own execution created: a
+# draft goes, a published release goes only when this execution created
+# it (the cleanup step says so only after this execution's `draft-begin`
+# succeeds) and its target is still the run's commit, and anything else
+# published fails instead of being deleted.
 #
 # `parse-time-l` reads a `/usr/bin/time -l` report (macOS) and prints the
 # maximum resident set size in bytes, the figure its line names, such as
@@ -47,6 +52,7 @@
 #   draft-upload <version> <file>...
 #   draft-publish <version>
 #   draft-delete <version>
+#   rehearsal-cleanup <version> <commit>
 #   parse-time-l <file>
 #   parse-footprint <file>
 set -euo pipefail
@@ -307,6 +313,16 @@ nightly_notes() {
   fi
 }
 
+# The publish flow runs the `gh release` calls below from the asset
+# directory, not a checkout, so no git-remote lookup can scope them;
+# the failure step runs `draft-delete` from the checkout instead. Either
+# way GH_REPO carries the repository for all of them, defaulting to the
+# Actions-provided `GITHUB_REPOSITORY`, so every call is explicitly scoped
+# regardless of working directory. An explicit GH_REPO wins; with both
+# unset a draft command fails at dispatch naming the variables, never
+# inside a `gh` call.
+export GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+
 # Prints `true` when `v$1` is a draft, `false` when it is published, and
 # fails when no release carries the name.
 release_state() {
@@ -362,6 +378,42 @@ draft_delete() {
   fi
 }
 
+# Deletes the rehearsal release `v$1` created from $2, for the rehearsal
+# job's always-run cleanup. A draft goes like any failed run's. A
+# published release goes only when this execution created it:
+# REHEARSAL_CREATED is `true` only after this execution's `draft-begin`
+# succeeds (the cleanup step carries the publish step's `created`
+# output), and the target must still be $2. A re-run carries the same
+# version and commit, so a matching target alone does not prove this
+# execution created the release: without both, a published release fails
+# instead of being deleted. Nothing to delete is success
+# only on a confirmed not-found; any other lookup failure fails instead
+# of skipping the delete.
+rehearsal_cleanup() {
+  err=$(mktemp) || fail "rehearsal-cleanup could not stage its error file."
+  if state=$(gh release view "v$1" --json isDraft --jq .isDraft 2> "$err"); then
+    rm -f "$err"
+    case $state in
+      true) gh release delete "v$1" --cleanup-tag -y ;;
+      false)
+        target=$(gh release view "v$1" --json targetCommitish --jq .targetCommitish 2> /dev/null) || target=
+        if [ "${REHEARSAL_CREATED:-}" = true ] && [ "$target" = "$2" ]; then
+          gh release delete "v$1" --cleanup-tag -y
+        else
+          fail "v$1 is already published; refusing to delete a release this run did not create."
+        fi ;;
+      *) fail "unexpected rehearsal release state: $state." ;;
+    esac
+  elif grep -qiE 'not found|could not find|no release|404' "$err"; then
+    rm -f "$err"
+    echo "no rehearsal release v$1 to delete."
+  else
+    cat "$err" >&2
+    rm -f "$err"
+    fail "could not inspect the rehearsal release v$1."
+  fi
+}
+
 # Prints the maximum resident set size in bytes from a `/usr/bin/time -l`
 # report, the figure its line names.
 parse_time_l() {
@@ -404,6 +456,10 @@ command=${1:-}
 [ -n "$command" ] || fail "usage: release-pack <command> [args]." 2
 shift
 case $command in
+  draft-begin | draft-upload | draft-publish | draft-delete | rehearsal-cleanup)
+    [ -n "$GH_REPO" ] || fail "GH_REPO is unset and GITHUB_REPOSITORY is unset." ;;
+esac
+case $command in
   pack-target) pack_target "$@" ;;
   pack-docs) pack_docs "$@" ;;
   pack-extensions) pack_extensions "$@" ;;
@@ -415,6 +471,7 @@ case $command in
   draft-upload) draft_upload "$@" ;;
   draft-publish) draft_publish "$@" ;;
   draft-delete) draft_delete "$@" ;;
+  rehearsal-cleanup) rehearsal_cleanup "$@" ;;
   parse-time-l) parse_time_l "$@" ;;
   parse-footprint) parse_footprint "$@" ;;
   *) fail "unknown command $command." 2 ;;

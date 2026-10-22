@@ -443,7 +443,9 @@ pub struct Cost {
     /// Tokens read from the prompt cache. Absent prices those tokens at 0.
     #[serde(default)]
     pub cache_read: Option<f64>,
-    /// Tokens written to the prompt cache. Absent prices those tokens at 0.
+    /// Tokens written to the prompt cache. Absent prices 5-minute writes at 0,
+    /// while a 1-hour write still prices at twice the selected input
+    /// (`docs/model-routing.md`, "Cost").
     #[serde(default)]
     pub cache_write: Option<f64>,
     /// Higher input sizes, each with its own four prices.

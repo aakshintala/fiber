@@ -834,6 +834,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 | Target::Watcher { .. }
                 | Target::Timer { .. }
                 | Target::Tool(_)
+                | Target::Delegate { .. }
                 | Target::Search(_)
                 | Target::Effects(_) => None,
             };
@@ -953,6 +954,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 | Target::Hook { .. }
                 | Target::Watcher { .. }
                 | Target::Timer { .. }
+                | Target::Delegate { .. }
                 | Target::Effects(_) => None,
             };
             if let Some(id) = name
@@ -1913,12 +1915,14 @@ fn watch_delegates(
     hub.set_delegate(fake.clone());
     {
         let mut shared = hub.lock();
-        shared
-            .delegates
-            .insert(contract::JobId("j_1".to_owned()), 1);
-        shared
-            .delegates
-            .insert(contract::JobId("j_2".to_owned()), 2);
+        shared.delegates.insert(
+            contract::JobId("j_1".to_owned()),
+            (1, Duration::from_secs(5)),
+        );
+        shared.delegates.insert(
+            contract::JobId("j_2".to_owned()),
+            (2, Duration::from_secs(5)),
+        );
     }
     (fake, arrived_rx, answer_tx)
 }
@@ -2176,7 +2180,12 @@ fn delegate_rig(
                 Target::Search(name) => {
                     timeouts.search.insert(name.clone(), timeout);
                 }
-                Target::Timer { .. } | Target::Provider { .. } | Target::Watcher { .. } => {}
+                // A delegate run needs no registration: its timeout
+                // comes from the yield.
+                Target::Timer { .. }
+                | Target::Provider { .. }
+                | Target::Watcher { .. }
+                | Target::Delegate { .. } => {}
             }
         } else {
             panic!("not ready");
@@ -2205,6 +2214,7 @@ fn run_delegate_worker(
     let request = crate::host::Request::Delegate {
         arguments: serde_json::Map::new(),
         handle: 7,
+        timeout: Duration::from_millis(100),
     };
     let deliver: crate::oauth::Deliver = Arc::new(move |reply| {
         reply_tx.send(reply).expect("the test waits for the reply");
@@ -2428,6 +2438,7 @@ fn an_abandoned_hub_refuses_a_delegate_start_closed() {
     let request = crate::host::Request::Delegate {
         arguments: serde_json::Map::new(),
         handle: 7,
+        timeout: Duration::from_millis(100),
     };
     let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
     let shared = hub.lock();
@@ -2497,6 +2508,7 @@ fn delegate_starts_are_refused_from_provider_search_and_effects() {
             let request = crate::host::Request::Delegate {
                 arguments: serde_json::Map::new(),
                 handle: 7,
+                timeout: Duration::from_millis(100),
             };
             let deliver: crate::oauth::Deliver = Arc::new(|_| panic!("no reply is delivered"));
             let shared = hub.lock();
@@ -2656,10 +2668,10 @@ fn bind_delegate_records_its_id_for_a_later_abandon() {
     let (fake, _arrived_rx, _answer_tx) = watch_delegates(&hub);
     hub.lock().delegates.clear();
     let id = contract::JobId("j_bind".to_owned());
-    hub.bind_delegate(id.clone(), 7);
+    hub.bind_delegate(id.clone(), 7, Duration::from_millis(100));
     assert_eq!(
         hub.lock().delegates.get(&id),
-        Some(&7),
+        Some(&(7, Duration::from_millis(100))),
         "bind records its id"
     );
     let unsent = {

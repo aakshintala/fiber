@@ -116,9 +116,10 @@ pub struct Placeholder {
 pub struct ProviderData {
     /// The provider's name, the first half of every model reference.
     pub name: String,
-    /// How its key is found when no credential is stored.
-    #[serde(default)]
-    pub credential: Option<CredentialSource>,
+    /// Where its credential comes from: the data's `credential`, `login`
+    /// and `credential_label`.
+    #[serde(flatten)]
+    pub credential_from: CredentialFrom,
     /// The stored credential it reads, defaulting to its own name.
     /// Providers in one package that share a key name the same one.
     #[serde(default)]
@@ -138,11 +139,83 @@ pub struct ProviderData {
     /// extension declares").
     #[serde(default)]
     pub reviewer_model: Option<String>,
-    /// How `fiber login` signs in for this provider: `browser` runs the
-    /// provider's `credential()` login instead of reading a key
-    /// (`docs/configuration.md`, "A provider's data"). Absent means a key.
+}
+
+/// Where a provider's credential comes from (`docs/configuration.md`, "A
+/// provider's data"), read from the data's `credential`, `login` and
+/// `credential_label`. `credential_label` stands alone: a provider whose
+/// `credential()` reads nothing stored has no key source and no login.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "RawCredentialFrom")]
+pub enum CredentialFrom {
+    /// Fiber stores it: the key `fiber login` stores, else the key
+    /// `credential` finds, or the login `login` runs.
+    Stored {
+        /// How its key is found when no credential is stored.
+        credential: Option<CredentialSource>,
+        /// How `fiber login` signs in for this provider: `browser` runs the
+        /// provider's `credential()` login instead of reading a key. Absent
+        /// means a key.
+        login: Option<Login>,
+    },
+    /// Its `credential()` supplies it and reads nothing Fiber stores; the
+    /// data's `credential_label` says what a credential label names
+    /// (`docs/model-routing.md`, "What a provider extension declares").
+    Function(CredentialLabelSources),
+}
+
+impl CredentialFrom {
+    /// How its key is found when no credential is stored.
+    pub fn credential(&self) -> Option<&CredentialSource> {
+        match self {
+            Self::Stored { credential, .. } => credential.as_ref(),
+            Self::Function(_) => None,
+        }
+    }
+
+    /// How `fiber login` signs in for this provider; `None` means a key.
+    pub fn login(&self) -> Option<Login> {
+        match self {
+            Self::Stored { login, .. } => *login,
+            Self::Function(_) => None,
+        }
+    }
+}
+
+/// The data's `credential`, `login` and `credential_label` as written.
+#[derive(Deserialize)]
+struct RawCredentialFrom {
     #[serde(default)]
-    pub login: Option<Login>,
+    credential: Option<CredentialSource>,
+    #[serde(default)]
+    login: Option<Login>,
+    #[serde(default)]
+    credential_label: Option<CredentialLabelSources>,
+}
+
+impl TryFrom<RawCredentialFrom> for CredentialFrom {
+    type Error = &'static str;
+
+    fn try_from(raw: RawCredentialFrom) -> Result<Self, Self::Error> {
+        match (raw.credential_label, raw.credential, raw.login) {
+            (Some(sources), None, None) => Ok(Self::Function(sources)),
+            (Some(_), _, _) => {
+                Err("`credential_label` is never declared beside `login` or `credential`")
+            }
+            (None, credential, login) => Ok(Self::Stored { credential, login }),
+        }
+    }
+}
+
+/// What a credential label names for a provider whose `credential()` reads
+/// nothing Fiber stores (`docs/configuration.md`, "A provider's data").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialLabelSources {
+    /// What a label names, such as `AWS profile`.
+    pub names: String,
+    /// What the `default` label reads, such as the environment.
+    pub default: String,
 }
 
 /// How `fiber login` signs in for a provider

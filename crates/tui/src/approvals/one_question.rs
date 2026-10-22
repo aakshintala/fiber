@@ -198,6 +198,7 @@ impl OneQuestion {
             | Edit::WordLeft
             | Edit::WordRight
             | Edit::DeleteWord
+            | Edit::DeleteToLineStart
             | Edit::LineStart
             | Edit::LineEnd
             | Edit::Delete => {}

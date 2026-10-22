@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use contract::JobId;
 use contract::clock::Clock;
 use contract::diag::{DebugLog, Purpose};
 use serde_json::{Value, json};
@@ -782,6 +783,12 @@ impl LuaExtension {
         }));
     }
 
+    /// The hub every waiter and the extension's thread share: what
+    /// `SessionExtensions` reaches the delegate bindings through.
+    pub(crate) fn hub(&self) -> &Hub {
+        &self.hub
+    }
+
     /// Whether the watcher has a delivery queued or running: the busy bit
     /// the thread sets on start and clears on finish, or a queued job the
     /// thread has not started. An ephemeral offer skips while this holds.
@@ -1104,6 +1111,19 @@ pub(crate) enum Target {
     /// The `effects` function of a tool `fiber.tool` registered, in the gaps
     /// of the stream.
     Effects(String),
+    /// One extension-owned delegate's end: its `run` with the completion's
+    /// table, in the ordered stream. The per-call `timeout` rides along
+    /// from the `host.delegate` yield, judged from the push instant.
+    Delegate {
+        /// The extension whose `run` runs.
+        extension: String,
+        /// The delegate job that ended.
+        job_id: JobId,
+        /// The chunk-local `run` handle this start stored.
+        handle: u64,
+        /// The per-call timeout the yield carried.
+        timeout: Duration,
+    },
 }
 
 /// The eligible provider purpose of `target`: the provider's registered
@@ -1159,6 +1179,9 @@ impl std::fmt::Display for Target {
             Self::Tool(name) => f.write_str(name),
             Self::Search(name) => f.write_str(name),
             Self::Effects(name) => write!(f, "{name}.effects"),
+            Self::Delegate {
+                extension, job_id, ..
+            } => write!(f, "{extension}.run {}", job_id.0),
         }
     }
 }
@@ -1174,6 +1197,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 pub(crate) mod asks;
 mod command_calls;
 mod declared;
+mod delegates;
 mod errors;
 mod host_calls;
 pub(crate) mod hub;

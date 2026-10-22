@@ -8,10 +8,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use config::{Config, ModelData, ProviderData};
+use config::{Config, ModelData, ProviderData, Source};
 use contract::ErrorCode;
 use contract::events::Notice;
-use serde_json::Value;
 
 use crate::git::short_name;
 use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
@@ -741,12 +740,14 @@ impl Providers {
                     ProviderData {
                         name,
                         models,
-                        credential: None,
+                        credential_from: config::CredentialFrom::Stored {
+                            credential: None,
+                            login: None,
+                        },
                         credential_name: None,
                         headers: BTreeMap::new(),
                         placeholders: BTreeMap::new(),
                         reviewer_model: None,
-                        login: None,
                     },
                 );
             }
@@ -821,6 +822,7 @@ impl Providers {
                 .unwrap_or_default();
             let mut left_out = Vec::new();
             if let Some(data) = self.by_name.get_mut(&provider_name) {
+                let login = !matches!(data.credential_from, config::CredentialFrom::Function(_));
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
@@ -842,6 +844,7 @@ impl Providers {
                                 &extension,
                                 &name,
                                 variable,
+                                login,
                             );
                             left_out.push((model.id.clone(), notice.message.clone()));
                             notices.push(notice);
@@ -931,12 +934,14 @@ impl Providers {
         self.by_name.get(name).cloned().unwrap_or(ProviderData {
             name: name.to_owned(),
             models: Vec::new(),
-            credential: None,
+            credential_from: config::CredentialFrom::Stored {
+                credential: None,
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
             reviewer_model: None,
-            login: None,
         })
     }
 
@@ -1028,17 +1033,24 @@ impl Providers {
     }
 
     /// The session's model, in the order "Choosing the model" gives: the
-    /// model a resumed session was using, then configuration's `model`, which
-    /// `--model` and `-c model=` set for one run.
+    /// per-run layer first (`--model` via `per_run`, then `-c model=`),
+    /// then the model a resumed session was using, then configuration's
+    /// default.
     pub fn choose<'a>(
         &'a self,
         resumed: Option<&str>,
         config: &Config,
     ) -> Result<Model<'a>, Error> {
-        let configured = config.get("model", None).map(|(value, _)| value);
-        let typed = resumed
-            .or_else(|| configured.as_ref().and_then(Value::as_str))
-            .ok_or(Error::NoModel)?;
+        let configured = config.get("model", None);
+        // Only the per-run layer beats the recorded model: a persistent
+        // default never does (`docs/model-routing.md`, "Choosing the
+        // model").
+        let per_run = configured
+            .as_ref()
+            .filter(|(_, source)| *source == Source::Run)
+            .and_then(|(value, _)| value.as_str());
+        let fallback = configured.as_ref().and_then(|(value, _)| value.as_str());
+        let typed = per_run.or(resumed).or(fallback).ok_or(Error::NoModel)?;
         self.resolve(typed)
     }
 

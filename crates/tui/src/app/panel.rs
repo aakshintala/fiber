@@ -97,6 +97,10 @@ pub(crate) struct PanelState {
     status: Option<SessionStatus>,
     model: Option<String>,
     thinking: Option<String>,
+    /// The credential label the latest `preamble_built` or
+    /// `model_changed` names: `None` before either, `Some(None)` when
+    /// the provider takes no credential.
+    credential: Option<Option<String>>,
     window: Option<u64>,
     trigger_at: Option<u64>,
     budget: Option<f64>,
@@ -141,6 +145,7 @@ impl PanelState {
                 if let Some(built) = super::read!(envelope, PreambleBuilt) {
                     self.model = Some(built.model);
                     self.thinking = built.thinking;
+                    self.credential = Some(built.credential);
                     self.window = Some(built.context_window);
                     self.trigger_at = built.trigger_at;
                     // The latest build's budget is the one in force; a
@@ -152,6 +157,7 @@ impl PanelState {
                 if let Some(changed) = super::read!(envelope, ModelChanged) {
                     self.model = Some(changed.after.model);
                     self.thinking = changed.after.thinking;
+                    self.credential = Some(changed.after.credential);
                 }
             }
             "turn_started" => {
@@ -292,6 +298,13 @@ impl PanelState {
     /// names.
     pub(crate) fn thinking(&self) -> Option<&str> {
         self.thinking.as_deref()
+    }
+
+    /// The credential label the latest `preamble_built` or
+    /// `model_changed` names: `None` before either, `Some(None)` when
+    /// the provider takes no credential.
+    pub(crate) fn credential(&self) -> Option<Option<&str>> {
+        self.credential.as_ref().map(Option::as_deref)
     }
 
     /// The latest `preamble_built`'s context window, in tokens.

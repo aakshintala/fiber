@@ -110,11 +110,23 @@ impl support::History {
         let mut prompt = self.prompt();
         prompt.credential = credential.map(str::to_owned);
         prompt.cache_lifetime = lifetime;
+        self.resume_session(tools, Self::model(), prompt)
+    }
+
+    /// Resumes on `model` with `prompt`: the single `Loop::resume` the
+    /// wrappers share. Takes the inbox as it is: `resume_with` renews it
+    /// first, while `resume_on` keeps a delivery queued before the resume.
+    fn resume_session(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        model: Model,
+        prompt: r#loop::PromptInputs,
+    ) -> Loop {
         Loop::resume(
             r#loop::Session {
                 log: Arc::clone(&self.log),
                 provider: Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-                model: Self::model(),
+                model,
                 prompt,
                 inbox: self.inbox_rx.take().unwrap(),
                 tools,
@@ -4316,11 +4328,16 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
         vec![Some(contract::ThinkingLevel::High)],
         "the folded thinking seeds `chosen`"
     );
+    // The resume starts the process on its session model, which differs
+    // from the recorded one: it records that switch as a driver would
+    // (`docs/events.md`, "`model_changed`"), then the inbox switches to
+    // the third model.
     assert_eq!(
         kinds_of(&history.lines()),
         vec![
             "session_started",
             "preamble_built",
+            "model_changed",
             "model_changed",
             "model_changed",
             "preamble_built",
@@ -4394,6 +4411,146 @@ fn a_resume_switching_the_label_records_model_changed_before_the_build() {
     assert_eq!(new[1].kind, "preamble_built");
     assert_eq!(new[1].payload["reason"], "resume");
     assert_eq!(new[1].payload["credential"], "home");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+impl support::History {
+    /// As [`History::resume`], with the session on `model` with `thinking`:
+    /// what a resume that starts the process runs on after `--model`
+    /// (`docs/model-routing.md`, "Choosing the model"). Renews the inbox,
+    /// as a second resume in one test must.
+    fn resume_with(
+        &mut self,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+        model: &str,
+        thinking: Option<contract::ThinkingLevel>,
+    ) -> Loop {
+        // A second resume in one test: the first took the inbox, so renew
+        // it before resuming.
+        let (tx, rx) = mpsc::channel();
+        self.inbox_tx = tx;
+        self.inbox_rx = Some(rx);
+        let recorded = r#loop::resumed(&self.dir).unwrap().credential;
+        let mut prompt = self.prompt();
+        prompt.credential = recorded;
+        prompt.thinking = thinking;
+        self.resume_session(
+            tools,
+            Model {
+                reference: model.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+        )
+    }
+}
+
+#[test]
+fn a_resume_switching_the_model_drops_the_recorded_reasoning() {
+    use contract::provider::Input;
+    let mut history = History::new(vec![
+        support::reasoning_reply("old thought", "Hello."),
+        Scripted::text("Again."),
+    ]);
+    let looped = history.resume_headless(Vec::new());
+    let outcome = history.run(looped, "one");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    history.freeze();
+
+    // The session now runs on another model reference, as a `--model`
+    // resume that starts the process does.
+    let looped = history.resume_with(Vec::new(), "fake/model-2", None);
+    let outcome = history.run(looped, "two");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+
+    // The switch is recorded before the resumed build, with the recorded
+    // settings as `before`.
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].payload["before"]["model"], support::MODEL);
+    assert_eq!(new[0].payload["after"]["model"], "fake/model-2");
+    assert_eq!(new[0].payload["source"], "driver");
+    assert_eq!(new[1].kind, "preamble_built");
+    assert_eq!(new[1].payload["model"], "fake/model-2");
+    // The recorded model's reasoning keeps its producer's stamp, so the
+    // request layer sends it only to that model and the new model never
+    // sees it (`docs/loop.md`, "What the model is sent").
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 2);
+    let reasoning: Vec<&String> = requests[1]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::Reasoning { model, .. } => Some(model),
+            Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. }
+            | Input::User { .. }
+            | Input::Assistant { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning,
+        [support::MODEL],
+        "{:#?}",
+        requests[1].conversation
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_switching_only_thinking_records_one_model_changed() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    let mut built = preamble_with(None, contract::events::CacheLifetime::OneHour);
+    if let Event::PreambleBuilt(inner) = &mut built {
+        inner.thinking = Some("low".into());
+    }
+    history.write(built, None);
+    history.freeze();
+
+    let looped = history.resume_with(
+        Vec::new(),
+        support::MODEL,
+        Some(contract::ThinkingLevel::High),
+    );
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].payload["before"]["model"], support::MODEL);
+    assert_eq!(new[0].payload["before"]["thinking"], "low");
+    assert_eq!(new[0].payload["after"]["model"], support::MODEL);
+    assert_eq!(new[0].payload["after"]["thinking"], "high");
+    assert_eq!(new[0].payload["source"], "driver");
     assert_eq!(
         history.new_kinds(),
         [

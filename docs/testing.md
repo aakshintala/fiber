@@ -45,7 +45,10 @@ kills the same mutants.
 
 CI wiring has no Rust test of its own: a workflow step, or a script only CI
 runs, is proven by the pull request's own CI run exercising it, and the pull
-request links the job log that shows it working. Logic that wiring calls lives
+request links the job log that shows it working. A job that can run only from
+`main`, because its environment allows only `main`, is proven by its first
+dispatch after merge: the ticket links that run's log, and a failure there is
+a new ticket. Logic that wiring calls lives
 in `xtask` or a crate, and is tested there like any other code.
 
 A binary-level test needs no test-only switch in the shipped binary. It sets
@@ -74,7 +77,11 @@ consumer observes it. A security boundary, such as the credential deny or a
 permission denial, is tested at binary level: the call is refused, it never
 starts, and no protected bytes reach the output or an artifact.
 
-Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+Tests read a repository file only by compiling it in. The exception is a
+first-party package under `providers/` or `extensions/`: a test may read one
+at run time through a path joined onto `CARGO_MANIFEST_DIR`, and its crate
+must be on the selector's list of package readers (`docs/ci.md`,
+"Selection"). The gate fails on any other run-time read.
 
 ### Event streams
 
