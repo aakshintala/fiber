@@ -832,14 +832,14 @@ fn run_turn(
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
-    current: &session_extensions::Current,
+    current: &Arc<session_extensions::Current>,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     // The session's watchers, subscribed for the whole turn: every appended
     // line fans out to them, until the shutdown drops the offer. Dropped
     // before `fiber_exited` below, so the session-end drain owns the exit
     // line.
-    let _watchers = session_extensions::subscribe(log, &current.get(), &cancel);
+    let _watchers = session_extensions::subscribe(log, current, &cancel);
     let door = Arc::clone(&cancel);
     let turn = Arc::clone(&cancel);
     let mut committed: Option<i32> = None;

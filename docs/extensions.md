@@ -413,7 +413,22 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   a removal cancels them, and an abandoned VM's delegates are cancelled.
   Before the session runs, and after a reload until the new set's hub has
   its inbox, it raises `closing` with `host.delegate: the session is not
-  running yet`.
+  running yet`. On every completion (`completed`, `failed`, `cancelled`)
+  the bound extension's `run` receives one table: `job_id` and `status`
+  always, plus the `delegate_finished` fields when one was written —
+  `text` (the bounded final message; the full text stays in `artifacts/`,
+  never the raw transcript), `artifact`, `questions`, `usage` and
+  `worktree`, each under its `docs/events.md` key name and only when the
+  finish carries it, and no other key. With no finish only `job_id` and
+  `status`. `run`'s timeout counts from the push of its
+  stream item. A `run` that times out or raises fails as a callback error
+  does: it emits `hook_failed` with `extension` set. A `job_completed`
+  arriving while a hook is parked waits behind it. A reload keeps the
+  delegates running; the old `run` never runs, and the finish reaches the
+  reloaded extension as `delegate_finished` through a watcher. A set
+  loaded without the extension stops that extension's jobs with no `run`.
+  Shutdown runs no `run`. On a normal end Fiber releases the
+  extension-owned ids, then stops them, with no `run`.
 - **`host.fs`** reads and writes anywhere, as a process can. The per-path lock
   Fiber's own file tools take is offered (`docs/architecture.md`, "Tool calls
   in a step").

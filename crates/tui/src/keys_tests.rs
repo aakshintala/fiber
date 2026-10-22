@@ -1166,6 +1166,10 @@ fn default_event_matches_the_parity_table() {
         (modified(Code::Right, ctrl), edit(Edit::WordRight)),
         (modified(Code::Char('f'), alt), edit(Edit::WordRight)),
         (modified(Code::Backspace, alt), edit(Edit::DeleteWord)),
+        (
+            modified(Code::Char('u'), ctrl),
+            edit(Edit::DeleteToLineStart),
+        ),
         (modified(Code::Left, super_), edit(Edit::LineStart)),
         (modified(Code::Right, super_), edit(Edit::LineEnd)),
         (plain(Code::Delete), edit(Edit::Delete)),

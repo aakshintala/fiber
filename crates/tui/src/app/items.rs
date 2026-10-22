@@ -183,6 +183,17 @@ impl App {
         self.items.open.is_some()
     }
 
+    /// Whether the open item's view shows a transcript: a Fiber
+    /// delegate's, swapped onto the screen. A job's view and another
+    /// harness's delegate show none, and the screen behind is the
+    /// parent's.
+    pub(super) fn item_transcript(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .is_some_and(|open| open.stashed.is_some())
+    }
+
     /// The open item's job, if any.
     fn open_job(&self) -> Option<JobId> {
         self.items.open.as_ref().map(|open| open.job_id.clone())
@@ -317,6 +328,8 @@ impl App {
         if self.open_job().as_ref() == Some(job) {
             return Effect::None;
         }
+        // A `/copy` waiting on a pass was for the view this one replaces.
+        self.copy_owed = false;
         self.close_item();
         self.close_keymap();
         self.close_config_view();
@@ -398,6 +411,8 @@ impl App {
     /// A delegate view leaves a `summary` wish, which `items_due` lowers.
     pub(super) fn close_item(&mut self) -> Option<String> {
         let open = self.items.open.take()?;
+        // A `/copy` waiting on a pass was for the view closing.
+        self.copy_owed = false;
         if let Some(stashed) = open.stashed {
             let (width, height) = (self.screen.width(), self.screen.height());
             self.screen = stashed;

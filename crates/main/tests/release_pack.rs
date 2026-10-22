@@ -90,6 +90,27 @@ impl Pack {
     /// as its standard input when given.
     #[track_caller]
     fn tool(&self, tool: &Path, args: &[&str], stdin: Option<&Path>) -> Output {
+        self.tool_env(tool, args, stdin, &[])
+    }
+
+    /// Runs `scripts/release-pack` with `args` and `env` added to the
+    /// cleared environment, under the test's deadline.
+    #[track_caller]
+    fn pack_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        self.tool_env(&script(), args, None, env)
+    }
+
+    /// Runs `tool` with `args` and `env` added to the cleared environment
+    /// under the test's deadline, with `stdin` as its standard input
+    /// when given.
+    #[track_caller]
+    fn tool_env(
+        &self,
+        tool: &Path,
+        args: &[&str],
+        stdin: Option<&Path>,
+        env: &[(&str, &str)],
+    ) -> Output {
         let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
         let mut command = Command::new(tool);
         command
@@ -104,6 +125,11 @@ impl Pack {
             .env("HOME", self.root.path())
             .env("TMPDIR", self.path("tmp"))
             .env("RELEASE_PACK_STATE", self.state())
+            // The publish job runs the draft flow from the asset directory
+            // outside any checkout, so the script learns the repository
+            // from GITHUB_REPOSITORY; GH_REPO stays unset (env_clear).
+            .env("GITHUB_REPOSITORY", "aakshintala/fiber")
+            .envs(env.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         match stdin {
@@ -452,6 +478,87 @@ fn the_draft_flow_publishes_last() {
     assert!(create.contains(&"a".repeat(40)), "{create}");
 }
 
+/// The draft flow works from outside any checkout: the run's directory is
+/// the test's temporary root, never a git repository, and `GH_REPO` is
+/// unset, so every `gh` call carries the repository from
+/// `GITHUB_REPOSITORY` instead of a git-remote lookup. The second version
+/// covers the delete kind, so every call kind carries the repository.
+#[test]
+fn the_draft_flow_outside_a_checkout_scopes_every_call_to_the_repo() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    let run = pack.pack(&["draft-begin", "1.2.3", &"a".repeat(40), &notes]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let asset = pack.wfile("out/fiber-docs.tar.gz", b"docs", 0o644);
+    let asset_name = asset.to_string_lossy().into_owned();
+    let run = pack.pack(&["draft-upload", "1.2.3", &asset_name]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let run = pack.pack(&["draft-publish", "1.2.3"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(pack.state().join("published-1.2.3").exists());
+    let run = pack.pack(&["draft-begin", "4.5.6", &"b".repeat(40), &notes]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let run = pack.pack(&["draft-delete", "4.5.6"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = pack.calls();
+    for kind in ["create", "delete", "edit", "upload", "view"] {
+        assert!(
+            calls.contains(kind),
+            "a gh call kind is missing: {kind}\n{calls}"
+        );
+    }
+    for line in calls.lines() {
+        assert!(
+            line.contains("repo=aakshintala/fiber"),
+            "a gh call left the repository: {line}"
+        );
+    }
+}
+
+/// With both repository variables unset the run fails naming them,
+/// before any gh call runs.
+#[test]
+fn no_repository_at_all_fails_naming_the_variables() {
+    let pack = Pack::start();
+    pack.wfile("notes.md", b"notes\n", 0o644);
+    let notes = pack.path("notes.md").to_string_lossy().into_owned();
+    // Empty counts as unset under `:-`, which is how the script reads it.
+    let run = pack.pack_env(
+        &["draft-begin", "1.2.3", &"a".repeat(40), &notes],
+        &[("GITHUB_REPOSITORY", "")],
+    );
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "release-pack: GH_REPO is unset and GITHUB_REPOSITORY is unset.\n"
+    );
+    assert!(pack.calls().is_empty(), "a gh call ran: {}", pack.calls());
+}
+
+/// The repository check scopes only the draft flow: packing a target
+/// with both repository variables unset still succeeds.
+#[test]
+fn pack_target_needs_no_repository() {
+    let pack = Pack::start();
+    pack.wfile("tree/bin/fiber", b"fiber", 0o755);
+    pack.wfile("tree/bin/THIRD-PARTY-NOTICES", b"notices", 0o644);
+    let run = pack.pack_env(
+        &[
+            "pack-target",
+            "tree/bin",
+            "x86_64-unknown-linux-musl",
+            "out",
+        ],
+        &[("GITHUB_REPOSITORY", "")],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        pack.path("out/fiber-x86_64-unknown-linux-musl.tar.gz")
+            .exists()
+    );
+}
+
 #[test]
 fn a_failure_before_publish_leaves_no_tag_and_no_release() {
     let pack = Pack::start();
@@ -684,6 +791,9 @@ impl Release {
             .env("HOME", self.setup.root.path())
             .env("TMPDIR", self.root("tmp"))
             .env("FIBER_HOME", self.setup.home())
+            // The fixture packs run through scripts/release-pack, whose
+            // repository export reads GITHUB_REPOSITORY.
+            .env("GITHUB_REPOSITORY", "aakshintala/fiber")
             .envs(env.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1229,6 +1339,49 @@ fn nightly_notes_at_the_stable_tag_prints_head_itself() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.stdout.lines().count(), 1);
     assert!(run.stdout.contains("first"), "{}", run.stdout);
+}
+
+// debt: git setup mirrors nightly_notes_prints_the_range_since_the_stable_tag; fold the two into one helper when Pack::tool takes a working directory.
+// The mirror is deliberate: the ticket orders an additive test and the bug rule needs the red proof standing alone.
+/// `nightly-notes` reads the repository at `GITHUB_WORKSPACE`, so the
+/// publish job can run it from outside the checkout.
+#[test]
+fn nightly_notes_outside_the_checkout_reads_the_workspace() {
+    let pack = Pack::start();
+    let repo = pack.root.path().to_path_buf();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    pack.wfile("note-src/one.txt", b"one", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    fakes::git::git(&repo, &["tag", "v0.0.9"]);
+    pack.wfile("note-src/two.txt", b"two", 0o644);
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "second"]);
+    let head = fakes::git::git(&repo, &["rev-parse", "HEAD"]);
+    let outside = fakes::TempDir::new("rlp-outside");
+    let path = format!("{}:/usr/bin:/bin", fixture_bin().display());
+    // debt: hand-rolled Command mirrors Pack::tool field for field; switch to Pack::tool when it takes a working directory and extra env.
+    let mut command = Command::new(script());
+    command
+        .process_group(0)
+        .args(["nightly-notes", "v0.0.9", &head])
+        .current_dir(outside.path())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", path)
+        .env("HOME", pack.root.path())
+        .env("TMPDIR", pack.path("tmp"))
+        .env("RELEASE_PACK_STATE", pack.state())
+        .env("GITHUB_REPOSITORY", "aakshintala/fiber")
+        .env("GITHUB_WORKSPACE", &repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let run = run_watched(&mut command, pack.deadline, "nightly-notes to exit");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.stdout.lines().count(), 1);
+    assert!(run.stdout.starts_with("- "), "{}", run.stdout);
+    assert!(run.stdout.contains("second"), "{}", run.stdout);
 }
 
 /// `draft-begin --prerelease` carries `--prerelease` through to the

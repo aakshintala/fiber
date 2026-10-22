@@ -1800,6 +1800,17 @@ impl Pages {
         true
     }
 
+    /// Each page's turns, the open page first and then back through
+    /// the closed ones; `None` for a page the window dropped.
+    pub(crate) fn newest_first(&self) -> impl Iterator<Item = Option<&[Turn]>> {
+        std::iter::once(Some(self.open.turns.as_slice())).chain(
+            self.closed
+                .iter()
+                .rev()
+                .map(|part| part.as_ref().map(|part| part.turns.as_slice())),
+        )
+    }
+
     /// How many pages hold cards, the open one included.
     pub(crate) fn resident(&self) -> usize {
         self.closed.iter().flatten().count().saturating_add(1)

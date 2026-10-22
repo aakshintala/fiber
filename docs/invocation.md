@@ -159,7 +159,13 @@ also prints the environment its sessions get: the `PATH`, the names of the
 other variables and whether the login-shell capture succeeded ("A session's
 environment"). A line that stops a
 session from starting carries its fix, such as
-`` no key for openrouter: run `fiber login openrouter` ``. It also names each
+`` no key for openrouter: run `fiber login openrouter` ``. A provider whose
+data declares `credential_label` (`docs/model-routing.md`, "What a provider
+extension declares") has one line, for its selected label, naming what that
+label reads, such as `` * work  AWS profile work, read by credential() (not
+checked) ``: doctor runs no extension code, so the line never stops a session
+from starting, and no file stored under that provider is listed, since it
+reads none. It also names each
 secret an enabled extension declares that is not stored, with the
 `fiber login <name>` that stores it; a missing secret does not stop a
 session from starting. It exits non-zero
@@ -631,6 +637,17 @@ the 5-second shutdown bound, and the client gets `session_held` only once the
 bound has passed. Commands keep their order across that resume ("What the hub
 speaks"). A command after `close` and before `fiber_exited` still gets
 `closing`, except a `close` with `now`, which is accepted and upgrades the close.
+
+**A resume whose workspace is gone and cannot be made again is refused
+`io_failed`.** For a resume that needs a new session process, the hub checks
+the workspace before starting one. A missing workspace is unrecoverable when
+the session recorded no Fiber `worktree`, so the workspace is a plain
+directory, or when the session recorded a Fiber `worktree` but its repository
+is gone too. When it is unrecoverable, the hub rejects the resume with
+`io_failed`, and the message names the missing path, the workspace or the
+repository: "<path> no longer exists". A recorded Fiber worktree whose
+repository still exists is made again, as "Isolation" says. A live session
+is attached as before, without the check.
 
 **A session that never got a prompt leaves nothing behind.** A session that
 exits with no `turn_started` and no `repository_code_offered` in its log
@@ -1278,7 +1295,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create, exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. The session a `start` `continues` names keeps its worktree the same way: the new session runs in that worktree, records the same `worktree`, and never removes it either. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. When the repository is gone, the resume is rejected the same way. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create, exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`

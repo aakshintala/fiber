@@ -717,8 +717,12 @@ impl<B: Backend> Loop<B> {
         self.open_tail(rx);
         self.page_in(rx);
         self.apply_theme();
-        // A selection's copy waiting on dropped pages runs once they load.
+        // A selection's copy waiting on dropped pages runs once they load,
+        // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
+            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+        }
+        if let Some(text) = self.app.take_owed_copy() {
             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
         }
         // The viewer opens the loop queued: one worker per view, each

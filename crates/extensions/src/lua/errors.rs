@@ -41,6 +41,7 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
         | Target::Timer { .. }
         | Target::Search(_)
         | Target::Tool(_)
+        | Target::Delegate { .. }
         | Target::Effects(_) => Error::UnknownCallback {
             extension: name.to_owned(),
             callback: target.to_string(),

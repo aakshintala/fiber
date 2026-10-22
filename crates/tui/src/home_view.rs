@@ -666,7 +666,7 @@ pub(super) fn render(
             }
             spans.push(Span::styled(spend.clone(), dim));
         } else {
-            spans.push(Span::styled("no sessions yet", dim));
+            spans.push(Span::styled("no live sessions", dim));
         }
         let count_width = placed
             .width

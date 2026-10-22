@@ -247,7 +247,7 @@ fn reset_saves_no_entry_for_the_defaults() {
     let mut app = homed(Some(Arc::clone(&fake)));
     keyed(&mut app, &[("copy_focused", json!(["c"]))]);
     slash_keys(&mut app);
-    down(&mut app, 20);
+    down(&mut app, 21);
     assert_eq!(tap(&mut app, "r"), Effect::None);
     assert_eq!(
         fake.keys_saved(),
@@ -263,7 +263,7 @@ fn delete_unbinds_and_the_key_goes_dead() {
     let fake = Arc::new(Fake::new(Vec::new()));
     let mut app = homed(Some(Arc::clone(&fake)));
     slash_keys(&mut app);
-    down(&mut app, 16);
+    down(&mut app, 17);
     assert_eq!(tap(&mut app, "delete"), Effect::None);
     assert_eq!(
         fake.keys_saved(),

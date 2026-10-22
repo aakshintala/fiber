@@ -28,7 +28,9 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
   with `credential()` and no `login`, such as Bedrock or Vertex, reads no
   stored key, so its sentence carries no such advice. `provider.message`
   below keeps the provider's own words, which for a failed `credential()`
-  name its remedy.
+  name its remedy. `fiber doctor` and the `model_unconfigured` notice run no
+  extension code, so they read the same fact from the provider's data: its
+  `credential_label`, which such a provider declares.
 
 A failed model call adds two optional fields:
 
@@ -132,7 +134,9 @@ install it. None of these is retried.
 
 Three fixes, in the order the message names them. `fiber login
 <provider>` asks for the host after the credential is stored and saves it
-globally. Setting the named setting in `config/<extension>.json` in Fiber
+globally; the message leaves it out for a provider whose data declares
+`credential_label`, which reads no stored credential
+(`docs/model-routing.md`, "A per-account host"). Setting the named setting in `config/<extension>.json` in Fiber
 home fills it for every project at once. When the message names an
 environment variable, exporting it in the shell profile and running `fiber
 hub refresh` fills it: the hub reads its environment when it starts, so a
@@ -407,7 +411,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_shadowed` | event | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions |
-| `hook_failed` | event | a `non-blocking` hook or a watcher failed |
+| `hook_failed` | event | a `non-blocking` hook, a watcher, or an extension delegate's `run` failed |
 | `instructions_large` | event | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `login_url` | condition | an extension's `host.oauth.open` or `host.oauth.show` needs a person to finish a login, and a `full` client is attached; the message gives the URL to open, and the code to enter for a device-code login (`docs/extensions.md`, "Host calls") |
 | `model_invalid` | event | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |

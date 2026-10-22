@@ -75,6 +75,7 @@ mod shell;
 mod skills_view;
 mod slash;
 mod sources;
+mod status_view;
 mod stroke;
 mod surface;
 mod swapped;

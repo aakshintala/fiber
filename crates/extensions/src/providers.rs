@@ -741,12 +741,14 @@ impl Providers {
                     ProviderData {
                         name,
                         models,
-                        credential: None,
+                        credential_from: config::CredentialFrom::Stored {
+                            credential: None,
+                            login: None,
+                        },
                         credential_name: None,
                         headers: BTreeMap::new(),
                         placeholders: BTreeMap::new(),
                         reviewer_model: None,
-                        login: None,
                     },
                 );
             }
@@ -821,6 +823,7 @@ impl Providers {
                 .unwrap_or_default();
             let mut left_out = Vec::new();
             if let Some(data) = self.by_name.get_mut(&provider_name) {
+                let login = !matches!(data.credential_from, config::CredentialFrom::Function(_));
                 let mut kept = Vec::new();
                 for mut model in data.models.drain(..) {
                     let template = model.base_url.clone();
@@ -842,6 +845,7 @@ impl Providers {
                                 &extension,
                                 &name,
                                 variable,
+                                login,
                             );
                             left_out.push((model.id.clone(), notice.message.clone()));
                             notices.push(notice);
@@ -916,18 +920,29 @@ impl Providers {
             .cloned()
     }
 
+    /// The loaded candidate's directory for the full extension name:
+    /// the pinned copy for a repository entry, the personal install
+    /// otherwise. `None` when the extension never loaded as a candidate,
+    /// so the caller falls back to the home layout. Only directories the
+    /// load already admitted, never a repository's working files.
+    pub fn extension_source_dir(&self, extension: &str) -> Option<std::path::PathBuf> {
+        self.source_dirs.get(extension).cloned()
+    }
+
     /// The installed data of `name`: the data file's, else one naming only
     /// the provider, as [`LuaProvider::has_credential`] reads it.
     pub fn data(&self, name: &str) -> ProviderData {
         self.by_name.get(name).cloned().unwrap_or(ProviderData {
             name: name.to_owned(),
             models: Vec::new(),
-            credential: None,
+            credential_from: config::CredentialFrom::Stored {
+                credential: None,
+                login: None,
+            },
             credential_name: None,
             headers: BTreeMap::new(),
             placeholders: BTreeMap::new(),
             reviewer_model: None,
-            login: None,
         })
     }
 

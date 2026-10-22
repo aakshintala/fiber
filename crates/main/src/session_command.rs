@@ -712,6 +712,7 @@ pub(crate) fn run_new(
                 started.map(|looped| {
                     let looped =
                         session_extensions::hooked(looped.jobs(jobs).quota(notice), &current);
+                    let looped = session_extensions::released(looped, Arc::clone(&current));
                     looped
                         .diagnostics(Arc::clone(&diag))
                         .observed(observe)

@@ -161,6 +161,12 @@ impl Hub {
     pub(super) fn take_timer_cleanup(&self) -> Vec<u64> {
         self.lock().timers.take_cleanup()
     }
+
+    /// The delegate `run` handles whose entries the extension's thread
+    /// clears from the VM, beside the timer functions.
+    pub(super) fn take_delegate_cleanup(&self) -> Vec<u64> {
+        std::mem::take(&mut self.lock().delegate_cleanup)
+    }
 }
 
 #[cfg(test)]
