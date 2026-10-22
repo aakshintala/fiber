@@ -333,6 +333,9 @@ pub struct Loop {
     pub(crate) lifecycle: lifecycle::State,
     /// `budget.usd` for this session. `None` is no limit.
     budget: Option<f64>,
+    /// True for a delegate's loop (`Loop::delegate`): its tree stop must
+    /// preempt its failed-turn drain, so the session ends stopped.
+    is_delegate: bool,
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     retry: Retry,
@@ -465,6 +468,9 @@ struct Seed {
     replaced: Vec<ToolReplaced>,
     workspace: PathBuf,
     credentials: PathBuf,
+    /// True for a delegate's loop: its tree stop must preempt its
+    /// failed-turn drain, so the session ends stopped.
+    is_delegate: bool,
 }
 
 /// The failure step 7 escalates without a reviewer, with the default limits.
@@ -506,6 +512,7 @@ impl Loop {
         let workspace = PathBuf::from(&session.permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
         let credentials = permission::resolved(session.permissions.credentials.clone());
+        let is_delegate = parent.is_some();
         let started = session.log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: session.permissions.workspace.clone(),
@@ -545,6 +552,7 @@ impl Loop {
                 replaced,
                 workspace,
                 credentials,
+                is_delegate,
             },
         )
     }
@@ -585,6 +593,7 @@ impl Loop {
             replaced,
             workspace,
             credentials,
+            is_delegate,
         } = seed;
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
@@ -670,6 +679,7 @@ impl Loop {
             late_cost: late_cost::LateCost::default(),
             lifecycle: lifecycle::State::new(reason, &contract::SessionId(session_id.clone())),
             budget: None,
+            is_delegate,
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,

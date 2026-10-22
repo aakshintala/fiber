@@ -517,6 +517,12 @@ impl Tripwire {
         self.apply(line)
     }
 
+    /// Whether the one-way trip has been claimed: the tree is over
+    /// budget, so its stop is issued or imminent for this session.
+    pub(crate) fn tripped(&self) -> bool {
+        self.tripped
+    }
+
     /// Checks the one-way trip on the current sum: true once, when the
     /// sum first reaches the budget. A downward correction never untrips.
     fn claim(&mut self) -> bool {

@@ -1464,6 +1464,115 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 }
 
+#[test]
+fn a_delegate_whose_call_fails_without_a_claimed_trip_keeps_its_own_exit_code() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The root spawns one child and parks in `jobs wait`; the child's
+    // only model call fails fast. No budget is configured anywhere, so
+    // no trip can claim and no tree stop is coming: the child's failed
+    // turn must drain with its own code, not the tree-stop code.
+    let parent = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("r_allow", "allow"), cusage_id("r_allow", 0.0)]);
+            }
+            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => cstream(&[
+                    ccall_id(
+                        "r_spawn",
+                        "delegate_spawn",
+                        &json!({"description": "scan", "prompt": "scan shallow", "model": "fiber:pb/m"}),
+                    ),
+                    cusage_id("r_spawn", 0.0),
+                ]),
+                1 => cstream(&[
+                    ccall_id(
+                        "r_wait",
+                        "jobs",
+                        &json!({"action": "wait", "job_id": job_id(&text), "timeout_ms": 30000}),
+                    ),
+                    cusage_id("r_wait", 0.0),
+                ]),
+                _ => cstream(&[ctext_id("r_done", "done"), cusage_id("r_done", 0.0)]),
+            }
+        }
+    })
+    .unwrap();
+    // Every model call fails at once: the veto header rules out retries,
+    // so the turn fails on the first attempt.
+    let child = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""tools":[{"#) {
+            return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
+        }
+        Response::status(500, "boom").header("x-should-retry", "false")
+    })
+    .unwrap();
+    install_url(
+        &setup,
+        "pa",
+        &parent.url(),
+        "openai-completions",
+        &json!({}),
+    );
+    install_url(&setup, "pb", &child.url(), "openai-completions", &json!({}));
+    standing_allow(&setup);
+    slow_idle(&setup);
+    let id = doors::mint("s_");
+    let mut running = Running::start(
+        &setup,
+        &id,
+        &["--model", "pa/m", "--prompt", "scan the tree"],
+    );
+    let parked = running.wait_line("the root parked in jobs wait", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    assert!(
+        parked
+            .iter()
+            .any(|line| line["kind"] == "tool_call_requested"
+                && line["payload"]["name"] == "delegate_spawn"),
+        "the spawn ran before the wait"
+    );
+    // The child's end: failed on its call, not cancelled by any stop.
+    let mut batch: Vec<Value> = Vec::new();
+    while batch.is_empty() {
+        let more = running.wait_line("the delegate end", |line| line["kind"] == "job_completed");
+        batch.extend(
+            more.into_iter()
+                .filter(|line| line["kind"] == "job_completed"),
+        );
+    }
+    assert_eq!(batch.len(), 1, "the child ends once: {batch:?}");
+    assert_eq!(batch[0]["payload"]["status"], "failed");
+    let root_started = one(&parked, "delegate_started");
+    let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(child_id)
+            .join("events.jsonl"),
+    );
+    // The failed turn keeps its own code: an error is recorded (a stop
+    // would leave none) and the exit is 1, not the tree-stop 143.
+    let child_exited = child_lines.last().unwrap().clone();
+    assert_eq!(child_exited["kind"], "fiber_exited");
+    assert_eq!(child_exited["payload"]["exit_code"], 1);
+    assert!(
+        child_exited["payload"]["error"]["code"].is_string(),
+        "the failure names its code: {child_exited:?}"
+    );
+    let client = running.connect(&setup);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+}
+
 /// Declares the MCP server `db` in the repository file of `workspace`: a
 /// server nobody approved.
 fn declare_db(workspace: &Path, extra: &Value) {
