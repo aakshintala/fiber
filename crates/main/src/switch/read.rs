@@ -69,6 +69,11 @@ pub(crate) struct Reads {
     /// test. Absent outside the unit tests.
     #[cfg(test)]
     settle_pause: Mutex<Option<SpawnPause>>,
+    /// The timeout settlement's pause at the top of its next pass,
+    /// before it captures its generation, armed by a test. Absent
+    /// outside the unit tests.
+    #[cfg(test)]
+    settle_pass_pause: Mutex<Option<SpawnPause>>,
     /// The timeout settlement's pause before the reaper wait, armed by a
     /// test. Absent outside the unit tests.
     #[cfg(test)]
@@ -699,6 +704,11 @@ impl Reads {
     /// a cancel that lands while timing out is never `TimedOut`.
     fn settle_group(&self, group: u32, clock: &dyn Clock, end: Instant) {
         loop {
+            // Held at the top of the pass when a test armed one: the
+            // take consumes one armed pause per pass, so passes run free
+            // unless the test armed again meanwhile.
+            #[cfg(test)]
+            self.pause_before_settle_pass();
             // The generation is captured before the checks, as in
             // `credential`: a clock move past this point ends the park
             // below at once, so no advance lands unheard.
@@ -1029,6 +1039,41 @@ impl Reads {
     fn pause_after_settle_kill(&self) {
         let point = self
             .settle_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause at the top of the timeout settlement's next pass:
+    /// the pass sends on `entered` before it captures its generation
+    /// and blocks until `release` arrives, so the test lands a wake
+    /// before the pass's generation on every run. The pause is one-shot.
+    pub(crate) fn pause_at_settle_pass(
+        &self,
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    ) {
+        *self
+            .settle_pass_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the settlement reached its next pass and blocks until the
+    /// test releases it. Runs free unless a test armed a pause meanwhile;
+    /// each pass consumes one armed pause, so re-arming pauses a later
+    /// pass too.
+    fn pause_before_settle_pass(&self) {
+        let point = self
+            .settle_pass_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
