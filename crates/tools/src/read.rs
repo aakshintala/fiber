@@ -11,10 +11,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::error::{FileError, ReadError};
-use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes, inspect,
-    resolve,
-};
+use crate::files::{Inspected, Shared, declare, effects_error, hash_bytes, inspect, resolve};
 use crate::pdf::{PageRange, page_range};
 use crate::tool_util::{errored, text_output};
 
@@ -117,13 +114,7 @@ impl Tool for Read {
         };
         let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(error) => {
-                let error = match error {
-                    ResolveError::Arguments(message) => FileError::PathInvalid { message },
-                    ResolveError::Tool(message) => FileError::PathUnresolved { message },
-                };
-                return errored(ReadError::from(error));
-            }
+            Err(error) => return errored(ReadError::from(FileError::from(error))),
         };
         let judged = self.shared.judged(&raw);
         if let Err(error) = crate::tool_util::recheck(
@@ -194,14 +185,7 @@ impl Tool for Read {
                     hint,
                 }));
             }
-            Err(InspectError::NotFound) => {
-                return errored(ReadError::from(FileError::NotFound {
-                    path: path.to_path_buf(),
-                }));
-            }
-            Err(InspectError::Tool(message)) => {
-                return errored(ReadError::from(FileError::Inspect { message }));
-            }
+            Err(error) => return errored(ReadError::from(FileError::from(error))),
         };
         let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
         match slice_text(body, offset, limit, self.cap) {

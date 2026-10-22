@@ -68,7 +68,7 @@ fn a_kept_artifact_stays_with_the_bytes_written() {
     let mut artifact = Artifact::create(dir.path(), "w_1", "pdf", None);
     artifact.write(b"first ");
     artifact.write(b"second");
-    assert_eq!(artifact.keep(), Ok(path.display().to_string()));
+    assert_eq!(artifact.keep().ok(), Some(path.display().to_string()));
     assert_eq!(fs::read(&path).unwrap(), b"first second");
 }
 
@@ -88,13 +88,10 @@ fn a_failed_write_is_recorded_removes_the_file_and_stops_writing() {
         2,
         "no write after the failure"
     );
-    assert_eq!(
+    assert!(matches!(
         artifact.keep(),
-        Err(format!(
-            "could not save the download to {}: the disk is full.",
-            path.display()
-        ))
-    );
+        Err(crate::error::WebFetchError::Unsaved { .. })
+    ));
     assert!(!path.exists());
 }
 
@@ -106,13 +103,10 @@ fn a_directory_that_is_a_file_is_a_save_failure() {
     let error = fs::create_dir_all(&artifacts).unwrap_err();
     let mut artifact = Artifact::create(&artifacts, "w_1", "html", None);
     artifact.write(b"<p>x</p>");
-    assert_eq!(
+    assert!(matches!(
         artifact.keep(),
-        Err(format!(
-            "could not save the download to {}: {error}.",
-            artifacts.join("w_1.html").display()
-        ))
-    );
+        Err(crate::error::WebFetchError::Unsaved { source, .. }) if source.kind() == error.kind()
+    ));
     assert_eq!(
         fs::read(&artifacts).unwrap(),
         b"a file where the directory goes"
@@ -127,13 +121,10 @@ fn a_file_already_at_the_path_is_a_save_failure_and_stays_untouched() {
     let error = File::create_new(&path).unwrap_err();
     let mut artifact = Artifact::create(dir.path(), "w_1", "html", None);
     artifact.write(b"<p>x</p>");
-    assert_eq!(
+    assert!(matches!(
         artifact.keep(),
-        Err(format!(
-            "could not save the download to {}: {error}.",
-            path.display()
-        ))
-    );
+        Err(crate::error::WebFetchError::Unsaved { source, .. }) if source.kind() == error.kind()
+    ));
     assert_eq!(fs::read(&path).unwrap(), b"someone else's");
     let artifact = Artifact::create(dir.path(), "w_1", "html", None);
     drop(artifact);
@@ -218,13 +209,10 @@ fn a_save_failure_stops_saving_and_converting_but_the_body_is_still_counted() {
         "one\n",
         "only the first piece converted"
     );
-    assert_eq!(
+    assert!(matches!(
         sink.artifact.unwrap().keep(),
-        Err(format!(
-            "could not save the download to {}: the disk is full.",
-            path.display()
-        ))
-    );
+        Err(crate::error::WebFetchError::Unsaved { .. })
+    ));
 }
 
 #[test]

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use super::charset::{self, Decoding, PRESCAN};
 use super::markdown::Stream;
+use crate::error::WebFetchError;
 
 /// Wraps an artifact's file in a test's own writer.
 pub(super) type Wrap = Arc<dyn Fn(File) -> Box<dyn Write + Send> + Send + Sync>;
@@ -95,7 +96,7 @@ pub(super) struct Artifact {
     /// Whether the file is this artifact's own and still on disk.
     created: bool,
     /// Why the download could not be saved, once it could not.
-    failed: Option<String>,
+    failed: Option<io::Error>,
 }
 
 impl Artifact {
@@ -116,7 +117,7 @@ impl Artifact {
                 path,
             },
             Err(error) => Self {
-                failed: Some(unsaved(&path, &error)),
+                failed: Some(error),
                 file: None,
                 created: false,
                 path,
@@ -131,7 +132,7 @@ impl Artifact {
             return;
         };
         if let Err(error) = file.write_all(bytes) {
-            self.failed = Some(unsaved(&self.path, &error));
+            self.failed = Some(error);
             self.file = None;
             self.remove();
         }
@@ -143,9 +144,12 @@ impl Artifact {
     }
 
     /// The saved file's path, kept on disk, or why it could not be saved.
-    pub(super) fn keep(mut self) -> Result<String, String> {
+    pub(super) fn keep(mut self) -> Result<String, WebFetchError> {
         match self.failed.take() {
-            Some(message) => Err(message),
+            Some(source) => Err(WebFetchError::Unsaved {
+                path: self.path.clone(),
+                source,
+            }),
             None => {
                 self.created = false;
                 Ok(self.path.display().to_string())
@@ -212,14 +216,6 @@ impl Write for Sink<'_> {
 pub(super) fn copy(body: &mut dyn Read, limit: u64, sink: &mut Sink<'_>) -> io::Result<u64> {
     let mut reader = BufReader::with_capacity(PIECE, body.take(limit));
     io::copy(&mut reader, sink)
-}
-
-/// The message for a download that could not be saved to `path`.
-fn unsaved(path: &Path, error: &io::Error) -> String {
-    format!(
-        "could not save the download to {}: {error}.",
-        path.display()
-    )
 }
 
 #[cfg(test)]

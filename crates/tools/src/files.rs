@@ -11,14 +11,14 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use contract::ErrorCode;
 use contract::diag::Timing;
 use contract::shapes::Effect;
-use contract::tool::{Effects, EffectsError, Output};
+use contract::tool::{Effects, EffectsError};
 
 pub(crate) mod land;
 mod locks;
 
+use crate::error::{InspectError, ResolveError};
 use crate::image::ImageChild;
 
 pub use locks::{PathGuard, PathLocks};
@@ -28,15 +28,6 @@ pub use locks::{PathGuard, PathLocks};
 const MAX_SYMLINKS: u32 = 40;
 
 const DIRECTORY_HINT: &str = "List it through the shell.";
-
-/// Why a path could not be resolved.
-#[derive(Debug)]
-pub(crate) enum ResolveError {
-    /// `..` in the part of the path that does not exist yet.
-    Arguments(String),
-    /// Permission, a symlink loop, or a parent that is a file.
-    Tool(String),
-}
 
 /// What a resolved path is, without opening a fifo, socket or device.
 #[derive(Debug)]
@@ -85,15 +76,6 @@ pub(crate) enum Inspected {
     },
 }
 
-/// Why inspection failed.
-#[derive(Debug)]
-pub(crate) enum InspectError {
-    /// The path does not exist.
-    NotFound,
-    /// A filesystem failure. The message names the path.
-    Tool(String),
-}
-
 /// A relative path joins `workspace`. The longest existing prefix is
 /// canonicalised and the rest is appended. A `..` in that rest cannot be
 /// resolved honestly.
@@ -114,9 +96,9 @@ pub(crate) fn resolve(workspace: &Path, raw: &str) -> Result<PathBuf, ResolveErr
             Piece::CurDir => {}
             Piece::ParentDir => {
                 if missing {
-                    return Err(ResolveError::Arguments(format!(
-                        "`{raw}` cannot be resolved: `..` points through a directory that does not exist."
-                    )));
+                    return Err(ResolveError::DotDotThroughMissing {
+                        raw: raw.to_owned(),
+                    });
                 }
                 // Popping `/` fails and leaves it in place, which is what `/..` means.
                 if !out.pop() && out.as_os_str().is_empty() {
@@ -135,31 +117,28 @@ pub(crate) fn resolve(workspace: &Path, raw: &str) -> Result<PathBuf, ResolveErr
                         if file_type.is_symlink() {
                             follows += 1;
                             if follows > MAX_SYMLINKS {
-                                return Err(ResolveError::Tool(format!(
-                                    "`{raw}` could not be resolved: too many levels of symbolic links."
-                                )));
+                                return Err(ResolveError::TooManyLinks {
+                                    raw: raw.to_owned(),
+                                });
                             }
-                            let target = fs::read_link(&candidate).map_err(|err| {
-                                ResolveError::Tool(format!(
-                                    "`{}` could not be resolved: {err}.",
-                                    candidate.display()
-                                ))
+                            let target = fs::read_link(&candidate).map_err(|source| {
+                                ResolveError::Unreadable {
+                                    path: candidate.clone(),
+                                    source,
+                                }
                             })?;
                             if target.as_os_str().is_empty() {
-                                return Err(ResolveError::Tool(format!(
-                                    "`{}` could not be resolved: the symbolic link is empty.",
-                                    candidate.display()
-                                )));
+                                return Err(ResolveError::EmptyLink { path: candidate });
                             }
                             for piece in target.components().map(Piece::from).rev() {
                                 pending.push_front(piece);
                             }
                         } else if !file_type.is_dir() && !pending.is_empty() {
                             // A later `..` would discard this file and keep resolving.
-                            return Err(ResolveError::Tool(format!(
-                                "`{raw}` could not be resolved: `{}` is not a directory.",
-                                candidate.display()
-                            )));
+                            return Err(ResolveError::NotADirectory {
+                                raw: raw.to_owned(),
+                                path: candidate,
+                            });
                         } else {
                             out.push(&name);
                         }
@@ -168,11 +147,11 @@ pub(crate) fn resolve(workspace: &Path, raw: &str) -> Result<PathBuf, ResolveErr
                         missing = true;
                         out.push(&name);
                     }
-                    Err(err) => {
-                        return Err(ResolveError::Tool(format!(
-                            "`{}` could not be resolved: {err}.",
-                            candidate.display()
-                        )));
+                    Err(source) => {
+                        return Err(ResolveError::Unreadable {
+                            path: candidate,
+                            source,
+                        });
                     }
                 }
             }
@@ -207,12 +186,16 @@ impl From<Component<'_>> for Piece {
 pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(InspectError::NotFound),
-        Err(err) => {
-            return Err(InspectError::Tool(format!(
-                "`{}` could not be read: {err}.",
-                path.display()
-            )));
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(InspectError::NotFound {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(source) => {
+            return Err(InspectError::Unreadable {
+                path: path.to_path_buf(),
+                source,
+            });
         }
     };
     let size = meta.len();
@@ -225,20 +208,17 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
         match pdf_magic(path) {
             Ok(true) => return Ok(Inspected::PdfOverCap { size }),
             Ok(false) => {}
-            Err(error) => {
-                return Err(InspectError::Tool(format!(
-                    "`{}` could not be read: {error}.",
-                    path.display()
-                )));
+            Err(source) => {
+                return Err(InspectError::Unreadable {
+                    path: path.to_path_buf(),
+                    source,
+                });
             }
         }
     }
     let bytes = read_regular(path)?;
-    let size = u64::try_from(bytes.len()).map_err(|_| {
-        InspectError::Tool(format!(
-            "`{}` could not be read: its size does not fit in 64 bits.",
-            path.display()
-        ))
+    let size = u64::try_from(bytes.len()).map_err(|_| InspectError::SizeOverflow {
+        path: path.to_path_buf(),
     })?;
     match magic(&bytes) {
         Some(Magic::Image(kind)) => {
@@ -291,11 +271,13 @@ pub(crate) fn pdf_magic(path: &Path) -> io::Result<bool> {
 fn read_regular(path: &Path) -> Result<Vec<u8>, InspectError> {
     match fs::read(path) {
         Ok(bytes) => Ok(bytes),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(InspectError::NotFound),
-        Err(err) => Err(InspectError::Tool(format!(
-            "`{}` could not be read: {err}.",
-            path.display()
-        ))),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(InspectError::NotFound {
+            path: path.to_path_buf(),
+        }),
+        Err(source) => Err(InspectError::Unreadable {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -530,30 +512,8 @@ pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effe
     )
 }
 
-/// Resolves `raw` against `workspace`. A failure is the call's output.
-#[allow(
-    clippy::result_large_err,
-    reason = "the error is the call's Output, returned unchanged"
-)]
-pub(crate) fn resolved(workspace: &Path, raw: &str) -> Result<PathBuf, Output> {
-    match resolve(workspace, raw) {
-        Ok(path) => Ok(path),
-        Err(ResolveError::Arguments(message)) => Err(crate::tool_util::failed(
-            ErrorCode::InvalidArguments,
-            message,
-        )),
-        Err(ResolveError::Tool(message)) => {
-            Err(crate::tool_util::failed(ErrorCode::ToolError, message))
-        }
-    }
-}
-
 pub(crate) fn effects_error(error: ResolveError) -> EffectsError {
-    match error {
-        ResolveError::Arguments(message) | ResolveError::Tool(message) => {
-            EffectsError::Arguments(message)
-        }
-    }
+    EffectsError::Arguments(error.to_string())
 }
 
 /// What a file's first bytes say it is.
