@@ -402,6 +402,26 @@ fn local_stop_returns_zero_when_no_hub_runs() {
 }
 
 #[test]
+fn local_stop_returns_nonzero_when_the_hub_goes_quiet() {
+    let dir = fakes::TempDir::new("cli-stop-local-quiet");
+    fs::create_dir_all(dir.path().join("run")).unwrap();
+    let listener = UnixListener::bind(dir.path().join("run/hub")).unwrap();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut hello = serde_json::to_vec(&json!({"kind": "hub_hello", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION, "payload": {}}))
+        .unwrap();
+        hello.push(b'\n');
+        (&stream).write_all(&hello).unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        // The hub closes before answering: a transport failure.
+    });
+    let clock = System;
+    assert_eq!(stop_local(dir.path(), &mut no_starter(), &clock), 1);
+}
+
+#[test]
 fn a_probed_hub_answering_zero_reports_zero_stopped() {
     let dir = fakes::TempDir::new("cli-stop-probed-zero");
     fs::create_dir_all(dir.path().join("run")).unwrap();

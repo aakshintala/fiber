@@ -186,6 +186,21 @@ fn stop_reads_sessions_and_refuses_anything_else() {
 }
 
 #[test]
+fn stop_names_the_sessions_shape_in_its_null_refusal() {
+    let null = serde_json::from_value::<HubCommandLine>(json!({
+        "id": "c",
+        "command": "stop",
+        "args": {"sessions": null},
+    }))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        null.contains("`sessions` is null, which stop refuses"),
+        "null refusal names the shape: {null}"
+    );
+}
+
+#[test]
 fn configure_debug_never_shows_arguments() {
     let configure = Configure {
         operation: "store_key".into(),

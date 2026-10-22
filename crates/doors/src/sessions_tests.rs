@@ -1444,3 +1444,11 @@ fn session_entries_is_empty_for_a_missing_run_dir() {
     let dir = TempDir::new("doors-session-entries-missing");
     assert_eq!(session_entries(dir.path()).unwrap(), vec![]);
 }
+
+#[test]
+fn session_entries_propagates_a_non_not_found_error() {
+    let dir = TempDir::new("doors-session-entries-file");
+    std::fs::write(dir.path().join("run"), b"not a directory").unwrap();
+    let error = session_entries(dir.path()).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+}
