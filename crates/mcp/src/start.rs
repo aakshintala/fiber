@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -365,11 +365,7 @@ impl Servers {
     /// SIGTERM, the grace, then kill and reap. Never spawns: a slot locked
     /// by an in-flight start is stopped after that start returns.
     pub fn stop(&self) {
-        let slots = self
-            .slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+        let slots = support::lock(&self.slots).clone();
         thread::scope(|scope| {
             for slot in &slots {
                 scope.spawn(|| slot.stop());
@@ -382,15 +378,8 @@ impl Servers {
     /// after it. The adopted handles are copied onto this list's end,
     /// leaving the other list intact; neither declared flag is touched.
     pub fn adopt(&self, other: Servers) {
-        let more = other
-            .slots
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        self.slots
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(more);
+        let more = support::lock(&other.slots).clone();
+        support::lock(&self.slots).extend(more);
     }
 
     /// Records that this session already declares `mcp_resources`, so a
@@ -416,9 +405,7 @@ impl Servers {
     /// The slot `name` runs in, if it is named; `None` when the server
     /// never started.
     pub(crate) fn slot(&self, name: &str) -> Option<Arc<Slot>> {
-        self.slots
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.slots)
             .iter()
             .find(|slot| slot.spec().name == name)
             .cloned()
@@ -456,7 +443,7 @@ impl Servers {
     /// list lock is never held across the stop.
     pub(crate) fn remove(&self, name: &str) {
         let slot = {
-            let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut slots = support::lock(&self.slots);
             let position = slots.iter().position(|slot| slot.spec().name == name);
             match position {
                 Some(index) => slots.remove(index),
@@ -602,10 +589,7 @@ pub(crate) fn start_observed_tracked(
     let (done, results) = mpsc::channel();
     if let Some(outstanding) = outstanding.as_ref() {
         for (_, spec) in session.iter() {
-            outstanding
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(spec.name.clone());
+            support::lock(outstanding).insert(spec.name.clone());
         }
     }
     for (index, spec) in session.into_iter() {
@@ -631,10 +615,7 @@ pub(crate) fn start_observed_tracked(
                 &key,
             );
             if let Some(outstanding) = outstanding.as_ref() {
-                outstanding
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&name);
+                support::lock(outstanding).remove(&name);
             }
             done.send((index, required, staged)).unwrap_or(());
         });
@@ -737,9 +718,7 @@ pub(crate) fn resources_declaration(
     artifacts: &Path,
     images: &Arc<dyn Images>,
 ) -> Option<Declaration> {
-    let offering = slots
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    let offering = support::lock(slots)
         .iter()
         .any(|slot| slot.offers_resources());
     if !offering {

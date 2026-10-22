@@ -26,6 +26,9 @@ pub(crate) struct Binding {
     pub(crate) defaults: &'static [&'static str],
     /// The canonical event per variant.
     pub(crate) events: &'static [Canon],
+    /// The event each default key gives on its own, one per entry of
+    /// `defaults`: [`Canon::Action`] when the key gives none.
+    pub(crate) default_events: &'static [Canon],
 }
 
 /// Every binding, in the table's order.
@@ -40,6 +43,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT,
         defaults: &["enter"],
         events: &[Canon::Key(Key::Enter)],
+        default_events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "Sessions",
@@ -51,6 +55,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["shift+enter", "ctrl+j"],
         events: &[Canon::Edit(Edit::ShiftEnter)],
+        default_events: &[Canon::Edit(Edit::ShiftEnter), Canon::Edit(Edit::CtrlJ)],
     },
     Binding {
         area: "Sessions",
@@ -62,6 +67,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["esc"],
         events: &[Canon::Key(Key::Esc)],
+        default_events: &[Canon::Key(Key::Esc)],
     },
     Binding {
         area: "Sessions",
@@ -73,6 +79,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["ctrl+c"],
         events: &[Canon::Key(Key::CtrlC)],
+        default_events: &[Canon::Key(Key::CtrlC)],
     },
     Binding {
         area: "Sessions",
@@ -84,6 +91,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["alt+0"],
         events: &[Canon::Action],
+        default_events: &[Canon::Action],
     },
     Binding {
         area: "Sessions",
@@ -95,6 +103,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["ctrl+n"],
         events: &[Canon::Action],
+        default_events: &[Canon::Action],
     },
     Binding {
         area: "Sessions",
@@ -118,6 +127,17 @@ pub(crate) const BINDINGS: &[Binding] = &[
             Canon::Key(Key::AltDigit(8)),
             Canon::Key(Key::AltDigit(9)),
         ],
+        default_events: &[
+            Canon::Key(Key::AltDigit(1)),
+            Canon::Key(Key::AltDigit(2)),
+            Canon::Key(Key::AltDigit(3)),
+            Canon::Key(Key::AltDigit(4)),
+            Canon::Key(Key::AltDigit(5)),
+            Canon::Key(Key::AltDigit(6)),
+            Canon::Key(Key::AltDigit(7)),
+            Canon::Key(Key::AltDigit(8)),
+            Canon::Key(Key::AltDigit(9)),
+        ],
     },
     Binding {
         area: "Sessions",
@@ -129,6 +149,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::CONVERSATION,
         defaults: &["delete", "backspace"],
         events: &[Canon::Edit(Edit::Delete)],
+        default_events: &[Canon::Edit(Edit::Delete), Canon::Key(Key::Backspace)],
     },
     Binding {
         area: "The input box",
@@ -140,6 +161,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT,
         defaults: &["up"],
         events: &[Canon::Key(Key::Up)],
+        default_events: &[Canon::Key(Key::Up)],
     },
     Binding {
         area: "The input box",
@@ -151,6 +173,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT,
         defaults: &["left"],
         events: &[Canon::Edit(Edit::Left)],
+        default_events: &[Canon::Edit(Edit::Left)],
     },
     Binding {
         area: "The input box",
@@ -162,6 +185,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["ctrl+r"],
         events: &[Canon::Key(Key::CtrlR)],
+        default_events: &[Canon::Key(Key::CtrlR)],
     },
     Binding {
         area: "The input box",
@@ -180,6 +204,14 @@ pub(crate) const BINDINGS: &[Binding] = &[
             "alt+f",
         ],
         events: &[Canon::Edit(Edit::WordLeft), Canon::Edit(Edit::WordRight)],
+        default_events: &[
+            Canon::Edit(Edit::WordLeft),
+            Canon::Edit(Edit::WordRight),
+            Canon::Edit(Edit::WordLeft),
+            Canon::Edit(Edit::WordRight),
+            Canon::Edit(Edit::WordLeft),
+            Canon::Edit(Edit::WordRight),
+        ],
     },
     Binding {
         area: "The input box",
@@ -191,6 +223,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["alt+backspace"],
         events: &[Canon::Edit(Edit::DeleteWord)],
+        default_events: &[Canon::Edit(Edit::DeleteWord)],
     },
     Binding {
         area: "The input box",
@@ -202,6 +235,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["ctrl+u"],
         events: &[Canon::Edit(Edit::DeleteToLineStart)],
+        default_events: &[Canon::Edit(Edit::DeleteToLineStart)],
     },
     Binding {
         area: "The input box",
@@ -213,6 +247,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["super+left", "super+right"],
         events: &[Canon::Edit(Edit::LineStart), Canon::Edit(Edit::LineEnd)],
+        default_events: &[Canon::Edit(Edit::LineStart), Canon::Edit(Edit::LineEnd)],
     },
     Binding {
         area: "The input box",
@@ -224,6 +259,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["ctrl+g"],
         events: &[Canon::Key(Key::CtrlG)],
+        default_events: &[Canon::Key(Key::CtrlG)],
     },
     Binding {
         area: "The input box",
@@ -235,6 +271,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING,
         defaults: &["ctrl+v"],
         events: &[Canon::Key(Key::CtrlV)],
+        default_events: &[Canon::Key(Key::CtrlV)],
     },
     Binding {
         area: "The conversation",
@@ -246,6 +283,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["ctrl+o"],
         events: &[Canon::Key(Key::CtrlO)],
+        default_events: &[Canon::Key(Key::CtrlO)],
     },
     Binding {
         area: "The conversation",
@@ -257,6 +295,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["shift+tab"],
         events: &[Canon::Key(Key::BackTab)],
+        default_events: &[Canon::Key(Key::BackTab)],
     },
     Binding {
         area: "The conversation",
@@ -268,6 +307,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::CONVERSATION,
         defaults: &["down", "up", "j", "k"],
         events: &[Canon::Key(Key::Down), Canon::Key(Key::Up)],
+        default_events: &[
+            Canon::Key(Key::Down),
+            Canon::Key(Key::Up),
+            Canon::Key(Key::Char('j')),
+            Canon::Key(Key::Char('k')),
+        ],
     },
     Binding {
         area: "The conversation",
@@ -279,6 +324,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::CONVERSATION,
         defaults: &["enter"],
         events: &[Canon::Key(Key::Enter)],
+        default_events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "The conversation",
@@ -290,6 +336,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::CONVERSATION,
         defaults: &["y"],
         events: &[Canon::Key(Key::Char('y'))],
+        default_events: &[Canon::Key(Key::Char('y'))],
     },
     Binding {
         area: "The conversation",
@@ -301,6 +348,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::CONVERSATION,
         defaults: &["tab"],
         events: &[Canon::Key(Key::Tab)],
+        default_events: &[Canon::Key(Key::Tab)],
     },
     Binding {
         area: "The conversation",
@@ -312,6 +360,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["alt+p"],
         events: &[Canon::Key(Key::AltP)],
+        default_events: &[Canon::Key(Key::AltP)],
     },
     Binding {
         area: "The conversation",
@@ -323,6 +372,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["alt+r"],
         events: &[Canon::Key(Key::AltR)],
+        default_events: &[Canon::Key(Key::AltR)],
     },
     Binding {
         area: "The conversation",
@@ -334,6 +384,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["ctrl+f", "super+f"],
         events: &[Canon::Key(Key::CtrlF)],
+        default_events: &[Canon::Key(Key::CtrlF), Canon::Key(Key::CtrlF)],
     },
     Binding {
         area: "The conversation",
@@ -345,6 +396,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::SEARCH,
         defaults: &["ctrl+f", "super+f"],
         events: &[Canon::Key(Key::CtrlF)],
+        default_events: &[Canon::Key(Key::CtrlF), Canon::Key(Key::CtrlF)],
     },
     Binding {
         area: "The conversation",
@@ -356,6 +408,12 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::SEARCH,
         defaults: &["enter", "shift+enter", "down", "up"],
         events: &[Canon::Key(Key::Down), Canon::Key(Key::Up)],
+        default_events: &[
+            Canon::Key(Key::Enter),
+            Canon::Edit(Edit::ShiftEnter),
+            Canon::Key(Key::Down),
+            Canon::Key(Key::Up),
+        ],
     },
     Binding {
         area: "The conversation",
@@ -367,6 +425,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["end"],
         events: &[Canon::Key(Key::End)],
+        default_events: &[Canon::Key(Key::End)],
     },
     Binding {
         area: "Steering",
@@ -378,6 +437,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["alt+up", "alt+down"],
         events: &[Canon::Key(Key::AltUp), Canon::Key(Key::AltDown)],
+        default_events: &[Canon::Key(Key::AltUp), Canon::Key(Key::AltDown)],
     },
     Binding {
         area: "Steering",
@@ -389,6 +449,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::STEERING,
         defaults: &["enter"],
         events: &[Canon::Key(Key::Enter)],
+        default_events: &[Canon::Key(Key::Enter)],
     },
     Binding {
         area: "Steering",
@@ -400,6 +461,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["alt+x"],
         events: &[Canon::Key(Key::AltX)],
+        default_events: &[Canon::Key(Key::AltX)],
     },
     Binding {
         area: "Requests, models and help",
@@ -411,6 +473,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["alt+a"],
         events: &[Canon::Key(Key::AltA)],
+        default_events: &[Canon::Key(Key::AltA)],
     },
     Binding {
         area: "Requests, models and help",
@@ -422,6 +485,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::INPUT_STEERING_CONVERSATION,
         defaults: &["ctrl+l"],
         events: &[Canon::Key(Key::CtrlL)],
+        default_events: &[Canon::Key(Key::CtrlL)],
     },
     Binding {
         area: "Requests, models and help",
@@ -433,6 +497,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::PICKER,
         defaults: &["ctrl+s"],
         events: &[Canon::Action],
+        default_events: &[Canon::Action],
     },
     Binding {
         area: "Requests, models and help",
@@ -444,6 +509,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::PICKER,
         defaults: &["tab"],
         events: &[Canon::Key(Key::Tab)],
+        default_events: &[Canon::Key(Key::Tab)],
     },
     Binding {
         area: "Requests, models and help",
@@ -455,6 +521,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::PICKER,
         defaults: &["ctrl+r"],
         events: &[Canon::Key(Key::CtrlR)],
+        default_events: &[Canon::Key(Key::CtrlR)],
     },
     Binding {
         area: "Requests, models and help",
@@ -466,6 +533,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         contexts: Contexts::ALL,
         defaults: &["f1"],
         events: &[Canon::Key(Key::F1)],
+        default_events: &[Canon::Key(Key::F1)],
     },
 ];
 

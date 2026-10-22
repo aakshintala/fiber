@@ -72,8 +72,8 @@ fn loop_with(
     });
     lp.app.set_size(60, 12);
     let (tx, rx) = mpsc::channel();
-    lp.files_out = Some(tx);
-    lp.open_command = open;
+    lp.files_out = tx;
+    lp.programs.open = open;
     let dir = fakes::TempDir::new("tui-login");
     let out = dir.path().join("opened").display().to_string();
     (lp, rx, dir, out)
@@ -135,7 +135,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     let (mut lp, rx, dir, out) = loop_with(&seam, None);
     let _dir = dir;
     let watchdog = fakes::Watchdog::matching(&out);
-    lp.open_command = Some(
+    lp.programs.open = Some(
         ["/bin/sh", "-c", "printf %s \"$1\" > \"$0\"", &out]
             .map(str::to_owned)
             .to_vec(),
@@ -334,34 +334,6 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
     assert_eq!(
         seam.reviewer_saves(),
         [("codex".to_owned(), "m1".to_owned())]
-    );
-}
-
-#[test]
-fn without_a_channel_the_worker_never_starts_and_the_start_waits() {
-    let seam = seam();
-    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    lp.app
-        .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
-    lp.app.set_home(crate::Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git: false,
-        },
-        ..Default::default()
-    });
-    lp.app.set_size(60, 12);
-    assert!(lp.files_out.is_none());
-    start_login(&mut lp);
-    // No channel, so no worker: the seam recorded nothing and the view
-    // still waits.
-    assert!(seam.login_names().is_empty());
-    let rows = screen(&lp);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("Starting the login to codex…")),
-        "{rows:?}"
     );
 }
 

@@ -5,13 +5,14 @@
 //! "Streaming").
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::events::UsageRecorded;
 use contract::provider::CostLookup;
 use contract::{ActionId, GenerationId, TurnId};
+use support::lock;
 
 use crate::progress::SharedWake;
 
@@ -191,12 +192,6 @@ fn work(shared: &Shared, clock: &dyn Clock) {
             }
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // A panic aborts the process (`docs/code-quality.md`, "Panics"), so no
-    // holder can leave the lock poisoned.
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

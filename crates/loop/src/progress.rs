@@ -3,7 +3,7 @@
 //! stream wires each running call to the loop thread, which writes every
 //! `tool_call_delta`, and the shared wake is what that wait sleeps on.
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::ActionId;
@@ -12,6 +12,7 @@ use contract::emit::Emit;
 use contract::events::{Event, Progress};
 use contract::tool::{Answered, Ask, Asking, Output};
 use serde_json::Value;
+use support::lock;
 
 use crate::asking::AskSlot;
 use crate::inner_calls::InnerSlot;
@@ -349,10 +350,6 @@ impl Ask for Stream {
             .as_ref()
             .map(|slot| slot.clone() as Arc<dyn contract::tool::InnerCalls>)
     }
-}
-
-fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
