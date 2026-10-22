@@ -116,6 +116,17 @@ fn locate_configured<'a>(
 ) -> Option<(usize, &'a [String])> {
     let first = words.first()?;
     for (name, flags) in configured {
+        // A single word equal to the whole name, such as `'my tool'`: the
+        // person named one command holding a space.
+        if first.cooked == *name && !owned(name) {
+            return Some((1, flags));
+        }
+        // A name holding `/` is a path: unquoted, the shell splits it, so
+        // it matches only whole. A slash-free name is a subcommand path
+        // and matches word for word.
+        if name.contains('/') {
+            continue;
+        }
         let mut parts = name.split(' ');
         if parts.next() != Some(first.cooked.as_str()) {
             continue;

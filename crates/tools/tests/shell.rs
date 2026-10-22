@@ -2761,6 +2761,41 @@ fn a_plain_shell_executes_what_a_configured_shell_reads() {
 }
 
 #[test]
+fn a_shell_reads_the_new_git_forms_with_no_paths() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-git");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    for command in [
+        "git init",
+        "git status",
+        "git stash list",
+        "git push --dry-run",
+        "git branch --show-current",
+        "LC_ALL=C git status",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A leading assignment executes; a redirect or input file reads.
+    let effects = effects_of(&shell, "FOO=1 ls");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Executes]
+    );
+    let effects = effects_of(&shell, "ls 2>/dev/null");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+}
+
+#[test]
 fn one_shells_list_does_not_leak_into_another() {
     let dir = fakes::TempDir::new("fiber-shell-read-only-isolation");
     let workspace = dir.path().join("ws");

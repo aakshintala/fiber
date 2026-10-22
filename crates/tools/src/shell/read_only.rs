@@ -383,6 +383,18 @@ pub(super) const COMMANDS: &[Command] = &[
         prints: false,
         counts: false,
     },
+    // `git branch` has no row on its own: bare `git branch` lists and
+    // `git branch <name>` creates, so only this form reads, with no paths.
+    Command {
+        name: "git branch --show-current",
+        flags: &[],
+        paths: false,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
     Command {
         name: "git diff",
         flags: GIT_DIFF,

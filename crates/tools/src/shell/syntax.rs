@@ -377,7 +377,7 @@ fn cook_assignment(node: Node, src: &str) -> Option<(String, String)> {
 fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> bool {
     let mut descriptor = None;
     let mut operator = None;
-    let mut destination = None;
+    let mut destinations = Vec::new();
     for child in node.children(&mut node.walk()) {
         match child.kind() {
             "file_descriptor" => {
@@ -393,13 +393,10 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
                 descriptor = Some(text);
             }
             "word" | "number" | "string" | "raw_string" | "concatenation" => {
-                if destination.is_some() {
-                    return false;
-                }
                 let Some(word) = cook_word(child, src) else {
                     return false;
                 };
-                destination = Some(word);
+                destinations.push((word, child.end_byte()));
             }
             ">" | ">&" | "<" => {
                 if operator.is_some() {
@@ -413,6 +410,14 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
     let Some(operator) = operator else {
         return false;
     };
+    // The grammar attaches words after the destination to the redirect,
+    // as in `git 2>&1 status`: the first is the target, the rest are
+    // command operands the redirect stands among.
+    let mut destinations = destinations.into_iter();
+    let Some((destination, dst_end)) = destinations.next() else {
+        return false;
+    };
+    let extras: Vec<(Word, usize)> = destinations.collect();
     if descriptor.is_none() {
         descriptor = steal_descriptor(simple, node, src);
     }
@@ -421,9 +426,6 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
             if !matches!(descriptor.as_deref(), None | Some("1") | Some("2")) {
                 return false;
             }
-            let Some(destination) = destination else {
-                return false;
-            };
             if destination.cooked != "/dev/null" {
                 return false;
             }
@@ -433,9 +435,6 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
             if !matches!(descriptor.as_deref(), None | Some("1") | Some("2")) {
                 return false;
             }
-            let Some(destination) = destination else {
-                return false;
-            };
             if destination.cooked != "1" && destination.cooked != "2" {
                 return false;
             }
@@ -445,9 +444,6 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
             if !matches!(descriptor.as_deref(), None | Some("0")) {
                 return false;
             }
-            let Some(destination) = destination else {
-                return false;
-            };
             if destination.cooked.starts_with("/dev/tcp/")
                 || destination.cooked.starts_with("/dev/udp/")
             {
@@ -457,14 +453,24 @@ fn push_redirect(simple: &mut Simple, node: Node, src: &str, leading: bool) -> b
         }
         _ => return false,
     };
-    let Some(raw) = text(node, src) else {
+    let Some(raw) = src.get(node.start_byte()..dst_end).map(str::to_string) else {
         return false;
     };
     simple.redirects.push(redirect);
+    let mut spellings = vec![raw];
+    for (extra, _) in extras {
+        spellings.push(extra.raw.clone());
+        simple.words.push(Word {
+            raw: extra.raw.clone(),
+            cooked: extra.cooked.clone(),
+        });
+    }
     if leading {
-        simple.tokens.insert(0, raw);
+        for spelling in spellings.into_iter().rev() {
+            simple.tokens.insert(0, spelling);
+        }
     } else {
-        simple.tokens.push(raw);
+        simple.tokens.extend(spellings);
     }
     true
 }
