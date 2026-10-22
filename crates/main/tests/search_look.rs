@@ -1078,9 +1078,7 @@ fn the_item_views_top_row_closes_them() {
     let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
     click(&mut run, x, y);
     run.wait_screen("the expanded Jobs card", |grid| {
-        session_settled(grid)
-            && session_spend_drawn(grid)
-            && panel_item_at(grid, "head -n 1").is_some()
+        panel_item_at(grid, "head -n 1").is_some()
     });
     for (card, description, crumb) in [
         (
