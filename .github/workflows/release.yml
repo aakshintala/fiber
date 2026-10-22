@@ -13,7 +13,9 @@ name: Release
 # A daily schedule builds a nightly pre-release instead, when main moved
 # since the last nightly: the nightly preflight computes the next nightly
 # version and every later nightly job runs only when it publishes. A manual
-# dispatch (`gh workflow run release.yml`) is a nightly under the same check.
+# dispatch (`gh workflow run release.yml`) is a nightly under the same check,
+# unless it sets `-f rehearse=true`, which runs only the rehearsal job and
+# skips the nightly path.
 on:
   push:
     branches: [main]
@@ -25,13 +27,18 @@ on:
     - cron: '0 5 * * *'
   # A manual nightly, for a nightly before the cron's late start.
   workflow_dispatch:
+    inputs:
+      rehearse:
+        description: Run only the rehearsal job against a throwaway release.
+        type: boolean
+        default: false
 
 # Pushes share one group and nightlies, scheduled or manual, share another,
 # neither cancelling: stable releases run one at a time, in push order, a
 # nightly never blocks a stable release behind it, and a manual nightly never
 # overlaps a scheduled one.
 concurrency:
-  group: release-${{ github.event_name == 'push' && 'push' || 'nightly' }}
+  group: release-${{ github.event_name == 'push' && 'push' || 'nightly' }}${{ inputs.rehearse == true && '-rehearsal' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -113,7 +120,7 @@ jobs:
 
   nightly-preflight:
     name: Nightly preflight
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.rehearse != true
     runs-on: ubuntu-24.04
     # The selection job it mirrors gets 5 minutes (docs/ci.md, "Job time limits").
     timeout-minutes: 5
@@ -692,6 +699,81 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: scripts/release-pack draft-delete "${{ needs.nightly-preflight.outputs.nightly-version }}"
+
+  rehearsal:
+    name: Rehearsal
+    if: inputs.rehearse == true
+    runs-on: ubuntu-24.04
+    # A generous bound for the draft, the asset uploads and the publish (docs/ci.md, "Job time limits").
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # The deployment itself; the environment deploys only from main.
+    environment: release
+    env:
+      VERSION: 0.0.0-rehearsal.${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The notes range reads local history and tags, which a shallow
+          # checkout without tags does not hold.
+          fetch-depth: 0
+      - name: Stage the installer and stand-in target archives
+        # The stand-ins prove the draft/upload path, not archive validity:
+        # each names the target the real pack step would pack, with the
+        # checksum file beside it as sha256sum writes it, so the upload
+        # glob and the missing-file failure stay the same shape as the
+        # real publish.
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          scripts/release-pack stage-installer . "$RUNNER_TEMP/release"
+          for target in aarch64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            printf 'rehearsal stand-in for %s\n' "$target" > "$RUNNER_TEMP/release/payload.txt"
+            tar -czf "$RUNNER_TEMP/release/fiber-$target.tar.gz" -C "$RUNNER_TEMP/release" payload.txt
+            (cd "$RUNNER_TEMP/release" && sha256sum "fiber-$target.tar.gz" > "fiber-$target.tar.gz.sha256")
+          done
+          rm -f "$RUNNER_TEMP/release/payload.txt"
+          ls "$RUNNER_TEMP/release"/fiber-*.tar.gz "$RUNNER_TEMP/release"/fiber-*.tar.gz.sha256
+      - name: Create the draft, upload every asset, publish last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pack="$GITHUB_WORKSPACE/scripts/release-pack"
+          cd "$RUNNER_TEMP/release" || exit 1
+          # A rehearsal writes no CHANGELOG.md section and requires none:
+          # its notes are the commit range since the previous stable tag.
+          last_stable=$(git -C "$GITHUB_WORKSPACE" tag --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          "$pack" nightly-notes "${last_stable:-}" "$GITHUB_SHA" > notes.md
+          [ -s notes.md ] || { printf 'release: %s\n' "the $VERSION notes are empty." >&2; exit 1; }
+          "$pack" draft-begin --prerelease "$VERSION" "$GITHUB_SHA" notes.md
+          "$pack" draft-upload "$VERSION" install.sh fiber-*.tar.gz fiber-*.tar.gz.sha256
+          "$pack" draft-publish "$VERSION"
+      - name: Delete the rehearsal release and its tag
+        # Always runs, so a cancelled or ambiguously-published run still
+        # cleans up: the step inspects the release state and deletes a
+        # published release with `gh release delete`, a draft with
+        # `draft-delete`, and no-ops only on a confirmed not-found. Any
+        # other lookup failure fails the step instead of skipping the
+        # delete, and a failed delete fails the job.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2> "$RUNNER_TEMP/state.err") || {
+            if grep -qiE 'not found|could not find|no release|404' "$RUNNER_TEMP/state.err"; then
+              echo "no rehearsal release v$VERSION to delete."
+              exit 0
+            fi
+            cat "$RUNNER_TEMP/state.err" >&2
+            printf 'release: %s\n' "could not inspect the rehearsal release v$VERSION." >&2
+            exit 1
+          }
+          case $state in
+            false) gh release delete "v$VERSION" --cleanup-tag -y ;;
+            true) scripts/release-pack draft-delete "$VERSION" ;;
+            *) printf 'release: %s\n' "unexpected rehearsal release state: $state." >&2; exit 1 ;;
+          esac
 
   # Benchmarks report, never gate: a slow sample or a missing figure is a
   # line in the summary, not a failure (docs/ci.md, "Releases"). The Linux
