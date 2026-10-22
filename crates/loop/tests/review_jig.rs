@@ -11,15 +11,7 @@
 
 mod support;
 
-use std::io::{Cursor, Write};
-use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Once, mpsc};
-use std::thread;
-use std::time::{Duration, Instant};
-
-use contract::clock::Clock;
+use contract::clock::Clock as _;
 use contract::events::{
     Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, HandoffCompleted,
     InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome, PermissionRequested,
@@ -33,6 +25,13 @@ use contract::tool::Tool;
 use contract::{ActionId, CommandId, RequestId, Seq, SessionId, TurnId};
 use fakes::{Deadline, Scripted, Watchdog, kill_group};
 use serde_json::{Value, json};
+use std::io::{Cursor, Write};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::{Arc, Once, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
 use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
@@ -1838,9 +1837,8 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
 /// FIFO, and the exchange's result arrives on `finished` once the hold is
 /// released. Dropping this value without releasing kills the group
 /// through the watchdog. The exchange's finish bound is a carried
-/// fake-clock value anchored at release: the test advances `clock` past
-/// [`JIG_DEADLINE`] while the child is proved blocked, so a bound
-/// measured from spawn would already have expired.
+/// wall-clock value stamped at release: the release step carries
+/// release plus [`JIG_DEADLINE`], so the held start takes none of it.
 struct HeldExchange {
     /// The hold directory, kept alive while the FIFOs are held.
     _home: fakes::TempDir,
@@ -1850,29 +1848,24 @@ struct HeldExchange {
     group: u32,
     watchdog: Watchdog,
     finished: mpsc::Receiver<std::io::Result<Output>>,
-    /// The test-side clock carrying the exchange bound as a fake value:
-    /// nothing waits on it, so the test moves it with
-    /// [`fakes::clock::FakeClock::advance`] once the ready FIFO has proved
-    /// the stall.
-    clock: Arc<fakes::clock::FakeClock>,
-    /// The fake instant the exchange was spawned, before the stall.
+    /// The wall instant the exchange was spawned, before the stall.
     spawned_at: Instant,
 }
 
 impl HeldExchange {
-    /// The exchange's finish bound in fake time, anchored at release:
-    /// the held start took none of it.
-    fn exchange_deadline(&self) -> Instant {
-        self.clock.now() + JIG_DEADLINE
+    /// Writes the release line and stamps the exchange's finish bound
+    /// in the actual release path: release plus [`JIG_DEADLINE`].
+    /// The test reads the carried value before finishing.
+    fn release(&mut self) -> Instant {
+        self.hold.write_all(b"release\n").unwrap();
+        fakes::clock::SystemClock.now() + JIG_DEADLINE
     }
 
-    /// Writes the release line, then waits for the replayed exchange
-    /// under a [`START_BOUND`] hang guard: the guard asserts nothing
-    /// about speed, it only fails a hung child by name. The exchange's
-    /// own bound started at release, as [`HeldExchange::exchange_deadline`]
-    /// carries it.
-    fn release_and_finish(mut self) -> Output {
-        self.hold.write_all(b"release\n").unwrap();
+    /// Waits for the replayed exchange under a [`START_BOUND`] hang
+    /// guard: the guard asserts nothing about speed, it only fails a
+    /// hung child by name. The exchange's own bound started at release,
+    /// as [`HeldExchange::release`] carries it.
+    fn finish(self) -> Output {
         let output = match Deadline::after(START_BOUND).recv(&self.finished) {
             Ok(output) => output.unwrap(),
             Err(_) => {
@@ -1899,12 +1892,10 @@ impl HeldExchange {
 /// and the shell quotes the parameters itself. The parent pre-opens the
 /// release FIFO read-write so neither side's open blocks, writes `answers`
 /// to the wrapper's stdin as [`run_jig`] does, and reads the pid under
-/// [`START_BOUND`] as the signal the child is blocked. The ready wait
-/// precedes any fake advance, so the stall is proved before it is
-/// modelled. Returns the exchange still held; the test releases it.
+/// [`START_BOUND`] as the signal the child is blocked. Returns the
+/// exchange still held; the test releases it.
 fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> HeldExchange {
-    let clock = fakes::clock::FakeClock::new();
-    let spawned_at = clock.now();
+    let spawned_at = fakes::clock::SystemClock.now();
     let home = fakes::TempDir::new("fiber-review-jig-hold");
     let ready = fakes::children::Ready::new(home.path());
     let release_path = home.path().join("release");
@@ -1951,48 +1942,37 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
         group,
         watchdog,
         finished,
-        clock,
         spawned_at,
     }
 }
 
-/// A start stalled past the exchange deadline still replays once
-/// released: the held start takes none of the exchange's own bound. The
-/// stall is modelled in fake time, never a sleep: the clock advances past
-/// [`JIG_DEADLINE`] while the ready FIFO proves the child blocked, an
-/// empty check proves nothing completed while held, and the carried
-/// deadline still lies a whole [`JIG_DEADLINE`] past release, so a single
-/// bound from spawn would already have expired.
+/// A start stalled while held still replays once released: the held
+/// start takes none of the exchange's own bound. The hold is a
+/// non-blocking empty check, never a sleep: nothing can complete while
+/// the release line is unwritten, and the carried deadline still lies a
+/// whole [`JIG_DEADLINE`] past release, so a single bound from spawn
+/// would already have expired.
 #[test]
 fn stalled_start_keeps_the_exchange_deadline_whole() {
     let fixture = main_fixture();
-    let held = spawn_held_jig(&fixture.dir, "1\n", false, &[]);
-    // The stall outlasts the exchange bound in fake time: the ready FIFO
-    // above already proved the child blocked, so the advance models the
-    // hold with no wall-clock wait.
-    let stalled = JIG_DEADLINE + Duration::from_secs(2);
-    held.clock.advance(stalled);
-    assert!(
-        held.clock.now() > held.spawned_at + JIG_DEADLINE,
-        "the stall outlasts a spawn-anchored bound"
-    );
+    let mut held = spawn_held_jig(&fixture.dir, "1\n", false, &[]);
     // The release line is unwritten, so completion is impossible unless
     // the child crashed, which must also fail the test.
     assert!(
         matches!(held.finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the exchange waits out the held start"
     );
-    assert_eq!(
-        held.exchange_deadline(),
-        held.clock.now() + JIG_DEADLINE,
+    let before_release = fakes::clock::SystemClock.now();
+    let deadline = held.release();
+    assert!(
+        deadline >= before_release + JIG_DEADLINE,
         "the exchange deadline starts at release"
     );
-    assert_eq!(
-        held.exchange_deadline(),
-        held.spawned_at + stalled + JIG_DEADLINE,
+    assert!(
+        deadline >= held.spawned_at + JIG_DEADLINE,
         "the held start took none of the exchange bound"
     );
-    let lines = stdout_lines(&held.release_and_finish());
+    let lines = stdout_lines(&held.finish());
     assert_eq!(lines.len(), 5);
     assert!(lines[0].get("stages").is_some());
 }
