@@ -112,13 +112,25 @@ fn closing_row(row: &str) -> String {
     if !after.is_empty() && !after.starts_with(" · ") {
         return row.to_owned();
     }
-    let kept = after
+    let (kept, pad) = after
         .strip_prefix(" · ")
         .and_then(|tail| {
             let n = duration_len(tail)?;
-            (tail[n..].is_empty() || tail[n..].starts_with(" · ")).then_some(&tail[n..])
+            (tail[n..].is_empty() || tail[n..].starts_with(" · ")).then_some((&tail[n..], n + 3))
         })
-        .unwrap_or(after);
+        .unwrap_or((after, 0));
+    // The drawn row gave the padding after the duration n + 3 fewer
+    // columns while the duration was present, so hand them back at the
+    // first wide space run. A frame-adjacent run counts even as one
+    // space, since the fill before `⋮` shrinks to one. A bare row holds
+    // no wide run and no frame, and reads on unchanged.
+    let mut kept = kept.to_owned();
+    if let Some(from) = kept.find("  ") {
+        kept.insert_str(from, &" ".repeat(pad));
+    } else if let Some(body) = kept.strip_suffix("⋮") {
+        let trimmed = body.trim_end_matches(' ');
+        kept.insert_str(trimmed.len(), &" ".repeat(pad));
+    }
     format!("{head} · [duration]{kept}")
 }
 
@@ -168,7 +180,11 @@ fn tool_group(row: &str) -> String {
     for (space, _) in body.match_indices(' ') {
         let tail = &body[space + 1..];
         if duration_len(tail) == Some(tail.len()) {
-            return format!("{} [duration]{suffix}", &body[..space]);
+            // The drawn row gave the padding before the duration n - 2
+            // fewer columns than the 2-char form, so hand them back.
+            // n is at least 2, so a 2-char duration adds nothing.
+            let pad = " ".repeat(tail.len() - 2);
+            return format!("{}{pad} [duration]{suffix}", &body[..space]);
         }
     }
     row.to_owned()
