@@ -92,7 +92,9 @@ A pull request runs only what its diff can affect.
   `tui`. A change to `docs/ci.md` or `docs/performance.md` runs `xtask`, whose tests pin the fast attaching ceiling to the 9V45 class data in `xtask/tests/class_data/`, recomputed from it by the `docs/performance.md` rule. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
-  string literal. Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+  string literal. Tests read a repository file only by compiling it in,
+  except a package reader's read of a first-party package through
+  `CARGO_MANIFEST_DIR` (next item); the gate fails on any other run-time read.
   An `include_str!` path resolves from the source file that holds it.
 - A diff under `providers/` or `extensions/` runs the binary-level tests
   and every crate whose tests read a first-party package. The selector lists
@@ -154,7 +156,8 @@ On Linux x86_64 alone:
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
-  string literal, and no crate reads a repository file at run time
+  string literal, and no crate reads a repository file at run time but a
+  package reader reading a first-party package ("Selection")
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
