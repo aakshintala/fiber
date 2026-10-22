@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -57,12 +57,7 @@ impl WakeRaceClock {
     }
 
     fn wake_subscriber(&self) {
-        let waker = self
-            .waker
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .and_then(Weak::upgrade);
+        let waker = support::lock(&self.waker).as_ref().and_then(Weak::upgrade);
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -103,7 +98,7 @@ impl Clock for WakeRaceClock {
     }
 
     fn subscribe(&self, waker: Weak<dyn Wake>) {
-        *self.waker.lock().unwrap_or_else(PoisonError::into_inner) = Some(waker.clone());
+        *support::lock(&self.waker) = Some(waker.clone());
         self.inner.subscribe(waker);
     }
 }

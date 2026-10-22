@@ -15,7 +15,7 @@
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -34,16 +34,13 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::{Map, Value, json};
+use support::lock;
 
 use crate::{BlockLimits, Loop, Model, Reviewer};
 
 /// How long a test waits for a turn, a handshake or a parked wait: the one
 /// named deadline every receive and join in this file carries.
 const WAIT: Duration = Duration::from_secs(5);
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 // One-shot test controls, reached only from in-fence sites. Each arm is
 // consumed by its next hook call; production holds no observer.
