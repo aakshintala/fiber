@@ -1,13 +1,7 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&settled.rows, settled.cursor, settled.hide_cursor, &ids)"
+expression: "grid_text(&second.rows, second.cursor, second.hide_cursor, &ids)"
 ---
-
-
-
-
-
-
 
 
 
@@ -25,29 +19,35 @@ expression: "grid_text(&settled.rows, settled.cursor, settled.hide_cursor, &ids)
 
    you answered · HH:MM ────────────────────────────────────────────────────────────────────────────────────────────────────
    Scope        tui
-⋮  Tests        skipped                                                                                                       ⋮
-⋮  Docs         "2"                                                                                                           ⋮
-⋮                                                                                                                             ⋮
+   Tests        skipped
+   Docs         "2"
+
    Thanks.
 
    ▣ completed · [duration] · 1 call
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-                                                                                                                     ▄▄▄▄▄▄▄▄
+⋮ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ⋮
+⋮                                                                                                                             ⋮
+⋮                                                                                                                    ▄▄▄▄▄▄▄▄ ⋮
                                                                                                                       again ▐
                                                                                                                      ▀▀▀▀▀▀▀▀
                                                                                                                    you HH:MM
 
   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-   ● Asked 3 questions                                                                                                  [duration] ▸
-
-   declined: the turn ended so you could answer in your own words
-
-   Thanks after decline.
-
-   ▣ interrupted · [duration] · 1 call
+   * Asked 3 questions · ask_user 3 questions                                                                           [duration] ▸
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ▌ › █
+ ▌ Question from run it · 3 questions, any can be skipped                                                 Esc: chat about this
+ ▌
+ ▌ ←  ☐ Scope    ☐ Tests    ☐ Docs    ✔ Submit  →
+ ▌
+ ▌ Which crates should the change touch?
+ ▌ choose any
+ ▌
+ ▌ ▸ 1 [ ] hub  the session host
+ ▌   2 [ ] tui  the terminal
+ ▌   3 ✎ Type an answer, alone or with the options
+ ▌   Next →
+ ▌
+ ▌ ←→ question · ↑↓ choose · Enter chooses and moves on · Space toggles · type to answer in words
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(46,5)
+cursor=hidden

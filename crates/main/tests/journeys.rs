@@ -429,13 +429,26 @@ fn journey_question_form_answered_then_declined() {
         "question_form_answered",
         grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
     );
-    // The session's second form: Esc declines it, and the declined answer
-    // goes to a free-text model call whose reply closes the turn.
+    // The session's second form, snapshotted open before Esc declines it.
     let decline_from = run.output().len();
     run.write(b"again\r");
     run.wait_screen("the second form", |screen| {
         form_drawn(screen) && shows(screen, "Thanks.")
     });
+    run.wait_bytes(
+        decline_from,
+        WAITING_TITLE,
+        "the second question turn waiting",
+    );
+    let second = run.wait_screen("the second form without a working line", |screen| {
+        form_drawn(screen) && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "question_form_second_open",
+        grid_text(&second.rows, second.cursor, second.hide_cursor, &ids)
+    );
+    // The declined answer starts a free-text model call; quitting right
+    // after the decline leaves that call's reply unwaited and unsnapshotted.
     run.write(b"\x1b[27u");
     let declined = run.wait_screen("the declined form", |screen| {
         shows(screen, "declined") && !shows(screen, "Question from")
@@ -444,19 +457,6 @@ fn journey_question_form_answered_then_declined() {
         declined.contents.contains("declined"),
         "{}",
         declined.contents
-    );
-    run.wait_screen("the follow-up reply", |screen| {
-        shows(screen, "Thanks after decline.")
-    });
-    run.turn_finished(decline_from);
-    let settled = run.wait_screen("the closed declined turn", |screen| {
-        shows(screen, "Thanks after decline.")
-            && shows(screen, "▣ interrupted")
-            && !shows(screen, "Esc to interrupt")
-    });
-    insta::assert_snapshot!(
-        "question_form_declined",
-        grid_text(&settled.rows, settled.cursor, settled.hide_cursor, &ids)
     );
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |screen| {
@@ -677,13 +677,21 @@ fn journey_interrupt_then_retried_answer() {
     let id = only_session(&setup);
     let log = fs::read_to_string(sessions(&setup).join(id).join("events.jsonl")).unwrap();
     let lines = support::complete_lines(&log);
-    let failed = lines
+    let failed: Vec<&Value> = lines
         .iter()
         .filter(|line| {
             line["kind"] == "assistant_message_completed" && line["payload"]["outcome"] == "failed"
         })
-        .count();
-    assert_eq!(failed, 1, "one failed model call in the log: {lines:#?}");
+        .collect();
+    assert_eq!(
+        failed.len(),
+        1,
+        "one failed model call in the log: {lines:#?}"
+    );
+    assert_eq!(
+        failed[0]["payload"]["error"]["code"],
+        "provider_unavailable"
+    );
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |screen| {
         !screen.alternate_screen && !screen.hide_cursor && shows(screen, "fiber resume")
