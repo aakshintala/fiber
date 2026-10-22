@@ -31,7 +31,7 @@ use serde_json::Value;
 /// One server's place in the session: what [`Slot::run`] starts, calls,
 /// restarts or refuses, and what [`Slot::stop`] stops.
 pub(crate) struct Slot {
-    spec: ServerSpec,
+    spec: Mutex<ServerSpec>,
     workspace: PathBuf,
     cache: PathBuf,
     clock: Arc<dyn Clock>,
@@ -249,7 +249,7 @@ impl Slot {
                         restarted: *restarted,
                         list_tools: *advertises_tools,
                         list_prompts: *advertises_prompts,
-                        timeout: self.spec.startup_timeout,
+                        timeout: lock(&self.spec).startup_timeout,
                         resources: self.resources,
                     }
                 }
@@ -260,7 +260,8 @@ impl Slot {
                     // server is gone too and the guard above covered the live
                     // case. It died while idle: this re-list is the first to see
                     // it, as the entry of `serve` is for a call.
-                    let death = died(&self.spec.name, !*restarted, self.spec.remote());
+                    let snapshot = lock(&self.spec).clone();
+                    let death = died(&snapshot.name, !*restarted, snapshot.remote());
                     return Relisted::Replace {
                         record: Some(ServerRecord::Failed(death.record)),
                     };
@@ -284,12 +285,13 @@ impl Slot {
                 // the handshake's listing shares, restartable as a death
                 // the next call would restart. Built without moving the
                 // slot.
+                let snapshot = lock(&self.spec).clone();
                 let mut death = not_started(
-                    &self.spec.name,
+                    &snapshot.name,
                     &crate::server::StartError::Deadline,
-                    self.spec.startup_timeout,
-                    self.spec.required,
-                    self.spec.remote(),
+                    snapshot.startup_timeout,
+                    snapshot.required,
+                    snapshot.remote(),
                 );
                 death.record.will_restart = true;
                 Relisted::Replace {
@@ -299,7 +301,8 @@ impl Slot {
             relist::Fetched::Failed {
                 error: Some(CallError::Gone),
             } => {
-                let death = died(&self.spec.name, !restarted, self.spec.remote());
+                let snapshot = lock(&self.spec).clone();
+                let death = died(&snapshot.name, !restarted, snapshot.remote());
                 Relisted::Replace {
                     record: Some(ServerRecord::Failed(death.record)),
                 }
@@ -327,7 +330,7 @@ impl Slot {
             State::Dead { .. } => false,
         };
         Arc::new(Self {
-            spec,
+            spec: Mutex::new(spec),
             workspace: workspace.to_path_buf(),
             cache: cache.to_path_buf(),
             clock: Arc::clone(clock),
@@ -426,9 +429,19 @@ impl Slot {
         self.resources
     }
 
-    /// The server's spec: its name, timeouts and transport.
-    pub(crate) fn spec(&self) -> &ServerSpec {
-        &self.spec
+    /// The server's spec: its name, timeouts and transport. Cloned under
+    /// a short lock, never held across a launch or an RPC, so a reload
+    /// that swaps the spec cannot wedge against a concurrent call.
+    pub(crate) fn spec(&self) -> ServerSpec {
+        lock(&self.spec).clone()
+    }
+
+    /// Persists the reload's new spec on a kept slot, so the slot, the
+    /// next classify and the call timeouts read the re-declared values.
+    /// The staged declaration already used this spec; the swap lands at
+    /// apply, beside the re-listed install.
+    pub(crate) fn set_spec(&self, spec: ServerSpec) {
+        *lock(&self.spec) = spec;
     }
 
     /// Whether the slot served before and serves no more: `Down`
@@ -553,7 +566,8 @@ impl Slot {
                         return Served::Up(Arc::clone(server), records);
                     } else {
                         // It died while idle: this call is the first to see it.
-                        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+                        let snapshot = lock(&self.spec).clone();
+                        let death = died(&snapshot.name, !*restarted, snapshot.remote());
                         records.push(ServerRecord::Failed(death.record.clone()));
                         if *restarted {
                             *state = State::Dead {
@@ -595,8 +609,9 @@ impl Slot {
         if let Some(hook) = lock(&self.after_reserve).take() {
             hook();
         }
-        let timeout = self.spec.startup_timeout;
-        let name = self.spec.name.clone();
+        let snapshot = lock(&self.spec).clone();
+        let timeout = snapshot.startup_timeout;
+        let name = snapshot.name.clone();
         // The slot's own context follows the attempt; the launch owns
         // the guard and consumes it at the tool-list boundary, dropping
         // what remains on the failure path here, with no lock held.
@@ -605,7 +620,7 @@ impl Slot {
         // its spec unspawned until its first call, so a check at
         // preparation alone would run a file created in between unapproved.
         match crate::start::launch_observed(
-            &self.spec,
+            &snapshot,
             &self.workspace,
             &self.clock,
             &self.version,
@@ -619,7 +634,7 @@ impl Slot {
                 let advertises_tools = open.advertises_tools;
                 let advertises_prompts = open.advertises_prompts;
                 if live != listed {
-                    cache::write(&self.cache, &name, &self.spec.key(), &live);
+                    cache::write(&self.cache, &name, &snapshot.key(), &live);
                 }
                 let tools = names(&live.tools);
                 let server = Arc::new(open.server);
@@ -643,7 +658,7 @@ impl Slot {
                 // A failed first start is the server's one death; a failed
                 // restart is its second. A failed renewal is a death of
                 // the server it replaces, keeping the restart it held.
-                let mut death = not_started(&name, &error, timeout, false, self.spec.remote());
+                let mut death = not_started(&name, &error, timeout, false, snapshot.remote());
                 death.record.will_restart = !restart;
                 let error = death.error.clone();
                 records.push(ServerRecord::Failed(death.record));
@@ -685,7 +700,7 @@ impl Slot {
                     | State::Dead { .. } => {
                         return Run::Failed(Box::new(RunFailed {
                             error: McpError::ServerUnavailable {
-                                server: self.spec.name.clone(),
+                                server: lock(&self.spec).name.clone(),
                             },
                             records,
                         }));
@@ -716,7 +731,8 @@ impl Slot {
         if !server.is_gone() {
             return None;
         }
-        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+        let snapshot = lock(&self.spec).clone();
+        let death = died(&snapshot.name, !*restarted, snapshot.remote());
         Some(ServerRecord::Failed(death.record))
     }
 
@@ -730,7 +746,9 @@ impl Slot {
             CallError::Cancelled => Fault::Cancelled,
             CallError::JsonRpc { message, .. } => Fault::Refused(message),
             CallError::Http(message) => Fault::Refused(message),
-            CallError::Login(detail) => Fault::Refused(login_sentence(&self.spec.name, &detail)),
+            CallError::Login(detail) => {
+                Fault::Refused(login_sentence(&lock(&self.spec).name, &detail))
+            }
             CallError::Expired => Fault::Expired,
             CallError::Gone => match self.died(server) {
                 Some(death) => Fault::Died(death),
@@ -801,7 +819,8 @@ impl Slot {
         if !Arc::ptr_eq(server, gone) {
             return None;
         }
-        let death = died(&self.spec.name, !*restarted, self.spec.remote());
+        let snapshot = lock(&self.spec).clone();
+        let death = died(&snapshot.name, !*restarted, snapshot.remote());
         *state = if *restarted {
             State::Dead {
                 error: death.error.clone(),
@@ -833,7 +852,7 @@ impl Slot {
             State::Dead { error } => error.clone(),
             State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => {
                 McpError::ServerUnavailable {
-                    server: self.spec.name.clone(),
+                    server: lock(&self.spec).name.clone(),
                 }
             }
         };

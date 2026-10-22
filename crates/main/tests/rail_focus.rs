@@ -39,15 +39,18 @@ const HOME_COUNTS: &str = "2 working · $0.00 live";
 /// Adds 0x14 to each channel of an `Rgb` colour: the hover lift the
 /// paint pass lays over a focused card.
 fn lifted(colour: &Colour) -> Colour {
+    try_lift(colour).unwrap_or_else(|| panic!("an Rgb tint, not {colour:?}"))
+}
+
+/// [`lifted`] without the panic: `None` for a colour that is not `Rgb`.
+fn try_lift(colour: &Colour) -> Option<Colour> {
     match colour {
-        Colour::Rgb(red, green, blue) => Colour::Rgb(
+        Colour::Rgb(red, green, blue) => Some(Colour::Rgb(
             red.saturating_add(0x14),
             green.saturating_add(0x14),
             blue.saturating_add(0x14),
-        ),
-        Colour::Default | Colour::Indexed(_) => {
-            panic!("an Rgb tint, not {colour:?}")
-        }
+        )),
+        Colour::Default | Colour::Indexed(_) => None,
     }
 }
 
@@ -61,13 +64,18 @@ fn card_row(grid: &Grid, name: &str) -> usize {
     card_row_at(grid, name).unwrap_or_else(|| panic!("a card for {name:?}:\n{}", grid.contents))
 }
 
+/// The background of the first card's third-column cell, `None` when the
+/// grid holds no such card.
+fn first_card_bg(grid: &Grid) -> Option<Colour> {
+    card_row_at(grid, "first live").map(|row| grid.cell(2, u16::try_from(row).unwrap()).bg)
+}
+
 /// Which of the three hint-and-lift conditions holds on `grid`: the foot
 /// hint, the first card's lift, the second card's flat tint. A missing
 /// card counts as false, so the report names it instead of panicking.
 fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool, bool) {
     let hint = grid.contents.contains(HINT_MIDDLE);
-    let first = card_row_at(grid, "first live")
-        .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == lifted(raised));
+    let first = first_card_bg(grid).is_some_and(|bg| bg == lifted(raised));
     let second = card_row_at(grid, "second live")
         .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == *flat);
     (hint, first, second)
@@ -75,13 +83,18 @@ fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool,
 
 /// Waits for the hint and the lifted first card, reporting which of the
 /// three conditions was false in the last checked grid when the wait
-/// expires. It keeps `wait_screen`'s deadline and fast-fail path: the
+/// expires, with the first card's actual background (`none` when the card
+/// is absent), `raised` and `lifted(raised)`. It keeps `wait_screen`'s deadline and fast-fail path: the
 /// report rides on the timeout panic instead of replacing it.
 #[track_caller]
 fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
     let last = std::cell::Cell::new((false, false, false));
+    let first_bg = std::cell::Cell::new(None);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run.wait_screen("the hint and the lifted first card", |grid| {
+            // Recorded before the checks: a `lifted` panic still leaves the
+            // card's background for the report.
+            first_bg.set(first_card_bg(grid));
             let checks = hint_lift_checks(grid, raised, flat);
             last.set(checks);
             checks.0 && checks.1 && checks.2
@@ -100,8 +113,15 @@ fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
                 })
                 .unwrap_or_else(|| "the hint and the lifted first card".to_owned());
             let (hint, first, second) = last.get();
+            let card = first_bg
+                .get()
+                .map_or_else(|| "none".to_owned(), |bg| format!("{bg:?}"));
+            let lift = try_lift(raised).map_or_else(
+                || "none (raised is not Rgb)".to_owned(),
+                |lift| format!("{lift:?}"),
+            );
             panic!(
-                "{base}; last check: hint present={hint}, first card lifted={first}, second card flat={second}"
+                "{base}; last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}"
             );
         }
     }
@@ -471,6 +491,18 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
         message.contains("left when the wait began"),
         "the failure names the spent deadline: {message:?}"
     );
+    assert!(
+        message.contains("first card bg=none,"),
+        "the failure says the first card is absent: {message:?}"
+    );
+    assert!(
+        message.contains("raised=Rgb(10, 20, 30),"),
+        "the failure names the raised tint: {message:?}"
+    );
+    assert!(
+        message.contains("lifted(raised)=Rgb(30, 40, 50)"),
+        "the failure names the lifted tint: {message:?}"
+    );
     // A grid holding only the hint: the hint flips true while both tints
     // stay false, so a flipped `&&` (an `||`) would stop failing here.
     let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
@@ -507,5 +539,63 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     assert!(
         message.contains("second card flat=false"),
         "the failure still names the second card: {message:?}"
+    );
+}
+
+/// The failure message of a spent-deadline hint-and-lift wait on a grid
+/// holding a first card painted with background `1;2;3` and nothing else.
+fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) -> String {
+    use std::io::Write;
+
+    let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
+    let deadline = support::Deadline::on(&**clock);
+    let terminal = support::pty::open(80, 24);
+    let main = std::fs::File::from(terminal.main);
+    let mut run = Run::attach(main, 80, 24, deadline);
+    let mut terminal_side = terminal.terminal;
+    let from = run.output().len();
+    terminal_side
+        .write_all(b"\x1b[48;2;1;2;3m  first live\x1b[0m")
+        .unwrap();
+    run.wait_bytes(from, b"first live\x1b[0m", "the fed card");
+    // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
+    clock.advance(support::WAITS);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_hint_lifted(&mut run, raised, flat)
+    }));
+    result
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The report carries the first card's actual background beside `raised`
+/// and `lifted(raised)`, and survives a `raised` that cannot be lifted:
+/// the `lifted` panic inside the check no longer hides the card's tint.
+#[test]
+fn hint_lift_report_shows_the_first_cards_actual_background() {
+    let flat = Colour::Rgb(40, 50, 60);
+    let message = spent_wait_message_with_a_painted_first_card(&Colour::Rgb(10, 20, 30), &flat);
+    assert!(
+        message.contains("first card lifted=false"),
+        "the painted card is not the lifted tint: {message:?}"
+    );
+    assert!(
+        message.contains(
+            "first card bg=Rgb(1, 2, 3), raised=Rgb(10, 20, 30), lifted(raised)=Rgb(30, 40, 50)"
+        ),
+        "the failure names the card's tint beside both references: {message:?}"
+    );
+    let message = spent_wait_message_with_a_painted_first_card(&Colour::Indexed(7), &flat);
+    assert!(
+        message.contains("an Rgb tint, not Indexed(7)"),
+        "the original panic stays in the report: {message:?}"
+    );
+    assert!(
+        message.contains(
+            "first card bg=Rgb(1, 2, 3), raised=Indexed(7), lifted(raised)=none (raised is not Rgb)"
+        ),
+        "the report survives a raised tint that cannot lift: {message:?}"
     );
 }
