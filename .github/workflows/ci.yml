@@ -872,7 +872,7 @@ jobs:
           flake_body() {
             printf '%s\n%s' "$1" "$tested"
             if [ -n "$detail" ]; then
-              printf '\n```\n%s\n```' "$detail"
+              printf "\n\`\`\`\n%s\n\`\`\`" "$detail"
             fi
           }
           for file in "$dir"/flaky-tests-*.txt; do
