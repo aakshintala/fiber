@@ -209,21 +209,27 @@ impl Loop {
     }
 
     /// Called once by `Loop::resume`: writes `model_changed` with `before`
-    /// = `recorded` when `recorded` is `Some`, its `credential` is `Some`,
-    /// and that label differs from the session's label. A rewound loop
-    /// passes `None` and writes nothing (`docs/events.md`,
-    /// "`model_changed`").
+    /// = `recorded` when the started session's settings differ from it in
+    /// model, thinking or credential label: a resume that starts the
+    /// process and switches model or thinking records the switch as a
+    /// driver would, and a `--credential` resume keeps its recorded label
+    /// switch (`docs/events.md`, "`model_changed`"). A rewound loop
+    /// passes `None` and writes nothing, as does a resume that switches
+    /// nothing.
     pub(crate) fn resumed_label(&mut self, recorded: Option<ModelSettings>) -> Result<(), Error> {
         let Some(recorded) = recorded else {
             return Ok(());
         };
         // A `preamble_built` with no `credential` field folds to settings
-        // with `credential: None`, and records no label to switch from; the
-        // same label as the session's writes nothing either.
-        if recorded.credential.is_none() || recorded.credential == self.prompt.credential {
+        // with `credential: None`, and records no label to switch from;
+        // unchanged settings write nothing either.
+        let credential_switch =
+            recorded.credential.is_some() && recorded.credential != self.prompt.credential;
+        let after = self.settings();
+        let model_switch = recorded.model != after.model || recorded.thinking != after.thinking;
+        if !credential_switch && !model_switch {
             return Ok(());
         }
-        let after = self.settings();
         self.write(
             &Event::ModelChanged(ModelChanged {
                 before: recorded,
