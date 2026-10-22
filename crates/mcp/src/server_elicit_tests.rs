@@ -91,25 +91,12 @@ fn two_field_elicitation() -> String {
 
 /// Waits, at most `WITHIN`, until request `id` has a response in its slot:
 /// the second signal the elicitation tests wait for before releasing the
-/// asker. Each turn reads the slot through `view`, then parks until `seq`
-/// moves past the value that `view` read, so a response landing between the
-/// two is not missed. The test takes `id` as `next_id() + 1` before its call
-/// starts, with no other request issued until this returns.
-fn await_response(shared: &super::Shared, id: u64) {
-    let wait = Deadline::after(WITHIN);
-    loop {
-        let view = shared.view(id, &super::NoCancel);
-        if view.response.is_some() {
-            return;
-        }
-        let state = crate::registry::lock(&shared.inner);
-        let (state, timeout) = shared
-            .cv
-            .wait_timeout_while(state, wait.left(), |state| state.seq == view.seq)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        drop(state);
-        assert!(!timeout.timed_out(), "a response lands within {WITHIN:?}");
-    }
+/// asker. The test takes `id` as `next_id() + 1` before its call starts,
+/// with no other request issued until this returns.
+fn await_response(shared: Arc<super::Shared>, id: u64) {
+    crate::test_support::await_until("a response lands", move || {
+        shared.view(id, &super::NoCancel).response.is_some()
+    });
 }
 
 /// One ordinary echo call on `server`: the fixture reads stdin in order
@@ -416,7 +403,7 @@ fn a_cancel_after_an_elicitation_cancels_despite_the_response() {
     );
     Deadline::after(WITHIN).recv_or_fail(&seen, "the first field's ask");
     write_fifo(setup.dir.path().join("release-ask"), "the result is sent");
-    await_response(&server.inner.shared, id);
+    await_response(Arc::clone(&server.inner.shared), id);
     cancel.cancel();
     send.send(Answered::NoAnswer).expect("the ask ends");
     assert_eq!(
@@ -474,7 +461,7 @@ fn a_deadline_after_an_elicitation_times_out_despite_the_response() {
     );
     Deadline::after(WITHIN).recv_or_fail(&seen, "the first field's ask");
     write_fifo(setup.dir.path().join("release-ask"), "the result is sent");
-    await_response(&server.inner.shared, id);
+    await_response(Arc::clone(&server.inner.shared), id);
     // The clock advances only now that the ask and the response are both
     // observed: the handler declines, then its own deadline wins over the
     // response delivered meanwhile.
@@ -597,7 +584,7 @@ fn the_last_remover_declines_what_is_still_queued() {
     // result lands while it waits, so the queue-then-remove order the
     // remover must handle happens on every run.
     Deadline::after(WITHIN).recv_or_fail(&entered, "the call registers");
-    await_response(&server.inner.shared, id);
+    await_response(Arc::clone(&server.inner.shared), id);
     go_tx.send(()).expect("the gate opens");
     assert_eq!(
         Deadline::after(WITHIN)
