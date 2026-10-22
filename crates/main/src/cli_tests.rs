@@ -1863,6 +1863,13 @@ fn stop_takes_an_optional_listed_hub() {
 }
 
 #[test]
+fn hub_stop_stays_a_usage_error() {
+    let said = sentence(&["fiber", "hub", "stop"]);
+    assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+    assert_eq!(said.lines().count(), 1, "{said}");
+}
+
+#[test]
 fn hub_with_a_subcommand_or_without_an_id_is_a_usage_sentence() {
     for args in [
         &["fiber", "--hub", "box", "sessions"][..],
