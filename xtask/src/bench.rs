@@ -9,6 +9,8 @@
 //! live base feeds only the timing columns; memory and exact rows compare
 //! against the backstop's stored results for the base commit.
 
+use serde_json::Value;
+
 use crate::rules::{section, table_rows};
 
 mod attach;
@@ -307,6 +309,100 @@ fn size_lines(head: Option<&results::Results>, base: &Base, base_commit: &str) -
     lines
 }
 
+/// The debug-run section, from the head's `op_breakdown`: one table row per
+/// operation with `provider_request` last, then each workload's error and
+/// notes as bullets. Empty without `op_breakdown`, so a file without it
+/// renders as before. Reported only: nothing here reaches the failures.
+fn breakdown_lines(head: Option<&results::Results>) -> Vec<String> {
+    let Some(metric) = head.and_then(|head| head.metrics.get("op_breakdown")) else {
+        return Vec::new();
+    };
+    let mut lines = vec![
+        String::new(),
+        "### Debug run".to_owned(),
+        String::new(),
+        "Each timing and busy workload ran once more at `diagnostics.level: \"debug\"`; never a sample, never gated (`docs/performance.md`, \"Measuring\").".to_owned(),
+        String::new(),
+    ];
+    match breakdown_rows(metric) {
+        Ok((rows, bullets)) => {
+            lines.push("| Workload | Run ms | Operation | Count | Total ms |".to_owned());
+            lines.push("|---|---|---|---|---|".to_owned());
+            lines.extend(rows);
+            if !bullets.is_empty() {
+                lines.push(String::new());
+                lines.extend(bullets);
+            }
+        }
+        Err(why) => lines.push(format!("The debug run could not be read: {why}.")),
+    }
+    lines
+}
+
+/// The table rows and the bullets of each `op_breakdown` entry, or why the
+/// metric cannot be read.
+fn breakdown_rows(metric: &Value) -> Result<(Vec<String>, Vec<String>), String> {
+    let entries = metric.as_array().ok_or("op_breakdown is not a list")?;
+    let (mut rows, mut bullets) = (Vec::new(), Vec::new());
+    for entry in entries {
+        let workload = entry
+            .get("workload")
+            .and_then(Value::as_str)
+            .ok_or("an entry has no workload name")?;
+        let ms = entry
+            .get("ms")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| format!("{workload} has no run time"))?;
+        let ops = entry
+            .get("ops")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{workload} has no ops"))?;
+        let provider = entry
+            .get("provider_request")
+            .ok_or_else(|| format!("{workload} has no provider_request"))?;
+        let requests = whole(provider, "count", workload)?;
+        let total_ms = whole(provider, "total_ms", workload)?;
+        let mut ops: Vec<(&String, &Value)> = ops.iter().collect();
+        ops.sort_by(|a, b| a.0.cmp(b.0));
+        if ops.is_empty() && requests == 0 {
+            rows.push(format!("| {workload} | {ms:.1} | none recorded | — | — |"));
+        } else {
+            for (op, value) in &ops {
+                let count = whole(value, "count", workload)?;
+                let total = whole(value, "ms", workload)?;
+                rows.push(format!(
+                    "| {workload} | {ms:.1} | {op} | {count} | {total} |"
+                ));
+            }
+            rows.push(format!(
+                "| {workload} | {ms:.1} | provider_request total_ms | {requests} | {total_ms} |"
+            ));
+        }
+        if let Some(error) = entry.get("error") {
+            let error = error.as_str().ok_or("an entry error is not text")?;
+            bullets.push(format!("- {workload}: failed: {error}"));
+        }
+        for note in entry
+            .get("notes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let note = note.as_str().ok_or("an entry note is not text")?;
+            bullets.push(format!("- {workload}: {note}"));
+        }
+    }
+    Ok((rows, bullets))
+}
+
+/// A whole number at `field` of `value`, for a breakdown entry of `workload`.
+fn whole(value: &Value, field: &str, workload: &str) -> Result<u64, String> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{workload} has no whole {field}"))
+}
+
 fn comment(
     lines: &[Line],
     failures: &[String],
@@ -368,6 +464,10 @@ fn comment(
         for failure in failures {
             out.push_str(&format!("- {failure}\n"));
         }
+    }
+    for line in breakdown_lines(head) {
+        out.push_str(&line);
+        out.push('\n');
     }
     out.push_str("\n### Not measured\n\n");
     for (budget, owner) in NOT_MEASURED {
