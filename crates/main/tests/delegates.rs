@@ -5513,10 +5513,12 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // the reload, and the cancelled end. `clients`, `session_status` and
     // `attention` are independently triggered (`docs/testing.md`, "Event
     // streams"), so they are set aside; every other line is pinned.
-    // `extension_ui` and `delegate_started` arrive in either order: the
+    // `extension_ui` floats against `job_started`/`delegate_started`: the
     // command writes its status after `host.delegate` returns, while the
-    // service writes the start beside the child's spawn, with no order
-    // between them. Either placement is valid; anything duplicated,
+    // loop writes `job_started` with no ordering edge between them, and
+    // `delegate_started` follows the child's spawn. `job_started` always
+    // precedes `delegate_started`; `extension_ui` may land before, between,
+    // or after them. Those three placements are valid; anything duplicated,
     // missing or otherwise reordered fails.
     let kinds = owned_kinds(&stream);
     let ordered: Vec<&str> = kinds
@@ -5543,8 +5545,12 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     ];
     let mut ui_first = started_first;
     ui_first.swap(5, 6);
+    let mut ui_before_job = started_first;
+    ui_before_job[4] = "extension_ui";
+    ui_before_job[5] = "job_started";
+    ui_before_job[6] = "delegate_started";
     assert!(
-        ordered == started_first || ordered == ui_first,
+        ordered == started_first || ordered == ui_first || ordered == ui_before_job,
         "unexpected stream: {ordered:?}"
     );
     drop(client);
