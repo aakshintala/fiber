@@ -1,8 +1,6 @@
 //! The draft editor: the input box's text, its cursor and its paste
 //! tokens (`docs/tui.md`, "The input box").
 
-use ratatui::text::Span;
-
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -644,7 +642,7 @@ impl Draft {
                 }
                 Piece::Char(ch) => {
                     let ch = if *ch == '\t' { ' ' } else { *ch };
-                    let w = char_width(ch);
+                    let w = crate::text::char_width(ch);
                     wrap(&mut rows, &mut col, w);
                     at.push(place(&rows, col));
                     push(&mut rows, ch);
@@ -652,7 +650,7 @@ impl Draft {
                 }
                 Piece::Paste { number, label, .. } => {
                     for (index, ch) in label.chars().enumerate() {
-                        let w = char_width(ch);
+                        let w = crate::text::char_width(ch);
                         wrap(&mut rows, &mut col, w);
                         let (row, start) = place(&rows, col);
                         if index == 0 {
@@ -677,7 +675,7 @@ impl Draft {
                 Piece::Image { .. } => {
                     image = image.saturating_add(1);
                     for (index, ch) in image_label(image).chars().enumerate() {
-                        let w = char_width(ch);
+                        let w = crate::text::char_width(ch);
                         wrap(&mut rows, &mut col, w);
                         let (row, start) = place(&rows, col);
                         if index == 0 {
@@ -758,12 +756,6 @@ fn push(rows: &mut [String], ch: char) {
     if let Some(row) = rows.last_mut() {
         row.push(ch);
     }
-}
-
-/// The columns `ch` takes on screen, as ratatui measures it.
-fn char_width(ch: char) -> usize {
-    let mut buf = [0u8; 4];
-    Span::raw(&*ch.encode_utf8(&mut buf)).width()
 }
 
 #[cfg(test)]

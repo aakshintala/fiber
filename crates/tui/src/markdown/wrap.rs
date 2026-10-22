@@ -14,13 +14,13 @@ pub(super) type Cell = (char, Style);
 
 /// `text` cut to `room` cells, ending in `…` when cut.
 pub(super) fn truncate(text: &str, room: usize) -> String {
-    if cells_width(text) <= room {
+    if crate::text::width(text) <= room {
         return text.to_owned();
     }
     let mut out = String::new();
     let mut used = 0usize;
     for ch in text.chars() {
-        let width = char_width(ch);
+        let width = crate::text::char_width(ch);
         if used.saturating_add(width).saturating_add(1) > room {
             break;
         }
@@ -31,17 +31,6 @@ pub(super) fn truncate(text: &str, room: usize) -> String {
         out.push('…');
     }
     out
-}
-
-/// The cells `ch` takes on screen.
-pub(super) fn char_width(ch: char) -> usize {
-    let mut buf = [0u8; 4];
-    Span::raw(&*ch.encode_utf8(&mut buf)).width()
-}
-
-/// The cells `text` takes on screen.
-pub(super) fn cells_width(text: &str) -> usize {
-    Span::raw(text).width()
 }
 
 /// Wraps `cells` into lines `width` wide, the first after `first` and the
@@ -114,7 +103,10 @@ pub(super) fn wrap_joined_indices(
         let piece = cells.get(at..end).unwrap_or_default();
         let start = at;
         at = end;
-        let width: usize = piece.iter().map(|(ch, _)| char_width(*ch)).sum();
+        let width: usize = piece
+            .iter()
+            .map(|(ch, _)| crate::text::char_width(*ch))
+            .sum();
         let room = if rows.is_empty() { first } else { rest };
         // A word that overflows goes to the next row when it fits there.
         if words && !row.is_empty() && used.saturating_add(width) > room && width <= rest {
@@ -137,7 +129,7 @@ pub(super) fn wrap_joined_indices(
         // One pass per cell of the piece.
         for (offset, &cell) in piece.iter().enumerate() {
             let room = if rows.is_empty() { first } else { rest };
-            let width = char_width(cell.0);
+            let width = crate::text::char_width(cell.0);
             if used.saturating_add(width) > room && !row.is_empty() {
                 rows.push((std::mem::take(&mut row), join, std::mem::take(&mut indices)));
                 join = Join::Wrap;
@@ -173,11 +165,11 @@ pub(super) fn link_cols(
         {
             let mut start = prefix;
             for (ch, _) in row.get(..first).unwrap_or_default() {
-                start = start.saturating_add(char_width(*ch));
+                start = start.saturating_add(crate::text::char_width(*ch));
             }
             let mut end = start;
             for (ch, _) in cells {
-                end = end.saturating_add(char_width(*ch));
+                end = end.saturating_add(crate::text::char_width(*ch));
             }
             let start = u16::try_from(start).unwrap_or(u16::MAX);
             let end = u16::try_from(end).unwrap_or(u16::MAX);

@@ -1,6 +1,6 @@
 //! Tests for the text helpers.
 
-use super::{controls_to_space, paste_clean, printable, strip_controls};
+use super::{char_width, controls_to_space, cut, paste_clean, printable, strip_controls, width};
 
 #[test]
 fn paste_clean_turns_line_ends_into_newlines_and_drops_controls() {
@@ -42,4 +42,41 @@ fn printable_is_false_for_c0_c1_and_del() {
     for ch in ['\t', '\n', '\u{7f}', '\u{85}', '\u{1b}'] {
         assert!(!printable(ch), "{ch:?}");
     }
+}
+
+#[test]
+fn width_counts_columns() {
+    assert_eq!(width("abc"), 3);
+    assert_eq!(width("語"), 2);
+    assert_eq!(width(""), 0);
+    // A control character takes one column, as `cut` and `wrap` count it.
+    assert_eq!(width("\u{1b}"), 1);
+}
+
+#[test]
+fn char_width_counts_columns() {
+    assert_eq!(char_width('a'), 1);
+    assert_eq!(char_width('語'), 2);
+    assert_eq!(char_width('\u{301}'), 0);
+}
+
+#[test]
+fn cut_without_an_ellipsis_keeps_what_fits() {
+    assert_eq!(cut("abcdef", 3, ""), "abc");
+    assert_eq!(cut("abc", 2, ""), "ab");
+    // A wide grapheme that does not fit is dropped whole.
+    assert_eq!(cut("語語", 3, ""), "語");
+    assert_eq!(cut("語語", 1, ""), "");
+    assert_eq!(cut("", 3, ""), "");
+}
+
+#[test]
+fn cut_with_an_ellipsis_ends_in_it_only_when_it_cuts() {
+    assert_eq!(cut("abcdef", 6, "…"), "abcdef");
+    assert_eq!(cut("abcdefg", 6, "…"), "abcde…");
+    assert_eq!(cut("abcdefg", 1, "…"), "…");
+    assert_eq!(cut("abcdefg", 0, "…"), "");
+    assert_eq!(cut("caf\u{e9}x", 5, "…"), "caf\u{e9}x");
+    assert_eq!(cut("語語語", 4, "…"), "語…");
+    assert_eq!(cut("", 0, "…"), "");
 }
