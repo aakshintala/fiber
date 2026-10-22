@@ -1022,9 +1022,10 @@ sends no `maxTokens`, because Nova 2 Lite refuses it beside that level.
 
 Fiber picks the model for a session in this order:
 
-1. The model a resumed session was using.
-2. `--model`, which both doors accept: `fiber ask`, and the terminal, which
-   passes it to each session it starts.
+1. `--model` given on a resume that starts the process, which both doors
+   accept: `fiber ask`, and the terminal, which passes it to each session
+   it starts. `-c model=` on the same run joins this layer.
+2. The model a resumed session was using.
 3. The default in config.
 
 If none of these gives a model, the terminal opens a model picker, and saving
