@@ -750,8 +750,6 @@ const SENTINEL: Duration = Duration::from_secs(60);
 
 /// Makes `dir/name` a fifo the timer callbacks below write to signal they
 /// fired: `host.fs.write` blocks until the test opens it for reading.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
 fn timer_fifo(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     fakes::fifo(&path);
