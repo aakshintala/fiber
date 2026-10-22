@@ -1,6 +1,6 @@
 ---
 source: crates/main/tests/journeys.rs
-expression: "grid_text(&open.rows, open.cursor, &ids)"
+expression: "grid_text(&open.rows, open.cursor, open.hide_cursor, &ids)"
 ---
 
 
@@ -50,4 +50,4 @@ expression: "grid_text(&open.rows, open.cursor, &ids)"
  ▌
  ▌ ←→ question · ↑↓ choose · Enter chooses and moves on · Space toggles · type to answer in words
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-cursor=(46,97)
+cursor=hidden

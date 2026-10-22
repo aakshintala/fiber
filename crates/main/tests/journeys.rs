@@ -14,10 +14,15 @@
 
 mod support;
 
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::pty::{Grid, Run, WAITING_TITLE};
-use support::{Setup, TRUECOLOUR, write_json};
+use support::pty::{Grid, KITTY_PUSH, Run, WAITING_TITLE};
+use support::{Deadline, PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
 
 /// The spinner glyphs of the working line: braille frames, or `●` under
 /// reduced motion.
@@ -196,10 +201,12 @@ fn provider_heading(row: &str) -> String {
 
 /// What changes every run, replaced before a snapshot. The settled grid's
 /// text: each row right-trimmed, rows joined by `\n`, then
-/// `\ncursor=(<row>,<col>)`, after the replacements, in order: `ids`,
-/// image names, clock times, the closing row, the working line, a
-/// tool-group summary, the provider heading.
-fn grid_text(rows: &[String], cursor: (u16, u16), ids: &[String]) -> String {
+/// `\ncursor=(<row>,<col>)`, or `\ncursor=hidden` when the cursor is hidden:
+/// a hidden cursor's parked coordinate is not user-visible and varies
+/// between identical frames. The replacements run in order: `ids`, image
+/// names, clock times, the closing row, the working line, a tool-group
+/// summary, the provider heading.
+fn grid_text(rows: &[String], cursor: (u16, u16), hide_cursor: bool, ids: &[String]) -> String {
     let mut text = Vec::with_capacity(rows.len() + 1);
     for row in rows {
         let mut row = row.trim_end().to_owned();
@@ -213,7 +220,11 @@ fn grid_text(rows: &[String], cursor: (u16, u16), ids: &[String]) -> String {
         let row = tool_group(&row);
         text.push(provider_heading(&row).trim_end().to_owned());
     }
-    text.push(format!("cursor=({},{})", cursor.0, cursor.1));
+    text.push(if hide_cursor {
+        "cursor=hidden".to_owned()
+    } else {
+        format!("cursor=({},{})", cursor.0, cursor.1)
+    });
     text.join("\n")
 }
 
@@ -221,7 +232,7 @@ fn grid_text(rows: &[String], cursor: (u16, u16), ids: &[String]) -> String {
 #[cfg(test)]
 fn one(row: &str, ids: &[&str]) -> String {
     let ids: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
-    let text = grid_text(&[row.to_owned()], (0, 0), &ids);
+    let text = grid_text(&[row.to_owned()], (0, 0), false, &ids);
     text.strip_suffix("\ncursor=(0,0)").unwrap().to_owned()
 }
 
@@ -395,7 +406,21 @@ fn a_reply_that_says_working_is_left_alone() {
 #[test]
 fn rows_are_trimmed_and_the_cursor_line_is_last() {
     let rows = ["a   ".to_owned(), String::new(), "  b ".to_owned()];
-    assert_eq!(grid_text(&rows, (29, 4), &[]), "a\n\n  b\ncursor=(29,4)");
+    assert_eq!(
+        grid_text(&rows, (29, 4), false, &[]),
+        "a\n\n  b\ncursor=(29,4)"
+    );
+}
+
+#[test]
+fn a_hidden_cursor_reads_hidden_wherever_it_is_parked() {
+    let rows = ["a".to_owned()];
+    assert_eq!(grid_text(&rows, (29, 4), true, &[]), "a\ncursor=hidden");
+    assert_eq!(grid_text(&rows, (0, 7), true, &[]), "a\ncursor=hidden");
+    assert_ne!(
+        grid_text(&rows, (29, 4), false, &[]),
+        grid_text(&rows, (0, 7), false, &[])
+    );
 }
 
 /// The one `tui` config object every journey writes: no rail and no panel
@@ -528,7 +553,7 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     assert!(shows(&opened, "beta-2"), "beta-2 lists before the filter");
     insta::assert_snapshot!(
         "model_picker_open",
-        grid_text(&opened.rows, opened.cursor, &ids)
+        grid_text(&opened.rows, opened.cursor, opened.hide_cursor, &ids)
     );
     // What only the display name carries narrows the list to `alpha-1`.
     run.write(b"opus 5.5");
@@ -543,7 +568,7 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     assert!(!shows(&filtered, "beta-2"), "beta-2 dropped out");
     insta::assert_snapshot!(
         "model_picker_by_name",
-        grid_text(&filtered.rows, filtered.cursor, &ids)
+        grid_text(&filtered.rows, filtered.cursor, filtered.hide_cursor, &ids)
     );
     // Clear the query, find `beta-2` and choose it: the picker closes.
     run.write(b"\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7fbeta");
@@ -580,7 +605,7 @@ fn journey_model_picker_by_name_switch_answer_quit_from_picker() {
     });
     insta::assert_snapshot!(
         "model_picker_answered_on_beta",
-        grid_text(&answered.rows, answered.cursor, &ids)
+        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
     );
     let requests = server.requests();
     let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
@@ -651,7 +676,7 @@ fn journey_question_form_answered_then_declined() {
     });
     insta::assert_snapshot!(
         "question_form_open",
-        grid_text(&open.rows, open.cursor, &ids)
+        grid_text(&open.rows, open.cursor, open.hide_cursor, &ids)
     );
     // Answer the first form: a digit chooses an option, → and Tab move
     // between questions, Enter on Submit answers.
@@ -684,7 +709,7 @@ fn journey_question_form_answered_then_declined() {
     });
     insta::assert_snapshot!(
         "question_form_answered",
-        grid_text(&answered.rows, answered.cursor, &ids)
+        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
     );
     // The session's second form: Esc declines it and ends the turn.
     run.write(b"again\r");
@@ -705,7 +730,7 @@ fn journey_question_form_answered_then_declined() {
     );
     insta::assert_snapshot!(
         "question_form_declined",
-        grid_text(&declined.rows, declined.cursor, &ids)
+        grid_text(&declined.rows, declined.cursor, declined.hide_cursor, &ids)
     );
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |screen| {
@@ -713,4 +738,334 @@ fn journey_question_form_answered_then_declined() {
     });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
+}
+
+/// Installs a provider `fake` with model `m` on `openai-responses` at the
+/// fake server, `model_extra` merged into the model, and writes
+/// `config.json` once: `fake/m` as the model, the hub idling out a second
+/// after its last client, `tui_off()`, and each top-level key of
+/// `extra_config` other than `tui`.
+fn provider_full(
+    setup: &Setup,
+    model_extra: &Value,
+    server: &ProviderServer,
+    extra_config: &Value,
+) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    let mut model = json!({"id": "m", "protocol": "openai-responses",
+        "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+    for (key, value) in model_extra.as_object().unwrap() {
+        model[key] = value.clone();
+    }
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [model]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let mut config = json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}, "tui": tui_off()});
+    for (key, value) in extra_config.as_object().unwrap() {
+        if key != "tui" {
+            config[key] = value.clone();
+        }
+    }
+    write_json(&setup.home().join("config.json"), &config);
+}
+
+/// [`provider_full`], with the fake model declaring `input`
+/// `["text", "image"]`, so a pasted image is sent as an image part.
+fn provider_with_images(setup: &Setup, server: &ProviderServer) {
+    provider_full(
+        setup,
+        &json!({"input": ["text", "image"]}),
+        server,
+        &json!({}),
+    );
+}
+
+/// The project's sessions directory, through the canonical workspace,
+/// as the project key names it.
+fn sessions(setup: &Setup) -> PathBuf {
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    setup.home().join("projects").join(key).join("sessions")
+}
+
+/// The one session in [`sessions`].
+fn only_session(setup: &Setup) -> String {
+    let mut ids: Vec<String> = fs::read_dir(sessions(setup))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(ids.len(), 1, "one session");
+    ids.pop().unwrap()
+}
+
+/// Waits under the test's [`Deadline`] until `socket` exists or not, as
+/// `present` says, naming `what` on expiry.
+#[track_caller]
+fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
+    let socket = socket.to_owned();
+    let (done, reached) = mpsc::channel();
+    thread::spawn(move || {
+        while socket.exists() != present {
+            thread::yield_now();
+        }
+        done.send(()).unwrap_or(());
+    });
+    assert!(
+        deadline.recv(&reached).is_ok(),
+        "waited until the deadline for {what}"
+    );
+}
+
+/// Whether the grid's text holds the answer to the pasted image, drawn
+/// with its image line.
+fn pixel_answered(screen: &Grid) -> bool {
+    shows(screen, "A pixel.") && shows(screen, "· 1×1")
+}
+
+/// An image pasted from the clipboard, answered, the session closed and
+/// resumed from the list: the image line and the answer draw again from
+/// the log.
+#[test]
+fn journey_image_paste_answer_close_resume() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("A pixel.")]).unwrap();
+    provider_with_images(&setup, &server);
+    // A fake clipboard program first on the child's PATH, printing the
+    // pixel in its real program's form.
+    let bin = setup.root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let (name, body) = if cfg!(target_os = "macos") {
+        let hex: String = PIXEL.iter().map(|byte| format!("{byte:02X}")).collect();
+        (
+            "osascript",
+            format!("printf '\\302\\253data PNGf{hex}\\302\\273\\n'"),
+        )
+    } else {
+        let octal: String = PIXEL.iter().map(|byte| format!("\\{byte:03o}")).collect();
+        ("wl-paste", format!("printf '{octal}'"))
+    };
+    fakes::script(&bin, name, &body);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let mut env: Vec<(&str, &str)> = vec![
+        ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ("PATH", path.to_str().unwrap()),
+    ];
+    if !cfg!(target_os = "macos") {
+        env.push(("WAYLAND_DISPLAY", "fiber-test"));
+    }
+    let mut run = Run::spawn(&setup, 120, 32, &[], &env);
+    let mut ids: Vec<String> = Vec::new();
+    run.wait_screen("the first frame", |screen| shows(screen, "›"));
+    run.ready();
+    run.write(&[0x16]);
+    run.wait_screen("the pasted image", |screen| shows(screen, "[Image #1]"));
+    run.write(b" what is this");
+    let pasted = run.wait_screen("the image beside its text", |screen| {
+        shows(screen, "[Image #1] what is this")
+    });
+    insta::assert_snapshot!(
+        "image_paste_pasted",
+        grid_text(&pasted.rows, pasted.cursor, pasted.hide_cursor, &ids)
+    );
+    let from = run.output().len();
+    run.write(b"\r");
+    run.wait_screen("the answer with its image line", pixel_answered);
+    run.turn_finished(from);
+    let answered = run.wait_screen("the closed turn", |screen| {
+        pixel_answered(screen) && shows(screen, "▣ completed") && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "image_paste_answered",
+        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+    );
+    // The request carries the pasted image as an image part.
+    let requests = server.requests();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let image = json!({"type": "input_image", "image_url": format!("data:image/png;base64,{PIXEL_BASE64}")});
+    assert!(
+        body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["content"].as_array())
+            .flatten()
+            .any(|part| *part == image),
+        "the request carries the pasted image: {body}"
+    );
+    // `/close` stops the session; nothing live remains to print a resume
+    // line, so the restored primary screen is the quit.
+    let id = only_session(&setup);
+    ids.push(id.clone());
+    run.write(b"/close\r");
+    until_socket(
+        setup.deadline,
+        &setup.home().join("run").join(&id),
+        false,
+        "the closed session to exit",
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    // Resume lists the closed session by its first prompt; Enter opens it,
+    // and the image line, the answer and the close draw from the log.
+    let mut run = Run::spawn(&setup, 120, 32, &["resume"], &env);
+    run.wait_screen("the first frame", |screen| shows(screen, "›"));
+    run.ready();
+    run.wait_screen("the session list", |screen| shows(screen, "what is this"));
+    let attached = run.output().len();
+    run.write(b"\r");
+    let drawn = |screen: &Grid| {
+        screen.alternate_screen && pixel_answered(screen) && shows(screen, "▣ completed")
+    };
+    run.wait_screen("the resumed conversation", drawn);
+    // The attach title orders the open before the grid is read.
+    run.wait_bytes(
+        attached,
+        support::pty::TITLE,
+        "the attached session's title",
+    );
+    let resumed = run.wait_screen("the resumed conversation, attached", drawn);
+    insta::assert_snapshot!(
+        "image_paste_resumed",
+        grid_text(&resumed.rows, resumed.cursor, resumed.hide_cursor, &ids)
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor && shows(screen, "fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// Whether the grid shows a working line with its elapsed count:
+/// "Working" plus a digit right after its space. The working line draws
+/// only once `turn_started` has opened the turn, so an Esc sent after it
+/// is never dropped as not-busy.
+fn working_elapsed(contents: &str) -> bool {
+    contents.match_indices("Working ").any(|(at, _)| {
+        contents[at + "Working ".len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_digit())
+    })
+}
+
+#[test]
+fn working_elapsed_needs_the_count() {
+    assert!(working_elapsed("Working 0s · Esc to interrupt"));
+    assert!(working_elapsed("Working 39s · Esc to interrupt"));
+    assert!(working_elapsed("Working 1m 2s · Esc to interrupt"));
+    assert!(!working_elapsed("Working · Esc to interrupt"));
+    assert!(!working_elapsed("Working"));
+    assert!(!working_elapsed("idle"));
+}
+
+/// A reply that stalls mid-body: the turn stays running until cancelled.
+fn stalled() -> Response {
+    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
+    Response::stall(200, prefix, prefix.len() + 100000).header("content-type", "text/event-stream")
+}
+
+/// An interrupted turn, then a turn whose first model call fails with a
+/// 500 that Fiber retries to an answer.
+#[test]
+fn journey_interrupt_then_retried_answer() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start([stalled(), Response::status(500, "{}"), reply("Recovered.")])
+            .unwrap();
+    provider_full(
+        &setup,
+        &json!({}),
+        &server,
+        &json!({"retry": {"attempts": 3, "initial_delay_ms": 0, "max_delay_ms": 0}}),
+    );
+    let mut run = Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "sk-test")]);
+    let ids: Vec<String> = Vec::new();
+    run.wait_screen("the first frame", |screen| shows(screen, "›"));
+    run.ready();
+    // The loop pushes kitty's flags only after it processes the harness's
+    // reply, so this also keeps the responder's pty write ahead of input.
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    run.write(b"say hi\r");
+    // The elapsed count proves `turn_started` folded, which opens the
+    // turn: Esc goes out as `cancel` only while the turn is busy.
+    run.wait_screen("the running turn", |screen| {
+        working_elapsed(&screen.contents)
+    });
+    run.write(b"\x1b[27u");
+    let interrupted = run.wait_screen("the interrupted turn", |screen| {
+        screen.alternate_screen
+            && shows(screen, "▣ interrupted")
+            && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "interrupt_retry_interrupted",
+        grid_text(
+            &interrupted.rows,
+            interrupted.cursor,
+            interrupted.hide_cursor,
+            &ids
+        )
+    );
+    // The close folded, so the terminal is idle and Enter sends a prompt.
+    let from = run.output().len();
+    run.write(b"again\r");
+    run.wait_screen("the recovered answer", |screen| shows(screen, "Recovered."));
+    run.turn_finished(from);
+    let answered = run.wait_screen("the closed turn", |screen| {
+        shows(screen, "Recovered.")
+            && shows(screen, "▣ completed")
+            && !shows(screen, "Esc to interrupt")
+    });
+    insta::assert_snapshot!(
+        "interrupt_retry_answered",
+        grid_text(&answered.rows, answered.cursor, answered.hide_cursor, &ids)
+    );
+    // The stalled call, the 500 and its retry make three requests, and
+    // the log holds the one failed call: the retry, not the turn, took the
+    // 500.
+    assert_eq!(server.requests().len(), 3);
+    let id = only_session(&setup);
+    let log = fs::read_to_string(sessions(&setup).join(id).join("events.jsonl")).unwrap();
+    let lines = support::complete_lines(&log);
+    let failed = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "assistant_message_completed" && line["payload"]["outcome"] == "failed"
+        })
+        .count();
+    assert_eq!(failed, 1, "one failed model call in the log: {lines:#?}");
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor && shows(screen, "fiber resume")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }

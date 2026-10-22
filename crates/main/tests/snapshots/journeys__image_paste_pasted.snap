@@ -1,0 +1,37 @@
+---
+source: crates/main/tests/journeys.rs
+expression: "grid_text(&pasted.rows, pasted.cursor, pasted.hide_cursor, &ids)"
+---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.0
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    no live sessions
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+
+
+
+
+
+
+
+
+
+                                                    No sessions yet.
+                                        Type below and press Enter to start one.
+
+
+
+
+
+
+
+
+
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  › [Image #1] what is this█
+
+  [w]  [fake/m]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map ·
+cursor=(27,27)
