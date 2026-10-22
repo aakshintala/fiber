@@ -291,6 +291,15 @@ When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. A `notice` with code
 `skill_shadowed` names both paths.
 
+The first-party `init` extension (`docs/extensions.md`, "A fresh install") ships
+one prompt template, `init`, so `/init` works on a fresh install. It asks the
+session's model to survey the workspace and write or improve the workspace's
+instruction file (see "Instruction files"): `AGENTS.md` if present is improved;
+otherwise an existing `CLAUDE.md` is improved in place; with neither, the model
+writes `AGENTS.md`. The model makes the change with the ordinary `write` and
+`edit` tools under the ordinary permission review. `init` is not a built-in
+command. A person's own `init` skill or template wins under the precedence above.
+
 An MCP server's prompt named like a skill is left out, whatever the skill's
 source, and of two servers' prompts with one name, the server first in name
 order wins. A `notice` with code `skill_shadowed` names the prompt left out

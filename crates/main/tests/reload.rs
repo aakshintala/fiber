@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{BufRead, BufReader, Read},
-    os::unix::process::CommandExt,
-    process::{Child, Command},
+    process::Child,
     sync::mpsc,
     thread,
 };
@@ -571,13 +570,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     let (setup, _server) = fixture();
     extension(&setup, "");
     let fifo = setup.root.path().join("load.fifo");
-    let mut command = Command::new("mkfifo");
-    command.arg(&fifo).process_group(0);
-    assert!(
-        run_to_exit(setup.deadline, "make reload fifo", command)
-            .status
-            .success()
-    );
+    fakes::fifo(&fifo);
     let mut session = Session::start(setup);
     fs::write(
         session.setup.home().join("extensions/demo/init.lua"),
@@ -641,13 +634,7 @@ fn startup_holds_extensions_loaded_behind_a_fifo_and_counts_clients_once() {
     // the fifo while the wait still collects both events.
     let (setup, _server) = fixture();
     let fifo = setup.root.path().join("startup.fifo");
-    let mut command = Command::new("mkfifo");
-    command.arg(&fifo).process_group(0);
-    assert!(
-        run_to_exit(setup.deadline, "make startup fifo", command)
-            .status
-            .success()
-    );
+    fakes::fifo(&fifo);
     // The startup extension initialization blocks reading the fifo: the
     // session's socket and first stdout line only exist once it completes,
     // so the writer below rendezvouses before the subscribe, and the

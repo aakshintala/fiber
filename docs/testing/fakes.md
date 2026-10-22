@@ -119,7 +119,11 @@ The shipped tooling has three parts:
   format.
 - **A runner, `fiber extension test [<path>]`.** It runs an extension's cases
   against the built binary in a temporary `FIBER_HOME` and exits non-zero when
-  any case fails (`docs/invocation.md`). While the runner drives a session, a
+  any case fails (`docs/invocation.md`). Before the first case it compares each
+  provider that has a data file with its Lua and fails the run on a `credential()`
+  with no `login` or `credential_label`, or a `credential_label` with no
+  `credential()`; a provider with no data file is exempt (`docs/extensions.md`,
+  "Testing an extension"). While the runner drives a session, a
   case may script the extension's host calls (a `host.http` reply, a
   `host.exec` result) and advance a fake clock, so timers fire when the case
   says, not when the wall clock does. These exist only under the runner, as
