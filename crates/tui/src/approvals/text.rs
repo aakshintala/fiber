@@ -40,3 +40,7 @@ pub(super) fn move_caret(text: &str, caret: &mut usize, right: bool) {
 pub(super) fn cells(text: &str) -> u16 {
     u16::try_from(measure(text)).unwrap_or(u16::MAX)
 }
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod tests;
