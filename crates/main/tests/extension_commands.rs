@@ -1180,19 +1180,30 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     // `clients` is set aside: written when the connection attaches, with
     // no position against the session's other lines (`docs/testing.md`,
     // "Event streams"); one attach writes exactly one.
+    // Only the durable lines stay pinned in order (`docs/events.md:116`):
+    // `session_started` first, `fiber_started` after it, `fiber_exited`
+    // last (`docs/events.md`, `session_started`, `fiber_started`,
+    // `extensions_loaded` and `fiber_exited` sections). `notice` and
+    // `extension_ui` are ephemeral with no promised count, order or
+    // placement, so the test pins only their required facts below, not
+    // their positions.
+    let durable = kinds(&out)
+        .into_iter()
+        .filter(|kind| {
+            *kind == "session_started"
+                || *kind == "fiber_started"
+                || *kind == "extensions_loaded"
+                || *kind == "fiber_exited"
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        kinds(&out)
-            .into_iter()
-            .filter(|kind| *kind != "clients")
-            .collect::<Vec<_>>(),
+        durable,
         [
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "notice",
-            "extension_ui",
-            "fiber_exited",
-        ]
+            "fiber_exited"
+        ],
     );
     assert_eq!(
         kinds(&out)
@@ -1206,6 +1217,15 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "skill_shadowed")
         .collect();
     assert_eq!(notices.len(), 1, "{out:?}");
+    let statuses: Vec<&Value> = out
+        .iter()
+        .filter(|line| {
+            line["kind"] == "extension_ui"
+                && line["payload"]["extension"] == "fiber.test/worker"
+                && line["payload"]["status"] == "synced x"
+        })
+        .collect();
+    assert!(!statuses.is_empty(), "{out:?}");
     assert!(
         notices[0]["payload"]["message"]
             .as_str()
