@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use contract::clock::{Clock, utc_time};
@@ -187,10 +187,7 @@ impl contract::extension::HostDelegate for Delegates {
             .tool()
             .start_extension(extension, arguments, bind)
             .map_err(|error| contract::shapes::Failure::from(&error))?;
-        let listed = self
-            .loaded
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let listed = support::lock(&self.loaded)
             .as_ref()
             .is_none_or(|loaded| loaded.iter().any(|name| name == extension));
         if !listed {
@@ -200,7 +197,7 @@ impl contract::extension::HostDelegate for Delegates {
     }
 
     fn retain(&self, loaded: &[String]) -> usize {
-        *self.loaded.lock().unwrap_or_else(PoisonError::into_inner) = Some(loaded.to_vec());
+        *support::lock(&self.loaded) = Some(loaded.to_vec());
         self.jobs.retain_extensions(loaded)
     }
 

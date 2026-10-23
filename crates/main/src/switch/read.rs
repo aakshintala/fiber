@@ -9,7 +9,7 @@ use std::io;
 use std::io::Read as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Output};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
@@ -132,7 +132,7 @@ impl SpawnPause {
     /// before any send or receive blocks, so no lock is held across the
     /// pause. Runs free unless a test armed a pause meanwhile.
     fn hold(slot: &Mutex<Option<SpawnPause>>) {
-        let point = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let point = support::lock(slot).take();
         if let Some(point) = point {
             match point.entered.send(()) {
                 Ok(()) | Err(_) => {}
@@ -397,7 +397,7 @@ impl Reads {
                 .spawn(move || {
                     #[cfg(test)]
                     Reads::pause_before_reaper_wait(&reaper_pause);
-                    let taken = holder.lock().unwrap_or_else(PoisonError::into_inner).take();
+                    let taken = support::lock(&holder).take();
                     if let Some(mut child) = taken {
                         let status = child.wait();
                         match status_sent.send(status) {
@@ -411,9 +411,7 @@ impl Reads {
                 Ok(_) => {}
                 Err(error) => {
                     kill_group(group);
-                    if let Some(mut child) =
-                        reaper.lock().unwrap_or_else(PoisonError::into_inner).take()
-                    {
+                    if let Some(mut child) = support::lock(&reaper).take() {
                         // The kill above ends the leader at once; the wait
                         // here reaps it, so no failure path leaves a zombie.
                         let _reaped = child.wait();
@@ -803,7 +801,7 @@ impl Reads {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.state)
     }
 }
 
@@ -838,21 +836,14 @@ impl Reads {
     /// pause is one-shot; arming again while the wait is held pauses its
     /// next pass too.
     pub(crate) fn pause_at_checks(&self, checked: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .checkpoint
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Checkpoint { checked, release });
+        *support::lock(&self.checkpoint) = Some(Checkpoint { checked, release });
     }
 
     /// Reports one pass through the `credential` wait's checks and blocks
     /// until the test releases it. The first pass consumes the armed
     /// pause; later passes run free unless a test armed again meanwhile.
     fn checkpoint(&self) {
-        let point = self
-            .checkpoint
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let point = support::lock(&self.checkpoint).take();
         if let Some(point) = point {
             match point.checked.send(()) {
                 Ok(()) | Err(_) => {}
@@ -867,10 +858,7 @@ impl Reads {
     /// once it reaches the spawn and blocks until `release` arrives. The
     /// pause is one-shot.
     pub(crate) fn pause_at_spawn(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .spawn_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.spawn_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the spawn reached its pause and blocks until the test
@@ -883,10 +871,7 @@ impl Reads {
     /// answers: the run sends on `entered` once it holds its value and
     /// blocks until `release` arrives. The pause is one-shot.
     pub(crate) fn pause_at_answered(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .answered_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.answered_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the run holds its value and blocks until the test
@@ -899,10 +884,7 @@ impl Reads {
     /// sends on `entered` once the group is listed and blocks until
     /// `release` arrives. The pause is one-shot.
     pub(crate) fn pause_at_listed(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .listed_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.listed_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the spawn listed its group and blocks until the test
@@ -915,10 +897,7 @@ impl Reads {
     /// sends on `entered` once it dropped the lock past the kill and
     /// blocks until `release` arrives. The pause is one-shot.
     pub(crate) fn pause_at_reap(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .reap_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.reap_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the spawn reached the late child's reap and blocks until
@@ -934,10 +913,7 @@ impl Reads {
     /// holds the raised count past the reap on every run. The pause is
     /// one-shot.
     pub(crate) fn pause_at_reaped(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .reaped_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.reaped_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the late spawn reaped its leader and blocks until the test
@@ -956,10 +932,7 @@ impl Reads {
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) {
-        *self
-            .command_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.command_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the command reached its leader's reap and blocks until the
@@ -974,10 +947,7 @@ impl Reads {
     /// the kill on every run. Each armed pause holds one pass; re-arming
     /// holds a later pass. The pause is one-shot.
     pub(crate) fn pause_at_settle(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .settle_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.settle_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the settlement killed its group and blocks until the test
@@ -996,10 +966,7 @@ impl Reads {
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) {
-        *self
-            .settle_pass_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.settle_pass_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the settlement reached its next pass and blocks until the
@@ -1015,10 +982,7 @@ impl Reads {
     /// `release` arrives, so the leader stays unreaped until the test
     /// releases it. The pause is one-shot; a closed sender releases it.
     pub(crate) fn pause_at_reaper(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-        *self
-            .reaper_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.reaper_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the reaper reached its leader's wait and blocks until the
@@ -1040,10 +1004,7 @@ impl Reads {
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) {
-        *self
-            .settle_park_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.settle_park_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports the settle reached its park and blocks until the test
@@ -1059,17 +1020,14 @@ impl Reads {
     /// settle park: the reaper thread and the stdout reader thread each
     /// send one after their wake bump, in no claimed order.
     pub(crate) fn note_completions(&self, sender: mpsc::Sender<()>) {
-        *self
-            .completion_notes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(sender);
+        *support::lock(&self.completion_notes) = Some(sender);
     }
 
     /// Sends one completion note after a credential thread's wake bump, if
     /// a test armed one. The sender is cloned into a local first and the
     /// mutex guard dropped before the send, so no lock is held across it.
     fn note_completion(slot: &Arc<Mutex<Option<mpsc::Sender<()>>>>) {
-        let note = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let note = support::lock(slot).clone();
         if let Some(note) = note {
             note.send(()).unwrap_or(());
         }
@@ -1083,10 +1041,7 @@ impl Reads {
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) {
-        *self
-            .settle_complete_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+        *support::lock(&self.settle_complete_pause) = Some(SpawnPause { entered, release });
     }
 
     /// Reports timeout settlement completion and blocks until the test

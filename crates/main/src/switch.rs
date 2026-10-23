@@ -13,7 +13,7 @@ mod read;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use config::{Config, ProviderData, Secret};
 use contract::clock::Clock;
@@ -108,7 +108,7 @@ impl StartLock {
     ) -> Result<Arc<LuaProvider>, extensions::Error> {
         #[cfg(test)]
         self.checkpoint(name, Point::P);
-        let mut started = self.started.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut started = support::lock(&self.started);
         let found = started.get(name).and_then(Weak::upgrade);
         #[cfg(test)]
         self.checkpoint(name, Point::Q);
@@ -313,7 +313,7 @@ impl Switching {
     /// publishing to `door` when a switch applies.
     pub(crate) fn closure(self: Arc<Self>, door: Door) -> r#loop::Prepare {
         {
-            let mut now = self.now.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut now = support::lock(&self.now);
             now.backend = door.backend.clone();
             now.hosted_stands = door.hosted_stands;
         }
@@ -330,7 +330,7 @@ impl Switching {
     }
 
     pub(crate) fn reloaded(&self, now: Reloadable) {
-        *self.now.lock().unwrap_or_else(PoisonError::into_inner) = now;
+        *support::lock(&self.now) = now;
     }
 
     pub(crate) fn loader(&self) -> Loader {
@@ -338,10 +338,7 @@ impl Switching {
     }
 
     pub(crate) fn reloadable(&self) -> Reloadable {
-        self.now
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        support::lock(&self.now).clone()
     }
 
     pub(crate) fn resolved(&self, reference: &str) -> Result<extensions::Model<'_>, Failure> {
@@ -393,10 +390,7 @@ impl Switching {
         });
         let shared = self.clone();
         let publish: Applied = Box::new(move || {
-            let mut remembered = shared
-                .remembered
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut remembered = support::lock(&shared.remembered);
             for (name, got) in staged {
                 remembered
                     .keys
@@ -416,10 +410,7 @@ impl Switching {
     /// never in `prepare`'s publish, so a rejected, failed or
     /// never-applied preparation moves nothing.
     fn repoint(&self, provider: &str, label: &str) {
-        self.current
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(provider.to_owned(), label.to_owned());
+        support::lock(&self.current).insert(provider.to_owned(), label.to_owned());
     }
 
     /// How one `host.model` call reaches its model reference: resolving it
@@ -438,12 +429,7 @@ impl Switching {
                 .resolve(reference)
                 .map_err(|error| crate::failed(error.code(), error))?;
             let name = resolved.provider.name.clone();
-            let label = shared
-                .current
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&name)
-                .cloned();
+            let label = support::lock(&shared.current).get(&name).cloned();
             let want = shared.want(&name, label.as_deref());
             let reader = Arc::clone(&shared);
             let read: Result<Got, Failure> = shared
@@ -481,7 +467,7 @@ impl Switching {
     /// (`docs/model-routing.md`, "Model discovery").
     fn keep_loaded(&self, keep: Vec<(String, Arc<LuaProvider>)>) {
         let dropped = std::mem::replace(
-            &mut *self.loaded.lock().unwrap_or_else(PoisonError::into_inner),
+            &mut *support::lock(&self.loaded),
             keep.into_iter().collect(),
         );
         drop(dropped);
@@ -492,10 +478,7 @@ impl Switching {
     /// loaded. `label` is the `credential` command's label, else the
     /// provider's selected label, else the configured one.
     fn want(&self, name: &str, label: Option<&str>) -> Want {
-        let remembered = self
-            .remembered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let remembered = support::lock(&self.remembered);
         let selected = match label {
             Some(label) => label.to_owned(),
             None => self.selected_of(&remembered, name, self.registry.get(name)),
@@ -504,12 +487,7 @@ impl Switching {
             .keys
             .get(&(name.to_owned(), selected.clone()))
             .cloned();
-        let lua = self
-            .loaded
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
-            .cloned();
+        let lua = support::lock(&self.loaded).get(name).cloned();
         Want {
             name: name.to_owned(),
             label: selected,
@@ -576,14 +554,8 @@ impl Switching {
                     // A Lua `credential()` provider never reaches this
                     // callback, so it accepts any label; a scripted provider
                     // was rejected before the read (`scripted::label`).
-                    let current = self.selected_of(
-                        &self
-                            .remembered
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner),
-                        &want.name,
-                        Some(data),
-                    );
+                    let current =
+                        self.selected_of(&support::lock(&self.remembered), &want.name, Some(data));
                     let labels = self.startup_config.credentials().labels(data);
                     if want.label != current && !labels.contains(&want.label) {
                         return Err(crate::credential::no_label(
@@ -781,10 +753,7 @@ pub(crate) fn prepare(
     // or a cancelled read publishes nothing (`docs/model-routing.md`,
     // "When a credential is missing or fails").
     {
-        let mut remembered = switching
-            .remembered
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut remembered = support::lock(&switching.remembered);
         remembered
             .keys
             .entry((session.clone(), got.label.clone()))
