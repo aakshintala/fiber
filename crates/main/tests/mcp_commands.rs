@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::json;
-use support::{KillGroup, Setup, StdoutRun, files_holding, group_alive, hello, spawn_watched};
+use support::{KillGroup, Setup, StdoutRun, files_holding, hello, spawn_watched};
 
 impl Setup {
     /// Runs `fiber` with `args` in `dir` under `home`, waits for it under
@@ -75,10 +75,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         StdoutRun::from(output)

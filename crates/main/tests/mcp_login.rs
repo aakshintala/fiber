@@ -147,10 +147,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !support::group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         StdoutRun::from(output)
@@ -378,10 +375,7 @@ fn login_with_callback(setup: &Setup, name: &str, empty_path: &Path) -> (Option<
             ),
         };
         let lines = reader.join().unwrap();
-        assert!(
-            !support::group_alive(setup.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(setup.deadline.cleanup_phase());
         (status.code(), lines)

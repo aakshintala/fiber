@@ -22,7 +22,7 @@ use extension_harness::*;
 use fakes::Client;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Setup, function_call, group_alive, spawn_watched};
+use support::{Deadline, KillGroup, Setup, function_call, spawn_watched};
 
 fn subscribe(deadline: Deadline, client: &Client) {
     client
@@ -211,7 +211,7 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
         Err(_) => support::expired(setup.deadline, group, &finished, "fiber ask to exit"),
     };
     assert!(
-        !group_alive(setup.deadline, group),
+        !fakes::group_alive(group),
         "`fiber` left a process in its group behind"
     );
     // The group is empty. Skip the drop, which would kill it again,

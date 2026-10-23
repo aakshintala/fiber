@@ -522,7 +522,7 @@ impl Running {
             }
         };
         assert!(
-            !support::group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);

@@ -23,7 +23,7 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Running, SessionGuard, Setup, Socket, close_session, connect_hub, expired, function_call,
-    group_alive, hello, recv, recv_answer, session_dir, start_session, stream, until,
+    hello, recv, recv_answer, session_dir, start_session, stream, until,
 };
 
 #[track_caller]
@@ -112,7 +112,7 @@ fn exit_cleanly(running: Running) {
     };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     drop(stdout);
