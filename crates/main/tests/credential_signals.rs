@@ -47,12 +47,17 @@ impl Drop for Setup {
     }
 }
 
+/// A fresh temporary root holding Fiber home and the workspace.
+fn temp_root() -> fakes::TempDir {
+    let root = fakes::TempDir::new("fh");
+    fs::create_dir_all(root.path().join("h")).unwrap();
+    fs::create_dir_all(root.path().join("w")).unwrap();
+    root
+}
+
 impl Setup {
     fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
+        let root = temp_root();
         // A hard link, not a copy: the bytes and inode are the built
         // binary's, so nothing new is executed (`docs/testing.md`, "Waits
         // and timeouts"), but the path is this test's own. It lives in
@@ -65,11 +70,25 @@ impl Setup {
         if let Err(err) = fs::hard_link(env!("CARGO_BIN_EXE_fiber"), &exe) {
             panic!("hard-linking `fiber` to {}: {err}", exe.display());
         }
+        // The first exec of a fresh path can stall on macOS before `main`
+        // runs, so warm this test's own link here: `-V` is rejected by the
+        // usage path before anything reads home or config, and exits 2.
+        // The stall lands in the warm-up's own `START_BOUND`, and the
+        // deadline below starts after it.
+        fakes::warm_up(&exe, &["-V"], 2);
+        let deadline = Deadline::start();
         Self {
             deadline,
             root,
             bin,
         }
+    }
+
+    /// A fresh temporary root under the same warmed `fiber` link: the
+    /// fork-loop test reuses one link across its attempts, so no attempt
+    /// pays the first-exec stall again.
+    fn fresh_root(&mut self) {
+        self.root = temp_root();
     }
 
     /// This test's own path to the built `fiber`.
@@ -371,9 +390,13 @@ fn ps_observer_runs_and_finds_no_member_in_an_absent_group() {
 #[cfg(target_os = "macos")]
 #[test]
 fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_fork_loop() {
+    // One link warmed once before the shared clock starts: every attempt
+    // reuses this path with a fresh root, so the first-exec stall lands
+    // in the warm-up's own `START_BOUND`, never in the shared deadline.
+    let mut setup = Setup::new();
     let shared = Deadline::start();
     for attempt in 0..20 {
-        let mut setup = Setup::new();
+        setup.fresh_root();
         setup.deadline = shared;
         let ready = Ready::new(setup.root.path());
         let fifo = ready.path().to_path_buf();
