@@ -421,6 +421,12 @@ pub enum CommandResult {
         /// The environment sessions the hub starts now get, as `session_started` carries it.
         variables: Variables,
     },
+    /// For `stop` with `sessions`, over the hub: the sessions that
+    /// confirmed closed before the hub exited.
+    Stop {
+        /// The sessions that confirmed closed.
+        sessions_stopped: usize,
+    },
     /// For `placeholder_env`, over the hub: the hub's captured values for
     /// the requested placeholder variable names. Absent names are omitted,
     /// never `null`, and the values are never logged.

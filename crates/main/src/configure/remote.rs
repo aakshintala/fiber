@@ -656,7 +656,7 @@ const TEXT_LIMIT: usize = 64 * 1024;
 
 impl Seam {
     fn config_path(&self, workspace: &Path, path: &Path) -> Result<(), Failure> {
-        let (_, project) = cli::project_of(&self.home, workspace)?;
+        let project = self.project_key(workspace)?;
         if config::is_editable_config_path(&self.home, workspace, &project, path) {
             Ok(())
         } else {

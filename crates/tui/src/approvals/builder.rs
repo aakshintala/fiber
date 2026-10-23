@@ -55,7 +55,7 @@ impl Builder {
     pub(super) fn row(&mut self, parts: &[(&str, Style)]) -> usize {
         let segments: Vec<(String, Style)> = parts
             .iter()
-            .map(|(text, style)| (super::text::clean(text), *style))
+            .map(|(text, style)| (crate::text::controls_to_space(text), *style))
             .collect();
         self.emit(&segments)
     }
@@ -72,7 +72,7 @@ impl Builder {
     pub(super) fn clipped_row(&mut self, segments: &[(&str, Style)], cols: usize) -> usize {
         let cleaned: Vec<(String, Style)> = segments
             .iter()
-            .map(|(text, style)| (super::text::clean(text), *style))
+            .map(|(text, style)| (crate::text::controls_to_space(text), *style))
             .collect();
         let full: String = cleaned.iter().map(|(text, _)| text.as_str()).collect();
         let drawn = cut(&full, cols);
@@ -101,7 +101,7 @@ impl Builder {
         let cleaned = |parts: &[(&str, Style)]| {
             parts
                 .iter()
-                .map(|(text, style)| (super::text::clean(text), *style))
+                .map(|(text, style)| (crate::text::controls_to_space(text), *style))
                 .collect::<Vec<_>>()
         };
         let left = cleaned(left);

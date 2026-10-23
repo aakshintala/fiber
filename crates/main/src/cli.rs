@@ -33,7 +33,8 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
-  feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
+  stop [--hub <name>]                       Shut down every running session, then the hub
+  feedback [<prompt>] [-] [--session <id>]  Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -236,6 +237,12 @@ pub(crate) enum Commands {
     Logout(LogoutArgs),
     /// Say whether a session can start, and how to fix it when it cannot
     Doctor,
+    /// Shut down every running session, then the hub
+    Stop {
+        /// Use a hub from this client's list.
+        #[arg(long, value_name = "name")]
+        hub: Option<String>,
+    },
     /// Write a feedback report and print the issue link
     Feedback(FeedbackArgs),
     /// Print a completion script for bash, zsh or fish
@@ -935,6 +942,11 @@ pub(crate) struct AskArgs {
 /// The `feedback` command: its description, resolved like `ask`'s prompt.
 #[derive(Debug, clap::Args)]
 pub(crate) struct FeedbackArgs {
+    /// The session whose diagnostics the report carries: any session in
+    /// Fiber home. Without it, the newest session in this project.
+    #[arg(long, value_name = "session_id", value_parser = parse_session_id)]
+    pub(crate) session: Option<String>,
+
     /// The description. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
     pub(crate) prompt: Vec<String>,

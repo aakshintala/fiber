@@ -23,11 +23,12 @@ use crate::wire::{args_value, str_at};
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
     read(false, Framing::Sse, stream, sink).map_err(|(error, _)| error)
 }
 
-/// As [`decode`], also carrying what the stream had seen when it failed:
+/// As `decode`, also carrying what the stream had seen when it failed:
 /// the generation and its usage once `message_start` named them, else none.
 #[allow(
     clippy::result_large_err,

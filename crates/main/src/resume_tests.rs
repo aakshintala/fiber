@@ -19,7 +19,7 @@ use contract::shapes::Worktree;
 use contract::{ErrorCode, clock::Clock};
 use log::Log;
 
-use super::{enter, enter_worktree, finish, recorded_worktree, recreatable};
+use super::{enter, enter_worktree, finish, in_launch_project, recorded_worktree, recreatable};
 use crate::failed;
 
 /// A session directory whose first line is `session_started` with
@@ -47,6 +47,31 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
     )
     .unwrap();
     log
+}
+
+#[test]
+fn in_launch_project_passes_the_recorded_workspace_once() {
+    let home = fakes::TempDir::new("main-resume-in-launch-project");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_0123456789abcdef");
+    let _log = session_with(&dir, None);
+    // The recorded workspace reaches the predicate exactly once.
+    let seen = RefCell::new(Vec::new());
+    assert!(in_launch_project(&dir, &|started| {
+        seen.borrow_mut().push(started.to_owned());
+        true
+    }));
+    assert_eq!(*seen.borrow(), vec!["/nowhere".to_owned()]);
+    // A missing log is refused without calling the predicate.
+    let seen = RefCell::new(Vec::new());
+    assert!(!in_launch_project(
+        &sessions.join("s_0123456789abcde9"),
+        &|started: &str| {
+            seen.borrow_mut().push(started.to_owned());
+            true
+        }
+    ));
+    assert!(seen.borrow().is_empty());
 }
 
 #[test]

@@ -10,7 +10,6 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::app::Target;
-use crate::format;
 use crate::rows::Rows;
 use crate::theme::Role;
 
@@ -134,11 +133,14 @@ pub(crate) fn rows(part: &Part, layout: &Layout, columns: u16, align: Align, out
             if indent > 0 {
                 spans.push(Span::raw(" ".repeat(usize::from(indent))));
             }
-            spans.extend(spans_of(&cut(&part.label(), max), &name));
+            spans.extend(spans_of(&crate::text::cut(&part.label(), max, "…"), &name));
             out.push((Line::from(spans), target));
         }
         Align::Right => {
-            let line = Line::from(spans_of(&cut(&part.label(), usize::from(columns)), &name));
+            let line = Line::from(spans_of(
+                &crate::text::cut(&part.label(), usize::from(columns), "…"),
+                &name,
+            ));
             out.push((line.right_aligned(), target));
         }
     }
@@ -163,18 +165,6 @@ fn spans_of(label: &str, name: &str) -> Vec<Span<'static>> {
     } else {
         vec![Span::styled(label.to_owned(), link)]
     }
-}
-
-/// `label` cut to at most `max` columns, ending in `…` when cut, so the
-/// drawn line is always one row.
-fn cut(label: &str, max: usize) -> String {
-    if format::width(label) <= max {
-        return label.to_owned();
-    }
-    if max == 0 {
-        return String::new();
-    }
-    format!("{}…", format::cut(label, max - 1))
 }
 
 /// One image the viewer opens: its id, its file name, the session it

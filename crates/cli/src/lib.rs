@@ -117,6 +117,7 @@ mod sessions_search;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod setup;
+mod stop;
 mod table;
 #[allow(
     clippy::result_large_err,
@@ -135,7 +136,8 @@ pub use extension::{
     extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
-pub use feedback::{FeedbackError, ReportContext, build_report, write};
+pub use feedback::diagnostics;
+pub use feedback::{FeedbackError, ReportContext, build_report, select_session, write};
 pub use hub_env::{declared_names, hub_env, lookup, placeholder_lookup};
 pub use hub_list::{hub_add, hub_remove};
 pub use hub_pair::{Address, hub_pair};
@@ -159,6 +161,7 @@ pub use sessions_list::list as sessions_list;
 pub use sessions_list::resolve_listed;
 pub use sessions_search::search as sessions_search;
 pub use setup::{Completions, Hub, SetupFlags, setup};
+pub use stop::{stop_local, stop_remote};
 pub use update::{Channel, ChannelError, ReleaseBases, resolve_channel, update};
 
 /// What `fiber logout` says when it is given no provider.

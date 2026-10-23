@@ -657,3 +657,33 @@ fn save_reviewer_notes_writes_current_layers_and_refuses_stale_ones() {
         },
     );
 }
+
+#[test]
+fn project_key_resolves_once_per_workspace() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    write(
+        &dirs.project_file(&workspace),
+        r#"{"handoff": {"tokens": 1}}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    let first = seam
+        .project_key(&workspace)
+        .unwrap_or_else(|e| panic!("key: {}", e.message));
+    let before = dirs.project_file(&workspace);
+    fakes::git::git(workspace.parent().unwrap(), &["init", "--quiet"]);
+    let after = dirs.project_file(&workspace);
+    assert_ne!(
+        before, after,
+        "a git init moves the workspace's project, or the stale assertion is vacuous"
+    );
+    // The seam keeps the first key until restart: a stale key is intended.
+    let second = seam
+        .project_key(&workspace)
+        .unwrap_or_else(|e| panic!("key: {}", e.message));
+    assert_eq!(first, second);
+    // The settings read goes through the same cached key.
+    let tokens = row(&seam, &workspace, "handoff.tokens");
+    assert_eq!(tokens.value, Shown::Value("1".to_owned()));
+    assert_eq!(tokens.file, Some(before));
+}

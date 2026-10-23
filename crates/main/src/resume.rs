@@ -87,9 +87,10 @@ pub(crate) fn ask_resume(
     };
     let project = doors::project(&workspace);
     let sessions = log::sessions_dir(&home, &project);
-    let id = match log::resolve(&sessions, &resuming.selector, &|started| {
-        doors::project(Path::new(started)) == project
-    }) {
+    // One memo serves the lookup and the launch-project check below, so
+    // every session in one workspace runs the identity once.
+    let in_project = crate::open::in_project(&project, &doors::project);
+    let id = match log::resolve(&sessions, &resuming.selector, &in_project) {
         Ok(id) => id,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
@@ -101,7 +102,7 @@ pub(crate) fn ask_resume(
     // untouched, no lock is taken and nothing attaches.
     let dir = sessions.join(&id.0);
     let recorded = recorded_worktree(&dir);
-    if !recreatable(recorded.as_ref()) && !in_launch_project(&dir, &project) {
+    if !recreatable(recorded.as_ref()) && !in_launch_project(&dir, &in_project) {
         let e = log::Error::NotFound(sessions.clone());
         return ask_failed(failed(e.code(), e));
     }
@@ -146,11 +147,11 @@ pub(crate) fn ask_resume(
 }
 
 /// Whether the session in `dir` runs in the launch project: its recorded
-/// workspace resolves to the same project, the same test the lookup
-/// applied. A missing log, or a first line that fails to read or parse as
+/// workspace passes the predicate the lookup applied, so both share one
+/// memo. A missing log, or a first line that fails to read or parse as
 /// `session_started`, is refused the same way; the lookup just accepted it,
 /// so that is unreachable short of a concurrent delete.
-fn in_launch_project(dir: &Path, project: &Path) -> bool {
+fn in_launch_project(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> bool {
     let Ok(lines) = log::lines(dir) else {
         return false;
     };
@@ -161,7 +162,7 @@ fn in_launch_project(dir: &Path, project: &Path) -> bool {
     let Ok(Some(Event::SessionStarted(started))) = Event::from_envelope(&line) else {
         return false;
     };
-    doors::project(Path::new(&started.workspace)) == project
+    in_project(&started.workspace)
 }
 
 /// The internal session command with `--resume`: resumes the session `id`

@@ -13,8 +13,9 @@ mod remote;
 mod skills;
 mod tools;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use config::{Config, SettingValue, Source, Sources};
 use contract::shapes::Failure;
@@ -37,6 +38,9 @@ pub(crate) struct Seam {
     /// The per-path locks a `models` refresh holds, the same lock the
     /// local picker read takes.
     locks: Arc<::tools::PathLocks>,
+    /// Each workspace's project key, resolved once per path for the
+    /// seam's life.
+    projects: Mutex<HashMap<PathBuf, config::ProjectKey>>,
 }
 
 impl Seam {
@@ -47,6 +51,7 @@ impl Seam {
             origin: Arc::new(extensions::Origin::github()),
             reads: Arc::new(Reads::default()),
             locks: Arc::new(::tools::PathLocks::new()),
+            projects: Mutex::new(HashMap::new()),
         }
     }
 
@@ -58,9 +63,26 @@ impl Seam {
         }
     }
 
+    /// The workspace's project key, resolved once per path and cached
+    /// for the seam's life. A failed resolve is retried: only keys are
+    /// cached, never failures. The key goes stale when the workspace's
+    /// repository changes (a `git init`, a reused path, a recreated
+    /// worktree) until the hub restarts, while `set` stays uncached and
+    /// writes under the fresh key.
+    fn project_key(&self, workspace: &Path) -> Result<config::ProjectKey, Failure> {
+        if let Some(key) = support::lock(&self.projects).get(workspace).cloned() {
+            return Ok(key);
+        }
+        let (_, key) = ::cli::project_of(&self.home, workspace)?;
+        Ok(support::lock(&self.projects)
+            .entry(workspace.to_path_buf())
+            .or_insert(key)
+            .clone())
+    }
+
     /// The configuration `workspace`'s project and repository give.
     fn load(&self, workspace: &Path) -> Result<Config, ConfigureError> {
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         Config::load(Sources {
             home: self.home.clone(),
             workspace: workspace.to_path_buf(),
@@ -249,7 +271,7 @@ impl tui::Configure for Seam {
     }
 
     fn rules(&self, workspace: &Path) -> Result<(RulesSection, RulesSection), ConfigureError> {
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         let (global, project) = config::list_rules(&self.home, &project);
         Ok((section(global), section(project)))
     }
@@ -261,7 +283,7 @@ impl tui::Configure for Seam {
         line: usize,
         text: &str,
     ) -> Result<Revoked, ConfigureError> {
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         let removed = config::remove_rule(&self.home, &project, scope_to(scope), line, text)
             .map_err(from_config)?;
         Ok(if removed {
@@ -331,7 +353,7 @@ impl tui::Configure for Seam {
     }
 
     fn reviewer_notes(&self, workspace: &Path) -> Result<tui::ReviewerNotes, ConfigureError> {
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         let notes = config::reviewer_notes(&self.home, &project).map_err(from_config)?;
         Ok(tui::ReviewerNotes {
             global: notes_file(notes.global),
@@ -345,7 +367,7 @@ impl tui::Configure for Seam {
         global: Option<tui::NotesWrite>,
         project: Option<tui::NotesWrite>,
     ) -> Result<tui::NotesSaved, ConfigureError> {
-        let (_, key) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let key = self.project_key(workspace).map_err(from_failure)?;
         let saved = config::save_reviewer_notes(
             &self.home,
             &key,

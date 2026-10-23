@@ -27,18 +27,12 @@ impl Title {
     }
 }
 
-/// Every C0 and C1 control character and DEL dropped from `text`, so a
-/// session's name cannot end the sequence or start another.
-pub(crate) fn clean(text: &str) -> String {
-    text.chars().filter(|ch| !ch.is_control()).collect()
-}
-
 /// OSC 2 setting the window title to `text`, with every C0 and C1 control
 /// character and DEL dropped so a session's name cannot end the sequence
 /// or start another.
 pub(crate) fn title(text: &str) -> Vec<u8> {
     let mut out = b"\x1b]2;".to_vec();
-    out.extend_from_slice(clean(text).as_bytes());
+    out.extend_from_slice(crate::text::strip_controls(text).as_bytes());
     out.push(0x07);
     out
 }
@@ -49,7 +43,7 @@ pub(crate) fn title(text: &str) -> Vec<u8> {
 /// or start another.
 pub(crate) fn notify(text: &str) -> Vec<u8> {
     let mut out = b"\x1b]9;".to_vec();
-    out.extend_from_slice(clean(text).as_bytes());
+    out.extend_from_slice(crate::text::strip_controls(text).as_bytes());
     out.push(0x07);
     out
 }
