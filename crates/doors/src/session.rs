@@ -172,6 +172,11 @@ pub(crate) struct Gate {
     /// Driver shells running now, and whether shutdown has begun, which
     /// cancels a new one as it registers.
     pub(crate) shells: Shells,
+    /// Whether shutdown has begun: set when [`Gate::cancel_shells`] seals
+    /// the shells, which every `close` path does before waiting for them.
+    /// A setter that must stop at `close`'s start reads this, not the
+    /// connections' stopped state, which is marked after the wait.
+    pub(crate) sealed: AtomicBool,
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
@@ -532,7 +537,7 @@ impl Session {
             let Some(gate) = gate.upgrade() else {
                 return;
             };
-            if gate.conns.stopped() {
+            if gate.sealed.load(Ordering::Relaxed) || gate.conns.stopped() {
                 return;
             }
             let mut tools = lock(&gate.tools);
@@ -710,6 +715,7 @@ impl Gate {
     /// inside the bound. Closing the socket does not stop a tool blocked
     /// in `run`.
     pub(super) fn cancel_shells(&self) {
+        self.sealed.store(true, Ordering::Relaxed);
         self.shells.seal_and_cancel();
         self.pasting.cancel();
     }
@@ -937,6 +943,7 @@ fn open_in(
         dir: dir.to_owned(),
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
+        sealed: AtomicBool::new(false),
         #[cfg(test)]
         probe: Mutex::new(None),
         clients: ClientCounts::new(),

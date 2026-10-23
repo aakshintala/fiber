@@ -3354,6 +3354,57 @@ fn the_state_setter_does_nothing_once_the_session_closes() {
 }
 
 #[test]
+fn the_state_setter_does_nothing_once_close_begins() {
+    reset();
+    let opened = Opened::open(vec![sized_info("edit", 1, Some(2))]);
+    let state = opened.session.state_setter();
+    let gate = Arc::clone(&opened.session.gate);
+    // Held registered so `close` parks in its first shells wait: the shells
+    // are sealed (close began) while the connections are not yet stopped.
+    let held = Arc::new(crate::shell::ShellCancel::new());
+    gate.shells.track(Arc::clone(&held));
+    let (waiting_tx, waiting) = mpsc::channel();
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if matches!(point, Probe::ShellsWaiting) {
+            let _ignored = waiting_tx.send(());
+        }
+    }));
+    let session = opened.session;
+    let log = opened.log;
+    let (done_tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        session.close(log);
+        let _ignored = done_tx.send(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&waiting)
+        .expect("close parks waiting for the held shell");
+    assert!(
+        gate.sealed.load(Ordering::Relaxed),
+        "close began before the connections stop"
+    );
+    assert!(
+        !gate.conns.stopped(),
+        "the connections stop only after the shells wait"
+    );
+    state("edit", ToolState::Deferred);
+    state("absent", ToolState::Deferred);
+    let rows = || {
+        lock(&gate.tools)
+            .iter()
+            .map(|tool| (tool.name.clone(), tool.state))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(), [("edit".to_owned(), ToolState::Full)]);
+    gate.shells.untrack(&held);
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("close returned");
+    state("edit", ToolState::Deferred);
+    assert_eq!(rows(), [("edit".to_owned(), ToolState::Full)]);
+}
+
+#[test]
 fn the_declarer_does_nothing_once_the_session_closes() {
     reset();
     let opened = Opened::open(vec![tool_info("edit", 1)]);

@@ -23,30 +23,27 @@ fn absent_keys_give_the_default() {
 }
 
 #[test]
-fn a_true_key_is_read_by_tool_name() {
-    let (deferrals, notices) = notices(&config(&["tools.x.deferred=true"]));
-    assert_eq!(deferrals.tools.len(), 1);
-    assert!(deferrals.tools["x"]);
-    assert!(notices.is_empty());
-}
-
-#[test]
-fn a_false_key_is_read_by_tool_name() {
-    let (deferrals, notices) = notices(&config(&["tools.x.deferred=false"]));
-    assert_eq!(deferrals.tools.len(), 1);
-    assert!(!deferrals.tools["x"]);
-    assert!(notices.is_empty());
-}
-
-#[test]
-fn both_values_together_give_both() {
-    let (deferrals, _) = notices(&config(&[
-        "tools.x.deferred=true",
-        "tools.y.deferred=false",
-    ]));
-    assert_eq!(deferrals.tools.len(), 2);
-    assert!(deferrals.tools["x"]);
-    assert!(!deferrals.tools["y"]);
+fn deferred_values_are_read_by_tool_name() {
+    for value in [true, false] {
+        let key = if value {
+            "tools.x.deferred=true"
+        } else {
+            "tools.x.deferred=false"
+        };
+        let (alone, seen) = notices(&config(&[key]));
+        assert_eq!(alone.tools.len(), 1, "value {value}");
+        assert_eq!(alone.tools["x"], value, "value {value}");
+        assert!(seen.is_empty(), "value {value}");
+        let other = if value {
+            "tools.y.deferred=false"
+        } else {
+            "tools.y.deferred=true"
+        };
+        let (both, _) = notices(&config(&[key, other]));
+        assert_eq!(both.tools.len(), 2, "value {value}");
+        assert_eq!(both.tools["x"], value, "value {value}");
+        assert_eq!(both.tools["y"], !value, "value {value}");
+    }
 }
 
 #[test]
