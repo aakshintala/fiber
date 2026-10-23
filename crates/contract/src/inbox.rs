@@ -171,6 +171,15 @@ pub enum Delivery {
     /// One `usage_recorded` from an extension's `host.model` call: written
     /// and ledgered with no turn and no action.
     ExtensionUsage(crate::events::UsageRecorded),
+    /// One `usage_recorded` a Fiber delegate's socket delivered: copied
+    /// into the parent's log with the originator named, folded once per
+    /// `generation_id` (`docs/delegates.md`, "Streams").
+    DelegateUsage {
+        /// The delegate session that sent the line.
+        session: crate::SessionId,
+        /// The line as the delegate wrote it.
+        line: crate::events::UsageRecorded,
+    },
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes

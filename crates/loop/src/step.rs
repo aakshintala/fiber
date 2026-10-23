@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use contract::events::{
     AssistantMessageCompleted, Empty, Event, MessageOutcome, ToolCallRequested, TurnCompleted,
@@ -83,15 +83,34 @@ impl Loop {
         })
     }
 
+    /// The exit code a tree stop ends a delegate with: 128 plus SIGTERM,
+    /// the code the parent's stop signal carries (`docs/invocation.md`,
+    /// "Lifecycle").
+    const TREE_STOP_CODE: i32 = 143;
+
     /// Stops the session's running delegates when the turn ends
     /// `budget_exceeded`, as `job_stop` stops one (`docs/loop.md`,
     /// "Spending budget"). Every budget end passes through here, and no
     /// other path stops them: `over_budget` stays pure, because the
     /// handoff note request also reads it and a failed note does not end
-    /// the turn.
+    /// the turn. A delegate whose one-way trip has been claimed stops
+    /// itself with the tree-stop code instead of draining failed: the
+    /// parent's stop signal is already coming for the same trip, and on
+    /// a slow signal path the failed drain would otherwise record exit 1
+    /// first. Roots never take this path, and failures without a claimed
+    /// trip keep their own codes.
     pub(crate) fn budget_end(&self, completed: TurnCompleted) -> TurnCompleted {
         if let Some(jobs) = &self.ending.jobs {
             jobs.stop_delegates();
+        }
+        if self.is_delegate
+            && self
+                .spend_trip
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .tripped()
+        {
+            self.cancel.shutdown(Self::TREE_STOP_CODE);
         }
         completed
     }
