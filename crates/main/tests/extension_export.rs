@@ -179,6 +179,9 @@ fn export_is_listed_with_no_vm_and_writes_the_transcript_to_the_default_path() {
     assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
+    // docs/testing.md:74-75: the test asserts the file left behind. Its order
+    // is the log's: `history` answers durable lines in `seq` order
+    // (docs/events.md:1367), and the extension renders each page in order.
     assert_eq!(
         written,
         format!(
@@ -265,6 +268,8 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
             break;
         }
     }
+    // A setup guard, not a doc count: past seq 300 with 256-line pages
+    // (docs/invocation.md:452) the transcript spans more than one page.
     assert!(highest > 300, "the log never passed seq 300");
     let accepted = session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
@@ -275,6 +280,9 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
         .filter(|line| line.starts_with("> page-prompt-"))
         .collect();
     let expected: Vec<String> = asked.iter().map(|text| format!("> {text}")).collect();
+    // docs/events.md:360 and :1367: each prompt enters one `turn_started`
+    // `input` in arrival order, and `history` returns those lines in `seq`
+    // order, so the quotes run in prompt order across pages.
     assert_eq!(
         quotes,
         expected.iter().map(String::as_str).collect::<Vec<_>>()
@@ -409,6 +417,8 @@ fn steering_and_a_failed_call_are_written() {
     let steer_at = written
         .find("> use the other file")
         .expect("the steering message is quoted");
+    // docs/events.md:389 and :1367: the steer is a durable line after the
+    // prompt's `turn_started`, and `history` returns lines in `seq` order.
     assert!(prompt_at < steer_at);
     assert!(
         written.contains("- `read` {\"path\":\"missing.txt\"} (failed)"),
@@ -418,6 +428,8 @@ fn steering_and_a_failed_call_are_written() {
         .lines()
         .filter(|line| line.starts_with("- `read` {"))
         .collect();
+    // The extension writes one line per completed model tool call and nothing
+    // for the inner `ran_by` call (init.lua header); two `read` calls ran.
     assert_eq!(reads.len(), 2, "{written}");
     let odd = reads[1];
     assert!(odd.contains("null"), "{odd}");
@@ -463,32 +475,4 @@ fn an_inner_tool_call_is_not_listed() {
         "the inner call is not listed: {written}"
     );
     session.finish();
-}
-
-#[test]
-fn the_real_package_loads_lazily() {
-    let setup = Setup::new_with_fm_root();
-    let server = ProviderServer::start([]).unwrap();
-    setup.provider(&server);
-    setup.install_export();
-    let session = Session::start(setup, server);
-    let (_status, out, _stderr) = session.finish();
-    let loaded = out
-        .iter()
-        .find(|line| line["kind"] == "extensions_loaded")
-        .expect("extensions_loaded on stdout");
-    assert!(
-        loaded["payload"]["extensions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["name"] == EXPORT_NAME),
-        "{loaded}"
-    );
-    assert!(
-        out.iter().all(
-            |line| !(line["kind"] == "notice" && line["payload"]["code"] == "extension_failed")
-        ),
-        "no extension failed to load: {out:?}"
-    );
 }

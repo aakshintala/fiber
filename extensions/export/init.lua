@@ -91,14 +91,9 @@ local function render_completed(out, pending, line)
     head = head .. " (" .. tostring(done.status) .. ")"
   end
   out[#out + 1] = head
-  local result = text_of(done.content or {})
-  local kept = 0
-  for _, result_line in ipairs(split_lines(result)) do
-    if kept >= TOOL_LINES then
-      break
-    end
-    out[#out + 1] = "    " .. result_line
-    kept = kept + 1
+  local result = split_lines(text_of(done.content or {}))
+  for i = 1, math.min(#result, TOOL_LINES) do
+    out[#out + 1] = "    " .. result[i]
   end
   out[#out + 1] = ""
 end
