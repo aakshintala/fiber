@@ -56,6 +56,27 @@ pub(crate) enum Surface {
 }
 
 impl Surface {
+    /// Whether a left press starting outside the surface's frame closes
+    /// it as Esc does (`docs/tui.md`, "Bindings"). Every surface that
+    /// draws a frame of its own over the screen is in the set; the
+    /// panel, the offer and the other surfaces never take the click's
+    /// place.
+    pub(crate) fn closes_on_outside_click(self) -> bool {
+        matches!(
+            self,
+            Surface::Quit
+                | Surface::Report
+                | Surface::Keymap
+                | Surface::Picker
+                | Surface::ConfigView
+                | Surface::DeleteQuestion
+                | Surface::WorkspacePicker
+                | Surface::Search
+                | Surface::Completion
+                | Surface::Notice
+        )
+    }
+
     /// Whether Esc reaches the notice overlay before this surface does.
     /// The `/keys` screen yields the same way in `on_press`, and the
     /// conversation's focus inside its own arm, because it runs

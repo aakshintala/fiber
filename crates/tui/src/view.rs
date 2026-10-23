@@ -278,7 +278,12 @@ pub(crate) fn render(
     match app.keymap_top() {
         Some(_) => {
             let slab = key_map::draw(app, conversation, buf, &mut targets);
-            app.frames().note(Surface::Keymap, slab);
+            // With a session attached the key map notes its frame; on
+            // home it is the full-screen drawing with no frame of its
+            // own.
+            if app.session().is_some() {
+                app.frames().note(Surface::Keymap, slab);
+            }
         }
         // A swapped view takes the conversation's place: the `/keys`
         // screen, the configuration view, model picker or session view.

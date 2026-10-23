@@ -27,13 +27,27 @@ impl App {
         hover: bool,
         now: Instant,
     ) -> Effect {
-        let _ = now;
         // Every left click, on a target or not, clears "Copied" and
         // ends a finished attention title (`docs/tui.md`, "Getting the
         // person's attention"); a click on `copy` sets it again.
         if mouse.kind == MouseKind::Press(Button::Left) {
             self.clear_copied();
             self.attention_seen();
+            if let Some(effect) = self.outside_press(mouse, targets, now) {
+                // The swallowed press holds no press: feeding the
+                // pointer a release at its cell clears what no click
+                // may later use, through the existing API, and always
+                // returns `None`.
+                let _disarmed = pointer.on_mouse(
+                    &Mouse {
+                        kind: MouseKind::Release,
+                        ..*mouse
+                    },
+                    &[],
+                    hover,
+                );
+                return effect;
+            }
         }
         self.on_drag(mouse);
         self.on_wheel(mouse);
@@ -46,6 +60,45 @@ impl App {
         } else {
             effect
         }
+    }
+
+    /// A left press starting outside the overlay on top's frame closes
+    /// that overlay through the same path as Esc and goes no further:
+    /// the press reaches none of the drag, the wheel, the selection,
+    /// the pointer or the control under it (`docs/tui.md`, "Bindings").
+    /// The model picker's header row is exempt: its whole top row
+    /// closes the picker outright, as a click there always did. `None`
+    /// when the press is no outside click on a closing surface.
+    fn outside_press(
+        &mut self,
+        mouse: &Mouse,
+        targets: &[crate::mouse::Target],
+        now: Instant,
+    ) -> Option<Effect> {
+        if !matches!(mouse.kind, MouseKind::Press(Button::Left)) {
+            return None;
+        }
+        let top = self.top_surface();
+        if !top.closes_on_outside_click() {
+            return None;
+        }
+        let slab = self.frames().slab_of(top)?;
+        if slab.contains(Position::new(mouse.col, mouse.row)) {
+            return None;
+        }
+        if top == Surface::Picker
+            && matches!(
+                crate::mouse::hit(targets, mouse.col, mouse.row),
+                Some(TargetId::View(crate::swapped::Spot::Close))
+            )
+        {
+            return None;
+        }
+        // A shown selection never keeps the panel: Esc alone would
+        // clear it first and leave a completion panel open, so the
+        // click clears it before closing through the Esc path.
+        self.clear_selection();
+        Some(self.on_key(Key::Esc, now))
     }
 
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
