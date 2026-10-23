@@ -12,7 +12,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc;
@@ -38,10 +38,6 @@ const START_BOUND: Duration = Duration::from_secs(30);
 
 const _: () = assert!(START_BOUND.as_secs() > DEADLINE.as_secs());
 
-/// The signal the watchdog's group kill sends, the same on Linux and macOS.
-/// No jig signals itself, so a jig that dies of it was still running.
-const SIGKILL: i32 = 9;
-
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
 /// cargo and waits on no build lock.
@@ -59,9 +55,8 @@ fn example_path() -> PathBuf {
 fn spawn_reader(stdout: ChildStdout, tx: mpsc::Sender<String>) {
     thread::spawn(move || {
         let mut lines = BufReader::new(stdout).lines();
-        let listening = match lines.next() {
-            Some(Ok(line)) => line,
-            Some(Err(_)) | None => return,
+        let Some(Ok(listening)) = lines.next() else {
+            return;
         };
         match tx.send(listening) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
@@ -165,7 +160,6 @@ fn failure_message(command: Command) -> String {
 /// checks one exchange and the request the jig printed.
 fn serve_one_fixture(mut command: Command) {
     let mut child = command
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -173,12 +167,9 @@ fn serve_one_fixture(mut command: Command) {
         .unwrap();
     // The child is in its own process group, so dropping this kills the
     // group and never the test's own; no pid or `pkill` names it.
-    let mut watchdog = Some(fakes::Watchdog::group(child.id()));
+    let watchdog = fakes::Watchdog::group(child.id());
     let (tx, rx) = mpsc::channel();
     spawn_reader(child.stdout.take().unwrap(), tx);
-    // Held until the function returns, so a jig that reads its standard
-    // input blocks until the group kill, not until end-of-file.
-    let _stdin = child.stdin.take();
     // One thread reaps the child and reads its stderr to end-of-file, so
     // the failure path and the success path take the same result.
     let mut stderr = child.stderr.take().unwrap();
@@ -192,26 +183,28 @@ fn serve_one_fixture(mut command: Command) {
         }
     });
 
-    let listening = Deadline::after(START_BOUND).recv(&rx);
-    let printed = listening.unwrap_or_else(|err| {
-        // The kill ends a jig still running. A SIGKILL status is the kill's
-        // own; any other status is the jig's exit before the kill.
-        drop(watchdog.take());
-        let (status, errors) = Deadline::after(DEADLINE).recv_or_fail(
-            &finished,
-            "the killed provider-server jig's exit and stderr",
-        );
-        let status = status.expect("reaping the killed provider-server jig");
-        let state = if status.signal() == Some(SIGKILL) {
-            "still running at its deadline".to_owned()
-        } else {
-            format!("exited, {status}")
-        };
-        panic!(
-            "the provider-server jig printed its listening line: {err:?} \
-             (bound {START_BOUND:?})\nits state: {state}\nits stderr: {errors}"
-        );
-    });
+    let printed = match Deadline::after(START_BOUND).recv(&rx) {
+        Ok(printed) => printed,
+        Err(err) => {
+            // The kill ends a jig still running. A child that exited before
+            // the kill keeps its exit status for this diagnostic.
+            drop(watchdog);
+            let (status, errors) = Deadline::after(DEADLINE).recv_or_fail(
+                &finished,
+                "the killed provider-server jig's exit and stderr",
+            );
+            let status = status.expect("reaping the killed provider-server jig");
+            let state = if status.code().is_none() {
+                "still running at its deadline".to_owned()
+            } else {
+                format!("exited, {status}")
+            };
+            panic!(
+                "the provider-server jig printed its listening line: {err:?} \
+                 (bound {START_BOUND:?})\nits state: {state}\nits stderr: {errors}"
+            );
+        }
+    };
     assert!(printed.starts_with("listening on http://"), "{printed}");
     let addr: SocketAddr = printed
         .trim_start_matches("listening on http://")
@@ -245,7 +238,7 @@ fn serve_one_fixture(mut command: Command) {
     );
 
     // The child served its fixture: killing its group ends it.
-    drop(watchdog.take());
+    drop(watchdog);
     let (status, errors) =
         Deadline::after(DEADLINE).recv_or_fail(&finished, "the provider-server jig to exit");
     status.expect("reaping the provider-server jig");
