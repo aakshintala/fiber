@@ -24,6 +24,8 @@ serde_json.workspace = true
 serde.workspace = true
 similar.workspace = true
 thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]

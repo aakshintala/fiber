@@ -143,7 +143,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         area: "Sessions",
         id: "delete_session",
         when: "on the row",
-        description: "Delete the selected exited session in the session list",
+        description: "Delete the selected exited, or a live one with Delete session in the session list",
         keys: "Delete, or Backspace, on the row",
         other_paths: "click the row's ✕",
         contexts: Contexts::CONVERSATION,
