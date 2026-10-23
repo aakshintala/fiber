@@ -13,7 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::events::{Event, TurnOutcome, UsageRecorded};
+use contract::events::{TurnOutcome, UsageRecorded};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, SessionId};
 use fakes::{Scripted, call_usage, unnamed_usage};
@@ -381,26 +381,56 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
     let mut child = Session::new(vec![unnamed_failure()], None);
     let copied = only_record(&mut child, &FAILED_UNNAMED_KINDS);
     let mut parent = Session::new(vec![unnamed_failure()], None);
-    let own = only_record(&mut parent, &FAILED_UNNAMED_KINDS);
-    assert_ne!(copied.generation_id, own.generation_id);
     // The copy as the delegate's stream delivers it, then the copy a resume
     // writes for a delegate marked `orphaned` (`docs/delegates.md`,
-    // "Streams"; `docs/loop.md`, "Spending budget").
+    // "Streams"; `docs/loop.md`, "Spending budget"). Both arrive before the
+    // turn, so the loop folds them as it writes them.
+    let copied_id = copied.generation_id.clone();
     let copy = UsageRecorded {
         origin_session_id: Some(SessionId("s_child".into())),
         ..copied
     };
     for _ in 0..2 {
-        parent
-            .log
-            .append(&Event::UsageRecorded(copy.clone()), None, None)
-            .unwrap();
+        send_child(&parent, "s_child", copy.clone());
     }
-    r#loop::fiber_exited(&parent.log, &parent.dir, Ok(()), false, None).unwrap();
+    parent.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(parent.turn(), Some(TurnOutcome::Failed));
+    let lines = parent.lines();
+    let own: UsageRecorded = lines
+        .iter()
+        .filter(|line| line.kind == "usage_recorded")
+        .map(|line| serde_json::from_value(Value::Object(line.payload.clone())).unwrap())
+        .find(|recorded: &UsageRecorded| recorded.generation_id != copied_id)
+        .unwrap();
+    assert_ne!(copied_id, own.generation_id);
+    r#loop::fiber_exited(
+        &parent.log,
+        parent.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&parent.dir).unwrap();
-    let mut expected = FAILED_UNNAMED_KINDS.to_vec();
-    expected.extend(["usage_recorded", "usage_recorded", "fiber_exited"]);
-    assert_eq!(kinds(&all), expected);
+    // The complete ordered event kinds: the two copies land in the drain,
+    // before the turn's own lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "usage_recorded",
+            "usage_recorded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let exited = all.last().unwrap();
     // The parent's call and the delegate's, each once.
     let usage = &exited.payload["usage"]["tokens"];
@@ -521,7 +551,14 @@ fn a_duplicate_copy_counts_once() {
     });
     // Both arrivals are written, but the spend holds one call: the
     // duplicate never doubles the ledger.
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let written = all
         .iter()
@@ -532,6 +569,36 @@ fn a_duplicate_copy_counts_once() {
     assert_eq!(exited.kind, "fiber_exited");
     assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
     assert_eq!(exited.payload["usage"]["tokens"]["output"], 6);
+    assert_eq!(exited.payload["usage"]["cost"], 0.01);
+}
+
+#[test]
+fn an_extension_s_model_call_counts_once_in_the_exit() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    turned(&mut session, |session| {
+        let line = UsageRecorded {
+            extension: Some("fiber.test/notes".into()),
+            ..child_usage("g_ext", Some(0.01), None, None)
+        };
+        session
+            .inbox
+            .send(contract::inbox::Delivery::ExtensionUsage(line))
+            .unwrap();
+    });
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
+    let all = log::read(&session.dir).unwrap();
+    assert_eq!(copies(&all, "g_ext").len(), 1);
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    // The extension's call and the turn's own, each once.
+    assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
     assert_eq!(exited.payload["usage"]["cost"], 0.01);
 }
 
@@ -552,7 +619,14 @@ fn a_correction_applies_only_its_delta() {
     });
     // The second arrival replaces the first in every total: the spend
     // holds the latest billed figure once, not both.
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
@@ -574,7 +648,14 @@ fn a_subscription_copy_counts_subscription_spend() {
     let found = copies(&lines, "g_child");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["subscription"], true);
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.payload["usage"]["subscription_cost"], 0.05);

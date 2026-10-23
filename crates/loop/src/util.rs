@@ -126,6 +126,9 @@ impl crate::Loop {
         .write(&self.log, &self.model.reference, event, turn, action)?;
         if event.class() == Class::Durable {
             self.ending.starts.fold(event);
+            // Every loop write folds here, so `fiber_exited` reads the
+            // summary instead of the log (`docs/events.md`, `fiber_exited`).
+            self.summary.observe(event, action);
         }
         // A completed handoff restarts the reviewer's input from the kept
         // person's messages (`docs/permissions.md`, "At a handoff"), so
