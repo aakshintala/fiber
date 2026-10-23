@@ -5448,6 +5448,22 @@ fn advance_retry(history: &History, deadline: &Deadline) {
         .advance_when_parked(Some(history.clock.now() + retry), None, retry, deadline);
 }
 
+/// [`advance_retry`] for a retry the held lock must fail again: returns
+/// once resume has parked at the next retry, so the test releases the lock
+/// only while resume is still waiting on it.
+fn advance_to_next_retry(history: &History, deadline: &Deadline) {
+    let retry = std::time::Duration::from_millis(50);
+    let mark =
+        history
+            .clock
+            .advance_when_parked(Some(history.clock.now() + retry), None, retry, deadline);
+    assert!(
+        history
+            .clock
+            .await_parked_since(&mark, Some(history.clock.now() + retry), *deadline)
+    );
+}
+
 #[test]
 fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
@@ -5466,7 +5482,7 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     let finished = resume_on_thread(&mut history);
     // Resume parks on the held lock: the advance below ends on its park,
     // and the parent log is unchanged, so the snapshot was not taken yet.
-    advance_retry(&history, &deadline);
+    advance_to_next_retry(&history, &deadline);
     assert_eq!(log::read(&history.dir).unwrap().len(), before);
     // The writer's final lines land before it releases: a correction of
     // the partial record and a new generation.
@@ -5519,7 +5535,7 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
     let before = log::read(&history.dir).unwrap().len();
 
     let finished = resume_on_thread(&mut history);
-    advance_retry(&history, &deadline);
+    advance_to_next_retry(&history, &deadline);
     assert_eq!(log::read(&history.dir).unwrap().len(), before);
     drop(delegate);
     advance_retry(&history, &deadline);
