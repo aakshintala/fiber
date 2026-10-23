@@ -11,12 +11,9 @@ fn a_usage_error_returns_2() {
 fn a_pdf_is_cut_and_the_entry_returns_0() {
     let dir = fakes::TempDir::new("fiber-picture-entry-pdf");
     let input = dir.path().join("in.pdf");
-    std::fs::copy(
-        format!(
-            "{}/../../research/pdf-tool-results/text.pdf",
-            env!("CARGO_MANIFEST_DIR")
-        ),
+    std::fs::write(
         &input,
+        include_bytes!("../../../research/pdf-tool-results/text.pdf"),
     )
     .unwrap();
     let code = picture::main(vec![
