@@ -54,34 +54,14 @@ fn in_launch_project_passes_the_recorded_workspace_once() {
     let home = fakes::TempDir::new("main-resume-in-launch-project");
     let sessions = home.path().join("sessions");
     let dir = sessions.join("s_0123456789abcdef");
-    let workspace = home.path().join("work").to_string_lossy().into_owned();
-    let id = SessionId(dir.file_name().unwrap().to_string_lossy().into_owned());
-    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let log = Log::create(&sessions, id, Arc::clone(&clock)).unwrap();
-    log.append(
-        &Event::SessionStarted(SessionStarted {
-            workspace: workspace.clone(),
-            variables: Variables {
-                path: "/usr/bin:/bin".to_owned(),
-                names: Vec::new(),
-                source: VariablesSource::Inherited,
-            },
-            parent: None,
-            forked_from: None,
-            rewind: None,
-            worktree: None,
-        }),
-        None,
-        None,
-    )
-    .unwrap();
+    let _log = session_with(&dir, None);
     // The recorded workspace reaches the predicate exactly once.
     let seen = RefCell::new(Vec::new());
     assert!(in_launch_project(&dir, &|started| {
         seen.borrow_mut().push(started.to_owned());
         true
     }));
-    assert_eq!(*seen.borrow(), vec![workspace]);
+    assert_eq!(*seen.borrow(), vec!["/nowhere".to_owned()]);
     // A missing log is refused without calling the predicate.
     let seen = RefCell::new(Vec::new());
     assert!(!in_launch_project(
