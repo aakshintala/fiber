@@ -1,7 +1,9 @@
 //! One MCP tool as a Fiber tool (`docs/mcp.md`, "Tools and their names"
 //! and "Calls"): the qualified name, the server's description and schema,
 //! effects from the resolved hints, and calls run on the server under the
-//! spec's timeout. Definitions are never deferred. The loop applies the 16
+//! spec's timeout. Definitions are deferred by default: the loop declares
+//! them with `defer_loading` on a model whose provider defers, unless the
+//! configuration says otherwise. The loop applies the 16
 //! KiB cut and writes the artifact, so [`Tool::bound`] stays default.
 
 use std::path::{Path, PathBuf};
@@ -102,7 +104,7 @@ impl McpTool {
                 name,
                 description,
                 input_schema: schema,
-                deferred: false,
+                deferred: true,
                 hosted: None,
             },
             effects: Effects {
@@ -483,12 +485,7 @@ fn saved_line(artifacts: &Path, mime_type: &Option<String>, encoded: &Value) -> 
 /// The content-addressed file name for `bytes`: the first 16 hex digits
 /// of their SHA-256, so a repeated result rewrites the same file.
 fn artifact_name(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-    let hex: String = digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let hex = support::sha256_hex(bytes);
     format!("mcp-{}.bin", &hex[..16])
 }
 

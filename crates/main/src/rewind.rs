@@ -163,7 +163,7 @@ pub(crate) fn session_forked(
         None,
         Some(parent.clone()),
         Some(r#loop::Rewound {
-            factory: None,
+            factory: Some(crate::builtin::tool_search_factory()),
             from,
             worktree,
             how: r#loop::Continuation::Fork { parent },
@@ -236,7 +236,7 @@ pub(crate) fn session_rewound(
         None,
         None,
         Some(r#loop::Rewound {
-            factory: None,
+            factory: Some(crate::builtin::tool_search_factory()),
             from: point,
             worktree,
             how: r#loop::Continuation::Rewind {

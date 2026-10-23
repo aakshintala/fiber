@@ -358,7 +358,7 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Feedback(args)), _) => {
             match cli::ask_parts(&args.prompt) {
-                Ok((prompt, dash)) => feedback(prompt, dash, clock),
+                Ok((prompt, dash)) => feedback(prompt, dash, args.session.map(SessionId), clock),
                 Err(_) => {
                     eprintln!("fiber: {}", cli::FEEDBACK_SHAPE);
                     2
@@ -669,9 +669,14 @@ fn doctor_report(
 }
 
 /// `fiber feedback`: resolves the description like `fiber ask` resolves
-/// its prompt, then runs the shared report writer; the path and the issue
-/// link print on stdout.
-fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+/// its prompt and the session like `fiber continue` does, then runs the
+/// shared report writer; the path and the issue link print on stdout.
+fn feedback(
+    arg: Option<String>,
+    dash: bool,
+    session: Option<SessionId>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> i32 {
     let stdin = io::stdin();
     let description = match doors::prompt(arg, dash, &mut stdin.lock(), stdin.is_terminal()) {
         Ok(description) => description,
@@ -696,14 +701,19 @@ fn feedback(arg: Option<String>, dash: bool, clock: Arc<dyn contract::clock::Clo
             ));
         }
     };
+    let session = match ::cli::select_session(&home, &workspace, session) {
+        Ok(session) => session,
+        Err(error) => return fail(error),
+    };
     let version = cli::bare_version();
     let context = ::cli::ReportContext {
         version: &version,
         cwd: &workspace,
         clock: clock.as_ref(),
         doctor: &|| doctor_report(&home, &workspace, &version, clock.as_ref()),
+        diagnostics: &|id| ::cli::diagnostics(&home, clock.as_ref(), id),
     };
-    match ::cli::write(&description, &context) {
+    match ::cli::write(&description, session.as_ref(), &context) {
         Ok(done) => {
             // A closed stdout leaves nobody to tell, as `fiber --version` does.
             let mut out = io::stdout().lock();
@@ -1080,22 +1090,24 @@ fn terminal(
     // behind the contract seam, beside the model-list reader. It captures
     // the launch directory, so a later `/feedback` reports the same
     // `doctor` output the headless door would.
-    let feedback: tui::WriteFeedback = std::sync::Arc::new(move |description: &str| {
-        let context = ::cli::ReportContext {
-            version: &feedback_version,
-            cwd: &feedback_workspace,
-            clock: feedback_clock.as_ref(),
-            doctor: &|| {
-                doctor_report(
-                    &feedback_home,
-                    &feedback_workspace,
-                    &feedback_version,
-                    feedback_clock.as_ref(),
-                )
-            },
-        };
-        ::cli::write(description, &context).map_err(|error| error.to_string())
-    });
+    let feedback: tui::WriteFeedback =
+        std::sync::Arc::new(move |description: &str, session: Option<&SessionId>| {
+            let context = ::cli::ReportContext {
+                version: &feedback_version,
+                cwd: &feedback_workspace,
+                clock: feedback_clock.as_ref(),
+                doctor: &|| {
+                    doctor_report(
+                        &feedback_home,
+                        &feedback_workspace,
+                        &feedback_version,
+                        feedback_clock.as_ref(),
+                    )
+                },
+                diagnostics: &|id| ::cli::diagnostics(&feedback_home, feedback_clock.as_ref(), id),
+            };
+            ::cli::write(description, session, &context).map_err(|error| error.to_string())
+        });
     launch.feedback = Some(feedback);
     launch.open_at = open_at;
     match tui::run(

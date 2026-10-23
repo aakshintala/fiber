@@ -530,6 +530,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "repo_settings": ["workspace_url"],
   "replaces": ["web_search"],
   "providers": { "acme": ["https://api.acme.dev/v1"] },
+  "commands": { "acme-status": { "description": "Show the Acme sync state", "argument_hint": "[project]" } },
   "prompt": "prompt.md",
   "secrets": ["acme.api_key"],
   "opening": {
@@ -553,10 +554,18 @@ range without running Lua.
 `memory_mib` raises a
 Lua extension's memory cap, in MiB, above the default of 1
 (`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `replaces`
-lists the built-in tools and commands the extension replaces, and `providers`
-maps each provider it registers to its base URLs; both default to none, and a
-registration beyond them stops the extension loading (`docs/extensions.md`,
-"What a package holds"). `prompt` names a
+lists the built-in tools and commands the extension replaces, `providers`
+maps each provider it registers to its base URLs, and `commands` maps each
+command it registers to its description and optional argument hint; all three
+default to none, and a
+registration beyond what the manifest declares stops the extension loading
+(`docs/extensions.md`, "What a package holds"); for `commands` that bound
+holds only on a lazy start with a declared `commands` key, and an extension
+without that key registers commands at session start as today. A `commands`
+key makes the extension lazy: its
+`init.lua` runs on the first run of one of its commands instead of at session
+start, and it registers only the commands the manifest declares
+(`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `prompt` names a
 file in the package whose text goes in the system prompt
 (`docs/system-prompt.md`, "Extension texts"). `secrets` lists the names the
 extension reads with `host.secret`, and defaults to none ("Secrets").

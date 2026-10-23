@@ -3405,3 +3405,281 @@ mod stacked {
         assert_eq!(app.import_report().map(|report| report.top()), Some(3));
     }
 }
+
+mod outside_click {
+    use crate::Configure;
+    use crate::app::config_views::ConfigView;
+    use crate::app::top::tests::session_app;
+    use crate::app::{App, Surface};
+    use crate::configure::{LoginKind, LoginTarget, LogoutRow};
+    use crate::configure_fake::Fake;
+    use crate::keys::{Button, Key, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    use contract::clock::Clock;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::{Position, Rect};
+    use std::sync::Arc;
+
+    fn now() -> std::time::Instant {
+        fakes::clock::FakeClock::new().now()
+    }
+
+    /// A session app with a conversation long enough to show rows, the
+    /// `long_session` shape of `mod stacked`.
+    fn selected_session() -> App {
+        let mut app = session_app();
+        let mut seq = 0;
+        for at in 0..40 {
+            for next in super::turn(&mut seq, &format!("a_m{at}"), "a one-line reply") {
+                app.on_line(next);
+            }
+        }
+        assert_eq!(app.top(), None, "following the bottom");
+        app
+    }
+
+    /// The app drawn at its size: the buffer and the last frame's targets.
+    fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+        let (width, height) = app.screen_size();
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(app, area, &mut buf, None);
+        (buf, targets)
+    }
+
+    #[test]
+    fn a_shown_selection_does_not_keep_the_completion_panel_open() {
+        let mut app = selected_session();
+        let (_, targets) = drawn(&app);
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col: 6,
+                row: 3,
+            },
+            &targets,
+        );
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Drag(Button::Left),
+                col: 14,
+                row: 4,
+            },
+            &targets,
+        );
+        assert!(app.select.span().is_some(), "a selection shows");
+        app.on_key(Key::Char('/'), now());
+        assert!(app.select.span().is_some(), "typing keeps the selection");
+        assert_eq!(app.top_surface(), Surface::Completion);
+        let (width, height) = app.screen_size();
+        let (_, targets) = drawn(&app);
+        let slab = app
+            .frames()
+            .slab_of(Surface::Completion)
+            .expect("the completion panel drew");
+        let (col, row) = [
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        ]
+        .into_iter()
+        .find(|&(col, row)| !slab.contains(Position::new(col, row)))
+        .expect("a corner outside the panel");
+        let mut pointer = Pointer::default();
+        app.on_mouse(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col,
+                row,
+            },
+            &targets,
+            &mut pointer,
+            true,
+            now(),
+        );
+        assert!(app.completions().is_none(), "the panel closed");
+        assert!(app.select.span().is_none(), "the selection cleared");
+    }
+
+    /// A left press at (`col`, `row`) through the loop's mouse path,
+    /// with a fresh pointer.
+    fn press_at(
+        app: &mut App,
+        targets: &[crate::mouse::Target],
+        col: u16,
+        row: u16,
+    ) -> crate::app::Effect {
+        let mut pointer = Pointer::default();
+        app.on_mouse(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col,
+                row,
+            },
+            targets,
+            &mut pointer,
+            true,
+            now(),
+        )
+    }
+
+    /// The first screen corner outside `slab`.
+    #[track_caller]
+    fn outside_corner(label: &str, slab: Rect, width: u16, height: u16) -> (u16, u16) {
+        [
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        ]
+        .into_iter()
+        .find(|&(col, row)| !slab.contains(Position::new(col, row)))
+        .unwrap_or_else(|| panic!("{label}: no screen corner outside {slab:?}"))
+    }
+
+    /// Opens `/login` on its key panel: Enter on the key row leaves the
+    /// rows for the panel step, which draws its own overlay.
+    fn open_login_step(app: &mut App) {
+        let fake = Fake::new(Vec::new());
+        if let Ok(mut targets) = fake.targets.lock() {
+            *targets = Ok(vec![LoginTarget {
+                name: "acme".to_owned(),
+                kind: LoginKind::Key,
+            }]);
+        }
+        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        let _ = app.open_config_view(ConfigView::Login);
+        assert!(
+            app.top_surfaces().contains(&Surface::ConfigView),
+            "/login opened"
+        );
+        app.on_key(Key::Enter, now());
+    }
+
+    /// Opens `/logout` on its delete confirm: Enter on the deletable
+    /// row leaves the rows for the confirm, which draws its own overlay.
+    fn open_logout_confirm(app: &mut App) {
+        let fake = Fake::new(Vec::new());
+        if let Ok(mut logout) = fake.logout.lock() {
+            *logout = Ok(vec![LogoutRow::Provider {
+                name: "acme".to_owned(),
+                label: "default".to_owned(),
+                default: true,
+                deletable: true,
+                origin: None,
+                siblings: Vec::new(),
+            }]);
+        }
+        app.set_configure(Some(Arc::new(fake) as Arc<dyn Configure>));
+        let _ = app.open_config_view(ConfigView::Logout);
+        assert!(
+            app.top_surfaces().contains(&Surface::ConfigView),
+            "/logout opened"
+        );
+        app.on_key(Key::Enter, now());
+    }
+
+    #[test]
+    fn a_press_outside_the_login_step_steps_back_to_the_rows() {
+        let mut app = session_app();
+        open_login_step(&mut app);
+        let (width, height) = app.screen_size();
+        let (_, targets) = drawn(&app);
+        let slab = app
+            .frames()
+            .slab_of(Surface::ConfigView)
+            .expect("the login step drew");
+        let (col, row) = outside_corner("login step", slab, width, height);
+        // Esc on a twin steps the step back to the rows, leaving the
+        // view open: still open proves the opener reached the step, and
+        // the redrawn rows slab is what the press must reproduce.
+        let mut twin = session_app();
+        open_login_step(&mut twin);
+        let esc = twin.on_key(Key::Esc, now());
+        assert!(
+            twin.top_surfaces().contains(&Surface::ConfigView),
+            "esc steps the step back to the rows"
+        );
+        let (_, _) = drawn(&twin);
+        let rows = twin
+            .frames()
+            .slab_of(Surface::ConfigView)
+            .expect("the rows drew");
+        let effect = press_at(&mut app, &targets, col, row);
+        assert_eq!(effect, esc, "the press closes as Esc does");
+        assert!(
+            app.top_surfaces().contains(&Surface::ConfigView),
+            "the view stays on the rows"
+        );
+        let (_, _) = drawn(&app);
+        assert_eq!(
+            app.frames().slab_of(Surface::ConfigView),
+            Some(rows),
+            "the press redrew the rows"
+        );
+        // One more Esc closes both, from the same rows.
+        app.on_key(Key::Esc, now());
+        twin.on_key(Key::Esc, now());
+        assert!(
+            !app.top_surfaces().contains(&Surface::ConfigView),
+            "the view closed"
+        );
+        assert!(
+            !twin.top_surfaces().contains(&Surface::ConfigView),
+            "the twin closed"
+        );
+    }
+
+    #[test]
+    fn a_press_outside_the_logout_confirm_steps_back_to_the_rows() {
+        let mut app = session_app();
+        open_logout_confirm(&mut app);
+        let (width, height) = app.screen_size();
+        let (_, targets) = drawn(&app);
+        let slab = app
+            .frames()
+            .slab_of(Surface::ConfigView)
+            .expect("the logout confirm drew");
+        let (col, row) = outside_corner("logout confirm", slab, width, height);
+        // Esc on a twin steps the confirm back to the rows, leaving
+        // the view open: still open proves the opener reached the
+        // confirm, and the redrawn rows slab is what the press must
+        // reproduce.
+        let mut twin = session_app();
+        open_logout_confirm(&mut twin);
+        let esc = twin.on_key(Key::Esc, now());
+        assert!(
+            twin.top_surfaces().contains(&Surface::ConfigView),
+            "esc steps the confirm back to the rows"
+        );
+        let (_, _) = drawn(&twin);
+        let rows = twin
+            .frames()
+            .slab_of(Surface::ConfigView)
+            .expect("the rows drew");
+        let effect = press_at(&mut app, &targets, col, row);
+        assert_eq!(effect, esc, "the press closes as Esc does");
+        assert!(
+            app.top_surfaces().contains(&Surface::ConfigView),
+            "the view stays on the rows"
+        );
+        let (_, _) = drawn(&app);
+        assert_eq!(
+            app.frames().slab_of(Surface::ConfigView),
+            Some(rows),
+            "the press redrew the rows"
+        );
+        // One more Esc closes both, from the same rows.
+        app.on_key(Key::Esc, now());
+        twin.on_key(Key::Esc, now());
+        assert!(
+            !app.top_surfaces().contains(&Surface::ConfigView),
+            "the view closed"
+        );
+        assert!(
+            !twin.top_surfaces().contains(&Surface::ConfigView),
+            "the twin closed"
+        );
+    }
+}

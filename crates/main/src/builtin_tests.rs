@@ -794,7 +794,12 @@ fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
         walked.push(definition.name);
     }
     walked.sort();
-    assert_eq!(walked, contract::tool::BUILT_IN_TOOLS);
+    let listed: Vec<&str> = contract::tool::BUILT_IN_TOOLS
+        .iter()
+        .filter(|name| **name != "tool_search")
+        .copied()
+        .collect();
+    assert_eq!(walked, listed);
 }
 
 /// The names an extension must list in `replaces` are exactly the names
@@ -810,6 +815,7 @@ fn built_in_tools_is_every_name_builtin_registers() {
     };
     let listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
         .iter()
+        .filter(|name| **name != "tool_search")
         .map(|name| (*name).to_owned())
         .collect();
     assert_eq!(names(Some("web_search_20250305")), listed);
@@ -817,6 +823,105 @@ fn built_in_tools_is_every_name_builtin_registers() {
     without.push("web_search".to_owned());
     without.sort();
     assert_eq!(without, listed);
+}
+
+/// `tool_search` is a built-in name in sorted place after `skill`, though
+/// `builtin` never registers it: the loop builds it over the deferred tools.
+#[test]
+fn built_in_tools_holds_tool_search_after_skill() {
+    let list = contract::tool::BUILT_IN_TOOLS;
+    assert!(list.contains(&"tool_search"), "{list:?}");
+    let mut sorted = list.to_vec();
+    sorted.sort();
+    assert_eq!(sorted, list, "{list:?}");
+    let skill = list.iter().position(|name| *name == "skill").unwrap();
+    assert_eq!(list[skill + 1], "tool_search", "{list:?}");
+}
+
+/// The factory builds the search tool over the catalogue, naming its
+/// sources in the description; with none, no such sentence.
+#[test]
+fn tool_search_factory_builds_the_search_naming_its_sources() {
+    let factory = super::tool_search_factory();
+    let search = factory(&[], &["fx".to_owned()]);
+    let definition = search.definition();
+    assert_eq!(definition.name, contract::provider::TOOL_SEARCH);
+    assert!(!definition.deferred);
+    assert!(
+        definition
+            .description
+            .ends_with("Deferred tools come from: fx."),
+        "{}",
+        definition.description
+    );
+    let bare = factory(&[], &[]);
+    assert_eq!(bare.definition().name, contract::provider::TOOL_SEARCH);
+    assert!(
+        !bare
+            .definition()
+            .description
+            .contains("Deferred tools come from"),
+        "{}",
+        bare.definition().description
+    );
+}
+
+/// The rows adapter publishes only the search row's declares, and every
+/// row's state move.
+#[test]
+fn tool_rows_forwards_only_the_search_declares_and_every_state() {
+    let declared = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let moved = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let store = Arc::clone(&declared);
+    let declare: doors::Declare = Arc::new(move |name: &str, info| {
+        store
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), info.is_some()));
+    });
+    let moves = Arc::clone(&moved);
+    #[allow(
+        clippy::type_complexity,
+        reason = "the setter type is doors' closure type, named at neither end"
+    )]
+    let state: Arc<dyn Fn(&str, contract::events::ToolState) + Send + Sync> =
+        Arc::new(move |name: &str, state| {
+            moves.lock().unwrap().push((name.to_owned(), state));
+        });
+    let rows = super::tool_rows(declare, state);
+    let info = || contract::events::ToolInfo {
+        name: "tool_search".to_owned(),
+        source: contract::events::ToolSource::Builtin,
+        state: contract::events::ToolState::Full,
+        bytes: 1,
+        tokens: None,
+    };
+    (rows.declare)("mcp__fx__echo", Some(info()));
+    assert!(declared.lock().unwrap().is_empty());
+    (rows.declare)("tool_search", Some(info()));
+    (rows.declare)("tool_search", None);
+    assert_eq!(
+        *declared.lock().unwrap(),
+        [
+            ("tool_search".to_owned(), true),
+            ("tool_search".to_owned(), false)
+        ]
+    );
+    (rows.state)("mcp__fx__echo", contract::events::ToolState::Loaded);
+    (rows.state)("tool_search", contract::events::ToolState::Deferred);
+    assert_eq!(
+        *moved.lock().unwrap(),
+        [
+            (
+                "mcp__fx__echo".to_owned(),
+                contract::events::ToolState::Loaded
+            ),
+            (
+                "tool_search".to_owned(),
+                contract::events::ToolState::Deferred
+            ),
+        ]
+    );
 }
 
 /// A search backend answering nothing, for choosing what `builtin`

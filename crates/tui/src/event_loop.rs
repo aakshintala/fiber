@@ -27,7 +27,7 @@ use signal_hook::iterator::Signals;
 use crate::app::{App, Effect};
 use crate::catalogue;
 use crate::home::Launch;
-use crate::keys::{Button, Event, MouseKind, Parser, Reply};
+use crate::keys::{Event, MouseKind, Parser, Reply};
 use crate::link::{Feed, Line};
 use crate::look::Look;
 use crate::mouse::Pointer;
@@ -483,29 +483,13 @@ impl<B: Backend> Loop<B> {
                 Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
                 Event::Key(key) => self.app.on_key(key, self.clock.now()),
                 Event::Edit(edit) => self.app.on_edit(edit),
-                Event::Mouse(mouse) => {
-                    // Every left click, on a target or not, clears
-                    // "Copied" and ends a finished attention title
-                    // (`docs/tui.md`, "Getting the person's
-                    // attention"); a click on `copy` sets it again.
-                    if mouse.kind == MouseKind::Press(Button::Left) {
-                        self.app.clear_copied();
-                        self.app.attention_seen();
-                    }
-                    self.app.on_drag(&mouse);
-                    self.app.on_wheel(&mouse);
-                    let selected = self.app.on_select(&mouse, self.screen.targets());
-                    let clicked = self
-                        .pointer
-                        .on_mouse(&mouse, self.screen.targets(), self.hover);
-                    // A click's effect, else the selection's.
-                    let effect = clicked.map_or(Effect::None, |target| self.app.on_click(target));
-                    if effect == Effect::None {
-                        selected
-                    } else {
-                        effect
-                    }
-                }
+                Event::Mouse(mouse) => self.app.on_mouse(
+                    &mouse,
+                    self.screen.targets(),
+                    &mut self.pointer,
+                    self.hover,
+                    self.clock.now(),
+                ),
                 Event::Reply(Reply::KittyFlags(_)) => {
                     self.kitty();
                     Effect::None
@@ -551,6 +535,7 @@ impl<B: Backend> Loop<B> {
                         self.app.feedback_writer(),
                         Some(&self.files_out),
                         description,
+                        self.app.session().cloned(),
                     ) {
                         // Nothing started, so no answer can arrive:
                         // landing the failure shows the notice.

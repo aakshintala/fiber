@@ -19,7 +19,7 @@ use crate::install::{
     Provenance, Record, Scratch, check, commit_all, copy, io, remove, stage, unique_name,
 };
 use crate::installed::lock;
-use crate::prepare::{download, hex};
+use crate::prepare::download;
 use unpack::{LIMITS, unpack};
 
 /// The release's docs archive.
@@ -280,7 +280,7 @@ fn verify(release: &Release, file: &str, fetched: &Fetched) -> Result<(), Error>
                 "does not start with a SHA-256 of 64 hex digits".into(),
             )
         })?;
-    let got = hex(ring::digest::digest(&ring::digest::SHA256, &fetched.bytes).as_ref());
+    let got = support::sha256_hex(&fetched.bytes);
     if got != expected {
         return Err(Error::ArchiveChecksum {
             archive: file.into(),

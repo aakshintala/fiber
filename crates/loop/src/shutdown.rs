@@ -124,6 +124,7 @@ impl Loop {
             | Delivery::Resolved(..)
             | Delivery::ExtensionLog(_)
             | Delivery::ExtensionUsage(_)
+            | Delivery::DelegateUsage { .. }
             | Delivery::Shell(..)
             | Delivery::Reply(..)
             | Delivery::Prompt(..)
@@ -252,6 +253,7 @@ impl Loop {
                 self.record_extension_job(started, delegate)?
             }
             Delivery::ExtensionUsage(line) => self.record_extension_usage(line)?,
+            Delivery::DelegateUsage { session, line } => self.copy_usage(&session, line)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,

@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobLine, JobStarted};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening};
+use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening, UsageTap};
 use contract::tool::Cancel;
 
 use crate::deadline::Deadline;
@@ -71,6 +71,9 @@ struct Inner {
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
     /// Where each later end is sent, once [`Jobs::deliver_to`] set it.
     inbox: Option<Sender<Delivery>>,
+    /// The watcher-side budget update, once [`Jobs::install_usage_tap`]
+    /// set it. A test reads it back through [`FakeJobs::has_usage_tap`].
+    usage_tap: Option<contract::jobs::UsageTap>,
 }
 
 /// Jobs a test opens. Files are `{dir}/{job_id}.log`. [`FakeJobs::failing`]
@@ -183,6 +186,7 @@ impl FakeJobs {
                 stop_delegates: 0,
                 foreground: Vec::new(),
                 inbox: None,
+                usage_tap: None,
             })),
             completed_tx,
             completed_rx: Mutex::new(completed_rx),
@@ -233,6 +237,13 @@ impl FakeJobs {
     /// turn that ends `budget_exceeded`.
     pub fn stop_delegates_calls(&self) -> usize {
         lock(&self.inner).stop_delegates
+    }
+
+    /// Whether a watcher-side budget update is installed: attaching the
+    /// loop installs one, and replacing the attachment clears the
+    /// previous registry's.
+    pub fn has_usage_tap(&self) -> bool {
+        lock(&self.inner).usage_tap.is_some()
     }
 }
 
@@ -391,6 +402,12 @@ impl Jobs for FakeJobs {
     /// claim holds, and each later batch as a [`Delivery::JobLine`].
     fn deliver_to(&self, inbox: Sender<Delivery>) {
         lock(&self.inner).inbox = Some(inbox);
+    }
+
+    /// Records the watcher-side budget update, so a test can tell an
+    /// attached registry from a replaced one.
+    fn install_usage_tap(&self, tap: Option<UsageTap>) {
+        lock(&self.inner).usage_tap = tap;
     }
 }
 

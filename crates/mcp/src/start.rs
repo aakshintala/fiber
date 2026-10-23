@@ -694,7 +694,7 @@ pub(crate) fn start_observed_tracked(
     }
 }
 
-/// One `mcp_resources` row: listed as built in, in full, like
+/// One `mcp_resources` row: listed as built in, deferred, like
 /// `main`'s `builtin::registered` builds its rows.
 fn resources_info(definition: &ToolDefinition) -> ToolInfo {
     let bytes =
@@ -702,7 +702,7 @@ fn resources_info(definition: &ToolDefinition) -> ToolInfo {
     ToolInfo {
         name: definition.name.clone(),
         source: ToolSource::Builtin,
-        state: ToolState::Full,
+        state: ToolState::Deferred,
         bytes,
         tokens: None,
     }
@@ -877,7 +877,7 @@ pub(crate) fn info(server: &str, tool: &McpTool) -> ToolInfo {
             server: server.to_owned(),
             tool: tool.tool_name().to_owned(),
         },
-        state: ToolState::Full,
+        state: ToolState::Deferred,
         bytes,
         tokens: None,
     }

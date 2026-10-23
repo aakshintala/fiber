@@ -8,6 +8,7 @@ use ratatui::text::Span;
 
 use super::{FOCUS_STYLE, completions, lift_hover};
 use crate::app::App;
+use crate::app::Surface;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
@@ -267,7 +268,12 @@ fn import_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
 /// Draws the import offer over `area`: the frame centred with its
 /// title, the head and one row per source, and its footer, beside
 /// the delete frame's drawing.
-fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+fn draw_import_question(
+    question: &str,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Rect {
     let rows = import_rows(question, area);
     let framed = super::overlay::Overlay {
         title: Some(("Import settings".to_owned(), Some(Span::raw("✕")))),
@@ -290,6 +296,7 @@ fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &
             },
         );
     }
+    slab
 }
 
 /// The rows over which home's notice overlay draws, in `area`.
@@ -347,7 +354,7 @@ fn draw_delete_question(
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) {
+) -> Rect {
     let rows = question_rows(question, area);
     let capacity = super::overlay::question_capacity(area.height);
     let max = rows.len().saturating_sub(capacity);
@@ -383,6 +390,7 @@ fn draw_delete_question(
             },
         );
     }
+    slab
 }
 
 struct ListRow {
@@ -840,18 +848,16 @@ pub(super) fn render(
     // the typed row, the completions, the header and the dim recents
     // draw instead.
     if let Some(picker) = &screen.picker {
-        match &picker.typed {
-            Some(typed) => {
-                draw_typed_picker(
-                    typed,
-                    &picker.recents,
-                    picker.focus,
-                    picker.escapes,
-                    (area, placed.box_top),
-                    buf,
-                    &mut targets,
-                );
-            }
+        let slab = match &picker.typed {
+            Some(typed) => draw_typed_picker(
+                typed,
+                &picker.recents,
+                picker.focus,
+                picker.escapes,
+                (area, placed.box_top),
+                buf,
+                &mut targets,
+            ),
             None => {
                 let items = &picker.recents;
                 let selected = picker.focus.unwrap_or(0);
@@ -876,10 +882,13 @@ pub(super) fn render(
                         area,
                         buf,
                         &mut targets,
-                    );
+                    )
+                } else {
+                    Rect::default()
                 }
             }
-        }
+        };
+        app.frames().note(Surface::WorkspacePicker, slab);
     }
     token_targets(app, area, &placed, &mut targets);
     let mut bottom = placed.foot;
@@ -897,7 +906,8 @@ pub(super) fn render(
     }
     let rows = notice_area(&placed, area);
     bottom = rows.bottom();
-    super::notice_rows::overlay(app, rows, buf, &mut targets);
+    let slab = super::notice_rows::overlay(app, rows, buf, &mut targets);
+    app.frames().note(Surface::Notice, slab);
     // The rows sit above the banner, unreserved, over the area's bottom
     // rows (`docs/tui.md`, "Notices").
     super::notice_rows::draw(app, rows, buf, &mut bottom, &mut targets);
@@ -917,14 +927,24 @@ pub(super) fn render(
                 placed.box_top.saturating_sub(area.y),
             )
         };
-        completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
+        let search = matches!(panel.rows, Rows::Search(_));
+        let slab = completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
+        app.frames().note(
+            if search {
+                Surface::Search
+            } else {
+                Surface::Completion
+            },
+            slab,
+        );
     }
     if let Some(question) = &screen.question {
-        if screen.question_import {
-            draw_import_question(question, area, buf, &mut targets);
+        let slab = if screen.question_import {
+            draw_import_question(question, area, buf, &mut targets)
         } else {
-            draw_delete_question(question, screen.question_scroll, area, buf, &mut targets);
-        }
+            draw_delete_question(question, screen.question_scroll, area, buf, &mut targets)
+        };
+        app.frames().note(Surface::DeleteQuestion, slab);
     }
     // The import report draws over home when open, above the offer and
     // delete frames: one overlay with both counts, no notices
@@ -944,6 +964,7 @@ pub(super) fn render(
                 },
             );
         }
+        slab
     });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row))
         && !matches!(id, TargetId::Home(Spot::Question))
@@ -1096,7 +1117,7 @@ fn draw_typed_picker(
     (area, box_top): (Rect, u16),
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) {
+) -> Rect {
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need.
     let room = usize::from(55u16.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
@@ -1212,7 +1233,7 @@ fn draw_typed_picker(
         footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, place, targets);
+    super::overlay::draw(buf, area, &framed, place, targets)
 }
 
 /// Draws the workspace picker over `area`: `window` with the selection
@@ -1226,7 +1247,7 @@ fn draw_picker(
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) {
+) -> Rect {
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need.
     let room = usize::from(55u16.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
@@ -1260,7 +1281,7 @@ fn draw_picker(
         footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets)
 }
 
 /// A target over each paste token's label the home box shows.

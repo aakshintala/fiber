@@ -144,8 +144,52 @@ impl Loop {
 
     /// The session's jobs: their ends wake the model, and the session does
     /// not end while one runs (`docs/tools.md`, "Background jobs"). Without
-    /// them no job ever runs.
+    /// them no job ever runs. Installs the watcher-side budget update over
+    /// the loop-owned tripwire: the tap holds only a weak reference to the
+    /// supplied jobs, so replacing the attachment never retains or stops a
+    /// previous registry. Publishes the restored ledger and budget under
+    /// the tripwire lock, preserving watcher contributions not yet folded
+    /// by only adding ledger lines the map lacks.
     pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
+        let trip = Arc::clone(&self.spend_trip);
+        // Replacing an attachment uninstalls the previous registry's
+        // tap first: a still-running delegate on it must neither update
+        // the shared tripwire nor stop the detached registry.
+        if let Some(previous) = self.ending.jobs.take() {
+            previous.install_usage_tap(None);
+        }
+        // Publishes the restored ledger and budget before the tap runs,
+        // so a tap firing between the publish and the install still
+        // serialises on the same lock and loses nothing.
+        {
+            let mut guard = trip
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for line in self.ledger.lines() {
+                // Preserves watcher records not yet folded: only ledger
+                // lines the map lacks join the sum here; the per-line
+                // publish on the fold path reconciles the rest.
+                guard.publish_missing(line);
+            }
+            guard.set_budget(self.budget);
+        }
+        let weak = Arc::downgrade(&jobs);
+        let tap: contract::jobs::UsageTap = Arc::new(move |line| {
+            // Counts the arrival as pending and folds it atomically: the
+            // loop's later acknowledgment of this arrival's delivery keeps
+            // this newer value instead of replaying the delivery's older
+            // line. The guard is released before stopping delegates.
+            let tripped = {
+                let mut guard = trip
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.tap(&line)
+            };
+            if tripped && let Some(jobs) = weak.upgrade() {
+                jobs.stop_delegates();
+            }
+        });
+        jobs.install_usage_tap(Some(tap));
         self.ending.jobs = Some(jobs);
         self
     }

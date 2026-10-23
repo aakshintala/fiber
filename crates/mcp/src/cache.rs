@@ -40,12 +40,7 @@ pub(crate) fn key(
         "secrets": secrets,
     });
     let bytes = serde_json::to_vec(&declaration).unwrap_or_default();
-    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    support::sha256_hex(&bytes)
 }
 
 /// The key of a remote server's `url`: the lowercase hex SHA-256 of the
@@ -57,12 +52,7 @@ pub(crate) fn url_key(url: &str) -> String {
         "url": url,
     });
     let bytes = serde_json::to_vec(&declaration).unwrap_or_default();
-    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    support::sha256_hex(&bytes)
 }
 
 /// The cache file of `server` under `cache`: `None` when the name has no

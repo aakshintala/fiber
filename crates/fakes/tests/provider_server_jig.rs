@@ -24,10 +24,19 @@ use fakes::Deadline;
 #[path = "support/provider_server.rs"]
 mod support;
 
-/// The deadline on each wait: the jig printing its address, the client's
-/// exchange, and the jig printing the request. A stall fails naming the
-/// wait (`docs/testing.md`, "Waits and timeouts").
+/// The deadline on each wait: the jig's exchange, the jig printing the
+/// request, and the jig's exit. A stall fails naming the wait
+/// (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
+
+/// How long the jig may take to print its listening line, process start
+/// included. The first exec of a freshly linked binary can stall under load,
+/// past [`DEADLINE`], so the line gets this bound. This is the bound
+/// `crates/loop/tests/review_jig.rs` gives a built binary's first start. The
+/// exchange after the line keeps [`DEADLINE`].
+const START_BOUND: Duration = Duration::from_secs(30);
+
+const _: () = assert!(START_BOUND.as_secs() > DEADLINE.as_secs());
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
@@ -41,14 +50,14 @@ fn example_path() -> PathBuf {
 
 /// Reads the jig's stdout: first its `listening on` line, then one request
 /// block, which ends at the blank line. Each send is best-effort: the test
-/// may already have failed its deadline and gone away.
+/// may already have failed its deadline and gone away. A jig that closes its
+/// stdout before the line drops the sender, so the wait fails at once.
 fn spawn_reader(stdout: ChildStdout, tx: mpsc::Sender<String>) {
     thread::spawn(move || {
         let mut lines = BufReader::new(stdout).lines();
-        let listening = lines
-            .next()
-            .map(|line| line.unwrap_or_default())
-            .unwrap_or_default();
+        let Some(Ok(listening)) = lines.next() else {
+            return;
+        };
         match tx.send(listening) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
@@ -106,9 +115,51 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     let dir = fakes::TempDir::new("provider-server-jig");
     let fixture = dir.path().join("reply.sse");
     std::fs::write(&fixture, "data: hi\n\n").unwrap();
+    let mut command = Command::new(example_path());
+    command.arg(&fixture);
+    serve_one_fixture(command);
+}
 
-    let mut child = Command::new(example_path())
-        .arg(&fixture)
+/// The listening wait takes [`START_BOUND`]. Its one statement is found in
+/// this file's source; a wait on [`DEADLINE`] instead leaves the count at
+/// zero. The needle is split so this test's own text does not match it.
+#[test]
+fn the_listening_wait_takes_the_start_bound() {
+    let source = include_str!("provider_server_jig.rs");
+    let wait = concat!("Deadline::after(", "START_BOUND).recv(&rx)");
+    assert_eq!(source.matches(wait).count(), 1);
+}
+
+/// A jig that exits before its line fails the listening wait at once. The
+/// failure names the exit status and the stderr the jig wrote.
+#[test]
+fn a_jig_that_exits_before_its_line_names_its_status_and_stderr() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("echo boom >&2");
+    let message = failure_message(command);
+    assert!(
+        message.contains("its state: exited, exit status: 0\n"),
+        "{message}"
+    );
+    assert!(message.contains("its stderr: boom\n"), "{message}");
+}
+
+/// The panic message of a jig that fails [`serve_one_fixture`].
+fn failure_message(command: Command) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        serve_one_fixture(command);
+    }))
+    .expect_err("the jig's listening wait should fail");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("a formatted panic message")
+}
+
+/// Starts the jig through `command`, which runs it with its fixture, then
+/// checks one exchange and the request the jig printed.
+fn serve_one_fixture(mut command: Command) {
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -119,11 +170,41 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     let watchdog = fakes::Watchdog::group(child.id());
     let (tx, rx) = mpsc::channel();
     spawn_reader(child.stdout.take().unwrap(), tx);
+    // One thread reaps the child and reads its stderr to end-of-file, so
+    // the failure path and the success path take the same result.
     let mut stderr = child.stderr.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let status = child.wait();
+        let mut errors = String::new();
+        stderr.read_to_string(&mut errors).unwrap();
+        match done.send((status, errors)) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
 
-    let printed = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("the provider-server jig printed its listening line");
+    let printed = match Deadline::after(START_BOUND).recv(&rx) {
+        Ok(printed) => printed,
+        Err(err) => {
+            // The kill ends a jig still running. A child that exited before
+            // the kill keeps its exit status for this diagnostic.
+            drop(watchdog);
+            let (status, errors) = Deadline::after(DEADLINE).recv_or_fail(
+                &finished,
+                "the killed provider-server jig's exit and stderr",
+            );
+            let status = status.expect("reaping the killed provider-server jig");
+            let state = if status.code().is_none() {
+                "still running at its deadline".to_owned()
+            } else {
+                format!("exited, {status}")
+            };
+            panic!(
+                "the provider-server jig printed its listening line: {err:?} \
+                 (bound {START_BOUND:?})\nits state: {state}\nits stderr: {errors}"
+            );
+        }
+    };
     assert!(printed.starts_with("listening on http://"), "{printed}");
     let addr: SocketAddr = printed
         .trim_start_matches("listening on http://")
@@ -158,18 +239,10 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
 
     // The child served its fixture: killing its group ends it.
     drop(watchdog);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || match done.send(child.wait()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
-    });
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => panic!("reaping the provider-server jig failed: {e}"),
-        Err(_) => panic!("the provider-server jig: not reaped within {DEADLINE:?}"),
-    }
-    // The child has exited, so every write end is closed and this reads
-    // the buffered remainder to end-of-file.
-    let mut errors = String::new();
-    stderr.read_to_string(&mut errors).unwrap();
+    let (status, errors) =
+        Deadline::after(DEADLINE).recv_or_fail(&finished, "the provider-server jig to exit");
+    status.expect("reaping the provider-server jig");
+    // The child has exited, so every write end is closed and the reaper
+    // read the buffered remainder to end-of-file.
     assert!(errors.is_empty(), "{errors}");
 }

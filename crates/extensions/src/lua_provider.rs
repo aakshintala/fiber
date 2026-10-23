@@ -16,15 +16,14 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::{Error, LuaExtension};
 use config::{Config, ModelData, ProviderData, Secret};
 use contract::ErrorCode;
 use contract::signing::{self, SignRequest, Signer};
 #[cfg(test)]
 use fakes::Deadline;
 use serde_json::{Map, Value, json};
-
-use crate::host::sha256_hex;
-use crate::{Error, LuaExtension};
+use support::sha256_hex;
 
 mod login;
 mod models_arg;

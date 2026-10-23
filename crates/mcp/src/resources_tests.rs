@@ -377,7 +377,7 @@ fn the_definition_is_fixed_and_names_no_server() {
             "required": ["action"],
         }),
     );
-    assert!(!definition.deferred);
+    assert!(definition.deferred);
     assert_eq!(definition.hosted, None);
     let text = serde_json::to_string(&definition).expect("a definition writes");
     assert!(

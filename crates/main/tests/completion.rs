@@ -148,7 +148,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
     ("logout", &[], &["--as", "--all", "-h", "--help"]),
     ("doctor", &[], &["-h", "--help"]),
     ("stop", &[], &["--hub", "-h", "--help"]),
-    ("feedback", &[], &["-h", "--help"]),
+    ("feedback", &[], &["--session", "-h", "--help"]),
     ("completion", &[], &["-h", "--help"]),
     ("version", &[], &["-h", "--help"]),
     ("help", &[], &["-h", "--help"]),

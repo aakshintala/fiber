@@ -103,7 +103,7 @@ asked for the session.
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth"), or `fiber mcp login` got no callback in time, or a listed hub refused the client's device token | 1 |
 | `connection_failed` | the startup OAuth refresh could not reach the token endpoint, or a client could not reach a listed hub | 1 |
-| `session_not_found` | a resume names no session | 1 |
+| `session_not_found` | a resume, or `fiber feedback --session`, names no session | 1 |
 | `session_held` | another process holds the session's lock, or runs it at a schema version this build cannot read | 1 |
 | `extension_missing` | the provider of a `provider/model` is not installed, or configuration declares hooks and the `hooks` extension is not installed (`docs/extensions.md`, "Hooks declared in configuration") | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
@@ -378,7 +378,7 @@ the lines that carry it.
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one | event |
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") | — |
 | `session_held` | exit, hub command, notice, driver command (`rewind`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session's schema is newer than this terminal reads | event |
-| `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none, or a `start` `continues` names a session whose worktree is gone (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen | event |
+| `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or `fiber feedback --session` names no session or names a delegate (`docs/invocation.md`, "Commands and flags"), or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none, or a `start` `continues` names a session whose worktree is gone (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen | event |
 | `signal` | tool call, job, diagnostic log | a process killed by a signal Fiber did not send, or Fiber itself stopped by one before it started writing `fiber_started` | — |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") | event |
 | `skill_shadowed` | notice | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") | event |
@@ -408,7 +408,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | Code | Class | Meaning |
 |---|---|---|
 | `command_conflict` | event | two extensions registered the same command name |
-| `config_key_ignored` | event | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
+| `config_key_ignored` | event | an unknown key, a key a repository may not set, a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking"), or `tools."tool_search".deferred`, which has no effect (`docs/tools.md`, "Tool search") |
 | `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_missing` | event | configuration declares hooks but the `hooks` extension is not installed, so its declared hooks will not run; the message says to run `fiber extension install hooks` |
