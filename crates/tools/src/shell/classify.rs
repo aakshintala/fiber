@@ -332,10 +332,11 @@ fn has_input(simple: &Simple) -> bool {
         .any(|redirect| matches!(redirect, Redirect::Input(_)))
 }
 
-/// Whether a stage prints statically-known words: a simple `echo` or
-/// `printf`, whose every operand word reaches `xargs` stdin as written.
-/// Any other stage's filenames are unproven, including a listing whose
-/// names come from command output. Appends the operand words when static.
+/// Whether a stage prints statically-known words: a simple `echo`, whose
+/// every operand word reaches `xargs` stdin as written. Any other stage's
+/// filenames are unproven, including a `printf` whose format string
+/// transforms its operands and any listing whose names come from command
+/// output. Appends the operand words when static.
 fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
     let Stage::Simple(simple) = stage else {
         return false;
@@ -343,7 +344,7 @@ fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
     let Some(first) = simple.words.first() else {
         return false;
     };
-    if first.cooked != "echo" && first.cooked != "printf" {
+    if first.cooked != "echo" {
         return false;
     }
     words.extend(simple.words.iter().skip(1).map(|word| word.cooked.clone()));

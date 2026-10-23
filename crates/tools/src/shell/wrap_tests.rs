@@ -168,7 +168,14 @@ fn xargs_reads_only_into_six_commands() {
         "find . -name x | xargs grep y f",
         "cat f | xargs head",
         "printf %s f | xargs head",
+        "printf '%s%s' cred ential | xargs head",
         "echo /path/to/credentials | xargs head",
+        // A redirect file of its own replaces the pipeline: the proven
+        // words never reach the target, so the call is reviewed.
+        "echo f | xargs head < g",
+        // A word the pipeline would split is never proven: `xargs` feeds
+        // `a` and `b`, neither of which the call declares.
+        "echo \"a b\" | xargs head",
     ] {
         assert_closed(command);
     }
@@ -210,6 +217,18 @@ fn xargs_with_static_stdin_words_declares_canonical_paths() {
         );
         assert!(effects.declared.paths.is_none(), "{command}");
     }
+}
+
+#[test]
+fn an_xargs_stage_counts_toward_the_wrapper_depth_cap() {
+    // The unwrap loop caps `timeout` wrappers and the `xargs` step
+    // together: three wrappers read with the proven word declared, the
+    // fourth wrapper is the fifth step and the call is reviewed.
+    assert_reads_paths(
+        "echo f | timeout 1 timeout 1 timeout 1 xargs head",
+        &["/work", "/work/f"],
+    );
+    assert_closed("echo f | timeout 1 timeout 1 timeout 1 timeout 1 xargs head");
 }
 
 #[test]
