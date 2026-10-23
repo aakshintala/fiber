@@ -110,12 +110,34 @@ impl World {
             .unwrap();
     }
 
-    /// Waits for every process holding the workspace path to exit.
-    fn await_session_exit(&self) {
+    /// The pids of the session processes running in the workspace now.
+    fn session_pids(&self) -> Vec<u32> {
         let workspace = self.setup.workspace().to_string_lossy().into_owned();
-        fakes::try_matching_exits(&workspace, self.setup.deadline).unwrap_or_else(|err| {
-            panic!("waited until the deadline for the session process to exit: {err}")
-        });
+        fakes::matching(&format!("--workspace={workspace}")).unwrap()
+    }
+
+    /// Waits for `pids` to exit. Not every process in the workspace: the
+    /// run a re-route resumes stays up.
+    fn await_exit(&self, pids: &[u32]) {
+        assert!(
+            fakes::pids_exit(pids, self.setup.deadline),
+            "waited until the deadline for the session process {pids:?} to exit"
+        );
+    }
+
+    /// The session's diagnostic log, one parsed line each; empty when the
+    /// session wrote none.
+    fn diagnostics(&self) -> Vec<Value> {
+        let path = self
+            .setup
+            .home()
+            .join("logs")
+            .join(format!("session-{}.log", self.id));
+        fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     /// The durable lines of the session's log.
@@ -124,6 +146,16 @@ impl World {
             fs::read_to_string(support::session_dir(&self.setup, &self.id).join("events.jsonl"))
                 .unwrap();
         support::complete_lines(&text)
+    }
+
+    /// Closes the session if it runs, as the last step of a test: a session
+    /// the hub started outlives the hub, and exits on its own only when
+    /// idle for `session.idle_exit_ms`.
+    fn end_session(&self) {
+        let last = self.client();
+        subscribe(&last, "c_sub_end", &self.id);
+        last.send(&close(&self.id));
+        until(&last, "fiber_exited", |line| line["kind"] == "fiber_exited");
     }
 
     fn finish(mut self) {
@@ -197,6 +229,7 @@ fn a_command_sent_into_the_exited_window_is_accepted_by_the_resumed_run() {
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
+    let held = world.session_pids();
     first.send(&prompt("c_p", &id, "two"));
 
     let second = world.client();
@@ -207,20 +240,23 @@ fn a_command_sent_into_the_exited_window_is_accepted_by_the_resumed_run() {
     });
     world.await_socket_absent();
     World::release(writer);
-    world.await_session_exit();
+    world.await_exit(&held);
 
+    // The resumed run answers `c_p` when its loop takes the prompt, which a
+    // later `tools` answer on the same connection does not wait for: the
+    // test waits for `c_p`'s own answer, then for a barrier after it.
+    let mut lines = until(&first, "c_p's answer", |line| is_answer(line, "c_p"));
     first.send(&command("c_after", &id, "tools", &json!({})));
-    let lines = until(&first, "c_after's acknowledgement", |line| {
+    lines.extend(until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
-    });
+    }));
     assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
     assert_eq!(answers(&lines, "c_q")[0]["kind"], "command_accepted");
     let prompted = answers(&lines, "c_p");
     assert_eq!(prompted.len(), 1, "one answer for the prompt: {lines:?}");
     assert_eq!(prompted[0]["kind"], "command_accepted", "{lines:?}");
     assert!(
-        position(&lines, "c_q") < position(&lines, "c_p")
-            && position(&lines, "c_p") < position(&lines, "c_after"),
+        position(&lines, "c_q") < position(&lines, "c_p"),
         "answers keep the order the commands were sent in: {lines:?}"
     );
     let log = world.log();
@@ -234,6 +270,7 @@ fn a_command_sent_into_the_exited_window_is_accepted_by_the_resumed_run() {
         "the ask, the held run and the resumed run"
     );
     assert_eq!(started[2]["payload"]["resumed"], true);
+    world.end_session();
     drop((first, second));
     world.finish();
 }
@@ -286,6 +323,179 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
         .filter(|line| line["kind"] == "turn_started")
         .count();
     assert_eq!(turns, 1, "the crashed prompt runs no turn: {log:?}");
+    world.end_session();
     drop(first);
+    world.finish();
+}
+
+/// The log's `fiber_started` lines: one for each process that ran.
+fn started(log: &[Value]) -> usize {
+    log.iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .count()
+}
+
+fn turns(log: &[Value]) -> usize {
+    log.iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .count()
+}
+
+#[test]
+fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() {
+    let world = World::new(3);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+    // Neither is read: the session's reader is inside `c_q`.
+    first.send(&import("c_q2", &id));
+    first.send(&prompt("c_p", &id, "two"));
+
+    let second = world.client();
+    subscribe(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    until(&second, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    world.await_socket_absent();
+    World::release(writer);
+    world.await_exit(&held);
+
+    // The re-route resumes a second run, whose reader blocks in `c_q2`.
+    let writer = world.await_import();
+    let resumed = world.session_pids();
+    assert_eq!(resumed.len(), 1, "one resumed run: {resumed:?}");
+    let third = world.client();
+    subscribe(&third, "c_sub3", &id);
+    third.send(&close(&id));
+    world.await_socket_absent();
+    World::release(writer);
+    world.await_exit(&resumed);
+
+    // Nothing after the last answer: `c_after` resumes a third run.
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    let lines = until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
+    assert_eq!(answers(&lines, "c_q")[0]["kind"], "command_accepted");
+    assert_eq!(answers(&lines, "c_q2").len(), 1, "{lines:?}");
+    assert_eq!(answers(&lines, "c_q2")[0]["kind"], "command_accepted");
+    let prompted = answers(&lines, "c_p");
+    assert_eq!(
+        prompted.len(),
+        1,
+        "exactly one answer for the prompt: {lines:?}"
+    );
+    assert_eq!(prompted[0]["kind"], "command_rejected", "{lines:?}");
+    assert_eq!(prompted[0]["payload"]["code"], "closing", "{lines:?}");
+    assert!(
+        position(&lines, "c_q") < position(&lines, "c_q2")
+            && position(&lines, "c_q2") < position(&lines, "c_p"),
+        "answers keep the order the commands were sent in: {lines:?}"
+    );
+    let log = world.log();
+    assert_eq!(turns(&log), 1, "the prompt never ran: {log:?}");
+    assert_eq!(
+        started(&log),
+        4,
+        "the ask, the held run, the re-routed run, and c_after's run"
+    );
+    world.end_session();
+    drop((first, second, third));
+    world.finish();
+}
+
+#[test]
+fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+    first.send(&prompt("c_p", &id, "two"));
+    drop(first);
+
+    let second = world.client();
+    subscribe(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    until(&second, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    world.await_socket_absent();
+    World::release(writer);
+    world.await_exit(&held);
+
+    // A later subscribe resumes the session: it finds no turn waiting.
+    let third = world.client();
+    subscribe(&third, "c_sub3", &id);
+    third.send(&close(&id));
+    until(&third, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    let log = world.log();
+    assert_eq!(turns(&log), 1, "the dropped prompt ran no turn: {log:?}");
+    assert_eq!(
+        started(&log),
+        3,
+        "the ask, the held run and the run the later subscribe resumed"
+    );
+    drop((second, third));
+    world.finish();
+}
+
+#[test]
+fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_rerouted() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let held = world.session_pids();
+
+    let second = world.client();
+    subscribe(&second, "c_sub2", &id);
+    second.send(&close(&id));
+    // Never released: the grace passes with the command still running.
+    let lines = until(&first, "the cut answer for c_q", |line| {
+        is_answer(line, "c_q")
+    });
+    let cut = answers(&lines, "c_q");
+    assert_eq!(cut.len(), 1, "{lines:?}");
+    assert_eq!(cut[0]["kind"], "command_rejected", "{lines:?}");
+    assert_eq!(cut[0]["payload"]["code"], "indeterminate", "{lines:?}");
+    // The reader is still inside the command, and the process ends anyway.
+    world.await_exit(&held);
+    drop(writer);
+
+    first.send(&command("c_after", &id, "tools", &json!({})));
+    let after = until(&first, "c_after's acknowledgement", |line| {
+        is_answer(line, "c_after")
+    });
+    assert!(
+        answers(&after, "c_q").is_empty(),
+        "no second answer for the command before c_after's: {after:?}"
+    );
+    let written = world.diagnostics();
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert_eq!(written[0]["level"], "warn", "{written:?}");
+    assert_eq!(written[0]["code"], "timeout", "{written:?}");
+    let log = world.log();
+    assert_eq!(
+        started(&log),
+        3,
+        "the ask, the held run and the run c_after resumed: {log:?}"
+    );
+    world.end_session();
+    drop((first, second));
     world.finish();
 }
