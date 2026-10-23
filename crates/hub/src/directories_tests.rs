@@ -304,6 +304,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
                     })
                 },
                 "0.0.0",
+                None,
                 starter,
                 serve_clock,
                 environments,

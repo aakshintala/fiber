@@ -45,6 +45,9 @@ pub(crate) struct Hub {
     pub(crate) home: PathBuf,
     /// The version `hub_hello` and `status` report.
     pub(crate) fiber_version: String,
+    /// The commit the hub was built from, when the build recorded one:
+    /// sent in `hub_hello` beside the version.
+    pub(crate) fiber_commit: Option<String>,
     /// How `start` runs the session command.
     pub(crate) starter: Arc<dyn Starter>,
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
@@ -212,6 +215,7 @@ impl Hub {
         Self {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
+            fiber_commit: None,
             starter,
             clock,
             diag,
@@ -282,6 +286,14 @@ impl Hub {
     /// Supplies configuration on this hub's machine.
     pub(crate) fn with_machine(mut self, machine: Arc<dyn crate::Machine>) -> Self {
         self.machine = Some(machine);
+        self
+    }
+
+    /// Records the commit this hub was built from; an empty one is no commit.
+    pub(crate) fn with_commit(mut self, commit: Option<&str>) -> Self {
+        self.fiber_commit = commit
+            .filter(|commit| !commit.is_empty())
+            .map(str::to_owned);
         self
     }
 
@@ -547,6 +559,20 @@ pub(crate) enum Accept {
     Exiting,
 }
 
+/// The `hub_hello` payload: the hub's Fiber version, then its commit when
+/// the build recorded one. The socket and the port send the same payload.
+pub(crate) fn hello_payload(hub: &Hub) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert(
+        "fiber_version".to_owned(),
+        Value::String(hub.fiber_version.clone()),
+    );
+    if let Some(commit) = &hub.fiber_commit {
+        payload.insert("fiber_commit".to_owned(), Value::String(commit.clone()));
+    }
+    payload
+}
+
 /// Serves one client connection: `hub_hello`, then one acknowledgement per
 /// hub command, and a relay thread per session commanded on it. Returning
 /// shuts down every relay stream of the connection, so each session sees
@@ -628,15 +654,7 @@ fn serve_from(
         if let Some(pause) = lock(&hub.before_hello).take() {
             pause();
         }
-        send(
-            &writer,
-            &hub,
-            "hub_hello",
-            Map::from_iter([(
-                "fiber_version".to_owned(),
-                Value::String(hub.fiber_version.clone()),
-            )]),
-        );
+        send(&writer, &hub, "hub_hello", hello_payload(&hub));
     }
     let mut fresh = Relays::default();
     // Replay timing rides this connection's hub: at debug the transfer
