@@ -902,6 +902,43 @@ fn tools_80x24() {
         ],
         None,
     );
+    // The contract: each source's bold heading, with its tool rows under
+    // it, found by content. The focus mark is dropped from the text, since
+    // which row holds the focus is not part of it.
+    let mut under: Vec<(String, String)> = Vec::new();
+    let mut heading = String::new();
+    for cells in tools.frame(80, None).rows {
+        let Some((first, _, ink)) = cells.first() else {
+            continue;
+        };
+        if *ink == Ink::Heading {
+            heading = first.clone();
+        } else {
+            let row: String = cells.iter().map(|(text, _, _)| text.as_str()).collect();
+            under.push((heading.clone(), row.replace('›', " ")));
+        }
+    }
+    under.sort();
+    let want = [
+        ("Built-in", "read · full · 100 bytes"),
+        (
+            "Extension · memory",
+            "notes · full · 100 bytes · this project [on] · everywhere [on]",
+        ),
+        (
+            "MCP · docs",
+            "gone · off · this project [on] · everywhere [off]",
+        ),
+        (
+            "MCP · docs",
+            "search · deferred · ~460 · this project [on] · everywhere [on]",
+        ),
+    ];
+    let want: Vec<(String, String)> = want
+        .iter()
+        .map(|(heading, row)| ((*heading).to_owned(), (*row).to_owned()))
+        .collect();
+    assert_eq!(under, want);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     render(
@@ -919,5 +956,7 @@ fn tools_80x24() {
                 .to_owned()
         })
         .collect();
+    // The snapshot pins the look only: the blank row between sources is
+    // the prototype's (Ruling 17), which the docs leave open.
     insta::assert_snapshot!("tools_80x24", text.join("\n"));
 }

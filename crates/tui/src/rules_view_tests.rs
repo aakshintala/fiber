@@ -173,17 +173,35 @@ fn the_headings_are_bold_and_the_x_is_in_error() {
     let fake = fake(vec![full()], Ok(vec![full()]));
     let rules = open(&fake);
     let frame = rules.frame(80, None);
-    assert_eq!(frame.rows[0], [("Global".to_owned(), None, Ink::Heading)]);
+    // Each row is found by what it says, not by its place among the
+    // rows.
+    let heading = |text: &str| {
+        frame
+            .rows
+            .iter()
+            .find(|cells| cells.first().is_some_and(|cell| cell.0 == text))
+            .unwrap_or_else(|| panic!("no {text} row in {frame:?}"))
+    };
     assert_eq!(
-        frame.rows[3],
-        [("This project".to_owned(), None, Ink::Heading)]
+        heading("Global"),
+        &[("Global".to_owned(), None, Ink::Heading)]
     );
-    assert_eq!(frame.rows[1][0].2, Ink::Plain);
     assert_eq!(
-        frame.rows[1][1],
+        heading("This project"),
+        &[("This project".to_owned(), None, Ink::Heading)]
+    );
+    let (at, rule) = frame
+        .rows
+        .iter()
+        .enumerate()
+        .find(|(_, cells)| cells.iter().any(|cell| cell.1.is_some()))
+        .expect("a rule row");
+    assert_eq!(rule[0].2, Ink::Plain);
+    assert_eq!(
+        rule[1],
         (
             "✕".to_owned(),
-            Some(Spot::Revoke(1)),
+            Some(Spot::Revoke(at)),
             Ink::Role(Role::Error)
         )
     );
