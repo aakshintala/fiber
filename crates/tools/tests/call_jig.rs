@@ -7,6 +7,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -51,7 +52,7 @@ fn call(tool: &str, arguments: &str) -> Output {
         .recv(&finished)
         .expect("the call jig finished")
         .unwrap();
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 

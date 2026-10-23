@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
@@ -20,8 +21,6 @@ use super::{
     signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
-
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A shell in its own process group whose command line carries `marker`.
 /// It forks `sleep 30` into the group, echoes the sleep's pid, then waits:
@@ -63,37 +62,37 @@ impl Piped {
         Self(rx)
     }
 
-    /// Waits [`DEADLINE`] for the forked `sleep`'s pid line.
+    /// Waits [`MUST_SUCCEED_WITHIN`] for the forked `sleep`'s pid line.
     #[track_caller]
     fn forked(&self, what: &str) {
-        match Deadline::after(DEADLINE).recv(&self.0) {
+        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.0) {
             Ok(Some(_)) => {}
-            _ => panic!("waited {DEADLINE:?} for {what}"),
+            _ => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
         }
     }
 
-    /// Waits [`DEADLINE`] for end-of-file, proving the `sleep` exited.
+    /// Waits [`MUST_SUCCEED_WITHIN`] for end-of-file, proving the `sleep` exited.
     #[track_caller]
     fn closed(self, what: &str) {
-        let wait = Deadline::after(DEADLINE);
+        let wait = Deadline::after(MUST_SUCCEED_WITHIN);
         loop {
             match wait.recv(&self.0) {
                 Ok(Some(_)) => {}
                 Ok(None) => return,
-                Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+                Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
             }
         }
     }
 }
 
-/// Reaps `child` under [`DEADLINE`], naming `what` on expiry.
+/// Reaps `child` under [`MUST_SUCCEED_WITHIN`], naming `what` on expiry.
 #[track_caller]
 fn reaped(mut child: Child, what: &str) -> std::process::ExitStatus {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    match Deadline::after(DEADLINE).recv(&finished) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
     }
 }
 
@@ -333,15 +332,15 @@ fn bounded_returns_a_timeout_on_a_miss_and_kills_the_child() {
     let stdin = child.stdin.take().unwrap();
     let missed = crate::within(
         "bounded to give up on the hung shell",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || bounded(child, "the hung shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(err.to_string().contains("the hung shell"), "{err}");
     assert!(
-        pids_exit(&[pid], Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the hung shell to be killed and reaped"
+        pids_exit(&[pid], Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the hung shell to be killed and reaped"
     );
     drop(stdin);
 }
@@ -368,24 +367,24 @@ fn bounded_kills_a_child_that_closed_stdout_then_hangs() {
     // The line is written past the close, so stdout is at end-of-file
     // while the `sleep` lives.
     assert_eq!(
-        ready.wait(Deadline::after(DEADLINE)),
+        ready.wait(Deadline::after(MUST_SUCCEED_WITHIN)),
         vec![group],
         "the ready line is the closed-stdout shell's pid"
     );
     let pid = child.id();
     let missed = crate::within(
         "bounded to give up on the closed-stdout shell",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || bounded(child, "the closed-stdout shell", Duration::from_millis(100)),
     );
     let err = missed.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(err.to_string().contains("the closed-stdout shell"), "{err}");
     assert!(
-        pids_exit(&[pid], Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the closed-stdout shell to be killed and reaped"
+        pids_exit(&[pid], Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the closed-stdout shell to be killed and reaped"
     );
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -395,11 +394,12 @@ fn bounded_returns_the_status_and_stdout_of_a_child_that_exits() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    let (status, stdout) =
-        crate::within("bounded to return", Deadline::after(DEADLINE), move || {
-            bounded(child, "the listing shell", DEADLINE)
-        })
-        .unwrap();
+    let (status, stdout) = crate::within(
+        "bounded to return",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || bounded(child, "the listing shell", MUST_SUCCEED_WITHIN),
+    )
+    .unwrap();
     assert_eq!(status.code(), Some(3));
     assert_eq!(stdout, b"listed\n");
 }
@@ -555,8 +555,8 @@ fn group_empties_reports_an_empty_group_and_a_live_one() {
     kill_group(group, "KILL").unwrap();
     reaped(child, "the killed group leader");
     assert!(
-        group_empties(group, Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the killed group to empty"
+        group_empties(group, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the killed group to empty"
     );
 }
 
@@ -575,7 +575,7 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     let (answered, answer) = mpsc::channel();
     thread::spawn(move || {
         answered
-            .send(group_empties(group, Deadline::after(DEADLINE)))
+            .send(group_empties(group, Deadline::after(MUST_SUCCEED_WITHIN)))
             .unwrap()
     });
     // The group lives until its stdin closes, so the wait must still be
@@ -590,9 +590,9 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     drop(stdin);
     reaped(child, "the group leader to exit once its stdin closed");
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answer),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer),
         Ok(true),
-        "waited {DEADLINE:?} for group_empties to see the emptied group"
+        "waited {MUST_SUCCEED_WITHIN:?} for group_empties to see the emptied group"
     );
 }
 
@@ -664,7 +664,7 @@ fn pids_exit_waits_for_both_pids() {
     let (answered, answer) = mpsc::channel();
     thread::spawn(move || {
         answered
-            .send(pids_exit(&[pa, pb], Deadline::after(DEADLINE)))
+            .send(pids_exit(&[pa, pb], Deadline::after(MUST_SUCCEED_WITHIN)))
             .unwrap()
     });
     drop(stdin_a);
@@ -678,9 +678,9 @@ fn pids_exit_waits_for_both_pids() {
     drop(stdin_b);
     reaped(b, "the second child to exit once its stdin closed");
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answer),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer),
         Ok(true),
-        "waited {DEADLINE:?} for both pids to exit"
+        "waited {MUST_SUCCEED_WITHIN:?} for both pids to exit"
     );
 }
 
@@ -711,9 +711,9 @@ fn wait_exits_probes_a_live_pid_about_every_10_ms() {
         "wait_exits answered while its pid lived"
     );
     drop(stop);
-    let (exited, probes) = Deadline::after(DEADLINE)
+    let (exited, probes) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&answer)
-        .expect("waited {DEADLINE:?} for wait_exits to end once stopped");
+        .expect("waited {MUST_SUCCEED_WITHIN:?} for wait_exits to end once stopped");
     assert!(!exited, "a live pid must not read as exited");
     assert!(
         probes <= 20,
@@ -745,8 +745,8 @@ fn matching_exits_is_true_when_nothing_matches() {
         .to_string_lossy()
         .into_owned();
     assert!(
-        matching_exits(&marker, Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for nothing to match"
+        matching_exits(&marker, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for nothing to match"
     );
 }
 
@@ -774,7 +774,10 @@ fn matching_exits_waits_for_a_live_match() {
     let (answered, answer) = mpsc::channel();
     thread::spawn(move || {
         answered
-            .send(matching_exits(&marker_text, Deadline::after(DEADLINE)))
+            .send(matching_exits(
+                &marker_text,
+                Deadline::after(MUST_SUCCEED_WITHIN),
+            ))
             .unwrap()
     });
     assert!(
@@ -786,9 +789,9 @@ fn matching_exits_waits_for_a_live_match() {
     kill_group(group, "KILL").unwrap();
     reaped(child, "the killed marked shell");
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&answer),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer),
         Ok(true),
-        "waited {DEADLINE:?} for the match to exit"
+        "waited {MUST_SUCCEED_WITHIN:?} for the match to exit"
     );
 }
 
@@ -796,7 +799,7 @@ fn matching_exits_waits_for_a_live_match() {
 fn listed_exit_names_a_first_listing_failure() {
     let err = listed_exit(
         || Err::<Vec<u32>, _>(io::Error::other("pgrep blew up")),
-        DEADLINE,
+        MUST_SUCCEED_WITHIN,
     )
     .unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
@@ -821,7 +824,7 @@ fn listed_exit_names_a_second_listing_failure() {
                 Err(io::Error::other("pgrep fell over"))
             }
         },
-        DEADLINE,
+        MUST_SUCCEED_WITHIN,
     )
     .unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::Other);
@@ -850,31 +853,37 @@ fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
             Ok(()) | Err(_) => {}
         }
     });
-    let text = match Deadline::after(DEADLINE).recv(&answer) {
+    let text = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer) {
         Ok(text) => text,
-        Err(_) => panic!("waited {DEADLINE:?} for the stalled lookup to time out"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the stalled lookup to time out"),
     };
     assert_eq!(text, PS_TIMEOUT, "a stalled lookup must read as timed out");
     assert!(
-        pids_exit(&[pid], Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the timed-out lookup to be reaped"
+        pids_exit(&[pid], Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the timed-out lookup to be reaped"
     );
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
 fn a_lookup_that_fails_or_prints_nothing_reads_gone() {
     let child = spawn_lookup("sh", &["-c", "exit 3"]).unwrap();
-    assert_eq!(read_lookup(child, "the failed lookup", DEADLINE), GONE_ARGS);
+    assert_eq!(
+        read_lookup(child, "the failed lookup", MUST_SUCCEED_WITHIN),
+        GONE_ARGS
+    );
     let child = spawn_lookup("sh", &["-c", "exit 0"]).unwrap();
-    assert_eq!(read_lookup(child, "the silent lookup", DEADLINE), GONE_ARGS);
+    assert_eq!(
+        read_lookup(child, "the silent lookup", MUST_SUCCEED_WITHIN),
+        GONE_ARGS
+    );
 }
 
 #[test]
 fn a_lookup_that_prints_then_fails_reads_gone_not_its_output() {
     let child = spawn_lookup("sh", &["-c", "echo stale; exit 1"]).unwrap();
     assert_eq!(
-        read_lookup(child, "the failed lookup", DEADLINE),
+        read_lookup(child, "the failed lookup", MUST_SUCCEED_WITHIN),
         GONE_ARGS,
         "a failed lookup's output must not be read as the process's command line"
     );
@@ -883,7 +892,10 @@ fn a_lookup_that_prints_then_fails_reads_gone_not_its_output() {
 #[test]
 fn a_lookup_that_succeeds_reads_its_trimmed_output() {
     let child = spawn_lookup("sh", &["-c", "printf '  listed  \\n'; exit 0"]).unwrap();
-    assert_eq!(read_lookup(child, "the listed lookup", DEADLINE), "listed");
+    assert_eq!(
+        read_lookup(child, "the listed lookup", MUST_SUCCEED_WITHIN),
+        "listed"
+    );
 }
 
 #[test]
@@ -903,7 +915,7 @@ fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
     let pid = Pid::from_raw(i32::try_from(group).unwrap()).unwrap();
     let watchdog = crate::Watchdog::group(group);
     assert_eq!(
-        read_lookup(child, "the unbounded lookup", DEADLINE),
+        read_lookup(child, "the unbounded lookup", MUST_SUCCEED_WITHIN),
         GONE_ARGS,
         "a lookup that failed for a reason other than a timeout reads gone"
     );
@@ -919,14 +931,14 @@ fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
             Ok(()) | Err(_) => {}
         }
     });
-    let reaped = match Deadline::after(DEADLINE).recv(&reap) {
+    let reaped = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&reap) {
         Ok(result) => result.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the unbounded lookup to be reaped"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the unbounded lookup to be reaped"),
     };
     let (reaped_pid, status) = reaped.expect("the killed lookup is waited on");
     assert_eq!(reaped_pid, pid);
     assert_eq!(status.terminating_signal(), Some(9));
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -950,7 +962,7 @@ fn listed_exit_reports_expiry_with_no_listing_yet() {
     // published, so the error names no holder.
     let (never, unanswered) = mpsc::channel::<()>();
     let err = listed_exit(
-        move || match Deadline::after(DEADLINE).recv(&unanswered) {
+        move || match Deadline::after(MUST_SUCCEED_WITHIN).recv(&unanswered) {
             Ok(()) | Err(_) => Err::<Vec<u32>, _>(io::Error::other("the listing never answered")),
         },
         Duration::from_millis(200),
@@ -973,7 +985,7 @@ fn try_matching_exits_is_ok_when_nothing_matches() {
         .join("nothing-matches-this-marker")
         .to_string_lossy()
         .into_owned();
-    assert!(try_matching_exits(&marker, Deadline::after(DEADLINE)).is_ok());
+    assert!(try_matching_exits(&marker, Deadline::after(MUST_SUCCEED_WITHIN)).is_ok());
 }
 
 #[test]
@@ -999,7 +1011,7 @@ fn listed_exit_waits_for_a_process_started_after_the_first_listing() {
                     Ok(vec![])
                 }
             },
-            DEADLINE,
+            MUST_SUCCEED_WITHIN,
         );
         match answered.send(result) {
             Ok(()) | Err(_) => {}
@@ -1008,17 +1020,17 @@ fn listed_exit_waits_for_a_process_started_after_the_first_listing() {
     // The child started after the first listing: it is released only
     // once the second listing has seen it, forcing the interleaving.
     assert!(
-        Deadline::after(DEADLINE).recv(&second).is_ok(),
-        "waited {DEADLINE:?} for the second listing to see the late process"
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&second).is_ok(),
+        "waited {MUST_SUCCEED_WITHIN:?} for the second listing to see the late process"
     );
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
-    match Deadline::after(DEADLINE).recv(&answer) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer) {
         Ok(result) => assert!(
             result.is_ok(),
-            "waited {DEADLINE:?} for the late process to exit: {result:?}"
+            "waited {MUST_SUCCEED_WITHIN:?} for the late process to exit: {result:?}"
         ),
-        Err(_) => panic!("waited {DEADLINE:?} for listed_exit to answer"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for listed_exit to answer"),
     }
 }
 
@@ -1067,11 +1079,11 @@ fn listed_exit_is_true_when_the_second_listing_is_empty() {
                 Ok(vec![])
             }
         },
-        DEADLINE,
+        MUST_SUCCEED_WITHIN,
     );
     assert!(
         listed.is_ok(),
-        "waited {DEADLINE:?} for the listed pid to exit"
+        "waited {MUST_SUCCEED_WITHIN:?} for the listed pid to exit"
     );
 }
 
@@ -1096,7 +1108,7 @@ fn listed_exit_counts_an_unreaped_child_as_exited() {
                 Ok(Vec::new())
             }
         },
-        DEADLINE,
+        MUST_SUCCEED_WITHIN,
     );
     reaped(child, "the held child to exit once its stdin closed");
     result.unwrap();

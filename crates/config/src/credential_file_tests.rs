@@ -1,9 +1,9 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Deadline;
 use fakes::TempDir;
@@ -82,7 +82,6 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
     let lock = file.try_lock().unwrap().unwrap();
     lock.write(&json!({ "token": "first" })).unwrap();
     let dir = home.path().join("credentials/acme");
-    const DEADLINE: Duration = Duration::from_secs(5);
     let (paused_tx, paused) = mpsc::channel();
 
     thread::scope(|scope| {
@@ -96,7 +95,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
             });
             lock.write(&json!({ "token": "t" })).unwrap();
         });
-        Deadline::after(DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&paused)
             .expect("the writer paused between creating the temporary file and renaming it");
         let mut temporaries = 0;

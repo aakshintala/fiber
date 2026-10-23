@@ -9,6 +9,7 @@
 )]
 
 use crate::test_support::{install_extension, load};
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, Mutex};
@@ -515,7 +516,7 @@ fn a_refused_watch_is_an_error() {
     assert!(watch_bounded(&watcher(&home), "s_missing", None, &seen).is_err());
 }
 
-/// Runs the watch on a thread and receives its outcome within 5 s: every
+/// Runs the watch on a thread and receives its outcome within the shared must-succeed bound: every
 /// blocking socket read happens there, so a watch that never returns
 /// fails the test instead of hanging it. Seen envelope kinds arrive over
 /// the shared record.
@@ -536,8 +537,7 @@ fn watch_bounded(
         };
         done.send(watch(&id, after, &mut on_line)).unwrap_or(());
     });
-    Deadline::after(std::time::Duration::from_secs(5))
-        .recv_or_fail(&finished, "the watch to return")
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the watch to return")
 }
 
 fn resumed() -> jobs::Launched {
@@ -777,8 +777,8 @@ fn serve_steer(
     (served, received)
 }
 
-/// Runs the steer seam on its own thread and receives its outcome within
-/// 5 s: every blocking socket read happens there, so a steer that never
+/// Runs the steer seam on its own thread and receives its outcome within the
+/// shared must-succeed bound: every blocking socket read happens there, so a steer that never
 /// returns fails the test instead of hanging it. `commit` and `on_queued`
 /// count their calls in the returned counters.
 #[track_caller]
@@ -820,8 +820,8 @@ fn steer_bounded(
         ))
         .unwrap_or(());
     });
-    let outcome = Deadline::after(std::time::Duration::from_secs(5))
-        .recv_or_fail(&finished, "the steer to return");
+    let outcome =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the steer to return");
     (outcome, commits, queued)
 }
 
@@ -837,7 +837,7 @@ fn the_steer_seam_maps_an_accepted_steer() {
     assert!(matches!(outcome, jobs::Steered::Accepted), "{outcome:?}");
     assert_eq!(commits.load(Ordering::SeqCst), 1);
     assert_eq!(queued.load(Ordering::SeqCst), 1);
-    let line = Deadline::after(std::time::Duration::from_secs(5))
+    let line = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&seen, "the server to observe the steer")
         .expect("the client wrote the steer line");
     assert_eq!(line["id"], "c_1");
@@ -864,7 +864,7 @@ fn the_steer_seam_maps_a_rejected_steer() {
     assert_eq!(failure.message, "no thanks");
     assert_eq!(commits.load(Ordering::SeqCst), 1);
     assert_eq!(queued.load(Ordering::SeqCst), 1);
-    let line = Deadline::after(std::time::Duration::from_secs(5))
+    let line = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&seen, "the server to observe the steer")
         .expect("the client wrote the steer line");
     assert_eq!(line["id"], "c_2");
@@ -893,8 +893,8 @@ fn the_steer_seam_maps_a_refused_commit_to_withheld() {
         steer_bounded(&super::steerer(&home), &id, "c_4", "check the lint", false);
     assert!(matches!(outcome, jobs::Steered::Withheld), "{outcome:?}");
     // The server saw the subscribe, then end of file: no steer line.
-    let line = Deadline::after(std::time::Duration::from_secs(5))
-        .recv_or_fail(&seen, "the server to observe the close");
+    let line =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&seen, "the server to observe the close");
     assert!(line.is_none(), "a refused commit wrote: {line:?}");
 }
 
@@ -1502,7 +1502,7 @@ fn child_guard(rig: &ServiceRig) -> fakes::Watchdog {
     let pidfile = rig._dir.path().join("child.pid");
     let pid: u32 = fakes::within(
         "the child writes its pid",
-        Deadline::after(Duration::from_secs(3)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || loop {
             let Ok(text) = std::fs::read_to_string(&pidfile) else {
                 std::thread::yield_now();
@@ -1572,10 +1572,9 @@ fn service_rig(depth: u32) -> ServiceRig {
 /// as running under the same lock, so a later `retain` finds it.
 #[track_caller]
 fn await_started(rig: &ServiceRig, id: &contract::JobId) {
-    let contract::inbox::Delivery::ExtensionJob(started, _) =
-        Deadline::after(Duration::from_secs(3))
-            .recv(&rig.inbox)
-            .expect("the start is delivered")
+    let contract::inbox::Delivery::ExtensionJob(started, _) = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rig.inbox)
+        .expect("the start is delivered")
     else {
         panic!("the start precedes the end");
     };
@@ -1587,7 +1586,7 @@ fn await_idle(rig: &ServiceRig) {
     let jobs = Arc::clone(&rig.delegates.jobs);
     fakes::within(
         "the job ends",
-        Deadline::after(Duration::from_secs(3)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 if contract::jobs::Jobs::running(jobs.as_ref()).is_empty() {
@@ -1646,7 +1645,7 @@ fn a_start_at_depth_zero_binds_and_lists_its_job() {
         "the registry lists the started job"
     );
     let contract::inbox::Delivery::ExtensionJob(started, delegate) =
-        Deadline::after(Duration::from_secs(3))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rig.inbox)
             .expect("the start is delivered")
     else {

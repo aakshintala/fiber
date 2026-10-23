@@ -1,5 +1,6 @@
 //! The inner-call seam, slots and cancellation.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 
 use contract::ActionId;
@@ -62,7 +63,7 @@ fn raise(
 
 #[test]
 fn a_raise_wakes_and_waits_for_its_written_answer() {
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(2));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let (slot, woke, _notice) = slot(0);
     let result = raise(slot.clone(), "read");
     deadline.recv_or_fail(&woke, "raised inner call");
@@ -88,7 +89,7 @@ fn a_raise_wakes_and_waits_for_its_written_answer() {
 #[test]
 fn closing_releases_raised_taken_and_later_requests() {
     use contract::events::CallStatus;
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(2));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     for taken in [false, true] {
         let (slot, woke, _notice) = slot(0);
         let result = raise(slot.clone(), "read");
@@ -118,7 +119,7 @@ fn closing_releases_raised_taken_and_later_requests() {
 fn close_before_any_raise_returns_cancelled_without_waking() {
     let (slot, woke, _notice) = slot(0);
     slot.close();
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(2));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(
         deadline
             .recv_or_fail(&raise(slot, "read"), "closed call")
@@ -148,7 +149,7 @@ fn own_and_turn_cancellation_wake_current_subscribers_not_later_ones() {
         } else {
             cancel.cancel();
         }
-        fakes::Deadline::after(std::time::Duration::from_secs(2)).recv_or_fail(&rx, "cancel wake");
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "cancel wake");
         assert!(cancel.is_cancelled());
         cancel.subscribe(Arc::downgrade(&notice));
         cancel.cancel();
@@ -197,8 +198,7 @@ fn following_a_live_command_keeps_turn_cancellation_and_wakes_subscribers() {
         } else {
             assert!(turn.cancel());
         }
-        fakes::Deadline::after(std::time::Duration::from_secs(2))
-            .recv_or_fail(&rx, "followed cancellation");
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "followed cancellation");
         assert!(cancel.is_cancelled());
     }
 }
@@ -257,7 +257,7 @@ impl contract::clock::Wake for HeldWake {
 #[test]
 fn a_subscription_after_turn_cancel_is_not_replayed_while_the_relay_is_delayed() {
     use contract::tool::Cancel;
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(2));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let turn = Arc::new(crate::TurnCancel::default());
     assert!(turn.arm());
     let (entered, holding) = std::sync::mpsc::channel();
@@ -379,7 +379,7 @@ struct Taken {
 /// `Loop::take_inner`. The anchor may be cancelled or finished before the
 /// take, and `window` acts inside the deny check.
 fn take(cancel_before: bool, finish_before: bool, window: Window) -> Taken {
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let home = fakes::TempDir::new("fiber-inner-take");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();

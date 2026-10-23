@@ -9,11 +9,11 @@
     reason = "test helpers outside a #[test]; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
 
 use common::{TestDir, delta, empty, id, session_started};
 use log::Log;
@@ -48,7 +48,7 @@ fn run_jig(dir: &Path) -> Output {
         .unwrap();
     let watchdog = fakes::Watchdog::group(child.id());
     let output = fakes::wait_output(child, "the check jig finished");
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 

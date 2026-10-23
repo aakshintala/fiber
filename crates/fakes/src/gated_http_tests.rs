@@ -1,5 +1,6 @@
 //! Tests of the gated HTTP fake, through its own seam (`gated_http.rs`).
 
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::panic::AssertUnwindSafe;
@@ -108,18 +109,6 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
     });
 }
 
-/// How long a test's client socket waits for each underlying read:
-/// the bound that frees a reader thread, not the test's wait. Each
-/// helper below takes its whole read under one [`READ_WAIT`] deadline
-/// instead (`docs/testing.md`, "Waits and timeouts"). The fake's own
-/// bound is longer, so a client read failing names the test's failure
-/// first.
-const CLIENT_WAIT: Duration = Duration::from_secs(5);
-/// The test's one deadline for a whole client read (`docs/testing.md`,
-/// "Waits and timeouts"): shorter than [`CLIENT_WAIT`], so the
-/// deadline names a hung read and the socket timeout only frees the
-/// reader thread.
-const READ_WAIT: Duration = Duration::from_secs(4);
 /// The most bytes a client reads from a stream it does not trust to end,
 /// so a mutant that streams forever fails the test instead of growing.
 const READ_CAP: u64 = 1 << 16;
@@ -138,7 +127,7 @@ fn address(url: &str) -> SocketAddr {
 fn connect(url: &str, method: &str, body: &str) -> BufReader<TcpStream> {
     let mut stream = TcpStream::connect(address(url)).expect("the test connects");
     stream
-        .set_read_timeout(Some(CLIENT_WAIT))
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN * 2))
         .expect("the test bounds its reads");
     let head = format!(
         "{method} /mcp HTTP/1.1\r\nhost: fake\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
@@ -161,7 +150,7 @@ fn read_head(reader: &mut BufReader<TcpStream>) -> (u16, Option<u64>) {
     let (tx, rx) = mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| if let Ok(()) = tx.send(read_head_inner(reader)) {});
-        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the response head")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the response head")
     })
 }
 
@@ -211,7 +200,7 @@ fn send(url: &str, method: &str, body: &str) -> (u16, String) {
                 .expect("the response body reads");
             if let Ok(()) = tx.send((status, String::from_utf8_lossy(&text).into_owned())) {}
         });
-        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the response")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the response")
     })
 }
 
@@ -236,7 +225,7 @@ fn next_event(reader: &mut BufReader<TcpStream>) -> Value {
     let (tx, rx) = mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| if let Ok(()) = tx.send(next_event_inner(reader)) {});
-        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the stream's next event")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the stream's next event")
     })
 }
 
@@ -261,7 +250,7 @@ fn rest(reader: BufReader<TcpStream>) -> String {
     let (tx, rx) = mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| if let Ok(()) = tx.send(rest_inner(reader)) {});
-        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the rest of the stream")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the rest of the stream")
     })
 }
 
@@ -498,7 +487,7 @@ fn shutdown_ends_an_accept_wait_at_once() {
         });
         assert!(server.shutdown(), "shutdown ends the wait");
         assert!(
-            !Deadline::after(CLIENT_WAIT).recv_or_fail(&done_rx, "the stopped accept"),
+            !Deadline::after(MUST_SUCCEED_WITHIN * 2).recv_or_fail(&done_rx, "the stopped accept"),
             "shutdown ends the accept stopped"
         );
     });

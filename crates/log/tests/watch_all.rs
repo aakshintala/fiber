@@ -11,6 +11,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -373,7 +374,7 @@ fn a_weak_emit_emits_while_the_log_lives_and_never_keeps_it() {
     let weak = Arc::downgrade(&log);
     let rx = relay(log.watch());
     emit.emit(&delta("e"));
-    let line = next(&rx, &Deadline::after(Duration::from_secs(5))).unwrap();
+    let line = next(&rx, &Deadline::after(MUST_SUCCEED_WITHIN)).unwrap();
     assert_eq!(line.kind, "assistant_message_delta");
     drop(log);
     assert!(

@@ -16,6 +16,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -29,12 +30,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response};
 use serde_json::json;
-
-/// How long a test waits for one call, or for a background refresh: the
-/// wall-clock limit on every wait, so a mutant cannot hang it
-/// (`docs/testing.md`, "Waits and timeouts").
-const WAIT: Duration = Duration::from_secs(5);
-const CALL_DEADLINE: Duration = Duration::from_secs(5);
 
 /// The grace past a call's own deadline that a parked caller waits.
 const GRACE: Duration = Duration::from_secs(1);
@@ -218,9 +213,9 @@ fn a_refresh_replaces_the_token_and_its_headers_together() {
             std::thread::yield_now();
         }
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&refreshed)
-        .unwrap_or_else(|_| panic!("the refresh did not land within {WAIT:?}"));
+        .unwrap_or_else(|_| panic!("the refresh did not land within {MUST_SUCCEED_WITHIN:?}"));
 }
 
 #[test]
@@ -467,7 +462,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, Deadline::after(CALL_DEADLINE)),
+        blocking.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call with seventeen values reaches its held sign request"
     );
 
@@ -478,7 +473,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         clock.await_thread_parked(
             held_thread.thread().id(),
             Some(park),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the held sign parked past its check at its grace"
     );
@@ -486,7 +481,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         Some(park),
         Some(held_thread.thread().id()),
         Duration::from_secs(301),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     let second = sign_with(&signer, &[]).unwrap();
     assert_eq!(
@@ -494,9 +489,9 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         Some("Bearer tok-current".to_owned())
     );
     blocking.release();
-    Deadline::after(CALL_DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&first)
-        .unwrap_or_else(|_| panic!("the held call returns within {CALL_DEADLINE:?}"))
+        .unwrap_or_else(|_| panic!("the held call returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
 
     let mut reported: Vec<String> = signer
@@ -572,7 +567,7 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         done.send(result).unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, Deadline::after(WAIT)),
+        blocking.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the first sign to block on the held server"
     );
     // Seventeen synchronous refreshes while the first call runs: its two
@@ -585,7 +580,7 @@ fn a_running_call_values_are_reported_until_it_finishes() {
             clock.await_thread_parked(
                 held_thread.thread().id(),
                 Some(park),
-                fakes::Deadline::after(WAIT)
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             ),
             "round {round}: the held sign parked past its check at its grace"
         );
@@ -593,7 +588,7 @@ fn a_running_call_values_are_reported_until_it_finishes() {
             Some(park),
             Some(held_thread.thread().id()),
             Duration::from_secs(301),
-            &Deadline::after(WAIT),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
         );
         let headers = sign_with(&signer, &[]).unwrap();
         assert_eq!(
@@ -617,9 +612,9 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         "the oldest idle values are still dropped past sixteen: {values:?}"
     );
     blocking.release();
-    let headers = Deadline::after(WAIT)
+    let headers = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&first)
-        .unwrap_or_else(|_| panic!("the held sign did not return within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the held sign did not return within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
     assert_eq!(
         header(&headers, "authorization"),
@@ -706,7 +701,7 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     let asked1 = clock.now();
     let held1 = launch(1, Arc::clone(&signer), done.clone());
     assert!(
-        first_call.await_requests(1, Deadline::after(CALL_DEADLINE)),
+        first_call.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "call 1 reached its held sign request"
     );
     for call in 2..=17 {
@@ -715,7 +710,7 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
             clock.await_thread_parked(
                 held1.thread().id(),
                 Some(park1),
-                fakes::Deadline::after(WAIT)
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             ),
             "call {call}: call 1 parked past its check at its grace"
         );
@@ -723,11 +718,11 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
             Some(park1),
             Some(held1.thread().id()),
             Duration::from_secs(301),
-            &Deadline::after(WAIT),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
         );
         let _held = launch(call, Arc::clone(&signer), done.clone());
         assert!(
-            later_calls.await_requests(call - 1, Deadline::after(CALL_DEADLINE)),
+            later_calls.await_requests(call - 1, Deadline::after(MUST_SUCCEED_WITHIN)),
             "call {call} reached its held sign request"
         );
     }
@@ -744,9 +739,9 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     assert_eq!(in_flight, expected, "all running calls keep their token");
 
     first_call.release();
-    let (call, result) = Deadline::after(CALL_DEADLINE)
+    let (call, result) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&results)
-        .unwrap_or_else(|_| panic!("call 1 returns within {CALL_DEADLINE:?}"));
+        .unwrap_or_else(|_| panic!("call 1 returns within {MUST_SUCCEED_WITHIN:?}"));
     assert_eq!(call, 1);
     let Err(contract::signing::Error::Failed(message)) = result else {
         panic!("call 1 fails after naming the token it used");
@@ -755,11 +750,11 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     // Hold call 1's already-returned error while the other calls complete.
     later_calls.release();
     // One deadline for the whole wait: the loop drains one stream.
-    let wait = Deadline::after(CALL_DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     for _ in 2..=17 {
-        let (_, result) = wait
-            .recv(&results)
-            .unwrap_or_else(|_| panic!("the remaining calls return within {CALL_DEADLINE:?}"));
+        let (_, result) = wait.recv(&results).unwrap_or_else(|_| {
+            panic!("the remaining calls return within {MUST_SUCCEED_WITHIN:?}")
+        });
         result.unwrap();
     }
     assert!(
@@ -850,7 +845,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         .unwrap_or(());
     });
     assert!(
-        blocking.await_requests(1, Deadline::after(WAIT)),
+        blocking.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the first sign to block on the held server"
     );
     // Call 2 signs with the same token and starts the background refresh.
@@ -860,7 +855,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
         Some("Bearer tok-A-value".to_owned())
     );
     assert!(
-        tokens.await_requests(2, Deadline::after(WAIT)),
+        tokens.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the background refresh to return the new token"
     );
     // The refresh replaced the cache: a new sign carries the new token.
@@ -879,13 +874,15 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
             }
         }
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&landed)
-        .unwrap_or_else(|_| panic!("the refreshed token did not land within {WAIT:?}"));
+        .unwrap_or_else(|_| {
+            panic!("the refreshed token did not land within {MUST_SUCCEED_WITHIN:?}")
+        });
     blocking.release();
-    let Err(contract::signing::Error::Failed(message)) = Deadline::after(WAIT)
+    let Err(contract::signing::Error::Failed(message)) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&first)
-        .unwrap_or_else(|_| panic!("the held sign did not return within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the held sign did not return within {MUST_SUCCEED_WITHIN:?}"))
     else {
         panic!("the first sign fails naming the token it used");
     };
@@ -977,7 +974,7 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
                     clock.await_thread_parked(
                         threads[0].thread().id(),
                         Some(park),
-                        fakes::Deadline::after(WAIT)
+                        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                     ),
                     "calls {calls}: round {round} waits for the first sign to park at its grace"
                 );
@@ -985,7 +982,7 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
                     Some(park),
                     Some(threads[0].thread().id()),
                     Duration::from_secs(301),
-                    &Deadline::after(WAIT),
+                    &Deadline::after(MUST_SUCCEED_WITHIN),
                 );
             }
             let signing = Arc::clone(&signer);
@@ -1008,16 +1005,16 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
             // round, so every call is in flight at once.
             if round == calls {
                 assert!(
-                    blocking.await_requests(calls - 1, Deadline::after(CALL_DEADLINE)),
+                    blocking.await_requests(calls - 1, Deadline::after(MUST_SUCCEED_WITHIN)),
                     "calls {calls}: earlier signs reach their held requests"
                 );
                 assert!(
-                    last.await_requests(1, Deadline::after(CALL_DEADLINE)),
+                    last.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
                     "calls {calls}: latest cached token reaches its held request"
                 );
             } else {
                 assert!(
-                    blocking.await_requests(round, Deadline::after(CALL_DEADLINE)),
+                    blocking.await_requests(round, Deadline::after(MUST_SUCCEED_WITHIN)),
                     "calls {calls}: sign {round} reaches its held request"
                 );
             }
@@ -1036,19 +1033,19 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         // token completes last and stays among the sixteen retained calls.
         blocking.release();
         // One deadline for the whole wait: the loop drains one stream.
-        let wait = Deadline::after(CALL_DEADLINE);
+        let wait = Deadline::after(MUST_SUCCEED_WITHIN);
         for _ in 1..calls {
             let (round, result) = wait.recv(&finished).unwrap_or_else(|_| {
-                panic!("calls {calls}: earlier signs return within {CALL_DEADLINE:?}")
+                panic!("calls {calls}: earlier signs return within {MUST_SUCCEED_WITHIN:?}")
             });
             assert_ne!(round, calls, "the latest cached token stays in flight");
             result.unwrap();
         }
         last.release();
-        let (round, result) = Deadline::after(CALL_DEADLINE)
+        let (round, result) = Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&finished)
             .unwrap_or_else(|_| {
-                panic!("calls {calls}: the latest sign returns within {CALL_DEADLINE:?}")
+                panic!("calls {calls}: the latest sign returns within {MUST_SUCCEED_WITHIN:?}")
             });
         assert_eq!(round, calls, "the latest cached token finishes last");
         result.unwrap();
@@ -1111,7 +1108,7 @@ fn a_held_fetch_never_holds_the_token_lock() {
         let _sent = done_tx.send(fetching.token(&worker_pair));
     });
     assert!(
-        tokens.await_requests(1, Deadline::after(WAIT)),
+        tokens.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the first fetch reaches the server"
     );
     // The fetch is held, yet the cache reads return at once.
@@ -1133,9 +1130,9 @@ fn a_held_fetch_never_holds_the_token_lock() {
         },
     );
     tokens.release();
-    let token = Deadline::after(WAIT)
+    let token = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
-        .unwrap_or_else(|_| panic!("the held fetch did not return within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the held fetch did not return within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
     assert_eq!(token.expose(), "tok-value");
 }

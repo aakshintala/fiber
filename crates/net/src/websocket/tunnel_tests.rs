@@ -1,5 +1,6 @@
 use super::*;
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex};
@@ -89,7 +90,7 @@ fn dial_distinguishes_a_timeout_from_other_connect_errors() {
 fn resolver_gets_connect_limit_and_its_answer_is_dialled() {
     fakes::within(
         "resolved connection",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let recorder = Arc::new(Recording {
@@ -116,7 +117,7 @@ fn resolver_gets_connect_limit_and_its_answer_is_dialled() {
 fn proxy_tunnels_and_no_proxy_dials_direct() {
     fakes::within(
         "proxy and bypass",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let proxy = fakes::ConnectProxy::start().unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -126,7 +127,7 @@ fn proxy_tunnels_and_no_proxy_dials_direct() {
             let (mut stream, _) = connect(&endpoint(port), &via).unwrap();
             stream.write_all(b"through").unwrap();
             let (mut peer, _) = listener.accept().unwrap();
-            peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
             let mut bytes = [0; 7];
             peer.read_exact(&mut bytes).unwrap();
             assert_eq!(&bytes, b"through");
@@ -153,14 +154,14 @@ fn proxy_tunnels_and_no_proxy_dials_direct() {
 fn proxy_basic_credentials_and_buffered_bytes_survive() {
     fakes::within(
         "proxy authorization",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let (mut peer, _) = listener.accept().unwrap();
-                peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
                 let (request, _) = handshake::headers(&mut peer).unwrap();
                 peer.write_all(b"HTTP/1.1 200 Connection established\r\n\r\nfirst")
                     .unwrap();
@@ -173,7 +174,7 @@ fn proxy_basic_credentials_and_buffered_bytes_survive() {
             stream.read_to_end(&mut tail).unwrap();
             assert_eq!(tail, b"first");
             let request =
-                fakes::Deadline::after(Duration::from_secs(5)).recv_or_fail(&rx, "CONNECT request");
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "CONNECT request");
             assert_eq!(
                 request,
                 "CONNECT 127.0.0.1:999 HTTP/1.1\r\nHost: 127.0.0.1:999\r\nProxy-Authorization: Basic dXNlcjpwdw==\r\n\r\n"
@@ -186,7 +187,7 @@ fn proxy_basic_credentials_and_buffered_bytes_survive() {
 fn refused_and_unsupported_proxies_are_named_without_passwords() {
     fakes::within(
         "proxy failures",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let server =
                 fakes::RawHttpServer::start(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
@@ -223,8 +224,8 @@ fn silent_proxy_uses_connect_not_idle_bound() {
             crate::Limits::new(Duration::from_millis(100), Duration::from_secs(300)).unwrap();
         done.send(connect(&endpoint(1), &via)).unwrap();
     });
-    let result = fakes::Deadline::after(Duration::from_secs(5))
-        .recv_or_fail(&rx, "silent proxy connect bound");
+    let result =
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "silent proxy connect bound");
     assert!(matches!(result,Err(Error::Stalled{idle}) if idle==Duration::from_millis(100)));
     drop(release);
 }

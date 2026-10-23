@@ -9,6 +9,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -23,9 +24,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer};
 use serde_json::json;
-
-/// How long a test waits for one call, or for a background refresh.
-const WAIT: Duration = Duration::from_secs(5);
 
 const ECHO: &str = r#"
 local echo_calls = 0
@@ -91,7 +89,7 @@ fn provider(extension: &Arc<LuaExtension>, name: &str) -> Arc<LuaProvider> {
     LuaProvider::new(Arc::clone(extension), name)
 }
 
-/// `provider.token()` for the pair, on its own thread under `WAIT`.
+/// `provider.token()` for the pair, on its own thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn token(provider: &Arc<LuaProvider>, credential: &str, label: &str) -> String {
     let provider = Arc::clone(provider);
@@ -311,7 +309,7 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
         "the request still gets the token it has while the refresh runs"
     );
     assert!(
-        server.await_requests(2, Deadline::after(WAIT)),
+        server.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the refresh request"
     );
     // While the refresh is held, the other pair answers from its own entry:
@@ -347,7 +345,7 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
             }
         }
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&refreshed)
         .expect("waited for the refreshed token");
     assert_eq!(token(&timed, "timed", "late"), "late/1");

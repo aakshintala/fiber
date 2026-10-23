@@ -16,6 +16,9 @@ use super::{
 /// One wait for every worker in this file.
 const HANG: Duration = Duration::from_secs(10);
 
+/// How long a second chunk is waited for when none should follow.
+const ABSENT: Duration = Duration::from_secs(2);
+
 /// A home with `logs/` and `crashes/` under it.
 struct Setup {
     root: fakes::TempDir,
@@ -279,7 +282,7 @@ fn newest_error_stops_when_the_file_shrinks_under_the_scan() {
     drop(release_first);
     // No second chunk follows a short read: a two-second absence proves
     // the scan stopped instead of reading on.
-    let stopped = fakes::Deadline::after(Duration::from_secs(2))
+    let stopped = fakes::Deadline::after(ABSENT)
         .recv(&arrived_second)
         .is_err();
     drop(release_second);

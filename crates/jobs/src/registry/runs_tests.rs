@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -22,8 +23,6 @@ use crate::registry::{Registry, Unreported};
 use crate::support::{
     delegate_finished, delegate_started, ended_ok, opening, registry_with, world,
 };
-
-const DEADLINE: Duration = Duration::from_secs(5);
 
 const OUTPUT: &str = "/sessions/s_x/events.jsonl";
 
@@ -112,7 +111,7 @@ fn concurrent_admissions_hold_the_gate_through_recording() {
         });
         a_tx.send(answer).unwrap();
     });
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     deadline
         .recv(&entered_rx)
         .expect("first start holds the gate");
@@ -533,7 +532,7 @@ fn a_wait_parked_on_run_1_answers_run_1_after_a_resume() {
         let answer = waiter.wait(&wid.0, 60_000, &CancelToken::new()).unwrap();
         let _sent = answer_tx.send(answer);
     });
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     let answer = wait.recv(&answer_rx).expect("the wait answered run 1");
     assert!(
         answer.text.contains("Final message:\nDone.\n"),
@@ -611,7 +610,7 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
         let answer = waiter.stop(&wid.0, &CancelToken::new()).unwrap();
         let _sent = answer_tx.send(answer);
     });
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     let answer = wait.recv(&answer_rx).expect("the stop answered run 1");
     assert!(answer.text.contains("completed"), "{}", answer.text);
     assert!(stop1.load(Ordering::SeqCst), "run 1's stop ran");
@@ -634,7 +633,7 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
         let answer = stopper.stop(&stop_id.0, &CancelToken::new()).unwrap();
         let _sent = run2_tx.send(answer);
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&stop2_rx)
         .expect("run 2's stop was sent");
     end_run(
@@ -643,7 +642,7 @@ fn a_stop_on_run_1_stops_run_1_and_answers_it_after_a_resume() {
         "Done again.",
     );
     stopping.join().unwrap();
-    let answer = Deadline::after(DEADLINE)
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&run2_rx)
         .expect("the stop answered run 2");
     assert!(stop2.load(Ordering::SeqCst), "run 2's stop ran once");
@@ -674,9 +673,9 @@ fn a_wait_on_a_running_run_parks_then_answers_still_running() {
         Some(until),
         None,
         Duration::from_millis(1_000),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     let answer = wait.recv(&answer_rx).expect("the wait timed out");
     assert!(answer.text.contains("still running"), "{}", answer.text);
     assert!(answer.settle.is_none());
@@ -750,7 +749,7 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
             Ok::<_, String>((Stop(Box::new(|| {})), ()))
         })
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&started_rx)
         .expect("the first resume holds the gate in start");
     let second = Arc::clone(&registry);
@@ -762,7 +761,7 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
             Ok::<_, String>((Stop(Box::new(|| {})), ()))
         })
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&attempting_rx)
         .expect("the second resume started");
     // The first resume holds the gate in `start`: the gate is still
@@ -1204,12 +1203,12 @@ fn a_dropped_resume_settle_is_taken_by_shutdown_after_a_stop() {
         let answer = stopper.stop(&stop_id.0, &CancelToken::new()).unwrap();
         let _sent = stopped_tx.send(answer);
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&stop_rx)
         .expect("run 2's stop was sent");
     end_run(resumed_a.unreported, &id, "Done 2.");
     stopping.join().unwrap();
-    let stopped = Deadline::after(DEADLINE)
+    let stopped = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&stopped_rx)
         .expect("the stop answered run 2");
     assert!(stopped.text.contains("completed"), "{}", stopped.text);

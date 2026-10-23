@@ -3,6 +3,7 @@ use super::*;
 use crate::fake::FakeStarter;
 use crate::testkit::args;
 use contract::clock::Clock;
+use fakes::MUST_SUCCEED_WITHIN;
 use fakes::clock::FakeClock;
 use serde_json::json;
 use std::fs;
@@ -84,7 +85,7 @@ fn finish_now(hub: &Hub, clock: &FakeClock, revoked: Revoked) {
             hub.pairing.finish(hub, revoked);
             finished_tx.send(()).unwrap_or(());
         });
-        if fakes::Deadline::after(Duration::from_secs(2))
+        if fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&finished_rx)
             .is_ok()
         {
@@ -94,9 +95,9 @@ fn finish_now(hub: &Hub, clock: &FakeClock, revoked: Revoked) {
             Some(end),
             2,
             crate::port::STOP_CLOSE_WAIT,
-            &fakes::Deadline::after(Duration::from_secs(1)),
+            &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
         );
-        fakes::Deadline::after(Duration::from_secs(2))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&finished_rx, "finish exits at its deadline");
         panic!("finish waited for fake time with nothing to wait for");
     });
@@ -315,7 +316,7 @@ fn a_revoked_connection_attached_late_is_shut_at_once() {
     let (_, who) = setup.pair("phone", 1);
     let revoked = setup.revoke("phone");
     let (writer, mut peer) = UnixStream::pair().unwrap();
-    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     setup
         .hub
         .pairing
@@ -529,7 +530,7 @@ fn authenticate_holds_revoke_until_it_registers() {
             .send(working.pairing.authenticate(&working, 2, &token.0))
             .unwrap();
     });
-    fakes::Deadline::after(Duration::from_secs(2))
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&held_rx, "authenticate holds the pairing lock");
     let (revoke_tx, revoke_rx) = std::sync::mpsc::channel();
     let working = Arc::clone(&hub);
@@ -543,10 +544,10 @@ fn authenticate_holds_revoke_until_it_registers() {
             .unwrap_or(());
     });
     release_tx.send(()).unwrap();
-    let who = fakes::Deadline::after(Duration::from_secs(2))
+    let who = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&auth_rx, "authenticate registers")
         .unwrap();
-    let revoked = match fakes::Deadline::after(Duration::from_secs(2))
+    let revoked = match fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&revoke_rx, "revoke follows authenticate")
         .unwrap()
     {
@@ -581,7 +582,7 @@ fn two_redemptions_of_one_code_admit_one() {
             )
             .unwrap();
     });
-    fakes::Deadline::after(Duration::from_secs(2))
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&held_rx, "first redemption holds the lock");
     let (second_tx, second_rx) = std::sync::mpsc::channel();
     let working = Arc::clone(&hub);
@@ -597,11 +598,11 @@ fn two_redemptions_of_one_code_admit_one() {
     });
     release_tx.send(()).unwrap();
     assert!(
-        fakes::Deadline::after(Duration::from_secs(2))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&first_rx, "first redemption succeeds")
     );
     assert!(
-        fakes::Deadline::after(Duration::from_secs(2))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&second_rx, "second redemption refuses reuse")
     );
     assert_eq!(hub.pairing.live(), 1);
@@ -632,7 +633,7 @@ fn a_mint_that_waits_behind_its_issuers_revocation_mints_nothing() {
             )
             .unwrap_or(());
     });
-    fakes::Deadline::after(Duration::from_secs(2))
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&held_rx, "revocation marks the issuer under the lock");
     let (mint_tx, mint_rx) = std::sync::mpsc::channel();
     let working = Arc::clone(&hub);
@@ -649,10 +650,10 @@ fn a_mint_that_waits_behind_its_issuers_revocation_mints_nothing() {
     });
     release_tx.send(()).unwrap();
     assert!(
-        fakes::Deadline::after(Duration::from_secs(2))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&mint_rx, "mint rechecks the issuer")
     );
-    let revoked = match fakes::Deadline::after(Duration::from_secs(2))
+    let revoked = match fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&rev_rx, "revocation returns")
         .unwrap()
     {
@@ -671,7 +672,7 @@ fn a_failed_listener_registration_refuses_the_connection_and_keeps_the_notice() 
     let hub = Arc::new(setup.hub);
     let (other_writer, other_peer) = UnixStream::pair().unwrap();
     other_peer
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
         .unwrap();
     let closer_for = |writer: &UnixStream| crate::feed::Closer {
         stream: writer.try_clone().unwrap(),
@@ -684,7 +685,7 @@ fn a_failed_listener_registration_refuses_the_connection_and_keeps_the_notice() 
         .listen(Arc::new(Mutex::new(other_writer)), closer, retired)
         .unwrap();
     let (stream, mut peer) = UnixStream::pair().unwrap();
-    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     hub.feed.attention.fail_next_listen();
     crate::connection::serve_authenticated(stream, Arc::clone(&hub), 1, who, None);
     let mut line = String::new();

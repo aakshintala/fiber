@@ -8,6 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::ffi::c_int;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -308,10 +309,10 @@ fn repeat_signals_and_the_return_guard_share_the_first_end() {
             .expect("the first finish"),
         SIGTERM
     );
-    // On the short bound: a fresh end would park this past every advance
-    // already made, so an arrival proves the repeat reused the spent one.
+    // A fresh end would park this past every advance already made, so an
+    // arrival proves the repeat reused the spent one.
     assert_eq!(
-        Deadline::after(SHORT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&is_fired)
             .expect("the second finish"),
         SIGTERM
