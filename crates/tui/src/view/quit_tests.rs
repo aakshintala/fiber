@@ -249,10 +249,22 @@ fn stripped(effect: &Effect) -> Effect {
                 })
                 .collect(),
         ),
+        Effect::Send(lines) => Effect::Send(
+            lines
+                .iter()
+                .map(|line| {
+                    let mut line: serde_json::Value =
+                        serde_json::from_str(line).unwrap_or_default();
+                    if let Some(object) = line.as_object_mut() {
+                        object.remove("id");
+                    }
+                    line.to_string()
+                })
+                .collect(),
+        ),
         Effect::None => Effect::None,
         Effect::Quit => Effect::Quit,
-        Effect::Send(_)
-        | Effect::ListFiles
+        Effect::ListFiles
         | Effect::Search { .. }
         | Effect::Editor { .. }
         | Effect::Copy(_)
@@ -357,4 +369,157 @@ fn the_hint_row_no_longer_shows_the_question() {
     let shown = screen(&app, 80, 24);
     // Once, in the overlay: never in the hint row.
     assert_eq!(shown.matches("sessions working").count(), 1, "{shown}");
+}
+
+/// Opens the close-all question with two live sessions, both working.
+fn ask_close_all(app: &mut App) {
+    app.on_line(hello());
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
+    let clock = fakes::clock::FakeClock::new();
+    for ch in "/close all".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    // docs/tui.md, "Quit": "2 sessions, 2 working, 0 open elsewhere"
+    // dim (live top-level sessions, how many working, how many elsewhere).
+    assert_eq!(app.close_all_question(), Some((2, 2, 0)));
+}
+
+#[test]
+fn close_all_on_home() {
+    let mut app = home(80, 24);
+    ask_close_all(&mut app);
+    insta::assert_snapshot!("close_all_on_home", screen(&app, 80, 24));
+}
+
+#[test]
+fn close_all_over_a_session() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let clock = fakes::clock::FakeClock::new();
+    for ch in "/close all".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(app.quit_open());
+    insta::assert_snapshot!("close_all_over_a_session", screen(&app, 80, 24));
+}
+
+#[test]
+fn close_all_at_width_40() {
+    let mut app = home(40, 24);
+    ask_close_all(&mut app);
+    insta::assert_snapshot!("close_all_at_width_40", screen(&app, 40, 24));
+}
+
+#[test]
+fn the_close_all_count_line_names_all_three_numbers() {
+    let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", 0));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", 0));
+    app.on_line(live("s_cccccccccccccccc", 0));
+    ask_close_all_three(&mut app);
+    // docs/tui.md, "Quit": "3 sessions, 3 working, 0 open elsewhere"
+    // dim (live top-level sessions, how many working, how many elsewhere).
+    assert_eq!(app.close_all_question(), Some((3, 3, 0)));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    draw(&app, area, &mut buf, &mut Vec::new());
+    let shown = crate::view::text(&buf);
+    assert!(
+        shown.contains("3 sessions, 3 working, 0 open elsewhere"),
+        "{shown}"
+    );
+}
+
+/// Opens the close-all question with three live sessions, all working.
+fn ask_close_all_three(app: &mut App) {
+    let clock = fakes::clock::FakeClock::new();
+    for ch in "/close all".chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(app.quit_open());
+}
+
+#[test]
+fn a_click_on_close_all_does_what_enter_does() {
+    let mut app = home(80, 24);
+    ask_close_all(&mut app);
+    let clock = fakes::clock::FakeClock::new();
+    let by_key = app.on_key(Key::Enter, clock.now());
+    let mut app = home(80, 24);
+    ask_close_all(&mut app);
+    let by_click = app.on_click(TargetId::Home(Spot::Quit(QuitChoice::CloseAll)));
+    // Command ids mint at random: the effects agree past them.
+    assert_eq!(stripped(&by_key), stripped(&by_click));
+    let Effect::Send(lines) = by_click else {
+        panic!("the confirm click closes all");
+    };
+    // docs/tui.md, "Quit": "Enter sends each live top-level session
+    // `close` with `now`"; the subscribes the connection needs first
+    // are not pinned.
+    let mut closes: Vec<String> = Vec::new();
+    for line in &lines {
+        let line: serde_json::Value = serde_json::from_str(line).unwrap_or_default();
+        if line["command"] != "close" {
+            continue;
+        }
+        assert_eq!(line["args"]["now"], serde_json::json!(true));
+        closes.push(line["session_id"].as_str().unwrap_or_default().to_owned());
+    }
+    closes.sort();
+    assert_eq!(closes, ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"]);
+}
+
+#[test]
+fn a_click_on_cancel_and_the_x_stay() {
+    for attached in [false, true] {
+        for choice in [QuitChoice::Stay, QuitChoice::Leave] {
+            let mut app = home(80, 24);
+            ask_close_all(&mut app);
+            if attached {
+                app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+            }
+            // Stay, Leave and the title's ✕ share one target: all cancel.
+            // `Leave` draws no row in the close-all question: a click
+            // routed to it anyway cancels like Stay.
+            assert_eq!(
+                app.on_click(TargetId::Home(Spot::Quit(choice))),
+                Effect::None
+            );
+            assert!(!app.quit_open());
+            assert_eq!(app.close_all_question(), None);
+        }
+    }
+}
+
+#[test]
+fn the_bar_stays_on_enter_in_close_all() {
+    let mut app = home(80, 24);
+    ask_close_all(&mut app);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    draw(&app, area, &mut buf, &mut Vec::new());
+    // Exactly one barred row: Enter's (docs/tui.md, "Quit": "with
+    // Enter's focused").
+    let barred = (0..24)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == crate::theme::Role::Accent.color()))
+        .count();
+    assert_eq!(barred, 1);
+    let row = (0..24)
+        .map(|y| {
+            (0..80)
+                .map(|x| buf[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        })
+        .find(|row| row.contains("› Enter"))
+        .expect("Enter's row keeps the bar");
+    assert!(row.contains("close all"), "{row}");
 }
