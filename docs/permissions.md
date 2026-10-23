@@ -356,7 +356,7 @@ Each line shows the layer it will go to, and one key flips it. A line from the
 project's files goes to the per-project notes. An answer about accounts, hosts
 or tools goes to the global notes. A session line goes to the per-project notes
 when every escalation behind it came from this project, and to the global notes
-otherwise. Outside a project, every line goes to the global notes.
+otherwise.
 
 Last, one screen shows each layer's notes exactly as they will be saved, as a
 diff against what is there, with the file named. Approving saves them and then

@@ -13,7 +13,7 @@ use crate::ThemeSetting;
 use crate::configure::{Layer, SettingRow, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
 use crate::keys::{Edit, Key};
-use crate::swapped::{Spot, render};
+use crate::swapped::{Ink, Spot, render};
 
 /// A value shown as compact JSON.
 fn value(json: &str) -> Shown {
@@ -102,7 +102,7 @@ fn at(fake: &Fake, key: &str) -> Settings {
         .iter()
         .position(|row| row.key == key)
         .unwrap_or_else(|| panic!("no row {key}"));
-    settings.list.select(index, settings.rows.len(), 20);
+    settings.list.select(index + 1, settings.list_len(), 20);
     settings
 }
 
@@ -131,7 +131,7 @@ fn field(settings: &Settings) -> Option<(String, Layer)> {
 fn drawn(settings: &Settings, usage: Option<u64>, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    let frame = settings.frame(usage);
+    let frame = settings.frame(usize::from(width), usage);
     render(&frame, area, &mut buf, &mut Vec::new());
     (0..height)
         .map(|y| {
@@ -145,29 +145,289 @@ fn drawn(settings: &Settings, usage: Option<u64>, width: u16, height: u16) -> St
         .join("\n")
 }
 
+/// The line of `screen` that starts with `key`.
+fn line_of<'a>(screen: &'a str, key: &str) -> &'a str {
+    screen
+        .lines()
+        .find(|line| line.trim_start_matches(['›', ' ']).starts_with(key))
+        .unwrap_or_else(|| panic!("no line for {key} in {screen}"))
+}
+
+/// The column where `needle` starts in `line`, counted in characters.
+fn column(line: &str, needle: &str) -> usize {
+    let byte = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("no {needle} in {line}"));
+    line[..byte].chars().count()
+}
+
 #[test]
-fn rows_show_key_value_and_layer() {
+fn rows_show_key_value_and_layer_as_aligned_columns() {
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "handoff.tokens");
+    let screen = drawn(&settings, None, 80, 24);
+    // The widest key is 33 columns and the widest value 23, so the layer
+    // column starts at 2 + 33 + 2 + 23 + 2.
+    assert_eq!(
+        line_of(&screen, "handoff.tokens"),
+        format!("› {:<35}{:<25}default", "handoff.tokens", "400000")
+    );
+    assert_eq!(
+        line_of(&screen, "model"),
+        format!("  {:<35}{:<25}global", "model", "a/b")
+    );
+    assert_eq!(
+        line_of(&screen, "skills.disabled"),
+        format!(
+            "  {:<35}{:<25}global + project",
+            "skills.disabled", "a (global), b (project)"
+        )
+    );
+    assert_eq!(
+        line_of(&screen, "providers.openai.credentials.work"),
+        format!(
+            "  {:<35}{:<25}global",
+            "providers.openai.credentials.work", "command op"
+        )
+    );
+    assert_eq!(
+        line_of(&screen, "tui.theme"),
+        format!("  {:<35}{:<25}default", "tui.theme", "unset")
+    );
+    assert_eq!(fake.reads(), [PathBuf::from("/w")]);
+}
+
+#[test]
+fn a_dim_header_row_heads_the_table() {
     let fake = Fake::new(rows());
     let settings = Settings::open(&ctx(&fake));
-    let screen = drawn(&settings, None, 80, 24);
-    assert!(
-        screen.contains("handoff.tokens                     400000  default"),
-        "{screen}"
+    let frame = settings.frame(80, None);
+    let header: Vec<(&str, Ink)> = frame.rows[0]
+        .iter()
+        .map(|(text, _, ink)| (text.trim_end(), *ink))
+        .collect();
+    assert_eq!(
+        header,
+        [
+            ("key", Ink::Muted),
+            ("value", Ink::Muted),
+            ("layer", Ink::Muted)
+        ]
     );
-    assert!(screen.contains("model                              \"a/b\"  global"));
-    assert!(screen.contains("a (global), b (project)  global + project"));
-    assert!(screen.contains("command op  global"));
-    assert_eq!(fake.reads(), [PathBuf::from("/w")]);
+    // Every line's layer starts where the header's does: 2 + 33 + 2 + 23
+    // + 2 columns in.
+    let screen = drawn(&settings, None, 80, 24);
+    let layer = column(line_of(&screen, "key"), "layer");
+    assert_eq!(layer, 62);
+    for (key, word) in [
+        ("handoff.tokens", "default"),
+        ("model", "global"),
+        ("tui.theme", "default"),
+        ("skills.disabled", "global + project"),
+        ("providers.openai.credentials.work", "global"),
+    ] {
+        let line = line_of(&screen, key);
+        assert_eq!(column(line, word), layer, "{line}");
+    }
+}
+
+#[test]
+fn the_first_key_is_selected_and_the_header_takes_no_selection() {
+    let fake = Fake::new(rows());
+    let mut settings = Settings::open(&ctx(&fake));
+    assert_eq!(settings.list.selected(), 1);
+    assert_eq!(
+        settings.selected().map(|row| row.key.as_str()),
+        Some("diagnostics.level")
+    );
+    // Up stays on the first key.
+    press(&mut settings, &fake, &[Key::Up]);
+    assert_eq!(settings.list.selected(), 1);
+    // A click on the header selects nothing, and nothing opens.
+    press(&mut settings, &fake, &[Key::Down, Key::Down]);
+    assert_eq!(settings.list.selected(), 3);
+    assert!(matches!(
+        settings.click(Spot::Row(0), &ctx(&fake)),
+        Act::Stay
+    ));
+    assert_eq!(settings.list.selected(), 3);
+    // Selecting the header by force: no key is selected, so Enter opens
+    // no field and nothing is written.
+    settings.list.select(0, settings.list_len(), 20);
+    assert!(settings.selected().is_none());
+    press(&mut settings, &fake, &[Key::Enter]);
+    assert_eq!(field(&settings), None);
+    assert!(fake.writes().is_empty());
+    // PageUp over the keys lands on the first key, never the header.
+    settings.list.select(3, settings.list_len(), 20);
+    press(&mut settings, &fake, &[Key::PageUp]);
+    assert_eq!(settings.list.selected(), 1);
+}
+
+#[test]
+fn rows_that_arrive_after_a_failed_read_start_on_the_first_key() {
+    let fake = Fake::new(Vec::new());
+    if let Ok(mut known) = fake.rows.lock() {
+        *known = Err(crate::ConfigureError {
+            code: contract::ErrorCode::ConfigInvalid,
+            message: "not JSON".to_owned(),
+        });
+    }
+    let mut settings = Settings::open(&ctx(&fake));
+    assert!(settings.rows.is_empty());
+    if let Ok(mut known) = fake.rows.lock() {
+        *known = Ok(rows());
+    }
+    settings.reread(&ctx(&fake));
+    assert_eq!(settings.list.selected(), 1);
+}
+
+#[test]
+fn a_move_clears_what_the_last_action_said_and_a_stay_keeps_it() {
+    let fake = Fake::new(rows());
+    let mut settings = Settings::open(&ctx(&fake));
+    // On the first key, Up stays: the line stays too.
+    settings.said = vec!["Saved.".to_owned()];
+    press(&mut settings, &fake, &[Key::Up]);
+    assert_eq!(settings.list.selected(), 1);
+    assert_eq!(settings.frame(80, None).below, ["Saved."]);
+    // Down moves: the line goes, and the selected key's timing shows.
+    press(&mut settings, &fake, &[Key::Down]);
+    assert_eq!(settings.list.selected(), 2);
+    assert!(settings.said.is_empty());
+    assert_eq!(
+        settings.frame(80, None).below,
+        ["changing handoff.tokens needs a reload"]
+    );
+    // And back up, the same.
+    settings.said = vec!["Saved.".to_owned()];
+    press(&mut settings, &fake, &[Key::Up]);
+    assert_eq!(settings.list.selected(), 1);
+    assert!(settings.said.is_empty());
+}
+
+#[test]
+fn a_string_draws_bare_and_anything_else_as_its_json() {
+    let fake = Fake::new(vec![
+        row("a", value("\"a/b\""), "global", WriteScope::GlobalOnly),
+        row("b", value("400000"), "global", WriteScope::GlobalOnly),
+        row("c", value("[1,2]"), "global", WriteScope::GlobalOnly),
+        row("d", value("true"), "global", WriteScope::GlobalOnly),
+        row(
+            "e",
+            value("\"two\\nlines\""),
+            "global",
+            WriteScope::GlobalOnly,
+        ),
+    ]);
+    let settings = Settings::open(&ctx(&fake));
+    let frame = settings.frame(80, None);
+    let values: Vec<&str> = frame.rows[1..]
+        .iter()
+        .map(|cells| cells[1].0.trim_end())
+        .collect();
+    assert_eq!(values, ["a/b", "400000", "[1,2]", "true", "two lines"]);
 }
 
 #[test]
 fn unset_keys_say_unset() {
     let fake = Fake::new(rows());
     let settings = Settings::open(&ctx(&fake));
-    assert!(
-        drawn(&settings, None, 80, 24)
-            .contains("tui.theme                          unset  default")
+    let screen = drawn(&settings, None, 80, 24);
+    assert!(line_of(&screen, "tui.theme").contains("unset"), "{screen}");
+}
+
+/// The view over one key `k` whose value is a string of `len` columns, and
+/// its layer's column at `width` 80.
+fn layer_column(len: usize) -> (usize, String) {
+    let fake = Fake::new(vec![row(
+        "tui.hover",
+        value(&format!("\"{}\"", "v".repeat(len))),
+        "global",
+        WriteScope::GlobalOnly,
+    )]);
+    let settings = Settings::open(&ctx(&fake));
+    let screen = drawn(&settings, None, 80, 24);
+    let line = line_of(&screen, "tui.hover").to_owned();
+    (column(&line, "global"), line)
+}
+
+#[test]
+fn a_value_past_the_room_is_cut_and_the_layer_column_stays() {
+    // The key column is 9 wide, the layer's room 10, two gaps of 2 and
+    // the gutter 2: 80 - 25 = 55 columns are left for the value.
+    let (below, _) = layer_column(54);
+    let (at, line) = layer_column(55);
+    let (past, cut) = layer_column(56);
+    assert_eq!(at, 2 + 9 + 2 + 55 + 2);
+    assert_eq!(below + 1, at);
+    assert!(!line.contains('…'), "{line}");
+    assert_eq!(past, at);
+    assert!(cut.contains(&format!("{}…", "v".repeat(54))), "{cut}");
+    let (far, _) = layer_column(200);
+    assert_eq!(far, at);
+}
+
+#[test]
+fn a_key_past_its_column_pushes_its_value() {
+    let long = "k".repeat(40);
+    let fake = Fake::new(vec![
+        row(&long, value("1"), "global", WriteScope::GlobalOnly),
+        row("model", value("2"), "global", WriteScope::GlobalOnly),
+    ]);
+    let settings = Settings::open(&ctx(&fake));
+    let screen = drawn(&settings, None, 80, 24);
+    // The column is 36 wide: the short key's value starts after it, the
+    // long key's after its own width.
+    assert_eq!(column(line_of(&screen, "model"), "2"), 2 + 36 + 2);
+    assert_eq!(column(line_of(&screen, &long), "1"), 2 + 40 + 2);
+}
+
+#[test]
+fn a_narrow_width_clips_without_panicking() {
+    let fake = Fake::new(rows());
+    let settings = Settings::open(&ctx(&fake));
+    for width in [0u16, 1, 5, 20, 40, 79] {
+        drawn(&settings, None, width, 6);
+    }
+}
+
+#[test]
+fn the_rows_end_in_the_file_hint_with_the_selected_keys_timing_above() {
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "handoff.tokens");
+    let frame = settings.frame(80, Some(180_000));
+    assert_eq!(frame.footer, "Ctrl+G opens the file");
+    assert_eq!(
+        frame.below,
+        ["changing handoff.tokens needs a reload (~180k tokens)"]
     );
+    let frame = settings.frame(80, None);
+    assert_eq!(frame.below, ["changing handoff.tokens needs a reload"]);
+    let theme = at(&fake, "tui.theme").frame(80, None);
+    assert_eq!(theme.below, ["Applies now."]);
+    let mut said = at(&fake, "tui.theme");
+    said.said = vec!["Saved.".to_owned()];
+    assert_eq!(said.frame(80, None).below, ["Saved."]);
+}
+
+#[test]
+fn the_field_and_the_choices_keep_their_own_hints() {
+    let fake = themed();
+    let mut field_view = at(&fake, "model");
+    press(&mut field_view, &fake, &[Key::Enter]);
+    assert_eq!(
+        field_view.frame(80, None).footer,
+        "Tab layer · Enter save · Esc cancel"
+    );
+    // The table stays above the field.
+    assert_eq!(field_view.frame(80, None).rows.len(), rows().len() + 1);
+    let mut choices_view = at(&fake, "tui.theme");
+    press(&mut choices_view, &fake, &[Key::Enter]);
+    let frame = choices_view.frame(80, None);
+    assert_eq!(frame.footer, "↑↓ move · Enter choose · Esc back");
+    assert_eq!(frame.rows.len(), 5);
+    assert!(frame.list.is_gutter());
 }
 
 #[test]
@@ -182,6 +442,9 @@ fn a_failed_read_says_why_and_shows_no_rows() {
     let settings = Settings::open(&ctx(&fake));
     assert!(settings.rows.is_empty());
     assert!(drawn(&settings, None, 80, 24).contains("config.json: not JSON"));
+    // With no key there is no header and nothing is marked.
+    assert!(settings.frame(80, None).rows.is_empty());
+    assert_ne!(settings.frame(80, None).list.selected(), 0);
 }
 
 #[test]
@@ -288,7 +551,7 @@ fn a_saved_write_rereads_and_says_the_file() {
         settings.said,
         [
             format!("Saved to {}.", file(Layer::Project).display()),
-            "Applies on each session's next /reload.".to_owned(),
+            "changing handoff.tokens needs a reload".to_owned(),
         ]
     );
 }
@@ -478,15 +741,23 @@ fn client_hub_keys_apply_at_the_next_connection() {
 fn the_reload_cost_uses_the_last_usage() {
     assert_eq!(
         applies_text("handoff.tokens", Some(180_000)),
-        "Applies on /reload, which rebuilds the cache: about 180,000 tokens."
+        "changing handoff.tokens needs a reload (~180k tokens)"
+    );
+    assert_eq!(
+        applies_text("handoff.tokens", Some(999)),
+        "changing handoff.tokens needs a reload (~999 tokens)"
     );
 }
 
 #[test]
-fn without_usage_it_says_each_sessions_next_reload() {
+fn without_usage_it_says_a_change_needs_a_reload() {
     assert_eq!(
         applies_text("handoff.tokens", None),
-        "Applies on each session's next /reload."
+        "changing handoff.tokens needs a reload"
+    );
+    assert_eq!(
+        applies_text("budget.usd", None),
+        "changing budget.usd needs a reload"
     );
 }
 

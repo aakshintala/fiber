@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
@@ -36,9 +37,6 @@ use serde_json::{Map, Value};
 
 use crate::model_host::ModelHost;
 use crate::switch::{Reach, Reached};
-
-/// How long the test waits for a parked retry wait before failing it.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A clock the test moves by hand; `now` starts at its origin.
 fn test_clock() -> Arc<FakeClock> {
@@ -371,7 +369,8 @@ fn second_call_sees_the_first_lines_cost() {
             bound(clock, None, done_lines),
         ));
     });
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the second call to fail"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the second call to fail"));
     assert_eq!(failure.code, ErrorCode::BudgetExceeded);
     assert_eq!(provider.requests().len(), 1);
     assert!(second_lines.lock().unwrap().is_empty());
@@ -534,9 +533,11 @@ fn retry_after_at_the_cap_retries_past_it_fails() {
         Some(origin + Duration::from_secs(60)),
         None,
         Duration::from_secs(60),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let reply = ok(Deadline::after(WAIT).recv_or_fail(&moved_rx, "the retried call to answer"));
+    let reply =
+        ok(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&moved_rx, "the retried call to answer"));
     assert_eq!(reply.text, "ok");
     assert_eq!(provider.requests().len(), 2);
 
@@ -581,8 +582,8 @@ fn retry_wait_past_the_deadline_fails_timeout() {
             bound(clock, Some(deadline), done_lines),
         ));
     });
-    let failure =
-        err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the over-deadline retry to fail"));
+    let failure = err(Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&done_rx, "the over-deadline retry to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
     assert_eq!(held.lock().unwrap().len(), 1);
@@ -732,7 +733,8 @@ fn in_flight_call_keeps_its_reached_provider() {
         let _sent =
             done_tx.send(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
     });
-    let reply = ok(Deadline::after(WAIT).recv_or_fail(&done_rx, "the next call to answer"));
+    let reply =
+        ok(Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the next call to answer"));
     assert_eq!(reply.text, "two");
     assert_eq!(second_sent.requests().len(), 1);
 }
@@ -972,7 +974,7 @@ fn gate_holds_one_call_and_times_out_the_next() {
         }
     });
     // Call A is inside `run` before B reaches the gate.
-    Deadline::after(WAIT).recv_or_fail(&entered_rx, "call A to enter `run`");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "call A to enter `run`");
     let second_lines = Arc::new(Mutex::new(Vec::new()));
     let deadline = origin + Duration::from_secs(5);
     let b_clock = Arc::clone(&clock);
@@ -992,14 +994,15 @@ fn gate_holds_one_call_and_times_out_the_next() {
         Some(deadline),
         None,
         Duration::from_secs(5),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&b_rx, "call B to end `timeout`"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&b_rx, "call B to end `timeout`"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.sends.load(Ordering::SeqCst), 1);
     assert!(second_lines.lock().unwrap().is_empty());
     release_tx.send(()).unwrap();
-    let reply = ok(Deadline::after(WAIT).recv_or_fail(&a_rx, "call A to answer"));
+    let reply = ok(Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&a_rx, "call A to answer"));
     assert_eq!(reply.text, "slow");
     assert_eq!(first_lines.lock().unwrap().len(), 1);
 }
@@ -1046,7 +1049,7 @@ impl ModelCall for BlockingCall {
         // here instead of holding its thread past the test's own deadline.
         // Expiry reports a failure the test never expects, so a mutant that
         // never watches still fails the test instead of hanging it.
-        let wall = Deadline::after(WAIT);
+        let wall = Deadline::after(MUST_SUCCEED_WITHIN);
         let mut released = lock.lock().unwrap();
         while !*released {
             let remaining = wall.left();
@@ -1119,9 +1122,11 @@ fn cancel_during_attempt_ends_timeout() {
             let _sent = done_tx.send(host.call("tag", request("scripted/s.json"), bound));
         }
     });
-    Deadline::after(WAIT).recv_or_fail(&entered_rx, "the attempt to start");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the attempt to start");
     cancel.cancel();
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the cancelled attempt to end"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the cancelled attempt to end"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(held.lock().unwrap().len(), 1);
 }
@@ -1149,8 +1154,10 @@ fn expired_deadline_during_attempt_ends_timeout() {
             bound(clock, Some(deadline), held),
         ));
     });
-    Deadline::after(WAIT).recv_or_fail(&entered_rx, "the attempt to start");
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the expired attempt to end"));
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the attempt to start");
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the expired attempt to end"));
     assert_eq!(failure.code, ErrorCode::Timeout);
 }
 
@@ -1185,9 +1192,11 @@ fn retry_wait_at_exactly_the_deadline_parks_then_fails() {
         Some(deadline),
         None,
         Duration::from_secs(60),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the exact retry wait to fail"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the exact retry wait to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
 }
@@ -1224,9 +1233,11 @@ fn retry_wait_at_exactly_the_deadline_parks_the_call_thread_then_fails() {
         Some(deadline),
         Some(call.thread().id()),
         Duration::from_secs(60),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the exact retry wait to fail"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the exact retry wait to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
 }
@@ -1266,11 +1277,13 @@ fn cancelled_retry_wait_fails_without_clock_move() {
         }
     });
     assert!(
-        clock.await_parked(target, fakes::Deadline::after(WAIT)),
+        clock.await_parked(target, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the retry wait to park at its target"
     );
     cancel.cancel();
-    let failure = err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the cancelled retry to fail"));
+    let failure =
+        err(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the cancelled retry to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
 }
@@ -1303,13 +1316,13 @@ fn clock_jump_past_deadline_during_retry_wait_fails() {
         ));
     });
     assert!(
-        clock.await_parked(target, fakes::Deadline::after(WAIT)),
+        clock.await_parked(target, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the retry wait to park at its target"
     );
     // Late wake past the 30 s retry park to 100 s, past the 60 s deadline; the park is proven just above (ruling 6261259790).
     clock.advance(Duration::from_secs(100));
-    let failure =
-        err(Deadline::after(WAIT).recv_or_fail(&done_rx, "the jumped retry wait to fail"));
+    let failure = err(Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&done_rx, "the jumped retry wait to fail"));
     assert_eq!(failure.code, ErrorCode::Timeout);
     assert_eq!(provider.requests().len(), 1);
 }
@@ -1340,7 +1353,9 @@ fn gate_releases_after_each_call() {
         let _sent =
             done_tx.send(host.call("tag", request("scripted/s.json"), bound(clock, None, held)));
     });
-    let reply = ok(Deadline::after(WAIT).recv_or_fail(&done_rx, "the second call to answer"));
+    let reply =
+        ok(Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the second call to answer"));
     assert_eq!(reply.text, "two");
     assert_eq!(provider.requests().len(), 2);
 }

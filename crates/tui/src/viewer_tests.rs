@@ -2,10 +2,12 @@
 //! it writes, and every way an open fails.
 
 use std::os::unix::fs::PermissionsExt;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use base64::Engine as _;
+use contract::clock::Clock;
+use fakes::clock::FakeClock;
 
 use super::{command, spawn};
 use crate::Input;
@@ -26,12 +28,19 @@ fn view(name: &str, bytes: &[u8]) -> View {
     }
 }
 
-/// Spawns the worker and waits for its answer.
+/// Spawns the worker on a fake clock and waits for its answer.
 #[track_caller]
 fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), String> {
     let (out, rx) = mpsc::channel();
-    spawn(argv, dir, view, &out);
-    match Deadline::after(DEADLINE).recv(&rx) {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    spawn(argv, dir, view, &out, &clock);
+    viewed(&rx)
+}
+
+/// The worker's answer within [`DEADLINE`].
+#[track_caller]
+fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
+    match Deadline::after(DEADLINE).recv(rx) {
         Ok(Input::Viewed { result, .. }) => result,
         Ok(
             Input::Bytes(_)
@@ -46,6 +55,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
@@ -231,4 +241,60 @@ fn a_failed_write_leaves_no_temporary_file() {
         .permissions();
     permissions.set_mode(0o700);
     std::fs::set_permissions(&parent, permissions).unwrap_or_else(|err| panic!("chmod: {err}"));
+}
+
+#[test]
+fn a_viewer_past_the_deadline_is_not_a_failure() {
+    let dir = fakes::TempDir::new("fiber-viewer-deadline");
+    let ready = fakes::children::Ready::new(dir.path());
+    let script = format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display());
+    let argv = ["/bin/sh".to_owned(), "-c".to_owned(), script];
+    let clock = FakeClock::new();
+    let end = clock.now() + crate::paste_image::READ_LIMIT;
+    let (out, rx) = mpsc::channel();
+    let dyn_clock: Arc<dyn Clock> = Arc::<FakeClock>::clone(&clock);
+    spawn(
+        &argv,
+        dir.path(),
+        view("shot.png", b"bytes"),
+        &out,
+        &dyn_clock,
+    );
+    let pgid = ready
+        .wait(Deadline::after(DEADLINE))
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no ready line"));
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(clock.await_parked(end, Deadline::after(DEADLINE)));
+    clock.advance_when_parked(
+        Some(end),
+        None,
+        crate::paste_image::READ_LIMIT,
+        &Deadline::after(DEADLINE),
+    );
+    assert_eq!(viewed(&rx), Ok(()));
+    assert!(fakes::group_empties(pgid, Deadline::after(DEADLINE)));
+    watchdog.stand_down(Deadline::after(DEADLINE));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_path_that_is_not_utf8_reaches_the_viewer_whole() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = fakes::TempDir::new("fiber-viewer-bytes");
+    let images = dir.path().join(std::ffi::OsStr::from_bytes(b"images-\xff"));
+    let marker = dir.path().join("opened");
+    let program = fakes::script(dir.path(), "viewer", "printf %s \"$2\" > \"$1\"\n");
+    let argv = [
+        "/bin/sh".to_owned(),
+        program.to_str().unwrap_or_default().to_owned(),
+        marker.to_str().unwrap_or_default().to_owned(),
+    ];
+    assert_eq!(opened(&argv, &images, view("shot.png", b"bytes")), Ok(()));
+    let path = images.join("s_aaaaaaaaaaaaaaaa-shot.png");
+    assert_eq!(
+        std::fs::read(&marker).unwrap_or_else(|err| panic!("read: {err}")),
+        path.as_os_str().as_bytes()
+    );
 }

@@ -18,12 +18,10 @@ use std::time::Duration;
 
 use fakes::Deadline;
 
-/// How long the decode jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total); with the 5s watchdog stand-down
-/// the deadlines sum to 25s, so 120s is at least twice them:
-/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
-/// at least twice the test's own deadlines, so a hang reports which wait
-/// expired.
+/// How long the decode jig exchange may take once the binary has started.
+/// This file's exchange bound, the start bound (`fakes::START_BOUND`) and the
+/// stand-down sum under nextest's 120 s limit (`docs/testing.md`, "Waits and
+/// timeouts").
 const JIG_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The example `cargo test` built beside this test binary
@@ -37,13 +35,12 @@ fn example_path() -> PathBuf {
 }
 
 /// A recorded stream the provider tests replay: the response bytes of one
-/// tool-call exchange, in the repo, so the fixture cannot drift.
-fn recording() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/opencode-go-tool-call.sse")
-}
+/// tool-call exchange, compiled into the test so the fixture cannot drift.
+static RECORDING: &[u8] = include_bytes!("recordings/opencode-go-tool-call.sse");
 
 #[track_caller]
 fn decode(file: &Path) -> Output {
+    fakes::warm_up(&example_path(), &[], 2);
     let child = Command::new(example_path())
         .arg(file)
         .stdout(Stdio::piped())
@@ -64,7 +61,9 @@ fn decode(file: &Path) -> Output {
 
 #[test]
 fn it_decodes_a_recorded_stream_into_deltas_actions_and_usage() {
-    let file = recording();
+    let dir = fakes::TempDir::new("fiber-decode-jig");
+    let file = dir.path().join("opencode-go-tool-call.sse");
+    std::fs::write(&file, RECORDING).unwrap();
     let out = decode(&file);
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");

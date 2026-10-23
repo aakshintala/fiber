@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
@@ -21,9 +22,6 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 
 use crate::{Error, LuaExtension};
-
-/// Wall-clock bound on a wait for the extension's thread.
-const WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -111,7 +109,7 @@ impl InnerCalls for FakeRunner {
         if let Some(release) = lock(&self.inner.hold).take() {
             // Held until the test releases it; a test that never releases
             // fails on its own deadline rather than hanging this thread.
-            return Deadline::after(WAIT)
+            return Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&release)
                 .expect("the test releases the held call");
         }
@@ -134,7 +132,7 @@ fn extension(init: &str, clock: &Arc<FakeClock>) -> (fakes::TempDir, Arc<LuaExte
     (dir, ext)
 }
 
-/// Runs the tool `tool` on `{}` through `runner`, on a thread under `WAIT`.
+/// Runs the tool `tool` on `{}` through `runner`, on a thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn tool_call(
     ext: &Arc<LuaExtension>,
@@ -704,8 +702,12 @@ fn outcome_names_only_status_content_and_reason_or_error() {
 #[track_caller]
 fn wait_parked(clock: &FakeClock, caller: std::thread::ThreadId, until: Instant) {
     assert!(
-        clock.await_thread_parked(caller, Some(until), fakes::Deadline::after(WAIT)),
-        "the caller never parked on the extension's clock within {WAIT:?}"
+        clock.await_thread_parked(
+            caller,
+            Some(until),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
+        "the caller never parked on the extension's clock within {MUST_SUCCEED_WITHIN:?}"
     );
 }
 
@@ -796,16 +798,16 @@ fn tool_from_a_hook_timer_effects_search_provider_or_command_is_an_error() {
     );
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&timer_done_rx)
         .expect("the timer callback completed");
     crate::lua::clear_timer_done_hook();
@@ -911,7 +913,7 @@ fn the_runner_goes_when_the_call_returns() {
             ))
             .expect("the caller answered");
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered)
         .expect("the runner was entered");
     // Registered right after the push: one runner while the call runs.
@@ -920,7 +922,7 @@ fn the_runner_goes_when_the_call_returns() {
         .send(Ok(completed("file text")))
         .expect("the test releases the held call");
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the call returned")
             .unwrap(),
@@ -954,7 +956,7 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
             ))
             .expect("the caller answered");
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered)
         .expect("the runner was entered");
     assert_eq!(ext.runners_held(), 1);
@@ -969,11 +971,11 @@ fn a_timed_out_call_drops_its_runner_and_its_late_answer() {
         Some(clock.origin() + Duration::from_millis(1200)),
         Some(caller_thread.thread().id()),
         Duration::from_millis(1200),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
         matches!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the slow call returned"),
             Err(Error::Timeout { .. })
@@ -1028,7 +1030,7 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
             ))
             .expect("the caller answered");
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered)
         .expect("the runner was entered");
     assert_eq!(ext.runners_held(), 1);
@@ -1040,7 +1042,7 @@ fn a_cancelled_call_drops_its_runner_and_its_late_answer() {
     );
     fire.cancel();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the slow call returned")
             .unwrap(),

@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -21,9 +22,6 @@ use serde_json::{Map, Value, json};
 use super::{Attempt, DelegateMessage, Launch, Steer, Steered};
 use crate::registry::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok};
-
-/// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
@@ -136,7 +134,7 @@ impl Script {
         if let Some(hold) = reply.hold_before {
             *self.holds.lock().unwrap() += 1;
             self.held.notify_all();
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&hold)
                 .expect("the hold released the connection");
         }
@@ -157,7 +155,7 @@ impl Script {
         if let Some(hold) = reply.hold {
             *self.holds.lock().unwrap() += 1;
             self.held.notify_all();
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&hold)
                 .expect("the hold released the write");
         }
@@ -326,9 +324,11 @@ fn depth_refuses_before_steering_or_resuming_with_the_same_definition() {
         );
         for call in [args(&id.0, "hello"), Map::new()] {
             let tool = Arc::clone(&rig.tool);
-            let output = fakes::within("depth refusal", Deadline::after(DEADLINE), move || {
-                tool.run(&call, &CancelToken::new(), &Recorder::default())
-            });
+            let output = fakes::within(
+                "depth refusal",
+                Deadline::after(MUST_SUCCEED_WITHIN),
+                move || tool.run(&call, &CancelToken::new(), &Recorder::default()),
+            );
             assert_eq!(code_of(&output), ErrorCode::DepthExceeded);
             assert!(content(&output).contains("`delegate_message`"));
             assert!(rig.script.calls().is_empty());
@@ -599,7 +599,7 @@ fn call_async(
 
 /// The call's answer, failing at the wall deadline.
 fn answered(rx: &mpsc::Receiver<Output>) -> Output {
-    fakes::Deadline::after(DEADLINE)
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(rx)
         .expect("the call answered")
 }
@@ -617,7 +617,10 @@ fn gone_backs_off_doubling_to_a_capped_second() {
         CancelToken::new(),
         Arc::new(Recorder::default()),
     );
-    assert!(rig.script.await_calls(1, DEADLINE), "the first attempt ran");
+    assert!(
+        rig.script.await_calls(1, MUST_SUCCEED_WITHIN),
+        "the first attempt ran"
+    );
     let mut at = rig.clock.now();
     // Five failures wait 50, 100, 200, 400 and 800 ms, then the cap: a
     // sixth and seventh failure wait 1 000 ms each.
@@ -628,14 +631,14 @@ fn gone_backs_off_doubling_to_a_capped_second() {
         let until = at + Duration::from_millis(wait);
         assert!(
             rig.clock
-                .await_parked(until, fakes::Deadline::after(DEADLINE)),
+                .await_parked(until, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
             "the call parks its backoff"
         );
         let mark = rig.clock.advance_when_parked(
             Some(until),
             None,
             Duration::from_millis(wait - 1),
-            &fakes::Deadline::after(DEADLINE),
+            &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
         );
         assert_eq!(
             rig.script.calls().len(),
@@ -643,18 +646,21 @@ fn gone_backs_off_doubling_to_a_capped_second() {
             "no attempt before its backoff"
         );
         assert!(
-            rig.clock
-                .await_parked_since(&mark, Some(until), fakes::Deadline::after(DEADLINE)),
+            rig.clock.await_parked_since(
+                &mark,
+                Some(until),
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+            ),
             "the call re-parks its backoff"
         );
         rig.clock.advance_when_parked(
             Some(until),
             None,
             Duration::from_millis(1),
-            &fakes::Deadline::after(DEADLINE),
+            &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
         );
         assert!(
-            rig.script.await_calls(calls + 2, DEADLINE),
+            rig.script.await_calls(calls + 2, MUST_SUCCEED_WITHIN),
             "the next attempt ran at its backoff"
         );
         at = until;
@@ -696,14 +702,14 @@ fn a_committed_gone_resends_with_the_same_id() {
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
         rig.clock
-            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
+            .await_parked(backoff, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
         Some(backoff),
         None,
         Duration::from_millis(50),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     let output = answered(&rx);
     handle.join().unwrap();
@@ -752,11 +758,14 @@ fn a_committed_send_to_an_ended_run_fails_indeterminate_without_resuming() {
         CancelToken::new(),
         Arc::new(Recorder::default()),
     );
-    assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
+    assert!(
+        rig.script.await_calls(1, MUST_SUCCEED_WITHIN),
+        "the attempt committed"
+    );
     assert!(
         rig.clock.await_parked(
             rig.clock.now() + Duration::from_millis(50),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the call parks its backoff"
     );
@@ -787,11 +796,14 @@ fn a_run_that_changes_under_a_committed_attempt_is_not_sent_twice() {
         CancelToken::new(),
         Arc::new(Recorder::default()),
     );
-    assert!(rig.script.await_calls(1, DEADLINE), "the attempt committed");
+    assert!(
+        rig.script.await_calls(1, MUST_SUCCEED_WITHIN),
+        "the attempt committed"
+    );
     assert!(
         rig.clock.await_parked(
             rig.clock.now() + Duration::from_millis(50),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the call parks its backoff"
     );
@@ -835,16 +847,19 @@ fn a_stale_commit_is_withheld_and_never_resent() {
     let backoff = rig.clock.now() + Duration::from_millis(50);
     assert!(
         rig.clock
-            .await_parked(backoff, fakes::Deadline::after(DEADLINE)),
+            .await_parked(backoff, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its backoff"
     );
     rig.clock.advance_when_parked(
         Some(backoff),
         None,
         Duration::from_millis(50),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    assert!(rig.script.await_calls(2, DEADLINE), "the resend held");
+    assert!(
+        rig.script.await_calls(2, MUST_SUCCEED_WITHIN),
+        "the resend held"
+    );
     // Run 1 ends and resumes to run 2 while the resend is held before
     // its commit.
     end_run(finish, &id);
@@ -939,7 +954,8 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
     );
     let at = rig.clock.now() + BOUND;
     assert!(
-        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+        rig.clock
+            .await_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call parks its closing wait"
     );
     let mark = rig.clock.advance_when_parked(
@@ -948,14 +964,14 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         BOUND
             .checked_sub(Duration::from_millis(1))
             .expect("the bound exceeds 1 ms"),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     // The advance woke the closing wait; it re-parks at the same bound
     // past its own clock check. Only then is "still parked" decided,
     // by a state check, never a sleep.
     assert!(
         rig.clock
-            .await_parked_since(&mark, Some(at), fakes::Deadline::after(DEADLINE)),
+            .await_parked_since(&mark, Some(at), fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the call re-parks its closing wait"
     );
     assert!(rx.try_recv().is_err(), "bound minus 1 ms still parked");
@@ -963,7 +979,7 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         Some(at),
         None,
         Duration::from_millis(1),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     let output = answered(&rx);
     handle.join().unwrap();
@@ -997,7 +1013,10 @@ fn a_cancel_before_the_commit_delivers_nothing() {
         cancel.clone(),
         Arc::new(Recorder::default()),
     );
-    assert!(rig.script.await_holds(1, DEADLINE), "the steer held");
+    assert!(
+        rig.script.await_holds(1, MUST_SUCCEED_WITHIN),
+        "the steer held"
+    );
     cancel.cancel();
     let output = answered(&rx);
     handle.join().unwrap();
@@ -1012,7 +1031,7 @@ fn a_cancel_before_the_commit_delivers_nothing() {
     // Releasing afterwards, the commit is refused and nothing is written.
     hold_tx.send(()).unwrap();
     assert!(
-        rig.script.await_commits(1, DEADLINE),
+        rig.script.await_commits(1, MUST_SUCCEED_WITHIN),
         "the steer recorded its refusal"
     );
     assert_eq!(
@@ -1036,7 +1055,10 @@ fn a_cancel_after_the_commit_says_the_message_may_still_join_its_turn() {
     let emit = Arc::new(Recorder::default());
     let cancel = CancelToken::new();
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", cancel.clone(), Arc::clone(&emit));
-    assert!(rig.script.await_holds(1, DEADLINE), "the write held");
+    assert!(
+        rig.script.await_holds(1, MUST_SUCCEED_WITHIN),
+        "the write held"
+    );
     assert_eq!(
         rig.script.commits.lock().unwrap().as_slice(),
         [true],
@@ -1075,7 +1097,7 @@ fn a_cancel_during_the_backoff_delivers_nothing() {
     assert!(
         rig.clock.await_parked(
             rig.clock.now() + Duration::from_millis(50),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the call parks its backoff"
     );

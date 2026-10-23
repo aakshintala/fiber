@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::extension::Drive;
-use contract::inbox::Ack;
+use contract::inbox::{Ack, Rejection};
 use log::{Log, Watcher};
 use serde_json::{Map, Value};
 use support::group::GROUP_POLL;
 
 use super::clock::CaseClock;
-use super::format::{Case, ClockAdvance, Selector, SessionCase};
+use super::format::{Case, CaseCommand, ClockAdvance, Input, Selector, SessionCase};
 
 pub(super) const ADVANCE_WAIT: Duration = Duration::from_secs(10);
 pub(super) const UNTIL_WAIT: Duration = Duration::from_secs(30);
@@ -42,6 +42,7 @@ pub(crate) struct CaseRun {
     clock: Arc<CaseClock>,
     advances: Vec<ClockAdvance>,
     until: Option<Selector>,
+    command: Option<CaseCommand>,
     attended: bool,
     process_clock: Arc<dyn Clock>,
     waits: WaitBounds,
@@ -60,6 +61,10 @@ impl CaseRun {
         waits: WaitBounds,
     ) -> Arc<Self> {
         let name = case.name.clone().unwrap_or_default();
+        let command = match &case.input {
+            Input::Prompt(_) => None,
+            Input::Command(command) => Some(command.clone()),
+        };
         Arc::new(Self {
             name,
             expected: case.expect,
@@ -67,6 +72,7 @@ impl CaseRun {
             clock: CaseClock::new(),
             advances: case.clock,
             until: case.until,
+            command,
             attended: case.attended,
             process_clock,
             waits,
@@ -137,6 +143,7 @@ impl CaseRun {
         let mut advance = 0;
         let mut reached_until = false;
         let mut released = false;
+        let mut command = self.command.clone();
 
         if !self.apply_advances(None, &mut advance, &mut failures) {
             released |= self.close(&driver, &cancel, &mut failures);
@@ -156,6 +163,12 @@ impl CaseRun {
             let occurrence = seen.entry(line.kind.clone()).or_default();
             *occurrence = occurrence.saturating_add(1);
             seen_order.push(line.kind.clone());
+            if line.kind == "extensions_loaded"
+                && let Some(command) = command.take()
+                && !self.send_command(&driver, &cancel, &command, &mut failures)
+            {
+                break;
+            }
             if !self.apply_advances(Some((&line.kind, *occurrence)), &mut advance, &mut failures) {
                 released |= self.close(&driver, &cancel, &mut failures);
                 break;
@@ -326,6 +339,73 @@ impl CaseRun {
         }
     }
 
+    /// Sends the case's extension command after `extensions_loaded`, as a
+    /// person typing `/name text`. A rejection or an unanswered ack fails the
+    /// case, then closes the session straight away so the session does not
+    /// serve until the process is killed.
+    fn send_command(
+        &self,
+        driver: &Arc<dyn Drive>,
+        cancel: &Arc<r#loop::TurnCancel>,
+        command: &CaseCommand,
+        failures: &mut Vec<String>,
+    ) -> bool {
+        let args = Map::from_iter([
+            ("name".to_owned(), Value::String(command.name.clone())),
+            ("text".to_owned(), Value::String(command.text.clone())),
+        ]);
+        match self.ask(driver, "command", args, self.waits.until) {
+            Some(Ok(())) => true,
+            Some(Err(rejection)) => {
+                let code = serde_json::to_value(&rejection.code)
+                    .ok()
+                    .and_then(|code| code.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| format!("{:?}", rejection.code));
+                failures.push(format!(
+                    "command {}: {} ({code})",
+                    command.name, rejection.message
+                ));
+                self.close(driver, cancel, failures);
+                false
+            }
+            None => {
+                failures.push(format!(
+                    "command {}: no answer within {:?}",
+                    command.name, self.waits.until
+                ));
+                cancel.cancel();
+                self.close(driver, cancel, failures);
+                false
+            }
+        }
+    }
+
+    /// Drives one command and waits for its acknowledgement. `None` is an
+    /// unanswered ack; the caller names it and cancels.
+    fn ask(
+        &self,
+        driver: &Arc<dyn Drive>,
+        command: &str,
+        args: Map<String, Value>,
+        wait: Duration,
+    ) -> Option<Result<(), Rejection>> {
+        let (answer, received) = mpsc::channel();
+        driver.drive(
+            "case-runner",
+            command,
+            args,
+            Ack(Box::new(move |result| {
+                drop(answer.send(result));
+            })),
+        );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the case runner's wait for the session's acknowledgement, bounded by the caller's wait"
+        )]
+        let answer = received.recv_timeout(wait);
+        answer.ok().map(|result| result.map(|_| ()))
+    }
+
     /// Closes the session, releasing stuck hangs first. Past the last clock
     /// entry a matched hang with a later deadline is stuck: this names each
     /// one, advances to its own deadline in deadline order so its callback
@@ -356,27 +436,13 @@ impl CaseRun {
                 failures.push(format!("host.exec[{entry}]: {reason}"));
             }
         }
-        let (answer, received) = mpsc::channel();
-        driver.drive(
-            "case-runner",
-            "close",
-            Map::new(),
-            Ack(Box::new(move |result| {
-                drop(answer.send(result));
-            })),
-        );
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the case runner's wait for the session's close acknowledgement, bounded by waits.close"
-        )]
-        let answer = received.recv_timeout(self.waits.close);
-        match answer {
-            Ok(Ok(_)) => {}
-            Ok(Err(rejection)) => failures.push(format!(
+        match self.ask(driver, "close", Map::new(), self.waits.close) {
+            Some(Ok(())) => {}
+            Some(Err(rejection)) => failures.push(format!(
                 "closing the case session: {} ({:?})",
                 rejection.message, rejection.code
             )),
-            Err(_) => {
+            None => {
                 failures.push("closing the case session timed out".to_owned());
                 cancel.cancel();
             }
@@ -459,7 +525,10 @@ pub(crate) fn extension_case(
     if let Err(error) = write_inputs(&case, &workspace) {
         return report(&name, &[error]);
     }
-    let prompt = case.prompt.clone();
+    let prompt = match &case.input {
+        Input::Prompt(prompt) => Some(prompt.clone()),
+        Input::Command(_) => None,
+    };
     let case_run = CaseRun::new(case, Arc::clone(&process_clock));
     let signals = match crate::shutdown::install(process_clock) {
         Ok(signals) => signals,
@@ -468,7 +537,7 @@ pub(crate) fn extension_case(
     let result = crate::session_command::new_session(
         contract::SessionId(doors::mint("s_")),
         crate::per_run(Some("scripted/script.json".to_owned()), Vec::new()),
-        Some(prompt),
+        prompt,
         false,
         false,
         case_run.session_clock(),

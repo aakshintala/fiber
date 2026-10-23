@@ -257,8 +257,9 @@ impl Registry {
         };
         // The new run is recorded with what the resume was started with.
         let description = resumable.description.clone();
-        {
+        let latched = {
             let mut inner = lock(&self.inner);
+            let stop_all = inner.stop_all_delegates;
             let Some(job) = inner
                 .jobs
                 .iter_mut()
@@ -318,8 +319,14 @@ impl Registry {
             job.stop = Arc::from(stop.0);
             job.stop_sent = false;
             job.finished = None;
-        }
+            // As in `open_started`: a latched stop-all stops the new
+            // run at once, with the lock released.
+            super::Inner::latched_stop(stop_all, job)
+        };
         self.park.bump();
+        if let Some(stop) = latched {
+            stop();
+        }
         Ok(Resumed {
             settle: self.settle_through(&job_id.0, Mark::start(next)),
             unreported: super::Unreported {

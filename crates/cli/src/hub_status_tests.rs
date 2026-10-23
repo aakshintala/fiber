@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -246,7 +247,7 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     clock.advance_when_parked(Some(due), Some(id), left, &Deadline::after(DEADLINE));
     // The retry's silent peer gets the shared deadline, not a fresh 5 s:
     // the whole probe fails naming the hello wait, at the one instant.
-    let error = Deadline::after(Duration::from_secs(2))
+    let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the probe fails at its total deadline, not a fresh one")
         .unwrap_err();

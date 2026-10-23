@@ -15,8 +15,9 @@ use contract::diag::{DebugLog, ProviderRequest, Purpose};
 use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
-use ring::{digest, hmac};
+use ring::hmac;
 use serde_json::{Map, Number, Value};
+use support::sha256_hex;
 use ureq::Agent;
 
 use crate::oauth::{self, Browser, Holder};
@@ -288,15 +289,6 @@ pub(crate) fn install(
     globals.set("host", host)?;
     globals.set("json", json)?;
     Ok((LuaValue::Table(tag), timer_funcs, delegate_handles))
-}
-
-/// SHA-256 of `bytes`, as lowercase hex.
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    digest::digest(&digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// One `host.http` call, copied out of Lua so it can run off the extension's

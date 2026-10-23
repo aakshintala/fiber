@@ -62,6 +62,9 @@ pub struct PromptPatch {
     pub extension_sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
     /// Disabled skill names.
     pub skills_disabled: Vec<String>,
+    /// Which registered tools the preamble sends deferred: a reload
+    /// replaces them whole, so a removed key is gone.
+    pub deferrals: crate::prompt::Deferrals,
     /// The prompt cache lifetime.
     pub cache_lifetime: CacheLifetime,
 }
@@ -262,6 +265,7 @@ impl Loop {
         self.prompt.extension_dirs = patch.extension_dirs;
         self.prompt.extension_sections = patch.extension_sections;
         self.prompt.skills_disabled = patch.skills_disabled;
+        self.prompt.deferrals = patch.deferrals;
         self.prompt.cache_lifetime = patch.cache_lifetime;
         self.skills.reloaded(self.prompt.clone());
         let settings = prepared.settings;

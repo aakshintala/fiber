@@ -112,6 +112,13 @@ pub(crate) type Switched = (ToolGroup, String, SwitchScope, bool);
 /// whether on.
 pub(crate) type SkillSwitched = (PathBuf, String, SwitchScope, bool);
 
+/// One install held at a gate: it signals on `entered` once its call is
+/// recorded and waits on `answer`.
+pub(crate) struct InstallGate {
+    answer: std::sync::mpsc::Receiver<Result<crate::ProviderInstall, ConfigureError>>,
+    entered: std::sync::mpsc::Sender<()>,
+}
+
 /// A seam over rows in memory.
 pub(crate) struct Fake {
     /// What `settings` answers.
@@ -174,6 +181,19 @@ pub(crate) struct Fake {
     /// The answer sender each browser login waits on, in order: owned by
     /// the seam (which the test owns), never by the login the worker holds.
     answers: Mutex<Vec<std::sync::mpsc::Sender<Result<Stored, ConfigureError>>>>,
+    /// Every `install_provider` asked for, in order: the workspace and the
+    /// provider.
+    pub(crate) installs: Mutex<Vec<(PathBuf, String)>>,
+    /// The threads installs ran on, in order: an install never runs on the
+    /// loop thread.
+    pub(crate) install_threads: Mutex<Vec<std::thread::ThreadId>>,
+    /// What an ungated install answers.
+    pub(crate) install_answer: Mutex<Result<crate::ProviderInstall, ConfigureError>>,
+    /// Gates queued for the next installs: each install takes one, signals
+    /// it has reached it, and waits on it. A test ending drops its sender
+    /// and releases the install, as `FakeLogin` does, so a failed test
+    /// cannot retain a worker forever.
+    pub(crate) install_gates: Mutex<Vec<InstallGate>>,
     /// Every reviewer read asked for, in order: the provider name.
     pub(crate) reviewer_reads: Mutex<Vec<String>>,
     /// The threads reviewer reads ran on, in order: discovery never runs
@@ -254,6 +274,10 @@ impl Fake {
             login_shown: Mutex::new(Vec::new()),
             logins: Mutex::new(Vec::new()),
             answers: Mutex::new(Vec::new()),
+            installs: Mutex::new(Vec::new()),
+            install_threads: Mutex::new(Vec::new()),
+            install_answer: Mutex::new(Ok(crate::ProviderInstall::default())),
+            install_gates: Mutex::new(Vec::new()),
             reviewer_reads: Mutex::new(Vec::new()),
             reviewer_threads: Mutex::new(Vec::new()),
             reviewer_gates: Mutex::new(Vec::new()),
@@ -336,6 +360,42 @@ impl Fake {
             .lock()
             .map(|threads| threads.clone())
             .unwrap_or_default()
+    }
+
+    /// The installs asked for so far, in order: the workspace and provider.
+    pub(crate) fn installs(&self) -> Vec<(PathBuf, String)> {
+        self.installs
+            .lock()
+            .map(|installs| installs.clone())
+            .unwrap_or_default()
+    }
+
+    /// The threads installs ran on, in order.
+    pub(crate) fn install_threads(&self) -> Vec<std::thread::ThreadId> {
+        self.install_threads
+            .lock()
+            .map(|threads| threads.clone())
+            .unwrap_or_default()
+    }
+
+    /// Queues a gate for the next install, returning its answer sender and
+    /// the signal that the install is waiting: the install waits until the
+    /// test answers or drops the sender.
+    pub(crate) fn gate_install(
+        &self,
+    ) -> (
+        std::sync::mpsc::Sender<Result<crate::ProviderInstall, ConfigureError>>,
+        std::sync::mpsc::Receiver<()>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        if let Ok(mut gates) = self.install_gates.lock() {
+            gates.push(InstallGate {
+                answer: rx,
+                entered,
+            });
+        }
+        (tx, waiting)
     }
 
     /// Queues a gate for the next reviewer read, returning its answer
@@ -454,11 +514,37 @@ pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> Se
 impl Configure for Fake {
     fn install_provider(
         &self,
-        _workspace: &Path,
-        _provider: &str,
+        workspace: &Path,
+        provider: &str,
         _clock: Arc<dyn Clock>,
     ) -> Result<crate::ProviderInstall, ConfigureError> {
-        Ok(crate::ProviderInstall::default())
+        if let Ok(mut installs) = self.installs.lock() {
+            installs.push((workspace.to_path_buf(), provider.to_owned()));
+        }
+        if let Ok(mut threads) = self.install_threads.lock() {
+            threads.push(std::thread::current().id());
+        }
+        let gate = self
+            .install_gates
+            .lock()
+            .ok()
+            .and_then(|mut gates| gates.pop());
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap_or(());
+            return gate
+                .answer
+                .recv()
+                .unwrap_or_else(|_| panic!("the install was never answered"));
+        }
+        self.install_answer.lock().map_or_else(
+            |_| {
+                Err(ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "poisoned".to_owned(),
+                })
+            },
+            |answer| answer.clone(),
+        )
     }
 
     fn settings(&self, workspace: &Path) -> Result<Vec<SettingRow>, ConfigureError> {

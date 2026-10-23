@@ -23,16 +23,17 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    InstallRow, MANAGER_WAIT, RERUN, Ran, current_exe, hub_answers, hub_install, hub_restart,
+    InstallRow, MANAGER_WAIT, Ran, current_exe, hub_answers, hub_install, hub_restart,
     hub_uninstall, install, must, read_unit, restart, stop_login_service, system_run,
     system_run_bounded, uninstall,
 };
+use crate::CliError;
+use crate::error::RERUN;
 use crate::hub_unit::{Manager, Service, name};
 
 /// One named deadline per blocking call.
@@ -155,7 +156,7 @@ impl Setup {
         port: Option<u16>,
         stub: &Stub,
         answers: bool,
-    ) -> (Result<(), Failure>, String) {
+    ) -> (Result<(), CliError>, String) {
         let mut out = Vec::new();
         let result = install(
             service,
@@ -302,8 +303,15 @@ fn launchd_still_loaded_10_s_after_bootout_fails_and_restores_the_plist() {
     let stub = Stub::ok();
     let (result, out) = setup.install(&service, Some(4040), &stub, false);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert!(error.message.ends_with(RERUN), "{}", error.message);
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(
+            &error,
+            CliError::RerunInstall { cause } if matches!(**cause, CliError::LaunchdStillLoaded { .. })
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().ends_with(RERUN), "{error}");
     // Asked at 0, 100 ms, ..., 10 s after the bootout.
     let calls = stub.calls();
     assert_eq!(calls.get(1), Some(&bootout(&service)));
@@ -335,8 +343,15 @@ fn launchd_bootstrap_failing_after_bootout_restores_and_the_rerun_bootstraps() {
         .install(&service, Some(4040), &stub, false)
         .0
         .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::RerunInstall { cause } if matches!(**cause, CliError::ManagerFailed { .. })
+        ),
+        "{error}"
+    );
     assert_eq!(
-        error.message,
+        error.to_string(),
         format!(
             "`launchctl bootstrap gui/{UID} {}` failed with exit code 5: boom. {RERUN}",
             service.unit.display()
@@ -368,12 +383,12 @@ fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_
     // The write leaves the new bytes in place (the rename succeeded)
     // then fails (its directory sync failed), like `write_atomic` after
     // the rename.
-    let failing = |path: &Path, bytes: &[u8]| -> Result<(), Failure> {
+    let failing = |path: &Path, bytes: &[u8]| -> Result<(), CliError> {
         fs::write(path, bytes).unwrap();
-        Err(crate::failed(
-            ErrorCode::IoFailed,
-            format!("syncing {}: directory sync failed", path.display()),
-        ))
+        Err(CliError::UnitWriteFailed(config::ConfigError::Unsynced {
+            file: path.to_owned(),
+            source: io::Error::other("directory sync failed"),
+        }))
     };
     let mut out = Vec::new();
     let error = install(
@@ -389,11 +404,18 @@ fn a_write_that_fails_after_the_rename_restores_and_the_rerun_takes_the_changed_
         },
     )
     .unwrap_err();
-    assert!(error.message.ends_with(RERUN), "{}", error.message);
     assert!(
-        error.message.contains("directory sync failed"),
+        matches!(
+            &error,
+            CliError::RerunInstall { cause } if matches!(**cause, CliError::UnitWriteFailed(_))
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().ends_with(RERUN), "{}", error.to_string());
+    assert!(
+        error.to_string().contains("directory sync failed"),
         "{}",
-        error.message
+        error.to_string()
     );
     assert_eq!(fs::read(&service.unit).unwrap(), previous);
     assert!(out.is_empty(), "{out:?}");
@@ -456,8 +478,15 @@ fn a_port_only_change_whose_restart_fails_is_restarted_by_the_rerun() {
         .install(&service, Some(4040), &stub, false)
         .0
         .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::RerunInstall { cause } if matches!(**cause, CliError::ManagerFailed { .. })
+        ),
+        "{error}"
+    );
     assert_eq!(
-        error.message,
+        error.to_string(),
         format!(
             "`systemctl --user restart {}.service` failed with exit code 5: boom. {RERUN}",
             service.name
@@ -490,7 +519,11 @@ fn a_failed_daemon_reload_on_a_fresh_install_removes_the_unit_and_the_rerun_relo
         })
     });
     let error = setup.install(&service, None, &stub, false).0.unwrap_err();
-    assert!(error.message.contains("daemon-reload"), "{}", error.message);
+    assert!(
+        error.to_string().contains("daemon-reload"),
+        "{}",
+        error.to_string()
+    );
     assert!(!service.unit.exists());
     assert_eq!(stub.calls(), [systemctl("daemon-reload")]);
 
@@ -507,7 +540,11 @@ fn an_unchanged_unit_is_left_as_it_is_when_its_call_fails() {
     let before = fs::read(&service.unit).unwrap();
     let stub = Stub::new(|_| Ok(boom()));
     let error = setup.install(&service, None, &stub, false).0.unwrap_err();
-    assert!(error.message.contains("enable --now"), "{}", error.message);
+    assert!(
+        error.to_string().contains("enable --now"),
+        "{}",
+        error.to_string()
+    );
     assert_eq!(fs::read(&service.unit).unwrap(), before);
 }
 
@@ -529,30 +566,36 @@ fn a_restore_that_fails_names_the_unit_file_and_says_to_uninstall() {
     )
     .unwrap();
     assert!(
-        error.message.contains(&format!(
+        matches!(&error, CliError::UnitNotRestored { cause, .. } if matches!(**cause, CliError::ManagerFailed { .. })),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&format!(
             "The unit file {} could not be put back",
             service.unit.display()
         )),
         "{}",
-        error.message
+        error.to_string()
     );
     assert!(
-        error.message.contains("run fiber hub uninstall"),
+        error.to_string().contains("run fiber hub uninstall"),
         "{}",
-        error.message
+        error.to_string()
     );
-    assert!(!error.message.contains(RERUN), "{}", error.message);
+    assert!(!error.to_string().contains(RERUN), "{}", error.to_string());
 }
 
 #[test]
 fn a_missing_service_manager_says_what_the_installed_hub_needs() {
-    for (manager, sentence) in [
+    for (manager, program, sentence) in [
         (
             launchd(),
+            "launchctl",
             "`launchctl` was not found; an installed hub needs launchd.",
         ),
         (
             Manager::Systemd,
+            "systemctl",
             "`systemctl` was not found; an installed hub needs systemd's user instance.",
         ),
     ] {
@@ -560,8 +603,19 @@ fn a_missing_service_manager_says_what_the_installed_hub_needs() {
         let service = setup.service(manager);
         let stub = Stub::new(|_| Err(io::Error::new(io::ErrorKind::NotFound, "no such file")));
         let error = setup.install(&service, None, &stub, false).0.unwrap_err();
-        assert_eq!(error.code, ErrorCode::IoFailed);
-        assert!(error.message.starts_with(sentence), "{}", error.message);
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+        // launchd asks before it writes, so its error is bare; systemd's
+        // comes from the load after the write.
+        let case = if let CliError::RerunInstall { cause } = &error {
+            &**cause
+        } else {
+            &error
+        };
+        assert!(
+            matches!(case, CliError::ManagerNotFound { program: p } if p == program),
+            "{error}"
+        );
+        assert!(error.to_string().starts_with(sentence), "{error}");
         assert!(!service.unit.exists());
     }
 }
@@ -573,9 +627,16 @@ fn another_spawn_failure_names_the_program() {
     let stub = Stub::new(|_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied")));
     let error = setup.install(&service, None, &stub, false).0.unwrap_err();
     assert!(
-        error.message.starts_with("running `systemctl`: denied"),
-        "{}",
-        error.message
+        matches!(
+            &error,
+            CliError::RerunInstall { cause }
+                if matches!(&**cause, CliError::ManagerRun { program, .. } if program == "systemctl")
+        ),
+        "{error}"
+    );
+    assert!(
+        error.to_string().starts_with("running `systemctl`: denied"),
+        "{error}"
     );
 }
 
@@ -600,9 +661,14 @@ fn a_blank_first_stderr_line_adds_no_quote_to_the_error() {
             &["bootstrap".to_owned(), "gui/501/x".to_owned()],
         )
         .unwrap_err();
-        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert_eq!(error.code(), ErrorCode::IoFailed);
+        assert!(
+            matches!(&error, CliError::ManagerFailed { said: None, .. }),
+            "{error}"
+        );
         assert_eq!(
-            error.message, "`launchctl bootstrap gui/501/x` failed with exit code 5.",
+            error.to_string(),
+            "`launchctl bootstrap gui/501/x` failed with exit code 5.",
             "stderr {stderr:?}"
         );
     }
@@ -868,7 +934,7 @@ fn the_unit_file_is_mode_0644_and_no_temporary_file_remains() {
     assert_eq!(names, [service.unit.file_name().unwrap().to_owned()]);
 }
 
-fn uninstalled(service: &Service, stub: &Stub) -> (Result<(), Failure>, String) {
+fn uninstalled(service: &Service, stub: &Stub) -> (Result<(), CliError>, String) {
     let mut out = Vec::new();
     let result = uninstall(service, &stub.run, &mut out);
     (result, String::from_utf8(out).unwrap())
@@ -938,7 +1004,7 @@ fn a_failed_bootout_leaves_the_plist_for_a_retry() {
         })
     });
     let (result, out) = uninstalled(&service, &stub);
-    assert!(result.unwrap_err().message.contains("bootout"));
+    assert!(result.unwrap_err().to_string().contains("bootout"));
     assert!(service.unit.exists());
     assert_eq!(out, "");
 }
@@ -1114,7 +1180,11 @@ fn read_unit_is_none_when_absent_some_when_present_and_an_error_otherwise() {
     assert_eq!(read_unit(&file).unwrap(), Some(b"unit".to_vec()));
     // Reading a directory fails with `IsADirectory`, not `NotFound`.
     let error = read_unit(dir.path()).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, CliError::UnitReadFailed { unit, .. } if unit == dir.path()),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1129,7 +1199,7 @@ fn hub_restart_with_no_unit_file_restarts_nothing() {
 fn hub_restart_with_too_long_a_home_is_a_usage_error() {
     let home = PathBuf::from(format!("/tmp/{}", "h".repeat(300)));
     let error = hub_restart(&home).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.code(), ErrorCode::Usage);
 }
 
 /// The child's marker: set, the test runs one exit-code wrapper and exits

@@ -12,6 +12,7 @@ use contract::{
     events::{ToolInfo, ToolSource, ToolState},
 };
 use doors::{Session, mint};
+use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, Watchdog, clock::FakeClock};
 use log::Log;
 use serde_json::{Value, json};
@@ -55,6 +56,7 @@ impl Jig {
     }
     fn spawn_inner(home: &Path, args: &[&str], capture_stderr: bool) -> Self {
         let executable = example_executable();
+        fakes::warm_up(&executable, &["--bogus"], 2);
         let mut child = Command::new(executable)
             .args(args)
             .env_clear()
@@ -152,7 +154,7 @@ impl Jig {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            .stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     }
     /// Reaps a jig that must fail, as [`wait`](Self::wait) reaps one that must succeed.
     fn wait_fails(&mut self) {
@@ -165,17 +167,17 @@ impl Jig {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            .stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     }
 }
 impl Drop for Jig {
     fn drop(&mut self) {
         if !self.reaped {
             let _killed = fakes::kill_group(self.group, "KILL");
-            let _reaped = Deadline::after(Duration::from_secs(5)).recv(&self.exited);
+            let _reaped = Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.exited);
         }
         if let Some(watchdog) = self.watchdog.take() {
-            watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
         }
     }
 }

@@ -20,7 +20,6 @@ mod wire_tools;
 mod harness;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use contract::events::{
     CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
@@ -85,10 +84,246 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     );
 }
 
-fn research(path: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../research")
-        .join(path)
+/// Every probe recording compiled into this test, in the order the old
+/// directory walk read them: the raw directory sorted by file name.
+/// Names are repo-relative paths, used as parse labels.
+static RECORDINGS: &[(&str, &[u8])] = &[
+    (
+        "research/openai-completions-probe/raw/openai-cache_control-on-openai.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openai-cache_control-on-openai.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-mt-max_completion_tokens.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openai-mt-max_completion_tokens.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-mt-max_tokens.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openai-mt-max_tokens.json"),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-stream-include_usage.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openai-stream-include_usage.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-stream-length.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openai-stream-length.json"),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-stream-no_include_usage.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openai-stream-no_include_usage.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-stream-reasoning-low.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openai-stream-reasoning-low.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openai-stream-tool.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openai-stream-tool.json"),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-bogus-type.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-bogus-type.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-last-message.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-last-message.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-last-tool-in-function.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-last-tool-in-function.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-last-tool-top.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-last-tool-top.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-system-ttl1h.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-system-ttl1h.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-system-ttl5m.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-cc-system-ttl5m.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-system.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openrouter-cc-system.json"),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-effort-none-400.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-effort-none-400.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-max_completion_tokens.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-max_completion_tokens.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-max_tokens.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openrouter-max_tokens.json"),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-pinned-replay-none.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-none.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_content.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_content.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_details.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_details.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-replay-none.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-replay-none.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-replay-reasoning.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-replay-reasoning_content.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning_content.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-replay-reasoning_details.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning_details.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-stream-include_usage.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-stream-include_usage.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-stream-length.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-stream-length.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-stream-no_include_usage.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-stream-no_include_usage.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-stream-reasoning.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-stream-reasoning.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-stream-tool.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-stream-tool.json"
+        ),
+    ),
+];
+
+/// The cache-shape recordings compiled into the cache-split test, sorted
+/// by file name like the old directory walk.
+static CACHE_RECORDINGS: &[(&str, &[u8])] = &[
+    (
+        "research/openai-completions-probe/raw/openrouter-anthropic-cache/last_message.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-anthropic-cache/last_message.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-anthropic-cache/none.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-anthropic-cache/none.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-anthropic-cache/system.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-anthropic-cache/system.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-anthropic-cache/system_ttl_1h.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-anthropic-cache/system_ttl_1h.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-anthropic-cache/tool.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-anthropic-cache/tool.json"
+        ),
+    ),
+];
+
+/// The provider-error bodies compiled into the overflow test, keyed by
+/// the short name the old `recorded` closure interpolated into its path.
+static PROVIDER_ERRORS: &[(&str, &[u8])] = &[
+    (
+        "or-completions-luna.max-tokens-huge",
+        include_bytes!(
+            "../../../research/provider-errors/raw/or-completions-luna.max-tokens-huge.json"
+        ),
+    ),
+    (
+        "or-completions-luna.overflow",
+        include_bytes!("../../../research/provider-errors/raw/or-completions-luna.overflow.json"),
+    ),
+];
+
+/// The compiled-in bytes recorded under `name`.
+fn recording(name: &str) -> &'static [u8] {
+    probes::lookup(RECORDINGS, name)
+}
+
+/// The exchanges the probe recording `name` holds.
+fn parsed(name: &str) -> Vec<probes::Exchange> {
+    probes::parse(name, recording(name)).unwrap()
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
@@ -238,16 +473,9 @@ fn tokens(usage: &Value) -> Tokens {
 
 #[test]
 fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(research("openai-completions-probe/raw"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
-    files.sort();
-
     let (mut streams, mut calls_seen, mut reasoned, mut statuses) = (0, 0, 0, 0);
-    for file in &files {
-        for exchange in probes::read(file).unwrap() {
+    for (name, bytes) in RECORDINGS {
+        for exchange in probes::parse(name, bytes).unwrap() {
             let label = &exchange.label;
             let bytes = match exchange.response {
                 Recorded::Stream(bytes) => bytes,
@@ -341,12 +569,11 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 
 #[test]
 fn cache_reads_and_writes_from_openrouter_to_anthropic_are_split_out_of_input() {
-    let dir = research("openai-completions-probe/raw/openrouter-anthropic-cache");
+    let dir = CACHE_RECORDINGS;
     let mut runs = 0;
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        let recorded: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let hour = path.to_string_lossy().contains("1h");
+    for (name, bytes) in dir {
+        let recorded: Value = serde_json::from_slice(bytes).unwrap();
+        let hour = name.contains("1h");
         let lifetime = if hour {
             CacheLifetime::OneHour
         } else {
@@ -358,7 +585,7 @@ fn cache_reads_and_writes_from_openrouter_to_anthropic_are_split_out_of_input() 
                 json!({"id": "gen-1", "choices": [], "usage": run["usage"]}),
             ]);
             let reply = decode(&bytes[..], &lifetime, &mut |_| {}).unwrap();
-            assert_eq!(reply.tokens, tokens(&run["usage"]), "{}", path.display());
+            assert_eq!(reply.tokens, tokens(&run["usage"]), "{name}");
             runs += 1;
         }
     }
@@ -367,12 +594,9 @@ fn cache_reads_and_writes_from_openrouter_to_anthropic_are_split_out_of_input() 
 
 #[test]
 fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
-    let exchange = probes::read(&research(
-        "openai-completions-probe/raw/openrouter-stream-tool.json",
-    ))
-    .unwrap()
-    .pop()
-    .unwrap();
+    let exchange = parsed("research/openai-completions-probe/raw/openrouter-stream-tool.json")
+        .pop()
+        .unwrap();
     let Recorded::Stream(bytes) = exchange.response else {
         panic!("expected a stream");
     };
@@ -602,12 +826,9 @@ fn declared_cache_markers_go_on_the_system_prompt_the_previous_end_and_the_new_e
 
 #[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
-    let exchange = probes::read(&research(
-        "openai-completions-probe/raw/openrouter-stream-reasoning.json",
-    ))
-    .unwrap()
-    .pop()
-    .unwrap();
+    let exchange = parsed("research/openai-completions-probe/raw/openrouter-stream-reasoning.json")
+        .pop()
+        .unwrap();
     let Recorded::Stream(bytes) = exchange.response else {
         panic!("expected a stream");
     };
@@ -813,8 +1034,12 @@ fn an_error_chunk_mid_stream_fails_the_call_and_drops_what_it_streamed() {
 #[test]
 fn an_overflow_status_is_told_apart_from_a_max_tokens_one() {
     let recorded = |name: &str| -> String {
-        let path = research(&format!("provider-errors/raw/{name}.json"));
-        let wrapper: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let bytes = PROVIDER_ERRORS
+            .iter()
+            .find(|(entry, _)| *entry == name)
+            .unwrap_or_else(|| panic!("unknown provider error {name}"))
+            .1;
+        let wrapper: Value = serde_json::from_slice(bytes).unwrap();
         wrapper["body"].as_str().unwrap().to_owned()
     };
     let server = ProviderServer::start([
@@ -1818,9 +2043,9 @@ fn where_usage_repeats_the_last_chunks_cost_wins() {
 
 #[test]
 fn an_openrouter_stream_decodes_its_inline_cost() {
-    let recorded: Value = serde_json::from_slice(
-        &std::fs::read(research("openrouter-cost/raw/results.json")).unwrap(),
-    )
+    let recorded: Value = serde_json::from_slice(include_bytes!(
+        "../../../research/openrouter-cost/raw/results.json"
+    ))
     .unwrap();
     let run = recorded
         .as_array()

@@ -10,10 +10,10 @@
     reason = "test helpers outside a #[test]; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
 
 #[path = "support/record.rs"]
 mod support;
@@ -33,6 +33,7 @@ fn example_path() -> PathBuf {
 /// the wait and leaves no process behind.
 #[track_caller]
 fn run_jig(args: &[&str]) -> Output {
+    fakes::warm_up(&example_path(), &[], 2);
     let child = Command::new(example_path())
         .args(args)
         .stdout(Stdio::piped())
@@ -42,7 +43,7 @@ fn run_jig(args: &[&str]) -> Output {
         .unwrap();
     let watchdog = fakes::Watchdog::group(child.id());
     let output = fakes::wait_output(child, "the record jig finished");
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 

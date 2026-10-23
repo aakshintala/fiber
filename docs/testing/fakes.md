@@ -149,7 +149,10 @@ program or waiting on a test.
 - **A test runs the jig's built binary.** `cargo test` builds the crate's
   examples, so a jig test starts `target/<profile>/examples/<jig>` (found
   from `std::env::current_exe`) directly. It never runs `cargo run`, which
-  would wait on the build directory's lock inside the test's deadline.
+  would wait on the build directory's lock inside the test's deadline. Its
+  first start runs through the shared helper's start bound
+  (`fakes::warm_up`), because the first exec of a freshly linked binary can
+  stall for seconds on macOS (`docs/testing.md`, the first-run stall).
 - **Its own logic is tested from shared support.** Code in a jig that a
   test checks without running the binary, such as its argument parsing,
   lives in a support file under the crate's `tests/support/`. The jig

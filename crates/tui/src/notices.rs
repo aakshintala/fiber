@@ -52,6 +52,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("model_unconfigured", Kind::Event),
     ("models_loading", Kind::Condition),
     ("no_model", Kind::Event),
+    ("notes_unchanged", Kind::Event),
     ("repository_code_skipped", Kind::Event),
     ("reviewer_selection_failed", Kind::Event),
     ("session_held", Kind::Event),

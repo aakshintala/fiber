@@ -1,10 +1,11 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use contract::shapes::Effect;
 use contract::tool::Effects;
 
 use super::super::read_only::COMMANDS;
-use super::{Lexer, Part, Word, classify};
+use super::classify;
 
 #[test]
 fn one_grep_accepts_only_one_plain_builtin_command() {
@@ -15,11 +16,17 @@ fn one_grep_accepts_only_one_plain_builtin_command() {
         "'grep' x a.txt",
         "\"grep\" x a.txt",
         "grep",
+        // An assignment prefix still runs grep, and an empty operand word
+        // does not disqualify the call.
+        "FOO=1 grep x a",
+        "grep '' x",
     ] {
         assert!(super::one_grep(command), "{command}");
     }
     for command in [
         "",
+        // A bare redirect names no command.
+        "2>/dev/null",
         "cat a | grep x",
         "grep x a; ls",
         "grep x a && ls",
@@ -27,7 +34,6 @@ fn one_grep_accepts_only_one_plain_builtin_command() {
         "command grep x a",
         "/usr/bin/grep x a",
         "rg x",
-        "FOO=1 grep x a",
         "env grep x a",
         "grep x a > out",
         "grep $(echo x) a",
@@ -43,117 +49,31 @@ fn one_grep_accepts_only_one_plain_builtin_command() {
     }
 }
 
-fn plain(text: &str) -> Word {
-    Word {
-        raw: text.to_owned(),
-        cooked: text.to_owned(),
+#[test]
+fn operators_outside_quotes_split_elements() {
+    // Every element reads. Each pathless element declares the workdir, so
+    // the four-element pipelines declare it four times.
+    let four = vec!["/work".to_owned(); 4];
+    for command in ["ls && pwd || cat; head | tail", "ls&&pwd||cat;head|tail"] {
+        assert_reads(command);
+        assert_eq!(
+            classified(command).declared.paths,
+            Some(four.clone()),
+            "{command}"
+        );
     }
-}
-
-fn quoted(raw: &str, cooked: &str) -> Word {
-    Word {
-        raw: raw.to_owned(),
-        cooked: cooked.to_owned(),
-    }
-}
-
-fn lexed(command: &str) -> Vec<Part> {
-    Lexer::new(command)
-        .run()
-        .unwrap_or_else(|| panic!("unreadable: {command:?}"))
-}
-
-fn assert_unreadable(command: &str) {
-    assert!(Lexer::new(command).run().is_none(), "readable: {command:?}");
+    assert_reads("echo 'ls && pwd || cat; head | tail'");
+    assert_reads("echo \"ls && pwd || cat; head | tail\"");
+    assert_reads("echo 'a&&b'&&ls");
 }
 
 #[test]
-fn operators_outside_quotes_split_and_inside_quotes_do_not() {
-    assert_eq!(
-        lexed("ls && git status || cat; head | tail"),
-        vec![
-            Part {
-                words: vec![plain("ls")]
-            },
-            Part {
-                words: vec![plain("git"), plain("status")]
-            },
-            Part {
-                words: vec![plain("cat")]
-            },
-            Part {
-                words: vec![plain("head")]
-            },
-            Part {
-                words: vec![plain("tail")]
-            },
-        ]
-    );
-    assert_eq!(
-        lexed("ls&&git||cat;head|tail"),
-        vec![
-            Part {
-                words: vec![plain("ls")]
-            },
-            Part {
-                words: vec![plain("git")]
-            },
-            Part {
-                words: vec![plain("cat")]
-            },
-            Part {
-                words: vec![plain("head")]
-            },
-            Part {
-                words: vec![plain("tail")]
-            },
-        ]
-    );
-    assert_eq!(
-        lexed("echo 'ls && git || cat; head | tail'"),
-        vec![Part {
-            words: vec![
-                plain("echo"),
-                quoted(
-                    "'ls && git || cat; head | tail'",
-                    "ls && git || cat; head | tail"
-                ),
-            ]
-        }]
-    );
-    assert_eq!(
-        lexed("echo \"ls && git || cat; head | tail\""),
-        vec![Part {
-            words: vec![
-                plain("echo"),
-                quoted(
-                    "\"ls && git || cat; head | tail\"",
-                    "ls && git || cat; head | tail",
-                ),
-            ]
-        }]
-    );
-    assert_eq!(
-        lexed("echo 'a&&b'&&ls"),
-        vec![
-            Part {
-                words: vec![plain("echo"), quoted("'a&&b'", "a&&b")]
-            },
-            Part {
-                words: vec![plain("ls")]
-            },
-        ]
-    );
-}
-
-#[test]
-fn characters_outside_the_plain_set_are_unreadable() {
+fn characters_outside_the_plain_set_execute() {
     for command in [
         "echo $(x)",
         "echo `x`",
         "echo <(x)",
         "echo >(x)",
-        "echo <f",
         "echo >f",
         "echo (x)",
         "echo x)",
@@ -181,8 +101,8 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "echo a\rb",
         "echo a\u{0001}b",
         "echo a\u{007f}b",
-        "echo café",
-        "echo λ",
+        "echo caf\u{e9}",
+        "echo \u{3bb}",
         "echo a\u{00a0}b",
         "echo 'unterminated",
         "echo \"unterminated",
@@ -191,7 +111,6 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "echo \"\\$\"",
         "echo \"\\`\"",
         "echo \"a\\\"",
-        "echo \"a\\\\\"",
         "echo \"a\\\n b\"",
         "ls ;; ls",
         "ls;;ls",
@@ -216,56 +135,20 @@ fn characters_outside_the_plain_set_are_unreadable() {
         "   ",
         "\t",
     ] {
-        assert_unreadable(command);
+        assert_closed(command);
     }
 }
 
 #[test]
-fn a_backslash_before_a_plain_character_inside_double_quotes_is_literal() {
+fn an_input_redirect_declares_its_file() {
+    // `echo <f` opens `f` for stdin where the bare call declares nothing;
+    // a `/proc` file executes.
+    assert_reads("echo <f");
     assert_eq!(
-        lexed("echo \"a\\b\""),
-        vec![Part {
-            words: vec![plain("echo"), quoted("\"a\\b\"", "a\\b"),]
-        }]
+        classified("echo <f").declared.paths,
+        Some(vec!["/work/f".to_owned()])
     );
-    assert_eq!(
-        lexed("echo \"a\\|b\""),
-        vec![Part {
-            words: vec![plain("echo"), quoted("\"a\\|b\"", "a\\|b"),]
-        }]
-    );
-}
-
-#[test]
-fn a_stderr_redirect_lexes_as_one_word() {
-    assert_eq!(
-        lexed("ls 2>/dev/null"),
-        vec![Part {
-            words: vec![plain("ls"), plain("2>/dev/null")]
-        }]
-    );
-    assert_eq!(
-        lexed("ls 2>&1 | head"),
-        vec![
-            Part {
-                words: vec![plain("ls"), plain("2>&1")]
-            },
-            Part {
-                words: vec![plain("head")]
-            },
-        ]
-    );
-    assert_eq!(
-        lexed("cat '2>&1'"),
-        vec![Part {
-            words: vec![plain("cat"), quoted("'2>&1'", "2>&1")]
-        }]
-    );
-    assert_reads("git 2>/dev/null status");
-    assert_eq!(
-        classified("cat '2>&1'").declared.paths,
-        Some(vec!["/work/2>&1".to_owned()])
-    );
+    assert_closed("cat </proc/version");
 }
 
 #[test]
@@ -278,102 +161,53 @@ fn a_stderr_redirect_reads_at_each_boundary() {
     assert_reads("ls 2>/dev/null;pwd");
     assert_reads("ls 2>&1");
     assert_reads("git 2>&1 status");
+    // A redirect stands anywhere, and a quoted redirect-like word is an
+    // operand naming its own path.
+    assert_reads("2>/dev/null ls");
+    assert_reads("2>&1 ls");
+    assert_reads("git 2>/dev/null status");
+    assert_eq!(
+        classified("cat '2>&1'").declared.paths,
+        Some(vec!["/work/2>&1".to_owned()])
+    );
 }
 
 #[test]
-fn anything_but_the_two_exact_redirects_is_unreadable() {
+fn refused_redirects_execute() {
     for command in [
-        "ls 2> /dev/null",
         "ls 12>/dev/null",
-        "ls 1>/dev/null",
-        "ls x2>/dev/null",
-        "ls \"2\">/dev/null",
         "ls 2>>/dev/null",
         "ls 2>&-",
-        "ls 2>&2",
         "ls 2>/dev/nullx",
         "ls 2>&12",
-        "2>/dev/null ls",
-        "2>&1 ls",
         "echo 2>(x)",
         "ls 2>/dev/null/x",
         "ls 2>/dev/zero",
-        "ls >/dev/null",
-        "ls 1>/dev/null",
         "ls 2>file",
         "ls >file",
         "ls &>file",
         "ls 2>\tfile",
     ] {
-        assert_unreadable(command);
+        assert_closed(command);
     }
-}
-
-#[test]
-fn a_newline_or_operator_inside_quotes_stays_one_word() {
+    // A descriptor the allow-list blesses reads, however it is spelled.
+    // Merging into a captured stream changes nothing the runner sees.
+    for command in [
+        "ls 1>/dev/null",
+        "ls >/dev/null",
+        "ls 2> /dev/null",
+        "ls 2>&2",
+    ] {
+        assert_reads(command);
+    }
+    // A word before the redirect stays an operand naming its own path.
     assert_eq!(
-        lexed("echo 'a\nb' \"c\nd\""),
-        vec![Part {
-            words: vec![
-                plain("echo"),
-                quoted("'a\nb'", "a\nb"),
-                quoted("\"c\nd\"", "c\nd"),
-            ]
-        }]
+        classified("ls x2>/dev/null").declared.paths,
+        Some(vec!["/work/x2".to_owned()])
     );
     assert_eq!(
-        lexed("echo '$HOME' '*' \"~\""),
-        vec![Part {
-            words: vec![
-                plain("echo"),
-                quoted("'$HOME'", "$HOME"),
-                quoted("'*'", "*"),
-                quoted("\"~\"", "~"),
-            ]
-        }]
-    );
-}
-
-#[test]
-fn cooked_words_drop_quotes_and_keep_the_text() {
-    assert_eq!(
-        lexed("git diff '--output=f' --out'put'=f"),
-        vec![Part {
-            words: vec![
-                plain("git"),
-                plain("diff"),
-                quoted("'--output=f'", "--output=f"),
-                quoted("--out'put'=f", "--output=f"),
-            ]
-        }]
-    );
-    assert_eq!(
-        lexed("echo \"hello\" a'b'c"),
-        vec![Part {
-            words: vec![
-                plain("echo"),
-                quoted("\"hello\"", "hello"),
-                quoted("a'b'c", "abc"),
-            ]
-        }]
-    );
-    assert_eq!(
-        lexed("npm  test\t--"),
-        vec![Part {
-            words: vec![plain("npm"), plain("test"), plain("--")]
-        }]
-    );
-    assert_eq!(
-        lexed("echo a_b-c.d/e:f=g@h%i+j,k"),
-        vec![Part {
-            words: vec![plain("echo"), plain("a_b-c.d/e:f=g@h%i+j,k")]
-        }]
-    );
-    assert_eq!(
-        lexed("''"),
-        vec![Part {
-            words: vec![quoted("''", "")]
-        }]
+        classified("ls \"2\">/dev/null").declared.paths,
+        Some(vec!["/work/2".to_owned()])
     );
 }
 
@@ -408,6 +242,19 @@ fn assert_reads(command: &str) {
     let effects = classified(command);
     assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
     assert!(effects.declared.reversible, "{command}");
+}
+
+/// The paths a `cd` call declares, as a membership: the doc promises
+/// which directories each element runs in, not their order.
+fn assert_declares(command: &str, paths: &[&str]) {
+    assert_reads(command);
+    let declared = classified(command).declared.paths.unwrap_or_default();
+    let actual: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    assert_eq!(
+        actual,
+        BTreeSet::from_iter(paths.iter().copied()),
+        "{command}"
+    );
 }
 
 fn assert_closed(command: &str) {
@@ -459,6 +306,78 @@ fn new_git_forms_read() {
 }
 
 #[test]
+fn exact_forms_read_without_paths() {
+    // `docs/tools.md`, "Shell", "Effects": if every command is on the
+    // read-only list, the call declares `reads` with no paths here.
+    for command in ["git branch --show-current", "git status", "git stash list"] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    // A writing form executes even with a discard redirect: `git init`
+    // creates or updates `.git` state, and `git push --dry-run` reaches
+    // the remote.
+    for command in ["git init", "git push --dry-run"] {
+        assert_closed(command);
+        assert_closed(&format!("{command} 2>/dev/null"));
+    }
+    // A discard redirect drops out before the exact match.
+    for command in [
+        "git branch --show-current 2>/dev/null",
+        "git status 2>/dev/null",
+    ] {
+        assert_reads(command);
+        assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
+fn the_longest_built_in_path_wins() {
+    // `git branch --show-current` reads by its own entry: an extra operand
+    // still reads with no paths.
+    assert_reads("git branch --show-current x");
+    assert!(
+        classified("git branch --show-current x")
+            .declared
+            .paths
+            .is_none()
+    );
+    // A configured entry at the same path is never consulted: the exact
+    // form reads, and the longer call executes as an owned path.
+    let entries = [configured("git stash list", &[])];
+    assert_reads("git stash list");
+    assert!(
+        classified_with("git stash list", &entries)
+            .declared
+            .paths
+            .is_none()
+    );
+    assert_configured_closed("git stash list extra", &entries);
+}
+
+#[test]
+fn an_assignment_after_the_name_is_an_operand() {
+    // `ls FOO=1` reads the `FOO=1` operand; a leading assignment
+    // executes, whatever its name (#1497 task 1.3).
+    assert_eq!(
+        classified("ls FOO=1").declared.paths,
+        Some(vec!["/work/FOO=1".to_owned()])
+    );
+    assert_closed("FOO=1 ls");
+    assert_closed("LC_ALL=C git status");
+}
+
+#[test]
+fn assignment_prefixes_execute_despite_takes_value_flags() {
+    // No built-in entry blesses an assignment name (#1497 task 1.3): not
+    // `LC_ALL`, and not a bare letter matching a takes-value flag such
+    // as `head -n`. `docs/tools.md`, "Shell", "Effects" promises the
+    // call declares `executes` with no paths.
+    assert_closed("FOO=1 git status");
+    assert_closed("LC_ALL=C git status");
+    assert_closed("n=1 head -5");
+}
+
+#[test]
 fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
@@ -493,11 +412,13 @@ fn hostile_git_forms_execute() {
         "git branch -D foo",
         "git branch -a",
         "git branch --list",
-        "git branch --show-current x",
         "git branch --show-current --show-current",
         "git checkout x",
         "git stash",
         "git config x",
+        // Writing forms, not read-only ones.
+        "git init",
+        "git push --dry-run",
     ] {
         assert_closed(command);
     }
@@ -561,11 +482,11 @@ fn sed_through_the_classifier_declares_its_files() {
     assert_reads("sed -n 1p a b");
     assert_reads("'sed' -n 1p f");
     assert_reads("sed -n 1p f 2>/dev/null");
+    assert_reads("sed -n 1p f >/dev/null");
     for command in [
         "sed -n 1p /proc/self/environ",
         "/usr/bin/sed -n 1p f",
         "sed -n 1p f > out",
-        "sed -n 1p f >/dev/null",
         "sed -n 1p f 2>file",
         "sed -n '1w out' f",
         "sed -i 1p f",
@@ -607,10 +528,13 @@ fn head_and_tail_count_forms_read() {
 }
 
 #[test]
-fn only_echo_and_pwd_declare_no_paths() {
+fn only_pathless_commands_declare_no_paths() {
     for command in COMMANDS {
-        let declares =
-            command.name != "echo" && command.name != "pwd" && command.name != "git rev-parse";
+        let declares = command.name != "echo"
+            && command.name != "pwd"
+            && command.name != "git rev-parse"
+            && command.name != "git status"
+            && command.name != "git branch --show-current";
         assert_eq!(command.paths, declares, "{}", command.name);
     }
 }
@@ -861,6 +785,7 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("find", false),
         ("sort", true),
         ("git status", true),
+        ("git branch --show-current", false),
         ("git diff", true),
         ("git log", true),
         ("git show", true),
@@ -880,7 +805,7 @@ fn every_part_on_the_list_reads() {
     assert_reads("ls src && git status");
     assert_eq!(
         classified("ls src && git status").declared.paths,
-        Some(vec!["/work/src".to_owned(), "/work".to_owned()])
+        Some(vec!["/work/src".to_owned()])
     );
     assert_reads("echo hi && pwd");
     assert!(classified("echo hi && pwd").declared.paths.is_none());
@@ -1132,10 +1057,11 @@ fn a_configured_name_matches_exactly() {
     assert_configured_closed("jqx . f", &entries);
     assert_configured_closed("/usr/bin/jq . f", &entries);
     assert_configured_closed("jq . f", &[]);
-    // A quoted multiword name matches only that exact word.
+    // A multiword name matches one quoted word equal to the whole name,
+    // or the word path: `my tool a b` reads as the `my tool` command.
     let spaced = [configured("my tool", &[])];
     assert_configured_reads("'my tool' a b", &spaced, &["/work/a", "/work/b"]);
-    assert_configured_closed("my tool a b", &spaced);
+    assert_configured_reads("my tool a b", &spaced, &["/work/a", "/work/b"]);
     assert_configured_closed("'my tool x' a", &spaced);
     // A first word holding `=` is never a command name.
     assert_configured_closed("jq=. f", &[configured("jq=", &[])]);
@@ -1156,7 +1082,6 @@ fn a_configured_builtin_basename_is_never_consulted() {
         ("cat --foo", "cat", &["--foo"]),
         ("/bin/cat --foo", "/bin/cat", &["--foo"]),
         ("git push", "/usr/bin/git push", &[]),
-        ("git push", "git", &["push"]),
         ("sed -i 1p f", "sed", &["-i"]),
         ("/usr/bin/sed -n 1p f", "/usr/bin/sed", &["-n"]),
     ] {
@@ -1168,6 +1093,10 @@ fn a_configured_builtin_basename_is_never_consulted() {
     assert_reads("grep -r x ws");
     assert_reads("git branch --show-current");
     assert_closed("git push");
+    // `git` is consulted with the person's flags: `push` reads as an
+    // operand where no built-in path owns the call.
+    let push = [configured("git", &["push"])];
+    assert_configured_reads("git push", &push, &["/work/push"]);
     // A path whose basename is not built in is consulted, for that exact
     // word only.
     let entries = [configured("/opt/tools/jq", &[])];
@@ -1281,4 +1210,110 @@ fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
     assert_configured_closed("/opt/my tools/jq . f", &spaced);
     assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
     assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
+}
+
+#[test]
+fn cd_forms_outside_the_allow_list_execute() {
+    for command in [
+        "cd",
+        "cd -",
+        "cd \"\"",
+        "cd -P",
+        "cd -L",
+        "cd -x",
+        "cd -P x",
+        "cd -L x",
+        "cd a b",
+        "cd ~",
+        "cd \"~\"",
+        "cd \"~/x\"",
+        "cd a*b",
+        "cd \"a*b\"",
+        "cd \"a?b\"",
+        "cd \"a[b]\"",
+        "cd \"a{b}\"",
+        "cd $(x)",
+        "cd `x`",
+        "cd $HOME",
+        "cd --",
+        "cd -- -",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn cd_dash_dash_names_one_directory() {
+    assert_declares("cd -- x", &["/work/x"]);
+    // A flag-like operand reads only after `--`.
+    assert_declares("cd -- -P", &["/work/-P"]);
+}
+
+#[test]
+fn cd_declares_its_directory() {
+    assert_declares("cd sub", &["/work/sub"]);
+    // A lexical join still resolves against the workdir.
+    assert_declares("cd sub/../proc", &["/work/proc"]);
+    // Under /proc the call is reviewed.
+    for command in ["cd /proc", "cd /proc/self", "cd /proc/1/fd"] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn operand_less_commands_declare_each_running_directory() {
+    // Each element declares the directories it runs in: the `cd` its own
+    // join, then the operand-less `ls` each running directory.
+    assert_declares("cd sub && ls", &["/work/sub"]);
+    for command in ["cd sub ; ls", "cd sub || ls"] {
+        assert_declares(command, &["/work", "/work/sub"]);
+    }
+}
+
+#[test]
+fn git_after_any_cd_executes() {
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd sub || git status",
+        "cd sub && git stash list",
+        "cd sub && git log",
+    ] {
+        assert_closed(command);
+    }
+    // Git before the cd still reads, declaring the joined directory.
+    assert_declares("git status && cd sub", &["/work/sub"]);
+}
+
+#[test]
+fn cd_before_an_input_redirect_checks_each_running_directory() {
+    assert_declares("cd sub && cat <f", &["/work/sub", "/work/sub/f"]);
+    for command in ["cd sub ; cat <f", "cd sub || cat <f"] {
+        assert_declares(command, &["/work", "/work/sub", "/work/f", "/work/sub/f"]);
+    }
+}
+
+#[test]
+fn cd_in_a_pipeline_moves_nothing() {
+    assert_declares("cd sub | cat f", &["/work/sub", "/work/f"]);
+}
+
+#[test]
+fn losing_the_path_executes_every_later_element() {
+    assert_reads(&cd_chain(30));
+    assert_reads(&cd_chain(31));
+    assert_closed(&cd_chain(32));
+}
+
+fn cd_chain(count: usize) -> String {
+    let mut command = String::new();
+    for n in 1..=count {
+        if n > 1 {
+            command.push_str(" ; ");
+        }
+        command.push_str(&format!("cd /d{n}"));
+    }
+    command.push_str(" ; ls");
+    command
 }

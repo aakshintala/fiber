@@ -59,7 +59,7 @@ a 20-thousand-token one fit the same ceiling.
 
 | Budget | Ceiling | Gated on | Basis | Fast ceiling | Middle ceiling | Slow ceiling | Fast tolerance | Slow tolerance |
 |---|---|---|---|---|---|---|---|---|
-| Session, idle, headless | 13,312 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
+| Session, idle, headless | 14,336 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, idle | 20,088 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
@@ -87,8 +87,7 @@ a 20-thousand-token one fit the same ceiling.
 | Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked | 7 ms | 6 ms | 9 ms | 21 % | 12 % |
 | Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked | 5 ms | 4 ms | 7 ms | 40 % | 23 % |
 
-The idle headless ceiling is 13 MiB of peak RSS. CI medians on main run
-12,416 to 12,480 KiB (runs 39137288066 and 39146597501). The growth over
+The idle headless ceiling is 14 MiB of peak RSS. CI medians on main run 13,144 KiB, of which 3,220 KiB is RssAnon and the rest file-backed code pages (run 39924100235). The growth over
 12 MiB is file-backed code pages; RssAnon is unchanged. Credential queries
 require an admitted-model tracker and reader callbacks even before the first
 query, so they can answer for a previously queued model switch. Label

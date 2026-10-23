@@ -15,8 +15,9 @@ use contract::tool::Tool;
 use serde_json::{Map, Value, json};
 
 /// The largest per-protocol total the built-in definitions may take, in
-/// bytes: `builtin()`'s definitions and `mcp_resources`, with no headroom.
-const BUDGET: usize = 15089;
+/// bytes: `builtin()`'s definitions, `mcp_resources` and `tool_search`,
+/// with no headroom.
+const BUDGET: usize = 15531;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -76,6 +77,9 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     // `mcp_resources` is declared as a built-in whenever a configured
     // server offers resources, so its definition counts toward the budget.
     definitions.push(mcp::resources_definition());
+    // `tool_search` is declared natively whenever a deferred tool is
+    // sent, so its definition counts toward the budget.
+    definitions.push(tools::ToolSearch::new(Vec::new(), Vec::new()).definition());
     definitions
 }
 
@@ -124,12 +128,16 @@ struct Measured {
 /// The provider a session reaches for `protocol`, through the session's own
 /// `connect`.
 fn provider(protocol: Protocol) -> Result<Arc<dyn Provider>, String> {
+    // Deferral is measured as sent: the two deferring protocols declare
+    // deferred tools with `defer_loading`, and the rest ignore the flag.
+    let deferred = protocol == Protocol::AnthropicMessages || protocol == Protocol::OpenaiResponses;
     let data: ProviderData = serde_json::from_value(json!({
         "name": "budget",
         "models": [{
             "id": "model",
             "protocol": protocol_name(protocol),
             "base_url": "https://x/v1",
+            "deferred_tools": deferred,
         }],
     }))
     .map_err(|error| format!("{}: provider data: {error}", protocol_name(protocol)))?;
@@ -195,8 +203,9 @@ fn measure(definitions: &[ToolDefinition]) -> Measured {
 }
 
 /// Whether each wire object carries the name it is paired with: `name` at
-/// the top level, `function.name` in `openai-completions`' shape, or
-/// `toolSpec.name` in `bedrock-converse`'s.
+/// the top level, `function.name` in `openai-completions`' shape,
+/// `toolSpec.name` in `bedrock-converse`'s, or `type: tool_search` for the
+/// natively declared search, which carries no name.
 fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), String> {
     if names.len() != objects.len() {
         return Err(format!(
@@ -211,8 +220,11 @@ fn aligned(names: &[String], objects: &[Map<String, Value>]) -> Result<(), Strin
             .or_else(|| object.get("function")?.get("name"))
             .or_else(|| object.get("toolSpec")?.get("name"))
             .and_then(Value::as_str);
+        let native_search = name == "tool_search"
+            && object.get("type").and_then(Value::as_str) == Some("tool_search");
         match wire {
             Some(wire) if wire == name => {}
+            _ if native_search => {}
             Some(wire) => {
                 return Err(format!(
                     "the wire object named `{wire}` is paired with `{name}`"

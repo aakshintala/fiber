@@ -27,7 +27,7 @@ use signal_hook::iterator::Signals;
 use crate::app::{App, Effect};
 use crate::catalogue;
 use crate::home::Launch;
-use crate::keys::{Button, Event, MouseKind, Parser, Reply};
+use crate::keys::{Event, MouseKind, Parser, Reply};
 use crate::link::{Feed, Line};
 use crate::look::Look;
 use crate::mouse::Pointer;
@@ -483,29 +483,13 @@ impl<B: Backend> Loop<B> {
                 Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
                 Event::Key(key) => self.app.on_key(key, self.clock.now()),
                 Event::Edit(edit) => self.app.on_edit(edit),
-                Event::Mouse(mouse) => {
-                    // Every left click, on a target or not, clears
-                    // "Copied" and ends a finished attention title
-                    // (`docs/tui.md`, "Getting the person's
-                    // attention"); a click on `copy` sets it again.
-                    if mouse.kind == MouseKind::Press(Button::Left) {
-                        self.app.clear_copied();
-                        self.app.attention_seen();
-                    }
-                    self.app.on_drag(&mouse);
-                    self.app.on_wheel(&mouse);
-                    let selected = self.app.on_select(&mouse, self.screen.targets());
-                    let clicked = self
-                        .pointer
-                        .on_mouse(&mouse, self.screen.targets(), self.hover);
-                    // A click's effect, else the selection's.
-                    let effect = clicked.map_or(Effect::None, |target| self.app.on_click(target));
-                    if effect == Effect::None {
-                        selected
-                    } else {
-                        effect
-                    }
-                }
+                Event::Mouse(mouse) => self.app.on_mouse(
+                    &mouse,
+                    self.screen.targets(),
+                    &mut self.pointer,
+                    self.hover,
+                    self.clock.now(),
+                ),
                 Event::Reply(Reply::KittyFlags(_)) => {
                     self.kitty();
                     Effect::None
@@ -519,7 +503,12 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
-                    clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+                    clipboard::copy(
+                        Some(&self.tty),
+                        self.programs.copy.as_deref(),
+                        text,
+                        &self.clock,
+                    );
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
@@ -614,6 +603,11 @@ impl<B: Backend> Loop<B> {
                 crate::login_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
             self.app.login_started(worker);
         }
+        // The install the input chose, if one waits: its end arrives as
+        // `Input::Install`.
+        if let Some(start) = self.app.take_install_start() {
+            crate::install_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
+        }
         self.save_shares();
         None
     }
@@ -677,6 +671,7 @@ impl<B: Backend> Loop<B> {
             // Its frame already drew: the next moving frame arms the
             // tick again below.
             Input::Tick => self.tick.ack(),
+            Input::Install { provider, result } => self.app.on_install(provider, result),
             Input::Login { ticket, step } => {
                 // Only the waiting ticket's `Open` opens anything: any
                 // other ticket changes nothing and opens nothing.
@@ -713,10 +708,20 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
-            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+            clipboard::copy(
+                Some(&self.tty),
+                self.programs.copy.as_deref(),
+                text,
+                &self.clock,
+            );
         }
         if let Some(text) = self.app.take_owed_copy() {
-            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+            clipboard::copy(
+                Some(&self.tty),
+                self.programs.copy.as_deref(),
+                text,
+                &self.clock,
+            );
         }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
@@ -769,6 +774,7 @@ impl<B: Backend> Loop<B> {
                 &self.programs.images_dir,
                 view,
                 &self.files_out,
+                &self.clock,
             );
         }
     }
@@ -901,7 +907,11 @@ impl<B: Backend> Loop<B> {
         if let Some(argv) = self.programs.open.clone() {
             let mut argv = argv;
             argv.push(url);
-            drop(clipboard::pipe(argv, String::new()));
+            drop(crate::helper::spawn_detached(
+                argv,
+                None,
+                Arc::clone(&self.clock),
+            ));
         }
     }
 
@@ -1027,6 +1037,10 @@ mod tests;
 #[cfg(test)]
 #[path = "lib_login_tests.rs"]
 mod login_tests;
+
+#[cfg(test)]
+#[path = "lib_install_tests.rs"]
+mod install_tests;
 
 #[cfg(test)]
 #[path = "lib_image_tests.rs"]

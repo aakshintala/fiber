@@ -1,3 +1,4 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{self, ErrorKind, Read};
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::Command;
@@ -213,7 +214,6 @@ impl Clock for BoundlessClock {
 
 #[track_caller]
 fn assert_park_returns(clock: BoundlessClock, shared: Arc<Shared>, seen: u64) {
-    const DEADLINE: Duration = Duration::from_secs(5);
     let cancel = CancelToken::new();
     let (done, finished) = mpsc::channel();
     let origin = clock.origin;
@@ -230,8 +230,8 @@ fn assert_park_returns(clock: BoundlessClock, shared: Arc<Shared>, seen: u64) {
         done.send(()).unwrap();
     });
     assert!(
-        Deadline::after(DEADLINE).recv(&finished).is_ok(),
-        "waited {DEADLINE:?} for park to return"
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished).is_ok(),
+        "waited {MUST_SUCCEED_WITHIN:?} for park to return"
     );
 }
 
@@ -268,7 +268,6 @@ fn a_wake_inside_wait_until_is_not_lost() {
 /// mutant; the two mixed cancel rows kill the `&&`-to-`||` mutant.
 #[test]
 fn park_wakes_on_sequence_or_on_cancel_while_running() {
-    const RETURN: Duration = Duration::from_secs(5);
     const STILL_PARKED: Duration = Duration::from_millis(200);
     // (sequence moved, wake_on_cancel, cancelled, park returns).
     for (moved, wake_on_cancel, cancelled, returns) in [
@@ -304,7 +303,7 @@ fn park_wakes_on_sequence_or_on_cancel_while_running() {
         });
         if returns {
             assert!(
-                Deadline::after(RETURN).recv(&parked).is_ok(),
+                Deadline::after(MUST_SUCCEED_WITHIN).recv(&parked).is_ok(),
                 "park returned (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
             );
         } else {
@@ -314,7 +313,7 @@ fn park_wakes_on_sequence_or_on_cancel_while_running() {
             );
             shared.wake();
             assert!(
-                Deadline::after(RETURN).recv(&parked).is_ok(),
+                Deadline::after(MUST_SUCCEED_WITHIN).recv(&parked).is_ok(),
                 "the stayed park was released (moved={moved} wake_on_cancel={wake_on_cancel} cancelled={cancelled})"
             );
         }
@@ -564,6 +563,17 @@ fn kill_every_group_kills_a_listed_group_and_then_drops_it() {
     assert_eq!(status.signal(), Some(9));
     // Reaped, the group is empty: the next kill drops it unsignalled.
     assert!(support::group::live().contains(pgid));
+    // The probe can lag the reap (see `support::group::alive`'s doc): poll it until the kill prunes.
+    fakes::within(
+        &format!("group {pgid} to read not alive"),
+        Deadline::after(LIST_DEADLINE),
+        move || {
+            let (_tick, ticked) = mpsc::channel::<()>();
+            while alive(pgid) {
+                let _waited = Deadline::after(support::group::GROUP_POLL).recv(&ticked);
+            }
+        },
+    );
     support::group::kill_every_group();
     assert!(!support::group::live().contains(pgid));
     support::group::live().unlist(listing);

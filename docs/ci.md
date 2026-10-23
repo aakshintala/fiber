@@ -154,6 +154,7 @@ On Linux x86_64 alone:
 
 - `cargo fmt --check`
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
+- no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check) and each test file another open pull request holds; it reports each site by file path, then line
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time but a
@@ -164,8 +165,7 @@ On Linux x86_64 alone:
 - no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
-- no crate enables serde_json's `preserve_order` feature anywhere in the
-  workspace build, over every target and feature (`cargo xtask
+- no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
   `research/tui-prototype`, when the diff touches it. The prototype is not a

@@ -257,6 +257,10 @@ impl App {
     /// hub-global read fails (after its notice) or a local terminal names
     /// none.
     fn view_workspace(&mut self) -> Option<PathBuf> {
+        if self.installing() {
+            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            return None;
+        }
         match self.workspace() {
             Some(workspace) => Some(workspace),
             None => {
@@ -285,6 +289,12 @@ impl App {
         text: &str,
     ) -> Option<Result<Saved, ConfigureError>> {
         let seam = self.config_views.seam.clone()?;
+        if self.installing() {
+            return Some(Err(ConfigureError {
+                code: contract::ErrorCode::IoFailed,
+                message: Self::INSTALLING_TEXT.to_owned(),
+            }));
+        }
         Some(match self.workspace() {
             Some(workspace) => seam.set(&workspace, Layer::Global, key, text),
             // With no local workspace the hub-global parent stands in
@@ -306,6 +316,10 @@ impl App {
     /// Opens `view`, closing any open, its unsaved edit dropped. With no
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
+        if self.installing() {
+            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            return Effect::None;
+        }
         self.draft.clear();
         self.model_picker.close();
         self.close_session_view();
@@ -759,12 +773,14 @@ impl App {
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
-            Open::Settings(settings) => settings.frame(usage),
-            Open::Tools(tools) => tools.frame(usage),
+            Open::Settings(settings) => settings.frame(self.config_view_width(), usage),
+            Open::Tools(tools) => {
+                tools.frame(self.config_view_width(), self.reload_cost().as_deref())
+            }
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
-            Open::Rules(rules) => rules.frame(),
+            Open::Rules(rules) => rules.frame(self.config_view_width(), self.motion().wall_ms()),
             Open::Login(_) => return None,
             // `/logout` draws its own overlay, as `/login` does.
             Open::Logout(_) => return None,
@@ -789,6 +805,23 @@ impl App {
             .as_ref()
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens)
+    }
+
+    /// What a reload's cache rebuild costs on the session on screen, as
+    /// the tools view's last row says it: its size, and its price when
+    /// the on-screen model's catalogue entry names one. `None` before
+    /// the session's first call.
+    fn reload_cost(&self) -> Option<String> {
+        let tokens = self.usage_on_screen()?;
+        let model = self.panel_state.model();
+        let price = self
+            .model_picker
+            .catalogue
+            .models
+            .iter()
+            .find(|entry| Some(entry.reference.as_str()) == model)
+            .and_then(|entry| entry.price.as_ref());
+        Some(crate::model_picker::rebuild_cost(tokens, price))
     }
 
     /// The theme a choice queued, once.

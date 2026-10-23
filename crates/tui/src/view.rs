@@ -11,6 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{App, Surface};
+use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
@@ -35,6 +36,7 @@ mod quit;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+mod reviewer_setup;
 pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 mod steering_queue;
@@ -123,21 +125,55 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
 
 /// Draws the open framed surfaces, bottom first, so the one on top draws
 /// last: `report` draws the import report where the caller's view puts
-/// it, the quit question over `area`.
+/// it, the quit question over `area`. Each notes the slab it drew, so a
+/// click outside the overlay on top closes it (`docs/tui.md`, "Bindings").
 fn draw_framed(
     app: &App,
     area: Rect,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-    mut report: impl FnMut(&mut Vec<Target>, &mut Buffer),
+    mut report: impl FnMut(&mut Vec<Target>, &mut Buffer) -> Rect,
 ) {
     for surface in app.framed_surfaces() {
         if surface == Surface::Report {
-            report(targets, buf);
+            let slab = report(targets, buf);
+            app.frames().note(Surface::Report, slab);
         } else if surface == Surface::Quit {
-            quit::draw(app, area, buf, targets);
+            let slab = quit::draw(app, area, buf, targets);
+            app.frames().note(Surface::Quit, slab);
         }
     }
+}
+
+/// Drops the click targets of what an overlay covers: the conversation's
+/// lines, links, results, offer and turns.
+fn drop_conversation_targets(targets: &mut Vec<Target>) {
+    targets.retain(|target| {
+        !matches!(
+            target.id,
+            TargetId::Line(_)
+                | TargetId::Link { .. }
+                | TargetId::FindResult(_)
+                | TargetId::NewBelow
+                | TargetId::Turn(_)
+                | TargetId::Offer(_)
+        )
+    });
+}
+
+/// Notes the slab `swapped::draw` drew: the model picker's under the
+/// picker, else the `/login` or `/logout` view's under its configuration
+/// view. Every other view draws full-area with no frame of its own.
+fn note_swapped(app: &App, slab: Option<Rect>) {
+    let Some(slab) = slab else {
+        return;
+    };
+    let surface = if app.model_picker_open() {
+        Surface::Picker
+    } else {
+        Surface::ConfigView
+    };
+    app.frames().note(surface, slab);
 }
 
 /// Draws `app` into `area` of `buf`, from the bottom up: the narrow
@@ -162,6 +198,9 @@ pub(crate) fn render(
     // The frame's asks start here: `Screen::draw_with` may render twice,
     // and the loop takes what the drawn frame asked.
     app.motion().clear_wake();
+    // The framed slabs start here too: each framed surface notes the slab
+    // it draws, so a click outside the overlay on top closes it.
+    app.frames().clear();
     // Below the floor one line shows, home included; home draws while no
     // session is on screen; the conversation draws in its column once one
     // attaches.
@@ -177,15 +216,18 @@ pub(crate) fn render(
         && app.on_home()
     {
         let mut targets = Vec::new();
-        crate::swapped::draw(app, area, buf, &mut targets);
-        notice_rows::overlay(app, area, buf, &mut targets);
+        let slab = crate::swapped::draw(app, area, buf, &mut targets);
+        note_swapped(app, slab);
+        let slab = notice_rows::overlay(app, area, buf, &mut targets);
+        // debt: five note sites stay inline; extract a shared note helper if a sixth framed surface appears.
+        app.frames().note(Surface::Notice, slab);
         let mut rows_bottom = area.bottom();
         notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);
         // The import report and the quit question take every key over
         // these views, so they draw over them too, the quit question
         // last: without it Enter would quit while the choices never show.
         draw_framed(app, area, buf, &mut targets, |targets, buf| {
-            crate::import_report::draw_report(app, area, buf, targets);
+            crate::import_report::draw_report(app, area, buf, targets)
         });
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
@@ -253,7 +295,13 @@ pub(crate) fn render(
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
         Some(_) => {
-            key_map::draw(app, conversation, buf, &mut targets);
+            let slab = key_map::draw(app, conversation, buf, &mut targets);
+            // With a session attached the key map notes its frame; on
+            // home it is the full-screen drawing with no frame of its
+            // own.
+            if app.session().is_some() {
+                app.frames().note(Surface::Keymap, slab);
+            }
         }
         // A swapped view takes the conversation's place: the `/keys`
         // screen, the configuration view, model picker or session view.
@@ -264,8 +312,10 @@ pub(crate) fn render(
             || app.keys_screen_open()
             || app.session_view_open() =>
         {
-            crate::swapped::draw(app, conversation, buf, &mut targets);
-            notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = crate::swapped::draw(app, conversation, buf, &mut targets);
+            note_swapped(app, slab);
+            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            app.frames().note(Surface::Notice, slab);
         }
         // An item view swaps into the conversation area and takes all of
         // it: its header on the top rows, then the delegate's transcript
@@ -291,7 +341,8 @@ pub(crate) fn render(
             } else {
                 item::draw_body(app, body, buf);
             }
-            notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            app.frames().note(Surface::Notice, slab);
         }
         None => {
             // The repository offer swaps in for the conversation.
@@ -329,7 +380,8 @@ pub(crate) fn render(
                     }
                 },
             }
-            notice_rows::overlay(app, conversation, buf, &mut targets);
+            let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
+            app.frames().note(Surface::Notice, slab);
         }
     }
     drag::draw(app, buf, pointer);
@@ -338,7 +390,16 @@ pub(crate) fn render(
     // their cells win. The Ctrl+R panel draws centred over the
     // conversation instead of in reserved rows.
     if let Some(completions) = app.completions() {
-        completions::draw(&completions, conversation, box_top, buf, &mut targets);
+        let search = matches!(completions.rows, Rows::Search(_));
+        let slab = completions::draw(&completions, conversation, box_top, buf, &mut targets);
+        app.frames().note(
+            if search {
+                Surface::Search
+            } else {
+                Surface::Completion
+            },
+            slab,
+        );
     }
     // The surfaces that draw a frame of their own go up bottom first, so
     // the one on top draws last. The import report draws over the
@@ -346,19 +407,16 @@ pub(crate) fn render(
     // (`docs/tui.md`, "Overlays"). The conversation's own targets go
     // away under it, as under the notices overlay. The quit question
     // draws above the report, as it takes every key while open.
+    // The reviewer setup draws first among them: the report and the quit
+    // question draw over it, as they take every key before it does.
+    let setup = reviewer_setup::draw(app, conversation, buf, &mut targets);
+    if !setup.is_empty() {
+        drop_conversation_targets(&mut targets);
+    }
+    app.frames().note(Surface::ReviewerSetup, setup);
     draw_framed(app, area, buf, &mut targets, |targets, buf| {
-        targets.retain(|target| {
-            !matches!(
-                target.id,
-                TargetId::Line(_)
-                    | TargetId::Link { .. }
-                    | TargetId::FindResult(_)
-                    | TargetId::NewBelow
-                    | TargetId::Turn(_)
-                    | TargetId::Offer(_)
-            )
-        });
-        crate::import_report::draw_report(app, conversation, buf, targets);
+        drop_conversation_targets(targets);
+        crate::import_report::draw_report(app, conversation, buf, targets)
     });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {

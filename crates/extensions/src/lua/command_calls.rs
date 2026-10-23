@@ -194,8 +194,10 @@ impl InnerCalls for CommandCalls {
             .take()
         {
             let _sent = entered.send(());
-            fakes::Deadline::after(std::time::Duration::from_secs(3))
-                .recv_or_fail(&held, "runner backstop release");
+            // The test owns the release sender: it sends, or drops it on exit.
+            match held.recv() {
+                Ok(()) | Err(_) => {}
+            }
         }
         let mut shared = hub.lock();
         if shared.serving == Some(call) {

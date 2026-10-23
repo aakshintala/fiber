@@ -31,6 +31,13 @@ pub(crate) fn matches(entry: &ModelEntry, query: &str) -> bool {
     })
 }
 
+/// Whether `name` matches `query` by the same word rule as [`matches`]:
+/// every space-separated word is an in-order, case-insensitive
+/// subsequence of the name. An empty or whitespace-only query matches.
+pub(crate) fn matches_name(name: &str, query: &str) -> bool {
+    query.split_whitespace().all(|word| subseq(name, word))
+}
+
 /// One flag per char of `id`: each word that is an in-order subsequence
 /// of the id, matched greedily from the left, marks the chars it took.
 /// A word that matches nowhere contributes no partial hits; the flags

@@ -188,6 +188,7 @@ impl Loop {
             | Delivery::ProposeNotes(..)
             | Delivery::ExtensionJob(..)
             | Delivery::ExtensionUsage(_)
+            | Delivery::DelegateUsage { .. }
             | Delivery::InnerCall(_)
             | Delivery::Cancelled
             | Delivery::Shell(..) => false,

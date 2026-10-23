@@ -14,12 +14,12 @@ use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
 
+/// The columns a list with a gutter keeps before each row's text.
+pub(crate) const GUTTER: usize = 2;
+
 /// The selected row's style: reversed, so it shows on every theme and
 /// with no colour.
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
-
-/// The footer's style.
-const FOOTER: Style = Style::new().fg(Role::Muted.color());
 
 /// A click target in a view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,9 +81,76 @@ impl Ink {
 pub(crate) struct List {
     selected: usize,
     top: usize,
+    /// Whether the selected row is marked by a "› " gutter instead of the
+    /// selection bar.
+    gutter: bool,
 }
 
 impl List {
+    /// A list that marks its selected row with a "› " gutter: every row
+    /// draws two columns in, and the selected one draws the mark in them
+    /// (`docs/tui.md`, "Swapped views").
+    pub(crate) fn gutter() -> Self {
+        Self {
+            gutter: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the list marks its selection with a gutter.
+    pub(crate) fn is_gutter(&self) -> bool {
+        self.gutter
+    }
+
+    /// The list as a frame draws it with no row focused: no row is
+    /// marked and the first row shown stays. Only for the frame; the
+    /// view keeps its own list.
+    pub(crate) fn blur(mut self) -> Self {
+        self.selected = usize::MAX;
+        self
+    }
+
+    /// Moves the selection by ↑ or ↓ onto the next row in `takes`
+    /// (ascending) in that direction: the rows that take Enter or a
+    /// switch. Any other key, and a list with none in `takes`, moves as
+    /// [`List::key`] does. Whether it moved.
+    pub(crate) fn key_over(
+        &mut self,
+        key: &Key,
+        rows: usize,
+        height: usize,
+        takes: &[usize],
+    ) -> bool {
+        if takes.is_empty() {
+            return self.key(key, rows, height);
+        }
+        let at = self.selected;
+        let to = if *key == Key::Down {
+            takes.iter().copied().find(|row| *row > at)
+        } else if *key == Key::Up {
+            takes.iter().rev().copied().find(|row| *row < at)
+        } else {
+            return self.key(key, rows, height);
+        };
+        let Some(to) = to else {
+            return false;
+        };
+        self.select(to, rows, height);
+        self.selected != at
+    }
+
+    /// Puts the selection on a row in `takes`: the one it is on, else the
+    /// next, else the last. With none in `takes` it stays.
+    pub(crate) fn rest_on(&mut self, takes: &[usize], rows: usize, height: usize) {
+        let at = takes
+            .iter()
+            .copied()
+            .find(|row| *row >= self.selected)
+            .or_else(|| takes.last().copied())
+            .unwrap_or(self.selected);
+        self.select(at, rows, height);
+    }
+
     /// Moves the selection by `key` over `rows` rows shown `height` at a
     /// time: ↑ and ↓ by one, PageUp and PageDown by the height less one,
     /// clamped at both ends, scrolling to keep it shown. Whether it moved;
@@ -219,10 +286,17 @@ pub(crate) fn draw_top_row(
 /// Draws the open swapped view into `area`, pushing its click targets:
 /// the model picker while it is open, else the open configuration view.
 /// The picker keeps the view's top row with its title and command, and
-/// draws in the overlay frame under it.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// draws in the overlay frame under it. Returns the framed slab for the
+/// model picker and the `/login` and `/logout` views, `None` for every
+/// other view, which draws full-area with no frame of its own.
+pub(crate) fn draw(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Option<Rect> {
     if area.is_empty() {
-        return;
+        return None;
     }
     if let Some(view) = app.model_picker_view() {
         draw_top_row(
@@ -239,22 +313,29 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
             area.width,
             area.height.saturating_sub(1),
         );
-        if !below.is_empty() {
-            super::view::model_picker::draw(&view, below, buf, targets);
-        }
-        return;
+        let slab = if below.is_empty() {
+            Rect::default()
+        } else {
+            super::view::model_picker::draw(&view, below, buf, targets)
+        };
+        return Some(slab);
     }
     let height = usize::from(area.height);
     if let Some(frame) = app.keys_frame(height) {
         render(&frame, area, buf, targets);
+        None
     } else if let Some(login) = app.login_view() {
-        login.draw(area, buf, targets);
+        Some(login.draw(area, buf, targets))
     } else if let Some(logout) = app.logout_view() {
-        logout.draw(area, buf, targets);
+        Some(logout.draw(area, buf, targets))
     } else if let Some(frame) = app.config_view_screen() {
         render(&frame, area, buf, targets);
+        None
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);
+        None
+    } else {
+        None
     }
 }
 
@@ -287,7 +368,16 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             id: TargetId::View(Spot::Row(at)),
             rect: line,
         });
+        let gutter = frame.list.is_gutter();
         let mut x = area.x;
+        if gutter {
+            if at == frame.list.selected() {
+                buf.set_stringn(x, y, "› ", GUTTER, Style::default());
+            }
+            x = x
+                .saturating_add(crate::text::to_u16(GUTTER))
+                .min(area.right());
+        }
         for (text, spot, ink) in cells {
             let (end, _) = buf.set_stringn(
                 x,
@@ -304,7 +394,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
             }
             x = end;
         }
-        if at == frame.list.selected() {
+        if !gutter && at == frame.list.selected() {
             buf.set_style(line, SELECTED);
         }
         y = y.saturating_add(1);
@@ -318,7 +408,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         if y >= footer {
             break;
         }
-        buf.set_stringn(area.x, y, line, width, Style::default());
+        buf.set_stringn(area.x, y, line, width, Ink::Muted.style());
         y = y.saturating_add(1);
     }
     if let Some((text, caret)) = &frame.field
@@ -327,7 +417,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         field(text, *caret, Rect::new(area.x, y, area.width, 1), buf);
     }
     if !frame.footer.is_empty() && footer > area.y {
-        buf.set_stringn(area.x, footer, &frame.footer, width, FOOTER);
+        buf.set_stringn(area.x, footer, &frame.footer, width, Ink::Muted.style());
     }
 }
 

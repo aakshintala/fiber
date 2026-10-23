@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -270,6 +270,7 @@ Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows
 "Cannot resume: <path> no longer exists. Delete removes the session.": it
 adds no rail card, and the row stays under "exited". A ✕ on a live row stops that session ("Quit"). Delete on a
+focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). A row whose
@@ -321,10 +322,10 @@ rail sets it once. Home is the rail at full width ("Home").
 on the card of the session on screen; with text in the box, ← moves the
 cursor. The focused card is lifted: its tint lifted, as hover draws it
 ("Mouse and hover"); with no colour it is bold and its box is not dim, while the other cards' boxes stay dim. The input box's stripe and text dim while the rail has
-focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · → or
+focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · Delete stop · → or
 Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
 project groups, Enter switches to the focused card's session, and → or Esc
-gives focus back to the input box. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
+gives focus back to the input box. Delete on a focused live card asks "Stop <name>?" over the conversation ("Quit"), with or without a draft in the box; the draft stays as it was. On a crashed card, a project header's "+" or "N ✓" it does nothing. Typing on a focused rail goes to the draft and keeps the focus on the rail, and Backspace edits the draft and never stops a session; a key that types nothing, Delete by default, is what stops, and a key rebound to a character types it. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
 the rail is hidden, by the person or for width ("Shedding"), one ← from an
 empty input box opens home.
 
@@ -543,6 +544,9 @@ error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
 `/settings` and `/skills` in the list below describe the local editor; this
 paragraph replaces them on a remote terminal.
 
+A view whose rows take Enter or a switch marks the focused row with "› " in a
+two-column gutter, as overlay choices do, without the bar.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
@@ -603,7 +607,8 @@ a click on it returns too. The views are:
   necessarily next to each other and ignoring case, the model's provider,
   id or display name. The filter keeps the list's order and only drops
   rows. Backspace removes a letter; Esc clears the query first and closes
-  the picker on the next press. Enter with no match leaves the picker open.
+  the picker on the next press. Enter with nothing focused does nothing and
+  leaves the picker open; it installs only a row ↓ or a click has focused.
   Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
@@ -639,9 +644,49 @@ a click on it returns too. The views are:
   model's chips. A model chosen for this session only gets a third row,
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
-  matches nothing shows one line, "No models match" dim, and no provider
-  sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+  matches no model and no not-installed row shows one line, "No models
+  match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+
+  Below the last provider section, after a blank row, the choosing picker
+  lists each first-party provider no installed extension declares, one row
+  each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
+  `accent`, " · not installed" dim. The scripted provider is never listed
+  (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
+  `/scoped-models` list none. Typing filters these rows by provider name as it
+  filters models, and a query that matches no model and no row still shows the
+  one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+  walk the models and then these rows; no row is focused until ↓ or a click
+  puts it there, so Enter with no row focused does what it does with none
+  listed (a query that hides every model focuses nothing). The focused row
+  reads as a focused model does, with "› " in its gutter, bold, on the bar.
+  Enter, or a click on the name, installs the provider as `fiber extension
+  install <name>` does, asking nothing more: choosing the row is the approval.
+  While it installs the row reads " ⟳ installing" and the spinner in
+  `attention`; choosing another row does nothing until it ends, and closing the
+  picker does not stop it. A failed install keeps the row, still marked not
+  installed, and adds a row under it, indented four columns, "✗ " and the
+  error in `error`, its first line cut at 80 columns; choosing the row again
+  tries again. A successful install drops the row, asks one model refresh so
+  the provider's models list, and draws under the list, until the picker closes
+  and indented four columns: "✓ " in `success` and "installed <name>", the
+  lines of the install summary dim ("What an install shows",
+  `docs/extensions.md`), and, for a provider whose key is missing, "<name>
+  needs a credential: run `fiber login <name>`" dim, or, for a key that could
+  not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
+  An install that ends while the picker is closed asks the refresh and, if it
+  failed, shows the notice "Installing <name> failed: <error>"; if it
+  succeeded, each credential line above is a notice instead
+  (`credential_missing`, `credential_failed`). On a remote terminal the install
+  runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
+  the list is the hub's; with the hub not connected the row fails with "The hub
+  is not connected."; and the install holds the terminal's one hub connection
+  until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
+  "Installing"), so other hub commands wait behind it; while it runs on a
+  remote terminal, `/settings` and the other config views are refused with "a
+  provider is installing; try again when it finishes" (a local terminal gets
+  no such refusal), and on either terminal Esc closes the picker with the
+  install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
   labels follow the header in the answer's order,
@@ -753,8 +798,11 @@ a click on it returns too. The views are:
   Each source is a bold heading ("Built-in", "MCP · linear", "Extension ·
   notes"), then one row per tool: "<name> · full · ~1.2k", or "deferred",
   then " · this project " and its switch and " · everywhere " and its switch.
-  A switch reads "[on]" bold or "[off]" dim. The last row is "a change
-  rebuilds the cache (~84k tokens · $0.31) on reload", dim.
+  A switch reads "[on]" bold or "[off]" dim. On the focused row, a bold "›"
+  marks the focused switch, and ← and → move it between the two. The mark
+  takes the place of the space before the switch, so columns do not move. It
+  shows on the focused row only. The last row is "a change rebuilds the
+  cache (~84k tokens · $0.31) on reload", dim.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
   tool count. The state is `connecting` for a server never started this
@@ -788,8 +836,8 @@ a click on it returns too. The views are:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
-  Under the table, the reload line ("changing model needs a reload (~84k
-  tokens)") and "Ctrl+G opens the file", both dim.
+  Under the table, the reload line ("changing handoff.tokens needs a reload
+  (~84k tokens)") and "Ctrl+G opens the file", both dim.
 
   ```
   key                 value         layer
@@ -1202,6 +1250,7 @@ and an expiry wakes the loop even with no input.
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
 | `no_model` | event | Fades 10 s after it shows. |
+| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
@@ -1523,8 +1572,10 @@ what it started keeps running.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search, and choosing
-  in the model picker or the credential picker for this session only. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, choosing
+  in the model picker or the credential picker for this session only, and
+  keeping, editing, striking and flipping a line's layer in the reviewer
+  setup. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1532,6 +1583,15 @@ what it started keeps running.
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
+- **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
+  ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
+  panel's legend says. The ✕ and a press outside the panel, which is Esc,
+  are its mouse targets, and the mouse wheel does nothing while it is open.
+  Enter on a diff that would change neither layer closes the setup with one
+  notice, `notes_unchanged`, and writes no file.
+  The notice that names the command, shown the first time in a session the
+  reviewer blocks a call while both layers of the notes are empty, closes on
+  any key, and that key goes nowhere else.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -1638,7 +1698,7 @@ search box and the draft shows without a cursor.
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
-| Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
+| Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
@@ -1670,6 +1730,9 @@ search box and the draft shows without a cursor.
 | Refresh every model list in the model picker | `refresh_lists` | Ctrl+R | click "⟳ refresh all" |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
+Every key bound to `delete_session` acts as Delete does. A rebound character key
+stops on home's list and types on a focused rail. `[]` unbinds it.
+
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
@@ -1699,7 +1762,7 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  import report, the home screen's delete question or workspace picker, the
+  close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
   key map, an approval or question, an offer, the Ctrl+R panel, or a
   notice's whole text; or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
@@ -1715,6 +1778,8 @@ of them when a key arrives:
   row ("Home"), and Esc on a focused row goes back to the session home came
   from; on a focused rail ↑, ↓, Enter, → and Esc move and
   switch ("The rail"); like an overlay's own keys, they are not bindings.
+  Delete on a focused rail card stops that session after asking ("Quit"); with
+  the input box focused it edits the draft.
 
 A global action acts in all six. The rest act only where they are listed:
 
@@ -1813,6 +1878,7 @@ later release still applies.
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
+| `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
@@ -1824,7 +1890,7 @@ later release still applies.
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
-| `/close` | Stops the session on screen ("Quit"). |
+| `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
@@ -1951,9 +2017,23 @@ list: "↑↓ move · Enter delete · Esc close".
     (`docs/invocation.md`, "Lifecycle").
   - "Close all" sends each working session `close` with `now`. The prompt says how many of them are also
     open elsewhere: a session's `clients` on its `session_status`, less the terminal's own `full` connection to it when it holds one.
-- **Stopping one session** is `/close`, or the ✕ on its home row. It sends
-  `close` with `now`, which ends its turn, stops its jobs and delegates,
-  and exits it (`docs/invocation.md`, "Shutdown").
+- **Stopping one session** is `/close`, the ✕ on its home row, or Delete on
+  its focused home row or rail card. It sends `close` with `now`, which ends
+  its turn, stops its jobs and delegates, and exits it
+  (`docs/invocation.md`, "Shutdown"). Delete asks first, in an overlay: the
+  title "Stop <name>?", a dim line that reads "working", "open elsewhere",
+  both as "working, open elsewhere", or nothing, then two choices, "Enter" to
+  stop and "Esc" to cancel, with Enter's focused. The footer reads "click a
+  choice". The line is counted as the quit prompt counts, once, when the
+  question opens, and the overlay never live-updates. It draws over the
+  conversation when asked from a rail card. Enter sends `close` with `now`;
+  when the stopped session is the one on screen the terminal goes home, and
+  stopping another card leaves the screen as it is. Esc, the ✕ and a click
+  outside the frame close the question and send nothing. With the link down
+  Delete opens nothing, and Enter does nothing and leaves the question
+  open. If the session left while the question showed, Enter sends nothing
+  and closes it.
+- **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and leaves the terminal on home; Esc closes the question. With no live session it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
 
 ### Getting the person's attention
 
@@ -2075,8 +2155,8 @@ tui       212   9,804
 ### Overlays
 
 Every surface drawn over the screen shares one frame: the
-key map, the quit question, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
+key map, the quit question, the close-all question, the stop question, home's delete question and workspace picker, the
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,

@@ -641,6 +641,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   the call `executes`. That covers subshells `( )`, process substitution,
   heredocs, loops, functions, a trailing `&`, and variable expansion
   (`$HOME`, `${x}`).
+- The recogniser works within four bounds: commands of at most 10,000
+  bytes, `cd` chains resolving against at most 32 directories, wrappers
+  nested at most 4 deep, and `.git` files of at most 512 bytes. Past any
+  bound the call declares `executes`, so the bounds never widen the fast
+  path.
 - Command substitution (`$( )` or backticks) always makes the call
   `executes`. Its arguments are known only when it runs, so the path checks
   cannot see them: `cat $(echo ~/.ssh/id_rsa)` reads the key while every
@@ -1577,6 +1582,7 @@ its tools are deferred, change only when the preamble is built.
   `declare_in_full` (`docs/mcp.md`).
 - MCP tools and `mcp_resources` are deferred by default. Every other built-in
   is declared in full.
+- A tool the provider hosts is never deferred: it is sent as its type and name only, so there is nothing to load. `tools."<name>".deferred` has no effect on it.
 - A built-in is deferred by default only when it is used in under about 2% of
   the owner's sessions and is not part of how they direct delegates.
 
@@ -1585,9 +1591,11 @@ its tools are deferred, change only when the preamble is built.
 - `tool_search` is a built-in tool the model calls to load deferred tools. It
   is declared, in full, only when the model supports deferral and at least one
   tool is deferred.
+- `tool_search` is never deferred; `tools."tool_search".deferred` has no effect and is reported as a `notice`.
 - Fiber runs the search itself: BM25 over each deferred tool's
   name, description and parameter names. It returns at most 8 tools by default;
   the model may pass `limit`.
+- `query` is required and not empty; `limit` is at least 1, with no maximum. A search runs over every deferred tool, loaded or not, and `loaded` lists its hits best first, ties by name. A search that matches nothing completes with an empty `loaded` and says so in text. Several searches in one step are separate calls.
 - The result goes back in each protocol's native form: `tool_reference`
   blocks on Anthropic, `tool_search_output` on OpenAI Responses. Fiber never
   uses a provider's own search, so every provider behaves the same and every
@@ -1596,12 +1604,10 @@ its tools are deferred, change only when the preamble is built.
   sends the same bytes.
 - Its description lists the sources of the deferred tools (each MCP server's
   name), fixed when the preamble is built.
-- A search is an ordinary tool call. A resume or fork re-sends its result
-  byte for byte.
+- A search is an ordinary tool call. A resume, fork or rewind re-sends its result byte for byte while the preamble defers the same tools; otherwise the result leaves out the names it no longer defers, as above.
 - A cancelled search loads nothing; its result is the line "The search was
   cancelled; no tool was loaded."
-- A loaded tool stays loaded until a handoff, which restarts the conversation
-  after the preamble (`docs/handoff.md`); after that the model searches again.
+- A loaded tool stays loaded until a handoff, which restarts the conversation after the preamble (`docs/handoff.md`); after that the model searches again. A reload or a model switch keeps it: each request renders every search result from `loaded`, leaving out names the preamble it sends does not defer, and on a model without deferral renders it as text naming the tools.
 - A call to a deferred tool that was never loaded runs like any other call,
   after the schema check.
 

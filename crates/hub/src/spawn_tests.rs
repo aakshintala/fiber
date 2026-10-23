@@ -141,18 +141,63 @@ fn exited_without_a_verdict_is_io_failed() {
     assert!(failure.message.contains("s_0123456789abcdef"));
 }
 
+/// `docs/invocation.md`, "What a caller gets back": `fiber_exited` is "the
+/// last line".
 #[test]
 fn drain_keeps_the_last_fiber_exited_line() {
     let child = printing(&[
         exited_line("no_model", "No model is configured."),
         exited_line("invalid_request", "The request was bad."),
-        "noise".to_owned(),
     ]);
     let (_, state) = drained(child);
     assert!(support::lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
     assert_eq!(failure.message, "The request was bad.");
+}
+
+/// `docs/invocation.md`, "What a caller gets back": `fiber_exited` is "the
+/// last line", so an earlier one is not the verdict.
+#[test]
+fn drain_ignores_a_fiber_exited_line_that_is_not_last() {
+    let child = printing(&[
+        exited_line("no_model", "No model is configured."),
+        "noise".to_owned(),
+    ]);
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
+}
+
+/// `docs/invocation.md`, "What a caller gets back": `fiber_exited` is "the
+/// last line", so an earlier one is not the verdict when the last is malformed.
+#[test]
+fn drain_ignores_a_malformed_last_line() {
+    let child = printing(&[
+        exited_line("no_model", "No model is configured."),
+        "{\"kind\":\"fiber_exited\"".to_owned(),
+    ]);
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
+}
+
+/// `docs/invocation.md`, "What a caller gets back": `fiber_exited` is "the
+/// last line", so an earlier one is not the verdict when the last cannot be read.
+#[test]
+fn drain_ignores_an_unreadable_last_line() {
+    let verdict = exited_line("no_model", "No model is configured.").replace('\'', "'\\''");
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(format!("printf '%s\\n' '{verdict}'; printf '\\377\\n'"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
 }
 
 #[test]

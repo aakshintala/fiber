@@ -120,6 +120,9 @@ fn config(setup: &Setup, reduced_motion: bool) {
         &serde_json::json!({
             "model": "scripted/s.json",
             "hub": {"idle_exit_ms": 200},
+            // Notes that are not empty: the reviewer-setup notice, which
+            // takes the next key, does not follow the first escalation.
+            "reviewer": {"context": "### Source control\n- acme is ours\n"},
             "tui": {"reduced_motion": reduced_motion, "rail": {"shown": false}},
         }),
     );

@@ -3,6 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, mpsc};
@@ -16,8 +17,6 @@ use fakes::{CancelToken, TempDir};
 
 use super::{lock_writer, open, output_so_far, wait_first_output, write_chunks};
 use crate::shell::output::{Shared, lock, note_eof};
-
-const DEADLINE: Duration = Duration::from_secs(5);
 
 #[test]
 fn what_the_secondary_prints_is_read_from_the_primary_and_input_reaches_the_secondary() {
@@ -49,7 +48,7 @@ fn the_reader_waits_for_output_written_later() {
         let _sent = tx.send(reader.read_exact(&mut seen).map(|()| seen));
     });
     secondary.write_all(b"late\n").unwrap();
-    let seen = Deadline::after(DEADLINE)
+    let seen = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the read to return")
         .unwrap();
@@ -96,7 +95,7 @@ fn waiting() -> (
 fn the_first_output_wait_ends_at_250_ms_and_not_before() {
     let (clock, _shared, done, due) = waiting();
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait did not park at 250 ms"
     );
     assert!(done.try_recv().is_err());
@@ -104,10 +103,14 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         Some(due),
         None,
         Duration::from_millis(249),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_since(
+            &mark,
+            Some(due),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the wait parks again a millisecond short of 250 ms"
     );
     assert!(
@@ -118,9 +121,9 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
         Some(due),
         None,
         Duration::from_millis(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait to end at 250 ms");
 }
@@ -128,9 +131,9 @@ fn the_first_output_wait_ends_at_250_ms_and_not_before() {
 #[test]
 fn the_first_output_wait_ends_at_once_on_end_of_file() {
     let (clock, shared, done, due) = waiting();
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)));
     note_eof(&shared);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait to end at end of file");
 }
@@ -147,7 +150,7 @@ fn the_first_output_wait_does_not_park_when_the_output_already_ended() {
         wait_first_output(&shared, clock.as_ref(), &CancelToken::new());
         let _sent = tx.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the wait to return at once");
 }
@@ -155,7 +158,7 @@ fn the_first_output_wait_does_not_park_when_the_output_already_ended() {
 #[test]
 fn output_arriving_does_not_end_the_wait() {
     let (clock, shared, done, due) = waiting();
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)));
     {
         let mut inner = lock(&shared.inner);
         inner.output.extend_from_slice(b"chunk");
@@ -163,10 +166,18 @@ fn output_arriving_does_not_end_the_wait() {
     }
     // The clock's subscription delivers the wake, so advancing by zero wakes
     // the wait without moving the deadline.
-    let mark =
-        clock.advance_when_parked(Some(due), None, Duration::ZERO, &Deadline::after(DEADLINE));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        Duration::ZERO,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert!(
-        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_since(
+            &mark,
+            Some(due),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "output arriving parks the wait again at 250 ms"
     );
     assert!(done.try_recv().is_err());
@@ -174,9 +185,9 @@ fn output_arriving_does_not_end_the_wait() {
         Some(due),
         None,
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the wait to end at 250 ms");
 }
@@ -201,7 +212,7 @@ fn script(steps: Vec<std::io::Result<usize>>) -> Script {
 }
 
 /// Runs `write_chunks` on its own thread, so a step that parks for good
-/// fails at `DEADLINE` and does not hang the run.
+/// fails at `MUST_SUCCEED_WITHIN` and does not hang the run.
 fn chunked(
     mut writer: Script,
     bytes: &'static [u8],
@@ -223,7 +234,13 @@ fn chunks_add_up_to_the_whole_input() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 5);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap(),
+        5
+    );
 }
 
 #[test]
@@ -237,7 +254,7 @@ fn a_full_queue_parks_for_ten_ms_on_the_clock_and_tries_again() {
         CancelToken::new(),
     );
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the write did not wait for room"
     );
     assert!(rx.try_recv().is_err());
@@ -245,9 +262,15 @@ fn a_full_queue_parks_for_ten_ms_on_the_clock_and_tries_again() {
         Some(due),
         None,
         Duration::from_millis(10),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 5);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap(),
+        5
+    );
 }
 
 #[test]
@@ -258,7 +281,13 @@ fn an_interrupted_write_is_tried_again_at_once() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 2);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap(),
+        2
+    );
 }
 
 #[test]
@@ -269,7 +298,10 @@ fn any_other_error_ends_the_write_with_that_error() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    let err = Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap_err();
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
 }
 
@@ -281,7 +313,10 @@ fn a_write_of_nothing_is_an_error() {
         FakeClock::new(),
         CancelToken::new(),
     );
-    let err = Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap_err();
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
 }
 
@@ -290,7 +325,13 @@ fn a_cancel_before_the_first_write_writes_nothing() {
     let cancel = CancelToken::new();
     cancel.cancel();
     let rx = chunked(script(vec![Ok(2)]), b"hi", FakeClock::new(), cancel);
-    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 0);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -304,9 +345,15 @@ fn a_cancel_while_waiting_for_room_returns_what_was_written() {
         Arc::clone(&clock),
         cancel.clone(),
     );
-    assert!(clock.await_parked(due, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)));
     cancel.cancel();
-    assert_eq!(Deadline::after(DEADLINE).recv(&rx).unwrap().unwrap(), 2);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap(),
+        2
+    );
 }
 
 /// A scratch file standing in for the primary.
@@ -315,7 +362,7 @@ fn scratch(dir: &TempDir) -> Arc<Mutex<File>> {
 }
 
 /// Runs `lock_writer` on its own thread, so a wait that never ends fails
-/// at `DEADLINE` and does not hang the run. True once the lock is taken.
+/// at `MUST_SUCCEED_WITHIN` and does not hang the run. True once the lock is taken.
 fn locking(
     writer: Arc<Mutex<File>>,
     clock: Arc<FakeClock>,
@@ -351,7 +398,7 @@ fn a_cancel_before_the_lock_is_waited_on_takes_nothing() {
         let _sent = tx.send(lock_writer(&moved, clock.as_ref(), &cancel).is_some());
     });
     assert!(
-        !Deadline::after(DEADLINE)
+        !Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("the lock wait to return")
     );
@@ -367,13 +414,13 @@ fn a_held_lock_plus_a_cancel_that_fires_takes_nothing() {
     let cancel = CancelToken::new();
     let rx = locking(Arc::clone(&writer), Arc::clone(&clock), cancel.clone());
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the lock wait did not park"
     );
     assert!(rx.try_recv().is_err());
     cancel.cancel();
     assert!(
-        !Deadline::after(DEADLINE)
+        !Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("the lock wait to end")
     );
@@ -388,7 +435,7 @@ fn a_lock_released_before_the_cancel_is_taken() {
     let due = clock.origin() + Duration::from_millis(10);
     let rx = locking(Arc::clone(&writer), Arc::clone(&clock), CancelToken::new());
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the lock wait did not park"
     );
     assert!(rx.try_recv().is_err());
@@ -397,10 +444,10 @@ fn a_lock_released_before_the_cancel_is_taken() {
         Some(due),
         None,
         Duration::from_millis(10),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        Deadline::after(DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("the lock wait to end")
     );

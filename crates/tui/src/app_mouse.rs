@@ -3,15 +3,115 @@
 
 use super::{App, Effect, Surface, Target};
 use crate::app::rail::Spot;
-use crate::keys::{Key, Mouse, MouseKind};
-use crate::mouse::TargetId;
+use crate::keys::{Button, Key, Mouse, MouseKind};
+use crate::mouse::{Pointer, TargetId};
 use ratatui::layout::{Position, Rect};
+use std::time::Instant;
 
 /// A wheel step over the conversation scrolls it this many rows: a
 /// starting point, not a measurement (`docs/tui.md`, "Turns").
 pub(super) const WHEEL_ROWS: usize = 3;
 
 impl App {
+    /// Handles one mouse report against the last frame's `targets`:
+    /// every left press clears "Copied" and ends a finished attention
+    /// title, then the press feeds the drag, the wheel, the selection
+    /// and the pointer in order; a click's effect wins over the
+    /// selection's (`docs/tui.md`, "Mouse and hover", "Getting the
+    /// person's attention").
+    pub(crate) fn on_mouse(
+        &mut self,
+        mouse: &Mouse,
+        targets: &[crate::mouse::Target],
+        pointer: &mut Pointer,
+        hover: bool,
+        now: Instant,
+    ) -> Effect {
+        // Every left click, on a target or not, clears "Copied" and
+        // ends a finished attention title (`docs/tui.md`, "Getting the
+        // person's attention"); a click on `copy` sets it again.
+        if mouse.kind == MouseKind::Press(Button::Left) {
+            self.clear_copied();
+            self.attention_seen();
+            if let Some(effect) = self.outside_press(mouse, targets, now) {
+                Self::disarm_press(pointer, mouse, hover);
+                return effect;
+            }
+        }
+        self.on_drag(mouse);
+        self.on_wheel(mouse);
+        let selected = self.on_select(mouse, targets);
+        let clicked = pointer.on_mouse(mouse, targets, hover);
+        // A click's effect, else the selection's.
+        let effect = clicked.map_or(Effect::None, |target| self.on_click(target));
+        if effect == Effect::None {
+            selected
+        } else {
+            effect
+        }
+    }
+
+    // The swallowed press holds no press: feeding the
+    // pointer a release at its cell clears what no click
+    // may later use, through the existing API, and always
+    // returns `None`.
+    // Deleting `kind` from the synthetic release replays the press with
+    // no hit: both clear the same `pressed`, and the `pressed_at`
+    // difference is unobservable because the next real press re-pairs
+    // both fields.
+    // debt: synthetic Release through the public API stays; switch to a Pointer disarm only if mouse.rs gains one (outside this ticket's fence).
+    #[cfg_attr(false, mutants::skip)]
+    fn disarm_press(pointer: &mut Pointer, mouse: &Mouse, hover: bool) {
+        let _disarmed = pointer.on_mouse(
+            &Mouse {
+                kind: MouseKind::Release,
+                ..*mouse
+            },
+            &[],
+            hover,
+        );
+    }
+
+    /// A left press starting outside the overlay on top's frame closes
+    /// that overlay through the same path as Esc and goes no further:
+    /// the press reaches none of the drag, the wheel, the selection,
+    /// the pointer or the control under it (`docs/tui.md`, "Bindings").
+    /// The model picker's header row is exempt: its whole top row
+    /// closes the picker outright, as a click there always did. `None`
+    /// when the press is no outside click on a closing surface.
+    fn outside_press(
+        &mut self,
+        mouse: &Mouse,
+        targets: &[crate::mouse::Target],
+        now: Instant,
+    ) -> Option<Effect> {
+        // debt: re-check stays as caller insurance; drop it only if outside_press stays single-caller and the caller keeps its guard.
+        if !matches!(mouse.kind, MouseKind::Press(Button::Left)) {
+            return None;
+        }
+        let top = self.top_surface();
+        if !top.closes_on_outside_click() {
+            return None;
+        }
+        let slab = self.frames().slab_of(top)?;
+        if slab.contains(Position::new(mouse.col, mouse.row)) {
+            return None;
+        }
+        if top == Surface::Picker
+            && matches!(
+                crate::mouse::hit(targets, mouse.col, mouse.row),
+                Some(TargetId::View(crate::swapped::Spot::Close))
+            )
+        {
+            return None;
+        }
+        // A shown selection never keeps the panel: Esc alone would
+        // clear it first and leave a completion panel open, so the
+        // click clears it before closing through the Esc path.
+        self.clear_selection();
+        Some(self.on_key(Key::Esc, now))
+    }
+
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
     /// a conversation line opens or closes what it names, a code block's
@@ -133,6 +233,11 @@ impl App {
         // conversation, home and the rail.
         if order.contains(&Surface::Report) {
             self.scroll_report_rows(!up, WHEEL_ROWS);
+            return;
+        }
+        // The reviewer setup takes the wheel and does nothing with it: the
+        // conversation under the panel stays where it is.
+        if order.contains(&Surface::ReviewerSetup) {
             return;
         }
         // The quit question and the notice overlay have nothing to

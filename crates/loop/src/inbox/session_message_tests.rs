@@ -11,6 +11,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -42,7 +43,6 @@ use support::admission::Admission;
 use super::Window;
 use crate::{Loop, Model};
 
-const DEADLINE: Duration = Duration::from_secs(5);
 const IDLE: Duration = Duration::from_secs(60);
 
 const FROM: &str = "s_0123456789abcdef";
@@ -80,10 +80,10 @@ fn capture() -> (Ack, mpsc::Receiver<Answer>) {
     )
 }
 
-/// The answer `rx` carries, waited under one [`DEADLINE`] naming `what`.
+/// The answer `rx` carries, waited under one [`MUST_SUCCEED_WITHIN`] naming `what`.
 #[track_caller]
 fn answered(rx: &mpsc::Receiver<Answer>, what: &str) -> Answer {
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(rx)
         .unwrap_or_else(|_| panic!("{what}"))
 }
@@ -259,7 +259,7 @@ impl Hooks for FakeHooks {
             // Parked: the test moves the fake clock past the registered
             // timeout, then releases the run.
             let _sent = park.entered.send(());
-            Deadline::after(DEADLINE)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&park.release)
                 .expect("the test releases the parked hook");
         }
@@ -318,7 +318,7 @@ fn close() -> Delivery {
     Delivery::Close(ignore())
 }
 
-/// Reads `watcher` until `done` accepts a line, under one [`DEADLINE`].
+/// Reads `watcher` until `done` accepts a line, under one [`MUST_SUCCEED_WITHIN`].
 #[track_caller]
 fn read_until(
     watcher: Watcher,
@@ -326,7 +326,7 @@ fn read_until(
     done: impl Fn(&Envelope) -> bool + Send + 'static,
 ) -> (Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, Deadline::after(DEADLINE), move || {
+    fakes::within(what, Deadline::after(MUST_SUCCEED_WITHIN), move || {
         let mut watcher = watcher;
         let mut lines = Vec::new();
         loop {
@@ -809,7 +809,7 @@ fn park_idle(world: &World) -> Mark {
     assert!(
         world
             .clock
-            .await_parked(origin + IDLE, fakes::Deadline::after(DEADLINE)),
+            .await_parked(origin + IDLE, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the loop parked in its idle wait: {:?}",
         world.clock.parked()
     );
@@ -844,7 +844,7 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     assert!(
         world
             .clock
-            .await_any_parked_since(&mark, fakes::Deadline::after(DEADLINE)),
+            .await_any_parked_since(&mark, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the message turn ran and the loop parked again: {:?}",
         world.clock.parked()
     );
@@ -853,7 +853,7 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     assert!(world.admission.admit(|| true).is_some());
     world.clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    let result = Deadline::after(DEADLINE)
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
@@ -907,7 +907,7 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     assert!(
         world
             .clock
-            .await_parked(origin + IDLE, fakes::Deadline::after(DEADLINE)),
+            .await_parked(origin + IDLE, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the loop parked in its idle wait: {:?}",
         world.clock.parked()
     );
@@ -916,7 +916,7 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     // again with no later wake.
     world.clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    let (mut looped, outcome) = Deadline::after(DEADLINE)
+    let (mut looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     assert!(outcome.unwrap().is_none());
@@ -985,17 +985,17 @@ fn a_message_accepted_before_a_close_that_lands_ahead_of_the_last_idle_check_is_
     let finished = world.spawn_run();
     let mark = park_idle(&world);
     world.send(Delivery::Cancelled);
-    let result = Deadline::after(DEADLINE)
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
     assert!(admitted.load(Ordering::SeqCst));
     assert!(message_in.load(Ordering::SeqCst));
-    let rx = Deadline::after(DEADLINE)
+    let rx = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&closed_rx)
         .expect("the close was sent");
     assert!(
-        Deadline::after(DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("the close was answered")
             .is_ok()
@@ -1055,7 +1055,7 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the question wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1072,7 +1072,7 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
     assert!(
         world
             .clock
-            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
+            .await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -1088,7 +1088,7 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1142,7 +1142,7 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the approval wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1158,7 +1158,7 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
     assert!(
         world
             .clock
-            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
+            .await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -1178,7 +1178,7 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1234,7 +1234,7 @@ fn a_session_message_during_an_approval_wait_is_answered_at_once() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the approval wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1266,7 +1266,7 @@ fn a_session_message_during_an_approval_wait_is_answered_at_once() {
         },
         ignore(),
     ));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1314,7 +1314,7 @@ fn a_session_message_during_a_question_wait_is_answered_at_once() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the question wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1359,7 +1359,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the offer wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1371,7 +1371,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     assert!(
         world
             .clock
-            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
+            .await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -1384,7 +1384,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1433,7 +1433,7 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the offer wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1446,7 +1446,7 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
     assert!(
         world
             .clock
-            .await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
+            .await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the wait stays parked with no deadline: {:?}",
         world.clock.parked()
     );
@@ -1459,7 +1459,7 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
         },
         ignore(),
     ));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1487,7 +1487,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the offer wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1495,7 +1495,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
         },
     );
     world.send(close());
-    let result = Deadline::after(DEADLINE)
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
@@ -1528,16 +1528,20 @@ fn a_required_offer_failure_with_a_held_message_fails_the_run() {
         "a repository_code_offered line",
         |line| line.kind == "repository_code_offered",
     );
-    fakes::within("the offer wait parked", Deadline::after(DEADLINE), {
-        let parked = Arc::clone(&world.clock);
-        move || {
-            while parked.parked().is_empty() {
-                thread::yield_now();
+    fakes::within(
+        "the offer wait parked",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        {
+            let parked = Arc::clone(&world.clock);
+            move || {
+                while parked.parked().is_empty() {
+                    thread::yield_now();
+                }
             }
-        }
-    });
+        },
+    );
     world.send(close());
-    let result = Deadline::after(DEADLINE)
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("run returned");
     let error = result.expect_err("the required item fails the run");
@@ -1596,7 +1600,7 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
     let parked = Arc::clone(&world.clock);
     fakes::within(
         "the question wait parked",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             while parked.parked().is_empty() {
                 thread::yield_now();
@@ -1605,7 +1609,7 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
     );
     let _mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     assert!(outcome.unwrap().is_none());
@@ -1731,7 +1735,7 @@ fn a_hook_parked_past_its_registered_timeout_answers_hook_failed() {
         let outcome = looped.admit_idle(delivery(named(), ack), &mut input);
         (looped, outcome, input.pieces.is_empty())
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered_rx)
         .expect("the hook parked");
     assert!(
@@ -1763,7 +1767,7 @@ fn a_non_blocking_hook_failure_still_delivers_and_logs_its_notice() {
     let finished = world.spawn_turn();
     let (ack, answers) = capture();
     world.send(delivery(named(), ack));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1809,7 +1813,7 @@ fn a_rewritten_session_message_frames_its_replacement_with_changed_by() {
     let finished = world.spawn_turn();
     let (ack, answers) = capture();
     world.send(delivery(named(), ack));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);
@@ -1850,7 +1854,7 @@ fn a_session_message_context_joins_the_turn_as_context_added() {
     let finished = world.spawn_turn();
     let (ack, answers) = capture();
     world.send(delivery(named(), ack));
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended");
     world.looped = Some(looped);

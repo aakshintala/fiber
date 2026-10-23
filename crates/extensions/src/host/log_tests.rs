@@ -66,6 +66,7 @@ fn logged(delivery: Delivery) -> ExtensionLog {
         | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
         | Delivery::Cancelled) => panic!("expected extension_log, got {other:?}"),
     }
@@ -174,6 +175,7 @@ fn a_line_before_deliver_to_keeps_order_with_an_exec_that_ends_after_it() {
         | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
         | Delivery::Shell(..)
         | Delivery::Cancelled) => panic!("expected extension_exec, got {other:?}"),
     }

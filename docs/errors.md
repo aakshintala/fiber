@@ -364,6 +364,7 @@ the lines that carry it.
 | `no_model` | exit, notice, driver command (`rewind`), hub command | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id; or a hub `configure` operation sets `model` to one no installed provider has | event |
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
+| `notes_unchanged` | notice | `/reviewer-setup` reached its diff and the save would change neither layer, so no file was written (`docs/tui.md`, "Rules") | event |
 | `orphaned` | job | the process that ran the job died | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run | — |
@@ -408,7 +409,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | Code | Class | Meaning |
 |---|---|---|
 | `command_conflict` | event | two extensions registered the same command name |
-| `config_key_ignored` | event | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
+| `config_key_ignored` | event | an unknown key, a key a repository may not set, a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking"), or `tools."tool_search".deferred`, which has no effect (`docs/tools.md`, "Tool search") |
 | `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_missing` | event | configuration declares hooks but the `hooks` extension is not installed, so its declared hooks will not run; the message says to run `fiber extension install hooks` |
@@ -430,7 +431,7 @@ Notices, for a failure outside any action or a login a person must finish:
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`, `not_found`,
 `unknown_command`, `closing`, `cancelled`, `io_failed`, `duplicate_command`, `session_not_found`,
-`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`)
+`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`)
 are `docs/invocation.md`, "Driver commands".
 
 Codes no table lists — a refusal or driver code the hub names

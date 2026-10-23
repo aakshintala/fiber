@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/view/quit_tests.rs
+assertion_line: 380
+expression: "screen(&app, 80, 24)"
+---
+▀▄ █▀▀▀▀ ▀▀█▀▀ █▀▀█  █▀▀▀▀ █▀▀▀▄
+▀▄ █▄▄▄    █   █▀▀█  ████  █▄▄▄▀   0.0.1
+▀▄ █       █   ████  █▀▀▀▀ █ ▀▄    2 working · $0.00 live
+▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █
+
+w +  2 live · $0.00
+⌥1 ● fix the parse▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄      WORKING  0s ✕
+    s_aaaaaaaaaaaa
+⌥2 ● fix the parse  Close all                             ✕        WORKING  0s ✕
+    s_bbbbbbbbbbbb
+                    2 sessions, 2 working, 0 open elsewhere
+
+                    › Enter  close all
+                      Esc    cancel
+
+                    click a choice
+
+                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › /close all█
+▌
+▌ [w]  [no model]  [thinking: default]  Enter starts a session
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+Enter opens the focused session, or starts one from the box · ↑↓ move · Delete s

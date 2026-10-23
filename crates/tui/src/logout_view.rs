@@ -338,10 +338,9 @@ impl Logout {
     /// anything the last action said, at least three body rows before
     /// the window clips them, and the legend footer. The confirm draws
     /// its own overlay.
-    pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
         if matches!(self.mode, Mode::Confirm { .. }) {
-            self.draw_confirm(area, buf, targets);
-            return;
+            return self.draw_confirm(area, buf, targets);
         }
         let width = overlay::width(u16::MAX, 96, area.width);
         let inner_w = overlay::inner(width);
@@ -446,19 +445,19 @@ impl Logout {
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets);
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets)
     }
 
     /// Draws the confirm over `area`: one overlay titled with the
     /// provider or secret name, naming the label it deletes and the
     /// providers reading the same stored directory. The body holds the
     /// confirm's own lines only, never the list's row count or width.
-    fn draw_confirm(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) {
+    fn draw_confirm(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) -> Rect {
         let Mode::Confirm { target } = &self.mode else {
-            return;
+            return Rect::default();
         };
         let Some(row) = self.rows.get(*target) else {
-            return;
+            return Rect::default();
         };
         let width = overlay::width(u16::MAX, 96, area.width);
         let inner = usize::from(overlay::inner(width));
@@ -479,7 +478,7 @@ impl Logout {
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out);
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out)
     }
 }
 

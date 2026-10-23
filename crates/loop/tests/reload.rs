@@ -14,9 +14,145 @@ use contract::inbox::{Ack, Delivery, Rejection};
 use fakes::{Deadline, Scripted};
 use r#loop::{PrepareReload, PromptPatch, ReloadPrepared, ReloadSettings};
 use std::sync::{Arc, Mutex, mpsc};
-use support::{DEADLINE, ENDED, REPLY, STEP, Session, assert_kinds, delivery, of_kind};
+use support::{
+    DEADLINE, ENDED, REPLY, STEP, Session, assert_kinds, deferred, deferring, delivery, of_kind,
+};
 
 use contract::hook::*;
+
+/// A reload setting `{x: false}` rebuilds `x` in full; one removing it
+/// rebuilds `x` deferred. A server in `full_servers` rebuilds its tools
+/// in full the same way.
+#[test]
+fn reload_replaces_the_deferrals_whole() {
+    let x = Arc::new(support::TestTool::reads("x", "x output"));
+    let factory: r#loop::ToolSearchFactory = Arc::new(|_, _| {
+        Arc::new(support::TestTool::reads("tool_search", "found")) as Arc<dyn contract::tool::Tool>
+    });
+    let mut session = Session::wrapped(
+        vec![
+            Scripted::text("one"),
+            Scripted::text("two"),
+            Scripted::text("three"),
+        ],
+        CacheLifetime::FiveMinutes,
+        |scripted, _| deferring(scripted),
+    );
+    session.looped = Some(session.looped.take().unwrap().tool_search(factory));
+    let step = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = Arc::clone(&x);
+    attach(
+        &mut session,
+        Arc::new(move |_| {
+            let at = step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut next = prepared();
+            next.tools.push(("fx".into(), deferred(Arc::clone(&tool))));
+            // Reload 1 turns `x` off by key, reload 2 by server, and
+            // reload 3 removes both, so `x` defers again.
+            next.prompt.deferrals = match at {
+                0 => r#loop::Deferrals {
+                    tools: [("x".to_owned(), false)].into_iter().collect(),
+                    full_servers: std::collections::BTreeSet::new(),
+                },
+                1 => r#loop::Deferrals {
+                    tools: std::collections::BTreeMap::new(),
+                    full_servers: ["fx".to_owned()].into_iter().collect(),
+                },
+                _ => r#loop::Deferrals::default(),
+            };
+            Ok(next)
+        }),
+    );
+    let deferred_of = |lines: &[contract::Envelope], name: &str| {
+        of_kind(lines, "preamble_built")[0].payload["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap()["deferred"]
+            .as_bool()
+            .unwrap()
+    };
+    let declared = |lines: &[contract::Envelope]| {
+        of_kind(lines, "preamble_built")[0].payload["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    session
+        .inbox
+        .send(Delivery::Reload(support::ignore()))
+        .unwrap();
+    session.inbox.send(delivery("one")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "session_started",
+                "reloaded",
+                "extensions_loaded",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert!(!deferred_of(&lines, "x"));
+    assert!(!declared(&lines).contains(&"tool_search".to_owned()));
+    session
+        .inbox
+        .send(Delivery::Reload(support::ignore()))
+        .unwrap();
+    session.inbox.send(delivery("two")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "reloaded",
+                "extensions_loaded",
+                "preamble_built",
+                "turn_started",
+            ],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert!(!deferred_of(&lines, "x"));
+    assert!(!declared(&lines).contains(&"tool_search".to_owned()));
+    session
+        .inbox
+        .send(Delivery::Reload(support::ignore()))
+        .unwrap();
+    session.inbox.send(delivery("three")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "reloaded",
+                "extensions_loaded",
+                "preamble_built",
+                "turn_started",
+            ],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+    assert!(deferred_of(&lines, "x"));
+    assert!(declared(&lines).contains(&"tool_search".to_owned()));
+}
 
 struct StateHooks {
     identity: &'static str,
@@ -231,6 +367,7 @@ fn prepared() -> ReloadPrepared {
             extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
             cache_lifetime: CacheLifetime::FiveMinutes,
+            deferrals: Default::default(),
         },
         tools: Vec::new(),
         extensions: vec![LoadedExtension {

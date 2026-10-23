@@ -16,16 +16,14 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, StopArgs};
-use contract::shapes::Failure;
 use serde_json::Value;
 use support::clock::Parker;
 
 use crate::hub_unit::{Manager, Service};
 use crate::sessions::request_value;
-use crate::{failed, finish, write_line};
+use crate::{CliError, finish, write_line};
 
 /// How often install asks launchd whether a booted-out service is gone.
 const BOOTOUT_POLL: Duration = Duration::from_millis(100);
@@ -41,10 +39,6 @@ pub(crate) const MANAGER_WAIT: Duration = Duration::from_secs(10);
 /// The watchdog's re-check interval: a command that finishes between
 /// slices still answers within one.
 const WATCH_SLICE: Duration = Duration::from_millis(10);
-
-/// What a failed install adds, so the person knows a rerun converges.
-const RERUN: &str =
-    "Run fiber hub install again, or fiber hub uninstall to remove what was written.";
 
 /// How a manager command ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,27 +254,22 @@ pub fn hub_uninstall() -> i32 {
 /// Restarts `home`'s installed hub through its service manager: `Ok(true)`
 /// once the manager restarted it, `Ok(false)` with nothing run when no
 /// service is installed, so the caller signals the hub instead.
-pub fn hub_restart(home: &Path) -> Result<bool, Failure> {
+pub fn hub_restart(home: &Path) -> Result<bool, CliError> {
     let exe = current_exe()?;
     let service = Service::locate(manager(), home, &exe, &|key| std::env::var_os(key))?;
     restart(&service, &system_run)
 }
 
 /// Fiber home and its service, from this process's environment.
-fn system_service() -> Result<(std::path::PathBuf, Service), Failure> {
-    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
+fn system_service() -> Result<(std::path::PathBuf, Service), CliError> {
+    let home = config::fiber_home_from_env()?;
     let exe = current_exe()?;
     let service = Service::locate(manager(), &home, &exe, &|key| std::env::var_os(key))?;
     Ok((home, service))
 }
 
-pub(crate) fn current_exe() -> Result<std::path::PathBuf, Failure> {
-    std::env::current_exe().map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("the running binary's path: {e}"),
-        )
-    })
+pub(crate) fn current_exe() -> Result<std::path::PathBuf, CliError> {
+    std::env::current_exe().map_err(CliError::CurrentExe)
 }
 
 /// This platform's manager, for this process's user.
@@ -298,7 +287,7 @@ pub(crate) fn hub_answers(home: &Path, clock: &dyn Clock, within: Duration) -> b
 /// Writes the unit file's bytes. The write may leave the new bytes in
 /// place while failing, when its rename succeeded before its directory
 /// sync failed.
-type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), Failure>;
+type UnitWrite = dyn Fn(&Path, &[u8]) -> Result<(), CliError>;
 
 /// Runs a manager command to completion. The stop path passes a closure
 /// over [`system_run_bounded`], which borrows the stop's clock, so the
@@ -326,7 +315,7 @@ pub(crate) fn install(
     service: &Service,
     run: &ManagerRun<'_>,
     row: InstallRow<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let previous = read_unit(&service.unit)?;
     let rendered = service.render(row.port)?;
     let changed = previous.as_deref() != Some(rendered.as_bytes());
@@ -336,8 +325,7 @@ pub(crate) fn install(
         // unchanged unit sends nothing, so the running hub keeps its pid.
         stop_running_hub(row.home, row.clock);
     }
-    config::replace_global(row.home, "hub.port", row.port.map(Value::from))
-        .map_err(|e| failed(e.code(), e))?;
+    config::replace_global(row.home, "hub.port", row.port.map(Value::from))?;
     let loaded = match service.manager {
         Manager::Launchd { uid } => call(run, "launchctl", &print_args(service, uid))?.success,
         Manager::Systemd => previous.is_some(),
@@ -349,16 +337,18 @@ pub(crate) fn install(
         return Err(restore_or_rerun(&service.unit, previous.as_deref(), error));
     }
     if let Err(error) = load(service, run, row.clock, loaded, changed) {
-        let message = match changed.then(|| restore(&service.unit, previous.as_deref())) {
-            Some(Err(lost)) => format!(
-                "{} The unit file {} could not be put back ({}); run fiber hub uninstall.",
-                error.message,
-                service.unit.display(),
-                lost.message
-            ),
-            Some(Ok(())) | None => format!("{} {RERUN}", error.message),
-        };
-        return Err(failed(error.code, message));
+        return Err(
+            match changed.then(|| restore(&service.unit, previous.as_deref())) {
+                Some(Err(lost)) => CliError::UnitNotRestored {
+                    cause: Box::new(error),
+                    unit: service.unit.clone(),
+                    lost: Box::new(lost),
+                },
+                Some(Ok(())) | None => CliError::RerunInstall {
+                    cause: Box::new(error),
+                },
+            },
+        );
     }
     write_line(
         row.out,
@@ -397,7 +387,7 @@ fn load(
     clock: &dyn Clock,
     loaded: bool,
     changed: bool,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let unit = unit_name(service);
     match service.manager {
         Manager::Launchd { uid } => {
@@ -443,20 +433,16 @@ fn await_gone(
     uid: u32,
     run: &ManagerRun<'_>,
     clock: &dyn Clock,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let deadline = clock.now() + BOOTOUT_DEADLINE;
     loop {
         if !call(run, "launchctl", &print_args(service, uid))?.success {
             return Ok(());
         }
         if clock.now() >= deadline {
-            return Err(failed(
-                ErrorCode::IoFailed,
-                format!(
-                    "launchd still had {} loaded 10 s after `launchctl bootout`.",
-                    service.name
-                ),
-            ));
+            return Err(CliError::LaunchdStillLoaded {
+                name: service.name.clone(),
+            });
         }
         clock.sleep(BOOTOUT_POLL);
     }
@@ -467,7 +453,7 @@ pub(crate) fn uninstall(
     service: &Service,
     run: &ManagerRun<'_>,
     out: &mut dyn Write,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let removed = match service.manager {
         Manager::Launchd { uid } => {
             let loaded = call(run, "launchctl", &print_args(service, uid))?.success;
@@ -499,12 +485,13 @@ pub(crate) fn uninstall(
         } else {
             "The hub's login service is not installed."
         },
-    )
+    )?;
+    Ok(())
 }
 
 /// Restarts the installed service; `Ok(false)` with no call when its unit
 /// file is absent.
-pub(crate) fn restart(service: &Service, run: &ManagerRun<'_>) -> Result<bool, Failure> {
+pub(crate) fn restart(service: &Service, run: &ManagerRun<'_>) -> Result<bool, CliError> {
     if read_unit(&service.unit)?.is_none() {
         return Ok(false);
     }
@@ -530,7 +517,7 @@ pub(crate) fn stop_login_service(
     service: &Service,
     run: &ManagerRun<'_>,
     clock: &dyn Clock,
-) -> Result<bool, Failure> {
+) -> Result<bool, CliError> {
     if read_unit(&service.unit)?.is_none() {
         return Ok(false);
     }
@@ -579,76 +566,71 @@ fn user(args: &[&str]) -> Vec<String> {
 
 /// Runs a manager command; a missing program names what the installed hub
 /// needs.
-fn call(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<Ran, Failure> {
+fn call(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<Ran, CliError> {
     run(program, args).map_err(|e| {
         if e.kind() == io::ErrorKind::NotFound {
-            let needs = if program == "launchctl" {
-                "launchd"
-            } else {
-                "systemd's user instance"
-            };
-            failed(
-                ErrorCode::IoFailed,
-                format!("`{program}` was not found; an installed hub needs {needs}."),
-            )
+            CliError::ManagerNotFound {
+                program: program.to_owned(),
+            }
         } else {
-            failed(ErrorCode::IoFailed, format!("running `{program}`: {e}"))
+            CliError::ManagerRun {
+                program: program.to_owned(),
+                source: e,
+            }
         }
     })
 }
 
 /// [`call`], failing when the command fails, naming it, its exit code and
 /// the first line of its stderr.
-fn must(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<(), Failure> {
+fn must(run: &ManagerRun<'_>, program: &str, args: &[String]) -> Result<(), CliError> {
     let ran = call(run, program, args)?;
     if ran.success {
         return Ok(());
     }
-    let code = ran.code.map_or_else(
-        || "no exit code".to_owned(),
-        |code| format!("exit code {code}"),
-    );
     let said = match ran.stderr.lines().next().map(str::trim) {
-        Some(first) if !first.is_empty() => format!(": {first}"),
-        Some(_) | None => String::new(),
+        Some(first) if !first.is_empty() => Some(first.to_owned()),
+        Some(_) | None => None,
     };
-    Err(failed(
-        ErrorCode::IoFailed,
-        format!("`{program} {}` failed with {code}{said}.", args.join(" ")),
-    ))
+    Err(CliError::ManagerFailed {
+        program: program.to_owned(),
+        args: args.to_vec(),
+        exit: ran.code,
+        said,
+    })
 }
 
 /// The unit file's bytes, `None` when there is none.
-pub(crate) fn read_unit(unit: &Path) -> Result<Option<Vec<u8>>, Failure> {
+pub(crate) fn read_unit(unit: &Path) -> Result<Option<Vec<u8>>, CliError> {
     match fs::read(unit) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(failed(
-            ErrorCode::IoFailed,
-            format!("reading {}: {e}", unit.display()),
-        )),
+        Err(e) => Err(CliError::UnitReadFailed {
+            unit: unit.to_owned(),
+            source: e,
+        }),
     }
 }
 
 /// Writes the unit file through a temporary file and a rename, mode 0644.
-fn write_unit(unit: &Path, bytes: &[u8]) -> Result<(), Failure> {
-    config::write_atomic(unit, bytes, 0o644).map_err(|e| failed(ErrorCode::IoFailed, e))
+fn write_unit(unit: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    config::write_atomic(unit, bytes, 0o644).map_err(CliError::UnitWriteFailed)
 }
 
 /// Deletes the unit file: true when there was one.
-fn delete_unit(unit: &Path) -> Result<bool, Failure> {
+fn delete_unit(unit: &Path) -> Result<bool, CliError> {
     match fs::remove_file(unit) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(failed(
-            ErrorCode::IoFailed,
-            format!("deleting {}: {e}", unit.display()),
-        )),
+        Err(e) => Err(CliError::UnitDeleteFailed {
+            unit: unit.to_owned(),
+            source: e,
+        }),
     }
 }
 
 /// Puts the unit file back as it was before install wrote it.
-fn restore(unit: &Path, previous: Option<&[u8]>) -> Result<(), Failure> {
+fn restore(unit: &Path, previous: Option<&[u8]>) -> Result<(), CliError> {
     match previous {
         Some(bytes) => write_unit(unit, bytes),
         None => delete_unit(unit).map(|_| ()),
@@ -657,17 +639,17 @@ fn restore(unit: &Path, previous: Option<&[u8]>) -> Result<(), Failure> {
 
 /// Restores `unit` to `previous` after a failed step, naming the rerun
 /// that converges, or the uninstall when the restore itself fails.
-fn restore_or_rerun(unit: &Path, previous: Option<&[u8]>, error: Failure) -> Failure {
-    let message = match restore(unit, previous) {
-        Err(lost) => format!(
-            "{} The unit file {} could not be put back ({}); run fiber hub uninstall.",
-            error.message,
-            unit.display(),
-            lost.message
-        ),
-        Ok(()) => format!("{} {RERUN}", error.message),
-    };
-    failed(error.code, message)
+fn restore_or_rerun(unit: &Path, previous: Option<&[u8]>, error: CliError) -> CliError {
+    match restore(unit, previous) {
+        Err(lost) => CliError::UnitNotRestored {
+            cause: Box::new(error),
+            unit: unit.to_owned(),
+            lost: Box::new(lost),
+        },
+        Ok(()) => CliError::RerunInstall {
+            cause: Box::new(error),
+        },
+    }
 }
 
 #[cfg(test)]

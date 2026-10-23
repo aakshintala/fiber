@@ -7,6 +7,8 @@ use super::{App, Effect};
 use crate::approvals::PanelKey;
 use crate::keys::Key;
 use crate::keyset::Context;
+use ratatui::layout::Rect;
+use std::cell::RefCell;
 
 /// One surface that can hold the keyboard, topmost first: declaration
 /// order is the precedence, so a surface compares less than every
@@ -21,6 +23,8 @@ pub(crate) enum Surface {
     KeysScreen,
     /// The key map.
     Keymap,
+    /// The reviewer notes setup.
+    ReviewerSetup,
     /// The model picker or the credential picker.
     Picker,
     /// A configuration view other than the credential picker.
@@ -54,12 +58,80 @@ pub(crate) enum Surface {
 }
 
 impl Surface {
+    /// Whether a left press starting outside the surface's frame closes
+    /// it as Esc does (`docs/tui.md`, "Bindings"). Every surface that
+    /// draws a frame of its own over the screen is in the set; the
+    /// panel, the offer and the other surfaces never take the click's
+    /// place.
+    // debt: explicit set stays; widen the matches! if the surveyor rules Panel/Offer in, never delete the gate while note calls decide coverage.
+    // Equivalent to `true` while every note site stays within the closing
+    // set: `slab_of(top)?` in `outside_press` already refuses every
+    // excluded surface, so no consumer sees `true` differ. If an excluded
+    // surface ever notes a slab, remove this exemption and test the gate.
+    #[cfg_attr(false, mutants::skip)]
+    pub(crate) fn closes_on_outside_click(self) -> bool {
+        matches!(
+            self,
+            Surface::Quit
+                | Surface::Report
+                | Surface::Keymap
+                | Surface::ReviewerSetup
+                | Surface::Picker
+                | Surface::ConfigView
+                | Surface::DeleteQuestion
+                | Surface::WorkspacePicker
+                | Surface::Search
+                | Surface::Completion
+                | Surface::Notice
+        )
+    }
+
     /// Whether Esc reaches the notice overlay before this surface does.
     /// The `/keys` screen yields the same way in `on_press`, and the
     /// conversation's focus inside its own arm, because it runs
     /// `cancel_pending_turn` after the overlay closes.
     pub(in crate::app) fn yields_esc_to_notice(self) -> bool {
         matches!(self, Surface::Offer | Surface::Results | Surface::Find)
+    }
+}
+
+/// The slabs the last frame drew for its framed surfaces, keyed by
+/// surface: what a click outside the overlay on top reads
+/// (`docs/tui.md`, "Bindings"). The draw writes it and a later input
+/// reads it, so it shares the interior-mutability shape of the other
+/// frame-written state; `render` clears it before anything else, and a
+/// surface is noted once per frame from the `Rect` its draw returned.
+#[derive(Default)]
+pub(crate) struct Frames(RefCell<Vec<(Surface, Rect)>>);
+
+impl Frames {
+    /// Drops the last frame's slabs, before the next frame notes its own.
+    pub(crate) fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+
+    /// Notes `surface`'s slab, replacing its earlier note; an empty slab
+    /// notes nothing, so a frame squeezed to nothing takes the old path.
+    // debt: replace branch stays as double-note insurance; drop it only if notes become provably once-per-frame by construction.
+    pub(crate) fn note(&self, surface: Surface, slab: Rect) {
+        if slab.is_empty() {
+            return;
+        }
+        let mut frames = self.0.borrow_mut();
+        if let Some(slot) = frames.iter_mut().find(|(open, _)| *open == surface) {
+            slot.1 = slab;
+        } else {
+            frames.push((surface, slab));
+        }
+    }
+
+    /// `surface`'s slab in the last frame, if it drew one.
+    pub(crate) fn slab_of(&self, surface: Surface) -> Option<Rect> {
+        self.0
+            .borrow()
+            .iter()
+            .find(|(open, _)| *open == surface)
+            .map(|(_, slab)| *slab)
     }
 }
 
@@ -77,6 +149,11 @@ pub(super) fn between(
 }
 
 impl App {
+    /// The slabs the last frame drew for its framed surfaces.
+    pub(crate) fn frames(&self) -> &Frames {
+        &self.frames
+    }
+
     /// The surfaces open now, topmost first, ending with the input box.
     pub(crate) fn top_surfaces(&self) -> Vec<Surface> {
         let open = [
@@ -84,6 +161,7 @@ impl App {
             (Surface::Report, self.import_report_open()),
             (Surface::KeysScreen, self.keys_screen_open()),
             (Surface::Keymap, self.keymap_top().is_some()),
+            (Surface::ReviewerSetup, self.reviewer_setup_open()),
             (
                 Surface::Picker,
                 self.model_picker_open() || self.credential_view_open(),
@@ -145,6 +223,7 @@ impl App {
             Surface::Quit
             | Surface::Report
             | Surface::Keymap
+            | Surface::ReviewerSetup
             | Surface::ConfigView
             | Surface::SessionView
             | Surface::DeleteQuestion
@@ -191,6 +270,7 @@ impl App {
             // completion panels in `route_key`, between two slices.
             Surface::KeysScreen | Surface::Completion => None,
             Surface::Keymap => self.keymap_key(key),
+            Surface::ReviewerSetup => self.reviewer_setup_key(key),
             Surface::Picker => self
                 .model_picker_key(key)
                 .or_else(|| self.config_view_key(key)),

@@ -1,0 +1,11 @@
+{
+  "script": {"steps": [{"text": "unused"}]},
+  "command": {"name": "export"},
+  "until": {"kind": "extension_ui"},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "fiber_exited"}
+  ]
+}

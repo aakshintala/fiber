@@ -12,19 +12,23 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
+    UsageRecorded,
 };
+use contract::inbox::Delivery;
 use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
-use contract::shapes::Failure;
-use contract::{ActionId, ErrorCode, Seq};
+use contract::shapes::{Failure, Tokens};
+use contract::{ActionId, ErrorCode, GenerationId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::{Scripted, reply};
 use serde_json::{Value, json};
 
 use support::{
-    MODEL, Session, TestTool, delivery, kinds, message, reasoning_item, reasoning_reply, steer,
-    tool_call_reply,
+    MODEL, Session, TestTool, child_usage, delivery, kinds, message, reasoning_item,
+    reasoning_reply, send_child, steer, tool_call_reply,
 };
 
 fn user(text: &str) -> Input {
@@ -1393,18 +1397,70 @@ fn budgeted_with_jobs(
 }
 
 #[test]
-fn a_turn_that_ends_over_budget_stops_delegates_once() {
+fn a_copy_at_exactly_the_budget_trips() {
+    // The boundary is inclusive: spend reaching the budget trips the
+    // fold, and the failed turn's budget end stops again.
     let (mut session, jobs) = budgeted_with_jobs(
-        vec![tool_of("gen_1", 1_000_000), reply_of("Done.", "gen_2", 1)],
-        Some(message("later")),
+        vec![Scripted::text("One.")],
+        None,
         per_token(false),
         Some(1.0),
     );
-    session.inbox.send(delivery("hi")).unwrap();
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_1", Some(1.0), None, None),
+    );
+    session.inbox.send(delivery("one")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let completed = session.lines().last().unwrap().clone();
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
-    assert_eq!(jobs.stop_delegates_calls(), 1);
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn a_turn_that_ends_over_budget_stops_delegates_through_trip_and_end() {
+    // A foreign copy crossing the budget trips at the fold (stop one);
+    // the failed turn's budget end stops again (stop two). The loop's
+    // own spend never trips the fold: it stops exactly once, at the
+    // budget end.
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![reply_of("Done.", "gen_2", 1)],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session
+        .inbox
+        .send(Delivery::DelegateUsage {
+            session: SessionId("s_child".into()),
+            line: UsageRecorded {
+                generation_id: GenerationId("g_cross".into()),
+                model: "fake/m".into(),
+                tokens: Tokens {
+                    input: 10,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 5,
+                },
+                input_bytes: 100,
+                input_media: None,
+                web_searches: None,
+                cost: Some(100.0),
+                subscription: None,
+                extension: None,
+                origin_session_id: None,
+                reviewer: None,
+            },
+        })
+        .unwrap();
+    session.inbox.send(support::delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    // The crossing copy trips the one-way tripwire and the failed turn's
+    // budget end stops again; each delegate run is stopped once.
+    assert_eq!(jobs.stop_delegates_calls(), 2);
 }
 
 #[test]
@@ -1432,4 +1488,253 @@ fn a_budget_end_without_jobs_ends_the_same_way() {
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let completed = session.lines().last().unwrap().clone();
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+}
+
+/// Attaches `jobs` to the session's loop, as the session does once its
+/// delegates can run: the restored ledger and the budget publish to the
+/// spend tripwire under its lock (`docs/loop.md`, "Spending budget").
+fn attach_jobs(session: &mut Session) -> Arc<fakes::jobs::FakeJobs> {
+    let jobs = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>));
+    jobs
+}
+
+#[test]
+fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
+    // The ledger already holds two delegate copies when the delegate
+    // opens: the open publishes those lines to the tripwire, so the
+    // watcher's replay of one adds no delta, trips nothing and spends
+    // nothing twice.
+    let mut session = budgeted(
+        vec![
+            Scripted::text("One."),
+            Scripted::text("Two."),
+            Scripted::text("Three."),
+            Scripted::text("Four."),
+        ],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    for prompt in ["one", "two"] {
+        session.inbox.send(delivery(prompt)).unwrap();
+        assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+        session.lines();
+    }
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_1", Some(0.30), None, None),
+    );
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_2", Some(0.30), None, None),
+    );
+    session.inbox.send(delivery("three")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    let jobs = attach_jobs(&mut session);
+    // The replay of the first copy, as a reopened watcher delivers it:
+    // the spend holds every line once, and the trip stays unclaimed.
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_1", Some(0.30), None, None),
+    );
+    session.inbox.send(delivery("four")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    // Unnamed own calls share one fold bucket; the replay adds nothing.
+    let one = all
+        .iter()
+        .find(|l| l.kind == "usage_recorded" && l.payload.get("origin_session_id").is_none())
+        .map(|l| l.payload["cost"].as_f64().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    let spent = exited.payload["usage"]["cost"].as_f64().unwrap_or(0.0);
+    assert!(
+        (spent - (one + 0.6)).abs() < 1e-9,
+        "the replay spends nothing twice: {spent} vs {one} + 0.6"
+    );
+}
+
+#[test]
+fn replacing_the_jobs_attachment_clears_the_previous_tap() {
+    // Replacing the attachment uninstalls the first registry's tap: a
+    // still-running delegate on it can neither update the shared
+    // tripwire nor stop the detached registry. Without the clear the
+    // first registry keeps its tap.
+    let mut session = budgeted(
+        vec![Scripted::text("One.")],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    let first = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&first) as Arc<dyn contract::jobs::Jobs>));
+    assert!(first.has_usage_tap());
+    let second = fakes::jobs::FakeJobs::new(&session.workspace);
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(looped.jobs(Arc::clone(&second) as Arc<dyn contract::jobs::Jobs>));
+    assert!(!first.has_usage_tap());
+    assert!(second.has_usage_tap());
+}
+
+#[test]
+fn a_copy_tripping_the_budget_stops_delegates_through_the_trip() {
+    // The crossing copy trips the one-way tripwire on its fold path, then
+    // the turn's budget end stops again: two calls, one trip. A repeat of
+    // the crossing copy claims nothing more; the turn still fails.
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![Scripted::text("One."), Scripted::text("Two.")],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_1", Some(0.90), None, None),
+    );
+    session.inbox.send(delivery("one")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_2", Some(0.50), None, None),
+    );
+    session.inbox.send(delivery("two")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn loop_spend_and_a_copy_trip_together() {
+    // The loop's own 0.6 fills the tripwire through the recording-only
+    // path; the 0.5 copy crosses the 1.0 budget on its fold path and
+    // trips (stop one), and the failed turn's budget end stops again
+    // (stop two). Without the recording path the copy alone never trips,
+    // and only the budget end stops.
+    let (mut session, jobs) = budgeted_with_jobs(
+        vec![
+            reply_of("Done.", "gen_own", 600_000),
+            Scripted::text("Two."),
+        ],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(delivery("one")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_1", Some(0.5), None, None),
+    );
+    session.inbox.send(delivery("two")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let completed = session.lines().last().unwrap().clone();
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn a_copy_without_its_job_lines_still_counts() {
+    // Pruning dropped the delegate's job lines, but the usage copy it
+    // wrote before stays: the spend holds it with no job in sight.
+    let mut session = Session::new(vec![reasoning_reply("Think.", "Hi.")], None);
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_9", Some(0.07), None, None),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    assert!(
+        all.iter()
+            .all(|l| l.kind != "job_started" && l.kind != "job_completed"),
+        "no job lines at all"
+    );
+    let exited = all.last().unwrap();
+    assert_eq!(exited.payload["usage"]["cost"], 0.07);
+    assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
+}
+
+#[test]
+fn a_restored_copy_without_a_job_end_counts_once_with_its_origin() {
+    // The resume restored the delegate's copy but no job end for it: the
+    // spend holds the copy once, naming the delegate that made the call.
+    let mut session = Session::new(
+        vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
+        None,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    session
+        .log
+        .append(
+            &contract::events::Event::UsageRecorded(child_usage(
+                "g_child",
+                Some(0.04),
+                Some(SessionId("s_child".into())),
+                None,
+            )),
+            None,
+            None,
+        )
+        .unwrap();
+    session.inbox.send(delivery("again")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let copies: Vec<_> = all
+        .iter()
+        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == "g_child")
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(copies[0].payload["origin_session_id"], "s_child");
+    let exited = all.last().unwrap();
+    assert_eq!(exited.payload["usage"]["cost"], 0.04);
+    assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
+}
+
+#[test]
+fn a_late_cost_for_a_copy_applies_only_its_delta() {
+    // The copy first arrives unbilled, then its cost settles late: the
+    // spend applies only the delta, never the whole figure twice.
+    let mut session = Session::new(vec![reasoning_reply("Think.", "Hi.")], None);
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_child", None, None, None),
+    );
+    send_child(
+        &session,
+        "s_child",
+        child_usage("g_child", Some(0.05), None, None),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.payload["usage"]["cost"], 0.05);
 }

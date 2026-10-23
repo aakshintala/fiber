@@ -464,6 +464,103 @@ pub enum CliError {
         /// The hub asked.
         hub: String,
     },
+    /// The running binary's path could not be read.
+    #[error("the running binary's path: {0}")]
+    CurrentExe(#[source] io::Error),
+    /// launchd still had the service loaded after `bootout` and the wait.
+    #[error("launchd still had {name} loaded 10 s after `launchctl bootout`.")]
+    LaunchdStillLoaded {
+        /// The service's name.
+        name: String,
+    },
+    /// The service manager's program is not installed.
+    #[error("`{program}` was not found; an installed hub needs {}.", manager_needs(.program))]
+    ManagerNotFound {
+        /// The program that was not found.
+        program: String,
+    },
+    /// The service manager's program could not run.
+    #[error("running `{program}`: {source}")]
+    ManagerRun {
+        /// The program that did not run.
+        program: String,
+        /// Why it did not run.
+        source: io::Error,
+    },
+    /// The service manager's program ran and failed.
+    #[error("{}", manager_failed_message(.program, .args, *.exit, .said.as_deref()))]
+    ManagerFailed {
+        /// The program that failed.
+        program: String,
+        /// The arguments it ran with.
+        args: Vec<String>,
+        /// Its exit code, none when a signal ended it.
+        exit: Option<i32>,
+        /// The first line of its stderr, none when that is blank.
+        said: Option<String>,
+    },
+    /// The unit file could not be read.
+    #[error("reading {}: {source}", unit.display())]
+    UnitReadFailed {
+        /// The unit file.
+        unit: PathBuf,
+        /// Why the read failed.
+        source: io::Error,
+    },
+    /// The unit file could not be written.
+    #[error("{0}")]
+    UnitWriteFailed(#[source] ConfigError),
+    /// The unit file could not be deleted.
+    #[error("deleting {}: {source}", unit.display())]
+    UnitDeleteFailed {
+        /// The unit file.
+        unit: PathBuf,
+        /// Why the delete failed.
+        source: io::Error,
+    },
+    /// An install step failed and the unit file could not be put back.
+    #[error("{cause} The unit file {} could not be put back ({lost}); run fiber hub uninstall.", unit.display())]
+    UnitNotRestored {
+        /// The step that failed.
+        cause: Box<CliError>,
+        /// The unit file.
+        unit: PathBuf,
+        /// Why the restore failed.
+        lost: Box<CliError>,
+    },
+    /// An install step failed and the unit file was put back.
+    #[error("{cause} {}", RERUN)]
+    RerunInstall {
+        /// The step that failed.
+        cause: Box<CliError>,
+    },
+    /// The stop command could not be written as JSON.
+    #[error("the hub: {0}")]
+    HubRequestEncode(#[source] serde_json::Error),
+    /// The hub closed the connection before answering the stop.
+    #[error("the hub closed the connection before answering stop")]
+    HubClosedBeforeAnswer,
+    /// The hub did not close within the stop's deadline.
+    #[error("the hub did not stop in {secs} s")]
+    HubStopLate {
+        /// The deadline in seconds.
+        secs: u64,
+    },
+    /// The hub's accepted stop answer carries no session count.
+    #[error("the hub answered stop without a session count")]
+    StopCountMissing,
+    /// The hub's pairing answer carries no code.
+    #[error("the hub's pairing answer has no code")]
+    PairingAnswerMissing,
+    /// The address does not fit in a QR code.
+    #[error("The address is too long to draw as a QR code.")]
+    QrTooLong,
+    /// The hub's `status` answer carries no usable variables.
+    #[error("the hub's answer to `status` has no variables")]
+    StatusNoVariables,
+    /// The hub's `devices` answer is not a device list.
+    #[error("the hub's answer to `devices` is not a device list")]
+    DevicesMalformed,
 }
 
 /// Why a store refused before anything was read or written: a usage
@@ -505,6 +602,10 @@ pub enum Refusal {
         label: String,
     },
 }
+
+/// What a failed install adds, so the person knows a rerun converges.
+pub(crate) const RERUN: &str =
+    "Run fiber hub install again, or fiber hub uninstall to remove what was written.";
 
 /// The layer in words, as usage failures name it.
 pub(crate) fn layer_word(layer: Layer) -> &'static str {
@@ -595,6 +696,31 @@ fn hub_message(error: &doors::Error) -> String {
     }
 }
 
+/// What an installed hub needs from the manager `program` belongs to.
+fn manager_needs(program: &str) -> &'static str {
+    if program == "launchctl" {
+        "launchd"
+    } else {
+        "systemd's user instance"
+    }
+}
+
+/// The `ManagerFailed` sentence: the command, its exit code and the first
+/// line of its stderr when it said one.
+fn manager_failed_message(
+    program: &str,
+    args: &[String],
+    exit: Option<i32>,
+    said: Option<&str>,
+) -> String {
+    let code = exit.map_or_else(
+        || "no exit code".to_owned(),
+        |code| format!("exit code {code}"),
+    );
+    let said = said.map_or_else(String::new, |first| format!(": {first}"));
+    format!("`{program} {}` failed with {code}{said}.", args.join(" "))
+}
+
 impl CliError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
@@ -607,11 +733,28 @@ impl CliError {
             Self::Log(error) => error.code(),
             Self::Hub(error) => error.code(),
             Self::Rejected { code, .. } => code.clone(),
+            Self::UnitNotRestored { cause, .. } | Self::RerunInstall { cause } => cause.code(),
             Self::HubClosed { .. }
             | Self::CommandEncode(_)
             | Self::SessionsAnswer(_)
             | Self::SessionRow(_)
             | Self::SearchHit(_) => ErrorCode::IoFailed,
+            Self::CurrentExe(_)
+            | Self::LaunchdStillLoaded { .. }
+            | Self::ManagerNotFound { .. }
+            | Self::ManagerRun { .. }
+            | Self::ManagerFailed { .. }
+            | Self::UnitReadFailed { .. }
+            | Self::UnitWriteFailed(_)
+            | Self::UnitDeleteFailed { .. }
+            | Self::HubRequestEncode(_)
+            | Self::HubClosedBeforeAnswer
+            | Self::HubStopLate { .. }
+            | Self::StopCountMissing
+            | Self::PairingAnswerMissing
+            | Self::StatusNoVariables
+            | Self::DevicesMalformed => ErrorCode::IoFailed,
+            Self::QrTooLong => ErrorCode::Usage,
             Self::DeleteNobody => ErrorCode::Usage,
             Self::SessionNotFoundOnHub { .. } => ErrorCode::SessionNotFound,
             Self::Terminal(_)
@@ -761,7 +904,25 @@ impl From<CliError> for Failure {
             | CliError::FiberExecutable(_)
             | CliError::DoctorReport(_)
             | CliError::DoctorDirectory(_)
-            | CliError::NoFirstPartyPackage { .. }) => Failure {
+            | CliError::NoFirstPartyPackage { .. }
+            | CliError::CurrentExe(_)
+            | CliError::LaunchdStillLoaded { .. }
+            | CliError::ManagerNotFound { .. }
+            | CliError::ManagerRun { .. }
+            | CliError::ManagerFailed { .. }
+            | CliError::UnitReadFailed { .. }
+            | CliError::UnitWriteFailed(_)
+            | CliError::UnitDeleteFailed { .. }
+            | CliError::UnitNotRestored { .. }
+            | CliError::RerunInstall { .. }
+            | CliError::HubRequestEncode(_)
+            | CliError::HubClosedBeforeAnswer
+            | CliError::HubStopLate { .. }
+            | CliError::StopCountMissing
+            | CliError::PairingAnswerMissing
+            | CliError::QrTooLong
+            | CliError::StatusNoVariables
+            | CliError::DevicesMalformed) => Failure {
                 code: other.code(),
                 message: other.to_string(),
                 retry_after_ms: None,

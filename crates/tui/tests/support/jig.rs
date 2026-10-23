@@ -8,7 +8,8 @@
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+
+use fakes::MUST_SUCCEED_WITHIN;
 
 /// The checked-in events file both jig tests draw, so the path never
 /// changes with a checkout.
@@ -31,6 +32,7 @@ pub(crate) fn example_path(name: &str) -> PathBuf {
 /// `finished` and leaves no process behind.
 #[track_caller]
 pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
+    fakes::warm_up(&example_path(binary), &[], 2);
     let child = Command::new(example_path(binary))
         .args(args)
         .stdout(Stdio::piped())
@@ -40,6 +42,6 @@ pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
         .expect("the jig binary spawns");
     let watchdog = fakes::Watchdog::group(child.id());
     let output = fakes::wait_output(child, finished);
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }

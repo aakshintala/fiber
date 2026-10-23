@@ -1,27 +1,38 @@
 //! Classifies a shell command (`docs/tools.md`, "Shell", "Effects").
+//!
+//! Each verdict comes from one of three places. The tree-sitter parse
+//! (`super::syntax`) splits the call into elements, stages, words and
+//! redirects. The entry lookup (`super::entry`) names the command path and
+//! reads its flags. The flag walk, the `sed` file grammar, the exact forms,
+//! the path tail and the subject line below are the old hand-lexer rules,
+//! kept word for word and cited where each stands.
 
 use std::path::{Component, Path, PathBuf};
 
 use contract::shapes::Effect;
 use contract::tool::Effects;
 
-use super::read_only::{COMMANDS, Command, EXACT};
+use super::cwd::Cwd;
+use super::entry::{self, Found};
+use super::read_only::{Command, EXACT};
+use super::syntax::{Redirect, Script, Simple, Stage, Word};
 
-/// Effects of `command` run in `workdir`. A command this classifier cannot
-/// read plainly, or any part not on the read-only list, is `executes` with
-/// no paths. One plain part is the subject. `configured` holds the person's
-/// `shell.read_only` entries beside the built-in list: a part the built-in
-/// list does not answer falls back to them.
+/// Effects of `command` run in `workdir`. A command the tree-sitter parse
+/// rejects, or any element not on the read-only list, is `executes` with no
+/// paths. The single simple stage's raw tokens are the subject.
+/// `configured` holds the person's `shell.read_only` entries beside the
+/// built-in list: an element no built-in path owns falls back to them, and
+/// a built-in path answers first so configuration cannot widen it.
 pub(super) fn classify(
     command: &str,
     workdir: &Path,
     configured: &[(String, Vec<String>)],
 ) -> Effects {
-    let Some(parts) = Lexer::new(command).run() else {
+    let Some(script) = super::syntax::parse(command) else {
         return executes(None, None);
     };
-    let (subject, prefix) = subject_and_prefix(&parts);
-    match outcome(&parts, workdir, configured) {
+    let (subject, prefix) = subject_and_prefix(&script);
+    match outcome(&script, workdir, configured) {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
     }
@@ -52,42 +63,44 @@ fn declared(
     crate::tool_util::effects(vec![effect], reversible, paths, subject, prefix)
 }
 
-/// The subject and prefix of a one-part plain command. Anything else has
-/// neither, so no allow rule can match it.
-fn subject_and_prefix(parts: &[Part]) -> (Option<String>, Option<String>) {
-    let Some(part) = parts.first() else {
+/// The subject reviewers see and the prefix allow rules match: the single
+/// simple stage's raw tokens joined, then its first one or two words. A
+/// pipeline, an opaque stage, a leading redirect or a leading assignment
+/// names nothing: the assignments never show, so no allow rule can match
+/// an environment-modified call, as the hand lexer showed raw words.
+fn subject_and_prefix(script: &Script) -> (Option<String>, Option<String>) {
+    let [element] = script.elements.as_slice() else {
         return (None, None);
     };
-    if parts.len() != 1 || !plain_part(part) {
+    let [Stage::Simple(simple)] = element.stages.as_slice() else {
+        return (None, None);
+    };
+    if !simple.assignments.is_empty() {
         return (None, None);
     }
-    let subject = part
-        .words
-        .iter()
-        .map(|word| word.raw.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    (Some(subject), prefix_of(part))
+    let tokens = &simple.tokens;
+    let Some(first) = tokens.first() else {
+        return (None, None);
+    };
+    if !simple.words.first().is_some_and(|word| word.raw == *first) {
+        return (None, None);
+    }
+    let prefix = prefix_of(tokens);
+    (Some(tokens.join(" ")), prefix)
 }
 
-fn plain_part(part: &Part) -> bool {
-    part.words
-        .first()
-        .is_some_and(|word| !word.cooked.contains('='))
-}
-
-fn prefix_of(part: &Part) -> Option<String> {
-    let first = part.words.first()?;
-    if first.raw.is_empty() || first.raw.contains(['\'', '"']) {
+fn prefix_of(tokens: &[String]) -> Option<String> {
+    let first = tokens.first()?;
+    if first.is_empty() || first.contains(['\'', '"']) {
         return None;
     }
-    let Some(second) = part.words.get(1) else {
-        return Some(first.raw.clone());
+    let Some(second) = tokens.get(1) else {
+        return Some(first.clone());
     };
-    if plain_word(&second.raw) {
-        Some(format!("{} {}", first.raw, second.raw))
+    if plain_word(second) {
+        Some(format!("{first} {second}"))
     } else {
-        Some(first.raw.clone())
+        Some(first.clone())
     }
 }
 
@@ -97,19 +110,48 @@ fn plain_word(raw: &str) -> bool {
     !raw.is_empty() && !raw.starts_with('-') && !raw.contains(['\'', '"', '/', '.', '=', '>'])
 }
 
-enum Outcome {
+pub(super) enum Outcome {
     Executes,
     Reads(Vec<String>),
 }
 
-fn outcome(parts: &[Part], workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
+fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
+    let Some(start) = workdir.to_str() else {
+        return Outcome::Executes;
+    };
+    let mut cwd = Cwd::new(start);
+    let mut saw_cd = false;
     let mut saw_executes = false;
+    let mut lost = false;
     let mut paths = Vec::new();
-    for part in parts {
-        match part_outcome(part, workdir, configured) {
-            Outcome::Executes => saw_executes = true,
-            Outcome::Reads(more) => paths.extend(more),
+    for element in &script.elements {
+        if lost {
+            saw_executes = true;
+            continue;
         }
+        let Some(dirs) = cwd.enter(element.join) else {
+            lost = true;
+            saw_executes = true;
+            continue;
+        };
+        let mut cd_target = None;
+        if let [Stage::Simple(simple)] = element.stages.as_slice()
+            && is_cd(simple)
+        {
+            cd_target = cd_operand(simple);
+        }
+        for stage in &element.stages {
+            if let Stage::Simple(simple) = stage
+                && is_cd(simple)
+            {
+                saw_cd = true;
+            }
+            match stage_outcome(stage, &dirs, configured, saw_cd) {
+                Outcome::Executes => saw_executes = true,
+                Outcome::Reads(mut more) => paths.append(&mut more),
+            }
+        }
+        cwd.leave(element.join, cd_target);
     }
     if saw_executes {
         Outcome::Executes
@@ -118,62 +160,179 @@ fn outcome(parts: &[Part], workdir: &Path, configured: &[(String, Vec<String>)])
     }
 }
 
-fn part_outcome(part: &Part, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
-    // A redirect applies wherever it stands, so it is dropped before the
-    // read-only check and kept only in the subject.
-    let kept: Vec<Word> = part
-        .words
-        .iter()
-        .filter(|word| !is_redirect_word(word))
-        .map(|word| Word {
-            raw: word.raw.clone(),
-            cooked: word.cooked.clone(),
-        })
-        .collect();
-    let mut words = kept.iter();
-    let Some(first) = words.next() else {
+fn stage_outcome(
+    stage: &Stage,
+    dirs: &[String],
+    configured: &[(String, Vec<String>)],
+    saw_cd: bool,
+) -> Outcome {
+    let Stage::Simple(simple) = stage else {
+        // An unlisted or refused stage: a loop body, a heredoc with a body,
+        // a substitution, an unlisted operator, or a redirect outside the
+        // allow-list.
         return Outcome::Executes;
     };
-    if first.cooked.contains('=') {
+    // An assignment prefix executes: no built-in entry blesses an
+    // assignment name, so `LC_ALL=C git status` and `FOO=1 ls` both do.
+    // The wrapper part reintroduces named blessings with its own tests.
+    if !simple.assignments.is_empty() {
         return Outcome::Executes;
     }
-    // An exact form reads with no paths: only `git branch --show-current`.
-    if EXACT.iter().any(|row| cooked_equals(&kept, row)) {
-        return Outcome::Reads(Vec::new());
+    // A `git` after any earlier `cd` is reviewed: the new directory can
+    // hold hooks or configuration the person never saw.
+    if saw_cd && is_git(simple) {
+        return Outcome::Executes;
+    }
+    // `cd <dir>` is a read-only step, and its directory is a path the
+    // call reads.
+    if is_cd(simple) {
+        return cd_outcome(simple, dirs);
+    }
+    // An exact form reads with no paths: `git status`, `git stash list`
+    // or `git branch --show-current`.
+    if EXACT.iter().any(|row| cooked_equals(&simple.words, row)) {
+        return with_inputs(Outcome::Reads(Vec::new()), simple, dirs);
     }
     // `sed` has its own print-only grammar, not a table row.
-    if first.cooked == "sed" {
-        let words = kept.iter().skip(1).map(|word| word.cooked.as_str());
-        let Some(files) = super::sed::files(words) else {
+    if simple
+        .words
+        .first()
+        .is_some_and(|word| word.cooked == "sed")
+    {
+        let files = simple.words.iter().skip(1).map(|word| word.cooked.as_str());
+        let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
         };
-        return path_tail(&files, workdir);
+        return with_inputs(path_tail(&files, dirs), simple, dirs);
     }
-    let Some(entry) = lookup(first, &mut words) else {
-        // A name the built-in list owns never reaches configuration: the
-        // link-following and write flags the built-in rule refuses stay
-        // refused, and configuration cannot widen them.
-        if builtin_name(&first.cooked) {
-            return Outcome::Executes;
+    let verdict = match entry::find(&simple.words, configured) {
+        Found::Builtin(entry) => builtin_outcome(simple, entry, dirs),
+        Found::Configured(flags, consumed) => {
+            entry::configured_outcome(flags, rest_after(&simple.words, consumed), dirs)
         }
-        let flags = configured
-            .iter()
-            .find(|(name, _)| *name == first.cooked)
-            .map(|(_, flags)| flags);
-        let Some(flags) = flags else {
-            return Outcome::Executes;
-        };
-        return configured_outcome(flags, words, workdir);
+        Found::None => Outcome::Executes,
     };
+    with_inputs(verdict, simple, dirs)
+}
+
+/// Whether a stage runs `cd`: its first word is exactly `cd`.
+fn is_cd(simple: &Simple) -> bool {
+    simple.words.first().is_some_and(|word| word.cooked == "cd")
+}
+
+/// Whether a stage runs `git`: its first word's basename is `git`.
+fn is_git(simple: &Simple) -> bool {
+    simple
+        .words
+        .first()
+        .is_some_and(|word| word.cooked.rsplit('/').next() == Some("git"))
+}
+
+/// The `cd` target: `cd <dir>` or `cd -- <dir>` with exactly one
+/// following word, or nothing when the shape differs. A flag-like operand
+/// reads only after `--`: `cd -P` executes while `cd -- -P` names a
+/// directory.
+fn cd_operand(simple: &Simple) -> Option<&str> {
+    let mut words = simple.words.iter();
+    if !words.next().is_some_and(|word| word.cooked == "cd") {
+        return None;
+    }
+    let first = words.next()?;
+    let (operand, dashed) = if first.cooked == "--" {
+        (words.next()?, true)
+    } else {
+        (first, false)
+    };
+    if words.next().is_some() {
+        return None;
+    }
+    if !dashed && operand.cooked.starts_with('-') {
+        return None;
+    }
+    Some(operand.cooked.as_str())
+}
+
+/// A `cd` stage: a plain `cd <dir>` or `cd -- <dir>` reads, declaring the
+/// joined directory in every directory the element may run in. Any flag,
+/// extra operand, `~` word or glob executes, as does a target under
+/// `/proc`.
+fn cd_outcome(simple: &Simple, dirs: &[String]) -> Outcome {
+    let Some(target) = cd_operand(simple) else {
+        return Outcome::Executes;
+    };
+    if target.is_empty()
+        || target == "-"
+        || target == "~"
+        || target.starts_with("~/")
+        || target
+            .chars()
+            .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
+    {
+        return Outcome::Executes;
+    }
+    let mut joined = Vec::new();
+    for dir in dirs {
+        joined.push(super::cwd::join_dir(dir, target));
+    }
+    with_inputs(Outcome::Reads(joined), simple, dirs)
+}
+
+/// The input redirect files, in order, beside a read-only verdict, in
+/// every directory the element may run in: the shell opens each for the
+/// command's stdin before it runs, so `cat <f` reads `f` and a `/proc`
+/// file executes.
+fn with_inputs(verdict: Outcome, simple: &Simple, dirs: &[String]) -> Outcome {
+    let Outcome::Reads(mut paths) = verdict else {
+        return Outcome::Executes;
+    };
+    let inputs = simple
+        .redirects
+        .iter()
+        .filter_map(|redirect| match redirect {
+            Redirect::Input(word) => Some(&word.cooked),
+            Redirect::Discard | Redirect::Merge => None,
+        });
+    for input in inputs {
+        for dir in dirs {
+            let Some(path) = resolve(dir, input) else {
+                return Outcome::Executes;
+            };
+            paths.push(path);
+        }
+    }
+    if paths.iter().any(|path| under_proc(path)) {
+        return Outcome::Executes;
+    }
+    Outcome::Reads(paths)
+}
+
+/// The words after the command path, for the flag walks: `git status -s`
+/// walks from `-s`. The slice stays whole because the workspace forbids
+/// indexing; the loop drops the path words instead.
+fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
+    let mut rest = words.iter();
+    for _ in 0..skip {
+        rest.next();
+    }
+    rest
+}
+
+/// The built-in flag walk, kept from the hand lexer: flags by the table,
+/// `--` where the entry says so, any other `-` word an operand for `echo`,
+/// the first operand the pattern for `grep` and `rg`.
+fn builtin_outcome(simple: &Simple, entry: &Command, dirs: &[String]) -> Outcome {
+    // The built-in path words never reach the walk: `git status -s` walks
+    // from `-s`.
+    let mut words = rest_after(&simple.words, entry.name.split(' ').count());
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;
     while let Some(word) = words.next() {
-        match word_at(word, ended, entry) {
-            WordAt::Operand(cooked) => operands.push(cooked),
-            WordAt::EndFlags => ended = true,
-            WordAt::Flag => {
-                if accept_flag(entry, &mut words, &word.cooked).is_none() {
+        match entry::word_at(word, ended, entry) {
+            entry::WordAt::Operand(cooked) => operands.push(cooked),
+            entry::WordAt::EndFlags => ended = true,
+            entry::WordAt::Flag => {
+                if entry::accept_flag(entry, &mut words, &word.cooked).is_none() {
                     return Outcome::Executes;
                 }
                 pattern_given |= entry.pattern_flags.contains(&word.cooked.as_str());
@@ -188,24 +347,25 @@ fn part_outcome(part: &Part, workdir: &Path, configured: &[(String, Vec<String>)
     if entry.pattern && !pattern_given && !operands.is_empty() {
         operands.remove(0);
     }
-    path_tail(&operands, workdir)
+    path_tail(&operands, dirs)
 }
 
-/// Resolves each operand against `workdir`, declaring the workdir when
-/// there are none. A path under `/proc/` is not read-only.
-fn path_tail(operands: &[String], workdir: &Path) -> Outcome {
+/// Resolves each operand against every directory the element may run in,
+/// declaring each running directory when there are no operands. A path
+/// under `/proc/` is not read-only.
+pub(super) fn path_tail(operands: &[String], dirs: &[String]) -> Outcome {
     let mut paths = Vec::new();
-    for operand in operands {
-        let Some(path) = resolve(workdir, operand) else {
-            return Outcome::Executes;
-        };
-        paths.push(path);
-    }
-    if paths.is_empty() {
-        let Some(path) = workdir.to_str().map(str::to_owned) else {
-            return Outcome::Executes;
-        };
-        paths.push(path);
+    for dir in dirs {
+        if operands.is_empty() {
+            paths.push(dir.clone());
+            continue;
+        }
+        for operand in operands {
+            let Some(path) = resolve(dir, operand) else {
+                return Outcome::Executes;
+            };
+            paths.push(path);
+        }
     }
     if paths.iter().any(|path| under_proc(path)) {
         return Outcome::Executes;
@@ -231,146 +391,6 @@ fn under_proc(path: &str) -> bool {
     normal.starts_with("/proc")
 }
 
-enum WordAt {
-    Operand(String),
-    EndFlags,
-    Flag,
-}
-
-fn word_at(word: &Word, ended: bool, entry: &Command) -> WordAt {
-    if ended || !word.cooked.starts_with('-') {
-        WordAt::Operand(word.cooked.clone())
-    } else if entry.ends_flags && word.cooked == "--" {
-        WordAt::EndFlags
-    } else if entry.prints && !is_option_word(&word.cooked) {
-        // bash's `echo` reads any other word as text.
-        WordAt::Operand(word.cooked.clone())
-    } else {
-        WordAt::Flag
-    }
-}
-
-/// `-` followed by one or more of `n`, `e`, `E`: the only words bash's
-/// `echo` reads as options.
-fn is_option_word(cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|ch| matches!(ch, 'n' | 'e' | 'E'))
-}
-
-/// Whether `first`, the cooked first word, names a built-in command: the
-/// text after its last `/`, against the built-in command names and `sed`,
-/// which has its own grammar. The whole word is used, so a quoted path
-/// holding a space still ends at its basename. A configured entry under
-/// such a name is never consulted.
-fn builtin_name(first: &str) -> bool {
-    let base = first.rsplit('/').next().unwrap_or(first);
-    base == "sed"
-        || COMMANDS
-            .iter()
-            .any(|entry| entry.name.split(' ').next().unwrap_or(entry.name) == base)
-}
-
-/// The configured read-only rule for one part: every cooked word starting
-/// `-` is a flag, any other word a path operand. A listed spelling ending
-/// `=` takes a value after that exact prefix, or as the next word; any
-/// other listed spelling matches exactly and takes none. `--` ends no
-/// flags here: it must be listed to read. Flag values are never paths.
-fn configured_outcome(
-    flags: &[String],
-    words: std::slice::Iter<'_, Word>,
-    workdir: &Path,
-) -> Outcome {
-    let mut words = words;
-    let mut operands = Vec::new();
-    while let Some(word) = words.next() {
-        if !word.cooked.starts_with('-') {
-            operands.push(word.cooked.clone());
-            continue;
-        }
-        // An exact plain spelling wins over its `=` twin, in either list
-        // order: the word takes no value and the next word stays an operand.
-        if flags
-            .iter()
-            .any(|flag| !flag.ends_with('=') && *flag == word.cooked)
-        {
-            continue;
-        }
-        // An inline value after the exact `=` prefix, empty allowed.
-        if flags
-            .iter()
-            .any(|flag| flag.ends_with('=') && word.cooked.starts_with(flag.as_str()))
-        {
-            continue;
-        }
-        // A separate value word, a leading `-` allowed; missing executes.
-        if flags.iter().any(|flag| {
-            flag.strip_suffix('=')
-                .is_some_and(|base| base == word.cooked)
-        }) {
-            if words.next().is_none() {
-                return Outcome::Executes;
-            }
-            continue;
-        }
-        return Outcome::Executes;
-    }
-    path_tail(&operands, workdir)
-}
-
-fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'static Command> {
-    if first.cooked == "git" {
-        let second = words.next()?;
-        return COMMANDS.iter().find(|entry| {
-            entry
-                .name
-                .strip_prefix("git ")
-                .is_some_and(|sub| sub == second.cooked)
-        });
-    }
-    COMMANDS.iter().find(|entry| entry.name == first.cooked)
-}
-
-fn accept_flag(
-    entry: &Command,
-    words: &mut std::slice::Iter<'_, Word>,
-    cooked: &str,
-) -> Option<()> {
-    if let Some(name) = long_value_name(cooked) {
-        return entry
-            .flags
-            .iter()
-            .any(|flag| flag.takes_value && flag.spelling == name)
-            .then_some(());
-    }
-    if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
-        if flag.takes_value {
-            words.next()?;
-        }
-        return Some(());
-    }
-    // `git log -<digits>`, as in `git log -8`.
-    if entry.counts && is_count(cooked) {
-        return Some(());
-    }
-    short_cluster(entry, cooked).then_some(())
-}
-
-/// `--name=value`, and only that form. A short flag does not take `=`.
-fn long_value_name(cooked: &str) -> Option<&str> {
-    let (name, _) = cooked.split_once('=')?;
-    name.starts_with("--").then_some(name)
-}
-
-/// `-<one or more ASCII digits>`, as in `git log -8`.
-fn is_count(cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
-}
-
 fn cooked_equals(words: &[Word], row: &[&str]) -> bool {
     words.len() == row.len()
         && words
@@ -379,265 +399,31 @@ fn cooked_equals(words: &[Word], row: &[&str]) -> bool {
             .all(|(word, want)| word.cooked == *want)
 }
 
-fn short_cluster(entry: &Command, cooked: &str) -> bool {
-    let Some(rest) = cooked.strip_prefix('-') else {
-        return false;
-    };
-    !rest.is_empty()
-        && rest.chars().all(|ch| {
-            entry
-                .flags
-                .iter()
-                .any(|flag| short_letter(flag) == Some(ch))
-        })
-}
-
-fn short_letter(flag: &super::read_only::Flag) -> Option<char> {
-    if flag.takes_value {
-        return None;
-    }
-    let rest = flag.spelling.strip_prefix('-')?;
-    if rest.starts_with('-') {
-        return None;
-    }
-    let mut chars = rest.chars();
-    let letter = chars.next()?;
-    chars.next().is_none().then_some(letter)
-}
-
-/// A word the lexer accepted as a stderr redirect. Raw equality is
-/// enough: `>` is refused everywhere else, so only an accepted redirect
-/// has this raw text, and a quoted `'2>&1'` keeps its quotes in raw.
-fn is_redirect_word(word: &Word) -> bool {
-    word.raw == "2>/dev/null" || word.raw == "2>&1"
-}
-
-fn resolve(workdir: &Path, operand: &str) -> Option<String> {
+fn resolve(dir: &str, operand: &str) -> Option<String> {
     if Path::new(operand).is_absolute() {
         Some(operand.to_owned())
     } else {
-        workdir.join(operand).to_str().map(str::to_owned)
+        Path::new(dir).join(operand).to_str().map(str::to_owned)
     }
 }
 
-/// One word as written, and the same word with quotes removed.
-#[derive(Debug, PartialEq, Eq)]
-struct Word {
-    raw: String,
-    cooked: String,
-}
-
-/// One command between `&&`, `||`, `;` or `|`.
-#[derive(Debug, PartialEq, Eq)]
-struct Part {
-    words: Vec<Word>,
-}
-
+/// Whether `command` is one plain `grep` call, so the run can attach its
+/// match lines. An assignment prefix or a redirect does not disqualify it;
+/// a second element, a second stage, or any unparsed text does.
 pub(super) fn one_grep(command: &str) -> bool {
-    let Some(parts) = Lexer::new(command).run() else {
+    let Some(script) = super::syntax::parse(command) else {
         return false;
     };
-    let [part] = parts.as_slice() else {
+    let [element] = script.elements.as_slice() else {
         return false;
     };
-    part.words.first().is_some_and(|word| word.cooked == "grep")
-}
-
-struct Lexer<'a> {
-    chars: std::iter::Peekable<std::str::Chars<'a>>,
-    parts: Vec<Part>,
-    words: Vec<Word>,
-    raw: String,
-    cooked: String,
-    in_word: bool,
-    quote: Option<char>,
-}
-
-impl<'a> Lexer<'a> {
-    fn new(command: &'a str) -> Self {
-        Self {
-            chars: command.chars().peekable(),
-            parts: Vec::new(),
-            words: Vec::new(),
-            raw: String::new(),
-            cooked: String::new(),
-            in_word: false,
-            quote: None,
-        }
-    }
-
-    /// Splits the command into parts and words. `None` when the command is
-    /// not plain: an empty part, an operator this classifier does not read
-    /// (`;;`, `|&`, a lone `&`), an unterminated quote, or a character
-    /// outside the plain set.
-    fn run(&mut self) -> Option<Vec<Part>> {
-        while let Some(ch) = self.chars.next() {
-            self.step(ch)?;
-        }
-        if self.quote.is_some() || !self.finish_part() {
-            return None;
-        }
-        Some(std::mem::take(&mut self.parts))
-    }
-
-    /// `None` is a syntax this classifier refuses.
-    fn step(&mut self, ch: char) -> Option<()> {
-        let Some(closer) = self.quote else {
-            return self.unquoted(ch);
-        };
-        // Inside double quotes a backslash before `$`, a backtick, `"`,
-        // `\` or a newline still expands, so the command is not plain.
-        // Before any other character it is literal, as bash reads it.
-        if closer == '"' && ch == '\\' {
-            let special = matches!(self.chars.peek(), Some('$' | '`' | '"' | '\\' | '\n'));
-            if special || self.chars.peek().is_none() {
-                return None;
-            }
-            self.raw.push(ch);
-            self.cooked.push(ch);
-            return Some(());
-        }
-        if closer == '"' && matches!(ch, '$' | '`') {
-            return None;
-        }
-        self.quoted(ch, closer)
-    }
-
-    fn quoted(&mut self, ch: char, closer: char) -> Option<()> {
-        self.raw.push(ch);
-        if ch == closer {
-            self.quote = None;
-        } else {
-            self.cooked.push(ch);
-        }
-        Some(())
-    }
-
-    fn unquoted(&mut self, ch: char) -> Option<()> {
-        if ch == ' ' || ch == '\t' {
-            self.finish_word();
-            return Some(());
-        }
-        if ch == '\'' || ch == '"' {
-            self.in_word = true;
-            self.raw.push(ch);
-            self.quote = Some(ch);
-            return Some(());
-        }
-        // `>` starts only the two stderr redirects, read as one word.
-        if ch == '>' {
-            return self.redirect();
-        }
-        match self.operator(ch) {
-            Operator::Split => self.finish_part().then_some(()),
-            Operator::None => {
-                // Globs, `~`, redirects and every other character outside
-                // the plain set expand or mean something this list cannot see.
-                if !plain_char(ch) {
-                    return None;
-                }
-                self.in_word = true;
-                self.raw.push(ch);
-                self.cooked.push(ch);
-                Some(())
-            }
-        }
-    }
-
-    /// Reads `>/dev/null` or `>&1` after a plain `2` as one redirect word.
-    /// Anything else holding `>` is not plain, so the call is reviewed.
-    fn redirect(&mut self) -> Option<()> {
-        // The word so far is exactly `2`, and the part already holds a
-        // word, so the redirect is never first in a part.
-        if !self.in_word || self.raw != "2" || self.words.is_empty() {
-            return None;
-        }
-        let tail = if self.ahead("/dev/null") {
-            "/dev/null"
-        } else if self.ahead("&1") {
-            "&1"
-        } else {
-            return None;
-        };
-        for _ in 0..tail.len() {
-            self.chars.next();
-        }
-        self.raw.push('>');
-        self.cooked.push('>');
-        for ch in tail.chars() {
-            self.raw.push(ch);
-            self.cooked.push(ch);
-        }
-        // The redirect is a word of its own: what follows ends the word.
-        match self.chars.peek() {
-            None | Some(' ') | Some('\t') | Some('|') | Some('&') | Some(';') => Some(()),
-            _ => None,
-        }
-    }
-
-    fn ahead(&self, want: &str) -> bool {
-        let mut rest = self.chars.clone();
-        for ch in want.chars() {
-            if rest.next() != Some(ch) {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// A lone `&` is not an operator: the plain-character check refuses it.
-    /// `;;` is two splits, so the second leaves an empty part.
-    fn operator(&mut self, ch: char) -> Operator {
-        match ch {
-            '|' => {
-                if self.chars.peek() == Some(&'|') {
-                    self.chars.next();
-                }
-                Operator::Split
-            }
-            '&' if self.chars.peek() == Some(&'&') => {
-                self.chars.next();
-                Operator::Split
-            }
-            ';' => Operator::Split,
-            _ => Operator::None,
-        }
-    }
-
-    fn finish_word(&mut self) {
-        if !self.in_word {
-            return;
-        }
-        self.words.push(Word {
-            raw: std::mem::take(&mut self.raw),
-            cooked: std::mem::take(&mut self.cooked),
-        });
-        self.in_word = false;
-    }
-
-    fn finish_part(&mut self) -> bool {
-        self.finish_word();
-        if self.words.is_empty() {
-            return false;
-        }
-        self.parts.push(Part {
-            words: std::mem::take(&mut self.words),
-        });
-        true
-    }
-}
-
-enum Operator {
-    Split,
-    None,
-}
-
-fn plain_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric()
-        || matches!(
-            ch,
-            '_' | '-' | '.' | '/' | ':' | '=' | '@' | '%' | '+' | ','
-        )
+    let [Stage::Simple(simple)] = element.stages.as_slice() else {
+        return false;
+    };
+    simple
+        .words
+        .first()
+        .is_some_and(|word| word.cooked == "grep")
 }
 
 #[cfg(test)]

@@ -51,10 +51,26 @@ mod extension_test;
 mod feedback;
 mod hub_env;
 mod hub_list;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_pair;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_refresh;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_service;
 mod hub_status;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_token;
 mod hub_unit;
 #[allow(
@@ -117,6 +133,10 @@ mod sessions_search;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod setup;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod stop;
 mod table;
 #[allow(
@@ -171,14 +191,17 @@ pub const LOGOUT_SHAPE: &str =
 /// A workspace's project: its `sessions` directory and its key
 /// (`docs/state.md`, "Projects"). The key comes from `log::project_key`,
 /// the one place it is derived.
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 pub fn project_of(
     home: &Path,
     workspace: &Path,
-) -> Result<(PathBuf, ::config::ProjectKey), Failure> {
+) -> Result<(PathBuf, ::config::ProjectKey), CliError> {
     let project = doors::project(workspace);
     let sessions = log::sessions_dir(home, &project);
-    let key =
-        ::config::ProjectKey::new(log::project_key(&project)).map_err(|e| failed(e.code(), e))?;
+    let key = ::config::ProjectKey::new(log::project_key(&project))?;
     Ok((sessions, key))
 }
 

@@ -172,6 +172,11 @@ refuses, the request is not sent:
   names the limit or the extension that refused
 - the session's running delegates are stopped, as `job_stop` stops one
   (`docs/delegates.md`, "Lifetime")
+- a delegate whose one-way trip has been claimed stops itself with the
+  tree-stop exit 143 instead of draining failed: the parent's stop signal
+  is already coming for the same spend, and a slow signal path would
+  otherwise record exit 1 first. Roots, and delegates whose trip is
+  unclaimed, keep their own exit codes
 
 The budget is also checked whenever a delegate's `usage_recorded` arrives,
 because a session waiting in `jobs wait` makes no model request of its own.

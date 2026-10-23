@@ -522,6 +522,25 @@ fn registered(
     (by.into(), tool, tool_definition(name, deferred))
 }
 
+fn registered_hosted(
+    name: &str,
+    by: &str,
+    deferred: bool,
+    guidelines: Option<&str>,
+) -> (
+    String,
+    std::sync::Arc<dyn contract::tool::Tool>,
+    contract::provider::ToolDefinition,
+) {
+    let mut definition = tool_definition(name, deferred);
+    definition.hosted = Some("web_search_20250305".to_owned());
+    let tool = std::sync::Arc::new(BuildTool {
+        definition: definition.clone(),
+        guidelines: guidelines.map(str::to_owned),
+    });
+    (by.into(), tool, definition)
+}
+
 /// A provider answering `defers`, never called by `build`.
 struct DefersProvider {
     defers: bool,
@@ -904,4 +923,152 @@ fn build_sources_are_sorted_unique_and_leave_builtin_out() {
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].1, ["alpha", "zeta"]);
+}
+
+/// A returned definition's own deferral flag, by name.
+fn returned_deferred(definitions: &[contract::provider::ToolDefinition], name: &str) -> bool {
+    definitions
+        .iter()
+        .find(|definition| definition.name == name)
+        .unwrap()
+        .deferred
+}
+
+/// A key turning a tool off, a server declared in full, and a key
+/// winning over both reach the definitions the request sends, matching
+/// what `preamble_built` records.
+#[test]
+fn build_writes_the_effective_flag_into_the_returned_definitions() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("x".to_owned(), false), ("wins".to_owned(), true)]
+            .into_iter()
+            .collect(),
+        full_servers: ["fx".to_owned()].into_iter().collect(),
+    };
+    let tools = tools_map(vec![
+        registered("x", "fx", true, None),
+        registered("fx_echo", "fx", true, None),
+        registered("wins", "fx", false, None),
+        registered("plain", "other", true, None),
+    ]);
+    let (_, definitions, event, _) = run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(!returned_deferred(&definitions, "x"));
+    assert!(!sent_deferred(&event, "x"));
+    assert!(!returned_deferred(&definitions, "fx_echo"));
+    assert!(!sent_deferred(&event, "fx_echo"));
+    assert!(returned_deferred(&definitions, "wins"));
+    assert!(sent_deferred(&event, "wins"));
+    assert!(returned_deferred(&definitions, "plain"));
+    assert!(sent_deferred(&event, "plain"));
+}
+
+/// Without deferral, or without a factory, every returned definition is
+/// in full whatever its own flag says.
+#[test]
+fn build_returns_every_definition_in_full_without_deferral_or_factory() {
+    let tools = tools_map(vec![registered("x", "fx", true, None)]);
+    let (_, definitions, event, built) = run_build(&build_inputs(), &tools, true, None, Vec::new());
+    assert!(built.is_none());
+    assert!(!returned_deferred(&definitions, "x"));
+    assert!(!sent_deferred(&event, "x"));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let (_, definitions, event, built) =
+        run_build(&build_inputs(), &tools, false, Some(&factory), Vec::new());
+    assert!(built.is_none());
+    assert!(!returned_deferred(&definitions, "x"));
+    assert!(!sent_deferred(&event, "x"));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+/// A key naming no registered tool changes nothing: no error, the same
+/// build as with no key.
+#[test]
+fn build_ignores_a_key_naming_no_registered_tool() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("ghost".to_owned(), false)].into_iter().collect(),
+        full_servers: std::collections::BTreeSet::new(),
+    };
+    let tools = tools_map(vec![registered("x", "fx", true, None)]);
+    let (_, definitions, event, built) =
+        run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(returned_deferred(&definitions, "x"));
+    assert!(sent_deferred(&event, "x"));
+    assert!(built.is_some());
+}
+
+/// A hosted tool is never effectively deferred, with or without a key:
+/// in full, out of the catalogue, and no search when it is the only
+/// deferred candidate.
+#[test]
+fn build_never_defers_a_hosted_tool() {
+    for key in [false, true] {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let factory = search_factory(&seen);
+        let mut inputs = build_inputs();
+        if key {
+            inputs.deferrals = crate::prompt::Deferrals {
+                tools: [("web_search".to_owned(), true)].into_iter().collect(),
+                full_servers: std::collections::BTreeSet::new(),
+            };
+        }
+        let tools = tools_map(vec![registered_hosted("web_search", "builtin", true, None)]);
+        let (_, definitions, event, built) =
+            run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+        assert!(!returned_deferred(&definitions, "web_search"), "key {key}");
+        assert!(!sent_deferred(&event, "web_search"), "key {key}");
+        assert!(built.is_none(), "key {key}");
+        assert!(
+            !sent_names(&event).contains(&"tool_search".to_owned()),
+            "key {key}"
+        );
+        assert!(seen.lock().unwrap().is_empty(), "key {key}");
+    }
+}
+
+/// The same name as a tool Fiber itself runs takes the key as usual.
+#[test]
+fn build_defers_the_same_name_when_it_is_not_hosted() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let mut inputs = build_inputs();
+    inputs.deferrals = crate::prompt::Deferrals {
+        tools: [("web_search".to_owned(), true)].into_iter().collect(),
+        full_servers: std::collections::BTreeSet::new(),
+    };
+    let tools = tools_map(vec![registered("web_search", "builtin", false, None)]);
+    let (_, definitions, event, built) =
+        run_build(&inputs, &tools, true, Some(&factory), Vec::new());
+    assert!(returned_deferred(&definitions, "web_search"));
+    assert!(sent_deferred(&event, "web_search"));
+    assert!(built.is_some());
+}
+
+/// A hosted tool stays out of the catalogue the factory builds from.
+#[test]
+fn build_leaves_hosted_tools_out_of_the_catalogue() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let factory = search_factory(&seen);
+    let tools = tools_map(vec![
+        registered_hosted("web_search", "builtin", true, None),
+        registered("echo", "fx", true, None),
+    ]);
+    let (_, _, _, built) = run_build(&build_inputs(), &tools, true, Some(&factory), Vec::new());
+    assert!(built.is_some());
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0]
+            .0
+            .iter()
+            .map(|definition| definition.name.clone())
+            .collect::<Vec<_>>(),
+        ["echo"]
+    );
 }

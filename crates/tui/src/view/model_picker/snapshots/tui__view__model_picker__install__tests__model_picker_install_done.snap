@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/view/model_picker/install_tests.rs
+expression: "screen(&picker, 100, 30)"
+---
+   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+     Type to search █
+     3 models                                                                     ⟳ refresh all
+     acme
+     › m1
+           fixed thinking
+
+     databricks
+       dbrx
+           fixed thinking
+
+     zeta
+       z1
+           fixed thinking
+         ✓ installed databricks
+         Install databricks from https://example.invalid/databricks
+         Version v1.4.0
+         Provider databricks: https://api.databricks.invalid
+         databricks needs a credential: run `fiber login databricks`
+
+     ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close
+
+   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

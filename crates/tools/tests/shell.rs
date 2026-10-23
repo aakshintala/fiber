@@ -8,6 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2758,6 +2759,114 @@ fn a_plain_shell_executes_what_a_configured_shell_reads() {
         vec![contract::shapes::Effect::Executes]
     );
     assert!(effects.declared.paths.is_none());
+}
+
+#[test]
+fn a_shell_reads_the_new_git_forms_with_no_paths() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-git");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    for command in ["git status", "git stash list", "git branch --show-current"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A writing form executes: `git init` creates or updates `.git` state,
+    // `git push --dry-run` reaches the remote, and a leading assignment
+    // executes whatever its name (#1497 task 1.3).
+    for command in [
+        "git init",
+        "git push --dry-run",
+        "LC_ALL=C git status",
+        "FOO=1 ls",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A discard redirect or an input file reads.
+    let effects = effects_of(&shell, "ls 2>/dev/null");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+}
+
+#[test]
+fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-cd");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub").join("n.md"), "The note.\n").unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let sub = workspace.join("sub").to_str().unwrap().to_owned();
+    // A `cd` is a read-only step: later paths resolve past the join, and
+    // an operand-less command declares each directory it may run in. The
+    // doc promises which directories, not their order.
+    for (command, paths) in [
+        (
+            "cd sub && cat n.md 2>/dev/null",
+            vec![sub.clone(), format!("{sub}/n.md")],
+        ),
+        (
+            "cd sub ; ls",
+            vec![sub.clone(), workspace.to_str().unwrap().to_owned()],
+        ),
+        (
+            "cd sub | cat f",
+            vec![
+                sub.clone(),
+                workspace.join("f").to_str().unwrap().to_owned(),
+            ],
+        ),
+        ("git status && cd sub", vec![sub.clone()]),
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        let declared: BTreeSet<&str> = effects
+            .declared
+            .paths
+            .as_ref()
+            .map(|paths| paths.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            declared,
+            BTreeSet::from_iter(paths.iter().map(String::as_str)),
+            "{command}"
+        );
+    }
+    // A `git` after any `cd`, and a `cd` outside the allow-list, execute.
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd",
+        "cd -",
+        "cd -P",
+        "cd a b",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
 }
 
 #[test]
