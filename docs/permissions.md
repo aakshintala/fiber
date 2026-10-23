@@ -600,17 +600,21 @@ a program called by a model, so the session follows the delegate rules above,
 with these differences.
 
 - Its own reviewer judges every call. An escalation is a block at once, and the
-  run carries on. Nothing waits on a person. The block is on the event stream
-  and in the feed, and sends no `attention` line.
+  run carries on. Nothing waits on a person and no request stays open. The
+  block is on the session's event stream, and sends no `attention` line.
 - The supervisor never answers an approval. It may steer with context, such as
   "you may run X because Y". The reviewer reads the supervisor's prompts and
   steers as the person's words, and judges the call again when the model
   retries it.
-- A person watching from the feed may grant the call, so the model's next
-  attempt passes.
-- It is top-level: it is in the feed, and a person may open it and drive it as
-  any client can. It sends no `finished` attention (`docs/invocation.md`,
-  "Attention").
+- A person grants a blocked call by saying so in their own `prompt` or
+  `steer`, such as "you may run X". The reviewer reads it as the person's
+  words, and the model's retry passes.
+- It is top-level: it is listed in the feed, and a person may open it and
+  drive it as any client can. It sends no `finished` attention
+  (`docs/invocation.md`, "Attention").
+- `supervised` is fixed at `start`, recorded on `session_started`, and kept
+  across a resume. A person driving the session does not change it: its
+  escalations stay blocks.
 
 The supervisor wrote the brief and wants the run done, which is the pressure
 the reviewer exists to check. Its say already reaches the reviewer through its
