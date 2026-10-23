@@ -28,6 +28,13 @@ const CLOSE_ALL_CHOICES: [(&str, &str, QuitChoice); 2] = [
     ("Esc", "cancel", QuitChoice::Stay),
 ];
 
+/// The stop choices: stopping the session now, or cancelling, each
+/// beside the click it takes.
+const STOP_CHOICES: [(&str, &str, QuitChoice); 2] = [
+    ("Enter", "stop", QuitChoice::CloseAll),
+    ("Esc", "cancel", QuitChoice::Stay),
+];
+
 /// One dim body row.
 fn dim_row(text: String) -> Row {
     Row {
@@ -45,6 +52,9 @@ fn dim_row(text: String) -> Row {
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
     if let Some((sessions, working, elsewhere)) = app.close_all_question() {
         return draw_close_all(area, buf, targets, sessions, working, elsewhere);
+    }
+    if let Some((name, working, elsewhere)) = app.stop_question() {
+        return draw_stop(area, buf, targets, &name, working, elsewhere);
     }
     let Some((working, elsewhere)) = app.quit_question() else {
         return Rect::default();
@@ -79,6 +89,35 @@ fn draw_close_all(
         "Close all",
         close_all_count(sessions, working, elsewhere),
         &CLOSE_ALL_CHOICES,
+        "click a choice",
+    )
+}
+
+/// Draws the stop question over `area`: the title naming the session,
+/// a dim note of whether it was working and open elsewhere when the
+/// question opened, the two choices with Enter's focused, and what the
+/// mouse does. A click on a choice does what its key does.
+fn draw_stop(
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+    name: &str,
+    working: bool,
+    elsewhere: bool,
+) -> Rect {
+    let note = match (working, elsewhere) {
+        (false, false) => "",
+        (true, false) => "working",
+        (false, true) => "open elsewhere",
+        (true, true) => "working, open elsewhere",
+    };
+    draw_question(
+        area,
+        buf,
+        targets,
+        &format!("Stop {name}?"),
+        note.to_owned(),
+        &STOP_CHOICES,
         "click a choice",
     )
 }

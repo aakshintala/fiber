@@ -14,11 +14,11 @@ expression: "sized(&mut app, 80, 24)"
 
   All  Sessions  The input box  The conversation  Steering  Requests, models a
   Type to search shortcuts› █
-  › Sessions                   Send a prompt, or a         Enter
+  › Sessions                   Send a prompt, or a          Enter
                                steering message during a
                                turn
-    Sessions                   Insert a line break         Shift+Enter ·
-  ↓                                                        Ctrl+J
+    Sessions                   Insert a line break          Shift+Enter ·
+  ↓                                                         Ctrl+J
 
   ↑↓ move · ←→ tabs · Esc closes
 
