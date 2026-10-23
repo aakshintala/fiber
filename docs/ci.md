@@ -164,8 +164,7 @@ On Linux x86_64 alone:
 - no crate but `tui` and `main` has `ratatui` or `crossterm` in its normal
   dependency tree (`cargo xtask tui-isolation`), so no other crate depends on
   a crate admitted only for the terminal
-- no crate enables serde_json's `preserve_order` feature anywhere in the
-  workspace build, over every target and feature (`cargo xtask
+- no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
   `research/tui-prototype`, when the diff touches it. The prototype is not a

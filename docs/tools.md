@@ -641,6 +641,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   the call `executes`. That covers subshells `( )`, process substitution,
   heredocs, loops, functions, a trailing `&`, and variable expansion
   (`$HOME`, `${x}`).
+- The recogniser works within four bounds: commands of at most 10,000
+  bytes, `cd` chains resolving against at most 32 directories, wrappers
+  nested at most 4 deep, and `.git` files of at most 512 bytes. Past any
+  bound the call declares `executes`, so the bounds never widen the fast
+  path.
 - Command substitution (`$( )` or backticks) always makes the call
   `executes`. Its arguments are known only when it runs, so the path checks
   cannot see them: `cat $(echo ~/.ssh/id_rsa)` reads the key while every
