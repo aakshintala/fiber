@@ -1875,6 +1875,263 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
     assert_eq!(b_done[0].payload["loaded"], json!(["a"]));
 }
 
+/// A rewind onto a non-deferring provider renders the logged search as
+/// text, as the live loop does: the logged D is dropped, so the first
+/// request carries `Loaded: a.`, declares no `tool_search`, and the
+/// registry holds none.
+#[test]
+fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
+    use contract::Seq;
+    use contract::commands::ModelArgs;
+    use contract::shapes::Point;
+
+    const PLAIN: &str = "fake/plain";
+    const DEFERRING: &str = "fake/model";
+    let search = Arc::new(SearchScript {
+        outputs: Mutex::new(vec![SearchTool::output(&["a"])].into()),
+        ..SearchScript::default()
+    });
+    let plain_scripted = Arc::new(ScriptedProvider::new(vec![
+        Scripted::text("Plain."),
+        Scripted::text("B done."),
+    ]));
+    let mut harness = Harness::start(
+        vec![
+            calls_reply("", &[("tool_search", search_arguments("a"))]),
+            Scripted::text("Done."),
+        ],
+        vec![("fx".to_owned(), Arc::new(CatalogTool::deferred("a")))],
+        Arc::clone(&search),
+        false,
+        None,
+    );
+    let deferring = Arc::clone(&harness.scripted);
+    let plain = Arc::clone(&plain_scripted);
+    let prepare: r#loop::Prepare = Arc::new(
+        move |args: &ModelArgs, _: Option<&str>, chosen: Option<contract::ThinkingLevel>| {
+            let provider: Arc<dyn Provider> = if args.model == DEFERRING {
+                Arc::new(Deferring {
+                    inner: Arc::clone(&deferring),
+                }) as Arc<dyn Provider>
+            } else {
+                Arc::clone(&plain) as Arc<dyn Provider>
+            };
+            Ok(r#loop::Prepared {
+                provider,
+                model: r#loop::Model {
+                    reference: args.model.clone(),
+                    cost: None,
+                    subscription: false,
+                },
+                thinking: None,
+                chosen,
+                credential: Some("work".into()),
+                cache_lifetime: CacheLifetime::OneHour,
+                context_window: fakes::CONTEXT_WINDOW,
+                addendum: None,
+                handoff: r#loop::HandoffSettings::default(),
+                reviewer: Err(contract::shapes::Failure {
+                    code: ErrorCode::NoModel,
+                    message: r#loop::NO_MODEL_MESSAGE.into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                web_search: r#loop::Hosted::Keep,
+                notice: None,
+                applied: None,
+                credential_files: Vec::new(),
+                observe: None,
+                reviewer_observe: None,
+            })
+        },
+    );
+    harness.looped = harness
+        .looped
+        .take()
+        .map(|looped| looped.switcher(prepare, r#loop::Switchable { chosen: None }));
+
+    // Turn 1 defers: the search loads `a`.
+    assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
+    let first_lines = harness.lines();
+    assert_kinds(
+        &first_lines,
+        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    );
+    assert_eq!(deferred_names(&first_lines), ["a"]);
+
+    // The switch rebuilds without deferral: the parent renders the
+    // logged search as text.
+    harness.inbox.send(model(PLAIN, None)).unwrap();
+    assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
+    let a_lines = harness.lines();
+    assert_kinds(
+        &a_lines,
+        &[&[
+            "model_changed",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
+    assert_eq!(deferred_names(&a_lines), Vec::<String>::new());
+    assert_eq!(declared_names(&a_lines), ["a"]);
+    let a_requests = plain_scripted.requests();
+    assert_eq!(a_requests.len(), 1);
+    assert!(
+        a_requests[0].conversation.iter().any(|input| matches!(
+            input,
+            Input::ToolResult { text, is_error, .. } if text == "Loaded: a." && !is_error
+        )),
+        "the parent renders the search as text: {:?}",
+        a_requests[0].conversation
+    );
+
+    let at = a_lines
+        .iter()
+        .filter(|line| line.kind == "turn_started")
+        .map(|line| line.seq.unwrap().0)
+        .next()
+        .unwrap()
+        - 1;
+    let note = r#loop::rewind_note(&harness.dir, Seq(at)).unwrap();
+
+    // B rewinds to turn 2's start with a factory and a plain provider:
+    // the logged D is dropped, so the first request renders text as the
+    // live loop does, not the zero-match text.
+    let home = harness.dir.parent().unwrap().to_path_buf();
+    let clock = Arc::clone(&harness.clock);
+    let log = Arc::new(Log::create(&home, SessionId("s_rewound".into()), clock.clone()).unwrap());
+    let dir = log.dir().to_path_buf();
+    let b_search = Arc::new(SearchScript::default());
+    let (tx, rx) = mpsc::channel();
+    let prompt_clock: Arc<dyn contract::clock::Clock> = clock;
+    let mut prompt = r#loop::PromptInputs::new(
+        home.clone(),
+        "/bin/sh".into(),
+        dir.join("events.jsonl").display().to_string(),
+        prompt_clock,
+        fakes::CONTEXT_WINDOW,
+    );
+    prompt.credential = Some("work".into());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_factory = Arc::clone(&seen);
+    let b_search_tool = Arc::clone(&b_search);
+    let factory: r#loop::ToolSearchFactory = Arc::new(move |catalogue, sources| {
+        seen_factory.lock().unwrap().push((
+            catalogue
+                .iter()
+                .map(|definition| definition.name.clone())
+                .collect::<Vec<_>>(),
+            sources.to_vec(),
+        ));
+        Arc::new(SearchTool {
+            script: Arc::clone(&b_search_tool),
+            executes: false,
+        }) as Arc<dyn Tool>
+    });
+    let b_log = Arc::clone(&log);
+    let mut b = r#loop::Loop::rewound(
+        r#loop::Session {
+            log,
+            provider: Arc::clone(&plain_scripted) as Arc<dyn Provider>,
+            model: r#loop::Model {
+                reference: "fake/plain".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: vec![(
+                "fx".to_owned(),
+                Arc::new(CatalogTool::deferred("a")) as Arc<dyn Tool>,
+            )],
+            permissions: r#loop::Permissions {
+                workspace: harness.workspace.display().to_string(),
+                credentials: harness.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: Arc::clone(&harness.rules) as _,
+            },
+        },
+        r#loop::Rewound {
+            factory: Some(factory),
+            from: Point {
+                session_id: SessionId("s_test".into()),
+                seq: Seq(at),
+            },
+            worktree: None,
+            how: r#loop::Continuation::Rewind {
+                note,
+                summary: None,
+                name: r#loop::latest_name(&harness.dir),
+            },
+        },
+    )
+    .unwrap();
+    tx.send(delivery("three")).unwrap();
+    let watcher = b_log.watch();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = b.turn().unwrap();
+        done.send((b, outcome)).unwrap();
+    });
+    let (_b, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended in time");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let (_, b_lines) = read_until(watcher, "a turn_completed line", |line| {
+        line.kind == "turn_completed"
+    });
+    assert_kinds(
+        &b_lines,
+        &[&[
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]],
+    );
+    // The factory never built: the registry holds no search tool.
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(b_search.ran.lock().unwrap().is_empty());
+    let b_requests = plain_scripted.requests();
+    assert_eq!(b_requests.len(), 2);
+    let first = &b_requests[1];
+    // The rewound request declares the registry in full, with no search.
+    assert_eq!(
+        first
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
+    assert!(
+        first.conversation.iter().any(|input| matches!(
+            input,
+            Input::ToolResult { text, is_error, .. } if text == "Loaded: a." && !is_error
+        )),
+        "the rewound request renders the search as text: {:?}",
+        first.conversation
+    );
+    assert!(
+        first.tools.iter().all(|tool| tool.name != "tool_search"),
+        "no tool_search is declared: {:?}",
+        first.tools
+    );
+}
+
 #[test]
 fn a_switch_off_and_back_renders_each_way() {
     use contract::commands::ModelArgs;
