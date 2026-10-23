@@ -19,13 +19,14 @@ use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
 use fakes::kill_pid;
+use support::cancel::Token;
 
 use super::super::Limit;
 use super::super::command::{Finished, Kept, MoveReason, StopKind};
 use super::super::output::align_char_boundary;
 use super::{
-    JobCancel, MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail,
-    parse_ps, receipt, shell_sentence, terminal_receipt, to_completed, with_spill_line,
+    MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail, parse_ps, receipt,
+    shell_sentence, stop_of, terminal_receipt, to_completed, with_spill_line,
 };
 
 fn finished(
@@ -394,12 +395,12 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
 
 #[test]
 fn the_jobs_stop_cancels_once_and_wakes_subscribers() {
-    let cancel = JobCancel::new();
+    let cancel = Token::new();
     assert!(!cancel.is_cancelled());
     let hits = Arc::new(Hits(AtomicUsize::new(0)));
     let wake: Arc<dyn Wake> = hits.clone();
     cancel.subscribe(Arc::downgrade(&wake));
-    let stop: Stop = cancel.stop();
+    let stop: Stop = stop_of(&cancel);
     (stop.0)();
     assert!(cancel.is_cancelled());
     assert_eq!(hits.0.load(Ordering::SeqCst), 1);
@@ -409,7 +410,7 @@ fn the_jobs_stop_cancels_once_and_wakes_subscribers() {
     let late_wake: Arc<dyn Wake> = late.clone();
     cancel.subscribe(Arc::downgrade(&late_wake));
     assert_eq!(late.0.load(Ordering::SeqCst), 0);
-    assert!(Cancel::is_cancelled(cancel.as_ref()));
+    assert!(Cancel::is_cancelled(&cancel));
 }
 
 struct Hits(AtomicUsize);

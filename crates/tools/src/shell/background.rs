@@ -18,6 +18,7 @@ use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::jobs::{Foreground, JobRecord, Jobs, Opened, Opening, Stop};
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
+use support::cancel::Token;
 
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
@@ -210,7 +211,7 @@ pub(crate) fn take(
     timing: Option<&Timing>,
     started: Option<Instant>,
 ) -> Output {
-    let job_cancel = JobCancel::new();
+    let job_cancel = Token::new();
     // A moved foreground call stamps here, so the command's earlier life
     // in the foreground is never counted. No clock is read without an
     // installed timing.
@@ -219,7 +220,7 @@ pub(crate) fn take(
     match jobs.open(Opening {
         tool: "shell".to_owned(),
         description: description_of(command),
-        stop: job_cancel.stop(),
+        stop: stop_of(&job_cancel),
         input: moved.take_input(),
         lines: limit.monitor,
     }) {
@@ -242,10 +243,17 @@ pub(crate) fn take(
     clippy::too_many_arguments,
     reason = "the moved command, the jobs, the clock and the call's own cancel and emit are one hand-off, with the timing stamp alongside"
 )]
+/// The job's stop: cancelling the job's own signal. The closure may run
+/// more than once and must not wake twice (`Token` idempotence).
+fn stop_of(token: &Token) -> Stop {
+    let token = token.clone();
+    Stop(Box::new(move || token.cancel()))
+}
+
 fn hand_off(
     mut moved: Moved,
     opened: Opened,
-    job_cancel: Arc<JobCancel>,
+    job_cancel: Token,
     clock: Arc<dyn Clock>,
     limit: Limit,
     terminal: bool,
@@ -260,7 +268,7 @@ fn hand_off(
     let spill_line = moved.attach_output(opened.file, &opened.path);
     // Armed before the call's cancel is detached, so a stop that arrives
     // as soon as the job is recorded still wakes the drive loop.
-    moved.arm(job_cancel.as_ref());
+    moved.arm(&job_cancel);
     moved.detach_call_cancel();
     let path = opened.path.clone();
     let job_id = opened.started.job_id.clone();
@@ -280,13 +288,13 @@ fn hand_off(
                 Err(error)
             }
         });
-        Feed::new(job_id.clone(), lines, job_cancel.stop(), clock.now())
+        Feed::new(job_id.clone(), lines, stop_of(&job_cancel), clock.now())
     });
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt lists the group, so its
     // timeout and stop hold while `ps` runs.
     thread::spawn(move || {
-        let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream, feed);
+        let finished = moved.drive_job(job_clock.as_ref(), &job_cancel, stream, feed);
         (end.0)(to_completed(job_id, &path, finished, limit));
     });
     // The job is recorded running and its own drive thread has been
@@ -622,56 +630,6 @@ fn output_tail(path: &Path) -> Option<String> {
     file.take(window).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(align_char_boundary(&bytes)).into_owned();
     if text.is_empty() { None } else { Some(text) }
-}
-
-struct JobInner {
-    cancelled: bool,
-    wakers: Vec<Weak<dyn Wake>>,
-}
-
-struct JobCancel {
-    inner: Mutex<JobInner>,
-}
-
-impl JobCancel {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            inner: Mutex::new(JobInner {
-                cancelled: false,
-                wakers: Vec::new(),
-            }),
-        })
-    }
-
-    fn stop(self: &Arc<Self>) -> Stop {
-        let this = Arc::clone(self);
-        Stop(Box::new(move || this.fire()))
-    }
-
-    fn fire(&self) {
-        let wakers = {
-            let mut inner = lock_job(&self.inner);
-            inner.cancelled = true;
-            std::mem::take(&mut inner.wakers)
-        };
-        for waker in wakers.into_iter().filter_map(|waker| waker.upgrade()) {
-            waker.wake();
-        }
-    }
-}
-
-impl Cancel for JobCancel {
-    fn is_cancelled(&self) -> bool {
-        lock_job(&self.inner).cancelled
-    }
-
-    fn subscribe(&self, waker: Weak<dyn Wake>) {
-        lock_job(&self.inner).wakers.push(waker);
-    }
-}
-
-fn lock_job(inner: &Mutex<JobInner>) -> MutexGuard<'_, JobInner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
