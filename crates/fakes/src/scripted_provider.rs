@@ -4,8 +4,9 @@
 //! against it (`docs/testing.md`, "Levels", "Across crates").
 
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use support::lock;
 
 use contract::events::TextCompleted;
 use contract::provider::{
@@ -171,10 +172,7 @@ impl ScriptedProvider {
 
     /// Every request it was given, in order.
     pub fn requests(&self) -> Vec<ModelRequest> {
-        self.requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.requests).clone()
     }
 }
 
@@ -184,23 +182,15 @@ impl Provider for ScriptedProvider {
     }
 
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        self.requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(request.clone());
-        let next = self
-            .script
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front()
-            .unwrap_or_else(|| {
-                Scripted::failed(Failure {
-                    code: ErrorCode::Other("script_exhausted".into()),
-                    message: "The scripted provider has no reply left.".into(),
-                    retry_after_ms: None,
-                    provider: None,
-                })
-            });
+        lock(&self.requests).push(request.clone());
+        let next = lock(&self.script).pop_front().unwrap_or_else(|| {
+            Scripted::failed(Failure {
+                code: ErrorCode::Other("script_exhausted".into()),
+                message: "The scripted provider has no reply left.".into(),
+                retry_after_ms: None,
+                provider: None,
+            })
+        });
         Box::new(Call {
             scripted: Mutex::new(Some(next)),
             cancelled: AtomicBool::new(false),
@@ -217,11 +207,7 @@ struct Call {
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let scripted = self
-            .scripted
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let scripted = lock(&self.scripted).take();
         let Some(scripted) = scripted else {
             return Err(CallError::Cancelled {
                 usage: Box::new(unnamed()),

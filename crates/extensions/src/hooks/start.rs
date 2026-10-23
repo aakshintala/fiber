@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
+use support::lock;
 
 use config::{Config, Manifest};
 use contract::clock::Clock;
@@ -134,11 +135,7 @@ pub(super) fn provider_handles(
             })
         }
     };
-    session
-        .provider_vms
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(entry.name.clone(), Arc::downgrade(&lua));
+    lock(&session.provider_vms).insert(entry.name.clone(), Arc::downgrade(&lua));
     for name in &entry.providers {
         session
             .lua_providers
@@ -185,10 +182,7 @@ impl SessionExtensions {
                 message: format!("registers no provider `{provider}`"),
             });
         }
-        let mut vms = self
-            .provider_vms
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut vms = lock(&self.provider_vms);
         let lua = match vms.get(extension).and_then(std::sync::Weak::upgrade) {
             Some(lua) => lua,
             None => {
@@ -217,19 +211,11 @@ impl SessionExtensions {
                 // Lock order: provider_vms, then emitter, then inbox. emit_to,
                 // seal and deliver_to drop their sink before collecting VMs,
                 // so none misses this VM.
-                let emit = self
-                    .emitter
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
+                let emit = lock(&self.emitter).clone();
                 // The retained session inbox reaches a late fresh VM before
                 // its handle escapes; a reused VM already has it, and none
                 // was ever delivered when the retained sender is `None`.
-                let inbox = self
-                    .inbox
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
+                let inbox = lock(&self.inbox).clone();
                 #[cfg(test)]
                 self.at_late(super::LatePoint::Read);
                 if let Some(emit) = emit {

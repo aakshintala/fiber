@@ -1,9 +1,12 @@
 //! A clock whose time moves only when a test says so (`docs/testing.md`,
 //! "Fakes" and "Values that change every run").
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+#[cfg(test)]
+use std::sync::MutexGuard;
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use support::lock;
 
 use contract::clock::{Clock, Wake};
 
@@ -567,10 +570,7 @@ impl FakeClock {
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *self
-            .advance_pass_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((entered_tx, release_rx));
+        *lock(&self.advance_pass_pause) = Some((entered_tx, release_rx));
         (entered_rx, release_tx)
     }
 
@@ -580,11 +580,7 @@ impl FakeClock {
     /// dropping it releases the pause, including when the test panics.
     #[cfg(test)]
     fn advance_pass_checked<'a>(&'a self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
-        let pause = self
-            .advance_pass_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let pause = lock(&self.advance_pass_pause).take();
         if let Some((entered, release)) = pause {
             drop(state);
             let _sent = entered.send(());
@@ -620,10 +616,7 @@ impl FakeClock {
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
         let (checked_tx, checked_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *self
-            .advance_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx, when_held));
+        *lock(&self.advance_pause) = Some((checked_tx, release_rx, when_held));
         (checked_rx, release_tx)
     }
 
@@ -637,11 +630,7 @@ impl FakeClock {
     #[cfg(test)]
     fn advance_wait_checked(&self, state: &State) {
         let held = state.parked.iter().any(|parked| fresh(state, parked));
-        let pause = self
-            .advance_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take_if(|(_, _, when_held)| held || !*when_held);
+        let pause = lock(&self.advance_pause).take_if(|(_, _, when_held)| held || !*when_held);
         if let Some((checked, release, _)) = pause {
             let _sent = checked.send(());
             crate::deadline::Deadline::after(Duration::from_secs(5))
@@ -711,21 +700,14 @@ impl FakeClock {
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
         let (checked_tx, checked_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *self
-            .await_any_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        *lock(&self.await_any_pause) = Some((checked_tx, release_rx));
         (checked_rx, release_tx)
     }
 
     #[cfg(test)]
     #[track_caller]
     fn await_any_predicate_checked(&self) {
-        let pause = self
-            .await_any_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let pause = lock(&self.await_any_pause).take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
             crate::deadline::Deadline::after(Duration::from_secs(5))
@@ -740,10 +722,7 @@ impl FakeClock {
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
         let (checked_tx, checked_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *self
-            .mark_parked_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+        *lock(&self.mark_parked_pause) = Some((checked_tx, release_rx));
         (checked_rx, release_tx)
     }
 
@@ -753,11 +732,7 @@ impl FakeClock {
     #[cfg(test)]
     #[track_caller]
     fn mark_parked_predicate_checked(&self) {
-        let pause = self
-            .mark_parked_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let pause = lock(&self.mark_parked_pause).take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
             crate::deadline::Deadline::after(Duration::from_secs(5))
@@ -1176,10 +1151,6 @@ fn wall_checked(offset: Duration) -> Option<SystemTime> {
     UNIX_EPOCH
         .checked_add(WALL_EPOCH)
         .and_then(|epoch| epoch.checked_add(offset))
-}
-
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

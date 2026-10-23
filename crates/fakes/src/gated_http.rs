@@ -12,8 +12,9 @@
 //! Dropping the fake stops its serving thread: no handshake-only test
 //! leaves one behind.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use support::lock;
 
 use serde_json::{Value, json};
 
@@ -109,9 +110,7 @@ impl GatedHttp {
     /// `id == "el-1"`, in arrival order.
     pub fn elicitation_answers(&self) -> Vec<Value> {
         // Plain data: a panicked holder has already failed its test.
-        self.bodies
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock(&self.bodies)
             .iter()
             .filter_map(|body| serde_json::from_slice::<Value>(body).ok())
             .filter(|body| body.get("id") == Some(&json!("el-1")))
@@ -184,10 +183,7 @@ fn accept(
         }
         RequestOutcome::Stopped => return None,
     };
-    bodies
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(request.body.clone());
+    lock(bodies).push(request.body.clone());
     Some((conn, request.method, request.body))
 }
 

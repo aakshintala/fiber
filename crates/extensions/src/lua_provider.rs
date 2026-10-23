@@ -12,9 +12,10 @@ use std::fs::File;
 use std::path::Path;
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use support::lock;
 
 use crate::{Error, LuaExtension};
 use config::{Config, ModelData, ProviderData, Secret};
@@ -943,12 +944,6 @@ fn detail(e: &Error) -> String {
         e.to_string()
     };
     text.lines().next().unwrap_or("").to_owned()
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // A panic aborts the process (`docs/code-quality.md`, "Panics"), so no
-    // holder can leave the lock poisoned.
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

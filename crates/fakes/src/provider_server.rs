@@ -9,8 +9,11 @@ use std::io;
 use std::net::SocketAddr;
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
+/// A lock that outlives a panicked holder: the state is plain data, and a
+/// test thread that panicked has already failed its test.
+use support::lock;
 
 use contract::clock::Clock;
 
@@ -482,12 +485,6 @@ impl Drop for ProviderServer {
         self.arrived.notify_all();
         self.core.shutdown();
     }
-}
-
-/// A lock that outlives a panicked holder: the state is plain data, and a
-/// test thread that panicked has already failed its test.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Whether the closing adapter discards already-arrived pipelined bytes
