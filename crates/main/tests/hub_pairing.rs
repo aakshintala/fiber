@@ -7,11 +7,13 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+#[path = "support/hub_start.rs"]
+mod hub_start;
 mod support;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use support::*;
@@ -282,24 +284,20 @@ fn read_frame(read: &mut BufReader<TcpStream>) -> Option<Frame> {
 #[test]
 fn a_revoked_token_is_refused_over_the_port() {
     let setup = Setup::new();
-    let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = free.local_addr().unwrap().port();
-    drop(free);
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"hub":{"port":port}}),
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub":{"port":port}}),
+            );
+            setup.fiber(&["hub", "serve", "--installed"])
+        },
     );
-    let process = HubProc::spawn_command(
-        setup.deadline,
-        &mut setup.fiber(&["hub", "serve", "--installed"]),
-    );
-    let home = setup.home();
-    let (stream, hello) = bounded(
-        setup.deadline,
-        "the installed hub's local socket",
-        move || doors::hub::connect(&home, &mut || Ok(()), &SystemClock),
-    )
-    .unwrap();
+    let port = served.port;
+    let (stream, hello) = served.hub;
     assert_eq!(hello.kind, "hub_hello");
     let local = Socket::from(setup.deadline, stream);
     let output = run(&setup, &["hub", "pair", "phone"]);
@@ -355,6 +353,6 @@ fn a_revoked_token_is_refused_over_the_port() {
             .contains(&token)
     );
     drop((client, again, local));
-    process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
 }
