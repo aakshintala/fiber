@@ -101,7 +101,7 @@ impl Index {
                 json!({
                     "size": entry.size,
                     "mtime_ns": entry.mtime_ns,
-                    "hash": hex(&entry.hash),
+                    "hash": support::hex(&entry.hash),
                 }),
             );
         }
@@ -182,7 +182,7 @@ pub(crate) fn hash_paths<'a>(
         ctx.update(&[u8::from(exec)]);
         ctx.update(&digest);
     }
-    Ok(hex(ctx.finish().as_ref()))
+    Ok(support::hex(ctx.finish().as_ref()))
 }
 
 /// Whether any execute bit is set, and the file's own hash: from the index
@@ -244,10 +244,6 @@ pub(crate) fn digest_file(file: &mut impl Read) -> io::Result<Digest> {
     }
     <Digest>::try_from(ctx.finish().as_ref())
         .map_err(|_| io::Error::other("a digest of the wrong length"))
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn from_hex(text: &str) -> Option<Digest> {

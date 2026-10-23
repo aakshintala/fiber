@@ -9,11 +9,7 @@ use serde_json::Value;
 /// stands in for the bytes: the bytes themselves never reach the line.
 /// Pure, no I/O.
 pub(crate) fn digest(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    support::sha256_hex(bytes)
 }
 
 /// The digest of one segment value as the body sends it: objects
