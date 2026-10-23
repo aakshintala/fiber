@@ -105,53 +105,10 @@ fn run_in(
         return failed(err);
     }
     drop(file);
-    // Registered once per process, before the spawn, so an acknowledged
-    // editor implies installed handlers. The clear sits before the spawn:
-    // any signal after the clear is observed by the wait; anything before
-    // it is stale by definition. Clearing on wait entry instead would
-    // discard a signal arriving after the spawn but before the wait.
-    let forward = forwarded();
-    forward.int.swap(false, Ordering::SeqCst);
-    forward.quit.swap(false, Ordering::SeqCst);
-    forward.term.swap(false, Ordering::SeqCst);
-    forward.hup.swap(false, Ordering::SeqCst);
-    // `sh` splits the command, so a value with arguments such as `code -w`
-    // works; the path goes in as `$1`, never through the split. The shell
-    // runs in Fiber's group, as on main: the wait signals the shell pid
-    // alone, never the group.
-    let mut child = match Command::new("/bin/sh")
-        .arg("-c")
-        .arg(format!("{command} \"$1\""))
-        .arg("sh")
-        .arg(&temp.0)
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            return Outcome::Done(Err(format!("Could not start the editor: {err}")));
-        }
-    };
-    let pid = child.id();
-    let waited = wait(&mut child, clock, pid);
-    let status = match waited {
-        Ok(Waited::Exited(status)) => status,
-        Ok(Waited::Stopped(signal)) => {
-            return Outcome::Stopped(signal);
-        }
-        Err(err) => {
-            return Outcome::Done(Err(format!("Could not start the editor: {err}")));
-        }
-    };
-    if let Some(signal) = status.signal() {
-        return Outcome::Done(Err(format!(
-            "The editor was ended by signal {signal}; the draft is unchanged."
-        )));
-    }
-    if !status.success() {
-        let code = status.code().unwrap_or_default();
-        return Outcome::Done(Err(format!(
-            "The editor exited with status {code}; the draft is unchanged."
-        )));
+    match launch(command, &temp.0, clock, "; the draft is unchanged.") {
+        Outcome::Done(Ok(())) => {}
+        Outcome::Done(Err(message)) => return Outcome::Done(Err(message)),
+        Outcome::Stopped(signal) => return Outcome::Stopped(signal),
     }
     let mut edited = match fs::read_to_string(&temp.0) {
         Ok(edited) => edited,
@@ -175,6 +132,19 @@ pub(crate) fn open(
     path: &Path,
     clock: &Arc<dyn Clock>,
 ) -> Outcome<Result<(), String>> {
+    launch(command, path, clock, ".")
+}
+
+/// Runs `command` on `path` in the foreground and waits for it. A spawn or
+/// wait error, a signal and a non-zero exit are the notice naming the
+/// cause, a signal or exit ending with `ended`; a shutdown signal ends the
+/// wait with [`Outcome::Stopped`].
+fn launch(
+    command: &str,
+    path: &Path,
+    clock: &Arc<dyn Clock>,
+    ended: &str,
+) -> Outcome<Result<(), String>> {
     // Registered once per process, before the spawn, so an acknowledged
     // editor implies installed handlers. The clear sits before the spawn:
     // any signal after the clear is observed by the wait; anything before
@@ -185,8 +155,10 @@ pub(crate) fn open(
     forward.quit.swap(false, Ordering::SeqCst);
     forward.term.swap(false, Ordering::SeqCst);
     forward.hup.swap(false, Ordering::SeqCst);
-    // As in [`run_in`]: the shell runs in Fiber's group, and the wait
-    // signals the shell pid alone.
+    // `sh` splits the command, so a value with arguments such as `code -w`
+    // works; the path goes in as `$1`, never through the split. The shell
+    // runs in Fiber's group, as on main: the wait signals the shell pid
+    // alone, never the group.
     let mut child = match Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("{command} \"$1\""))
@@ -211,11 +183,13 @@ pub(crate) fn open(
         }
     };
     if let Some(signal) = status.signal() {
-        return Outcome::Done(Err(format!("The editor was ended by signal {signal}.")));
+        return Outcome::Done(Err(format!(
+            "The editor was ended by signal {signal}{ended}"
+        )));
     }
     if !status.success() {
         let code = status.code().unwrap_or_default();
-        return Outcome::Done(Err(format!("The editor exited with status {code}.")));
+        return Outcome::Done(Err(format!("The editor exited with status {code}{ended}")));
     }
     Outcome::Done(Ok(()))
 }

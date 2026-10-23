@@ -65,7 +65,9 @@ impl From<Error> for io::Error {
     }
 }
 
-/// Whether the group still holds a process, through `kill(-pgid, 0)`. A
+/// Whether the group still holds a process, through `kill(-pgid, 0)`. Only
+/// `ESRCH` retires a group: `Ok` and every other errno read alive, since a
+/// killed child not yet reaped probes `EPERM` on macOS and `Ok` on Linux. A
 /// refused id, or one past what a pid holds, reads empty: the probe sends
 /// nothing for it.
 #[must_use]
@@ -73,7 +75,10 @@ pub fn alive(pgid: u32) -> bool {
     let Some(pid) = pid_of(pgid) else {
         return false;
     };
-    rustix::process::test_kill_process_group(pid).is_ok()
+    !matches!(
+        rustix::process::test_kill_process_group(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
 }
 
 /// Sends `signal` to process group `pgid`, through `kill(-pgid, signal)`. A
