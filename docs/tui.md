@@ -1209,6 +1209,7 @@ and an expiry wakes the loop even with no input.
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
 | `no_model` | event | Fades 10 s after it shows. |
+| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
@@ -1530,8 +1531,10 @@ what it started keeps running.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search, and choosing
-  in the model picker or the credential picker for this session only. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, choosing
+  in the model picker or the credential picker for this session only, and
+  keeping, editing, striking and flipping a line's layer in the reviewer
+  setup. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1539,6 +1542,15 @@ what it started keeps running.
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
+- **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
+  ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
+  panel's legend says. The ✕ and a press outside the panel, which is Esc,
+  are its mouse targets, and the mouse wheel does nothing while it is open.
+  Enter on a diff that would change neither layer closes the setup with one
+  notice, `notes_unchanged`, and writes no file.
+  The notice that names the command, shown the first time in a session the
+  reviewer blocks a call while both layers of the notes are empty, closes on
+  any key, and that key goes nowhere else.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -1709,7 +1721,7 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the home screen's delete question or workspace picker, the
+  close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
   key map, an approval or question, an offer, the Ctrl+R panel, or a
   notice's whole text; or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
@@ -1825,6 +1837,7 @@ later release still applies.
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
+| `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
@@ -2102,7 +2115,7 @@ tui       212   9,804
 
 Every surface drawn over the screen shares one frame: the
 key map, the quit question, the close-all question, the stop question, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
