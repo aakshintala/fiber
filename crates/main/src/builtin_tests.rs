@@ -794,7 +794,12 @@ fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
         walked.push(definition.name);
     }
     walked.sort();
-    assert_eq!(walked, contract::tool::BUILT_IN_TOOLS);
+    let listed: Vec<&str> = contract::tool::BUILT_IN_TOOLS
+        .iter()
+        .filter(|name| **name != "tool_search")
+        .copied()
+        .collect();
+    assert_eq!(walked, listed);
 }
 
 /// The names an extension must list in `replaces` are exactly the names
@@ -810,6 +815,7 @@ fn built_in_tools_is_every_name_builtin_registers() {
     };
     let listed: Vec<String> = contract::tool::BUILT_IN_TOOLS
         .iter()
+        .filter(|name| **name != "tool_search")
         .map(|name| (*name).to_owned())
         .collect();
     assert_eq!(names(Some("web_search_20250305")), listed);
@@ -817,6 +823,19 @@ fn built_in_tools_is_every_name_builtin_registers() {
     without.push("web_search".to_owned());
     without.sort();
     assert_eq!(without, listed);
+}
+
+/// `tool_search` is a built-in name in sorted place after `skill`, though
+/// `builtin` never registers it: the loop builds it over the deferred tools.
+#[test]
+fn built_in_tools_holds_tool_search_after_skill() {
+    let list = contract::tool::BUILT_IN_TOOLS;
+    assert!(list.contains(&"tool_search"), "{list:?}");
+    let mut sorted = list.to_vec();
+    sorted.sort();
+    assert_eq!(sorted, list, "{list:?}");
+    let skill = list.iter().position(|name| *name == "skill").unwrap();
+    assert_eq!(list[skill + 1], "tool_search", "{list:?}");
 }
 
 /// A search backend answering nothing, for choosing what `builtin`
