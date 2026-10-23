@@ -3,7 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::Output;
 
 use contract::ErrorCode;
 
@@ -273,7 +273,7 @@ pub enum Removed {
 /// Removes the worktree at `path` and its branch, through `git` run from
 /// the common directory.
 pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed, Error> {
-    let mut remove = git_command("git");
+    let mut remove = support::git::command("git");
     remove
         .arg("-C")
         .arg(&inspected.common_dir)
@@ -282,18 +282,17 @@ pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed
     if force {
         remove.arg("--force");
     }
-    remove.arg(path).stdin(Stdio::null());
+    remove.arg(path);
     let out = remove
         .output()
         .map_err(|source| spawn_failed(path, source))?;
     if !out.status.success() {
         return Err(git_failed(path, "worktree remove", &out));
     }
-    let out = git_command("git")
+    let out = support::git::command("git")
         .arg("-C")
         .arg(&inspected.common_dir)
         .args(["branch", "-D", &inspected.branch])
-        .stdin(Stdio::null())
         .output()
         .map_err(|source| spawn_failed(path, source))?;
     if out.status.success() {
@@ -306,43 +305,12 @@ pub fn remove(path: &Path, inspected: &Inspected, force: bool) -> Result<Removed
 /// Runs a `git` read for `path` in `dir`: stdin is null, and no lock is
 /// taken. A spawn failure of kind `NotFound` means `git` is missing.
 fn run(program: &str, dir: &Path, path: &Path, args: &[&str]) -> Result<Output, Error> {
-    git_command(program)
+    support::git::command(program)
         .arg("-C")
         .arg(dir)
         .args(args)
-        .stdin(Stdio::null())
         .output()
         .map_err(|source| spawn_failed(path, source))
-}
-
-/// Runs Git with `core.fsmonitor` off, without the environment that
-/// can redirect reads or removals elsewhere, and without running the
-/// repository's hooks: only `git worktree add`, built by
-/// [`hooked_command`], runs those (`post-checkout`, which Git LFS
-/// needs).
-fn git_command(program: &str) -> Command {
-    let mut command = hooked_command(program);
-    command.args(["-c", "core.hooksPath=/dev/null"]);
-    command
-}
-
-/// A `git` command with the scrubbed environment: `core.fsmonitor` off
-/// (`-c core.fsmonitor=false`), `GIT_OPTIONAL_LOCKS` and
-/// `GIT_TERMINAL_PROMPT` pinned to `0`, and `GIT_DIR`, `GIT_WORK_TREE`,
-/// `GIT_COMMON_DIR` and `GIT_INDEX_FILE` removed, so the caller's
-/// environment cannot redirect the invocation. The repository's hooks
-/// still run: only `git worktree add` is built this way.
-pub fn hooked_command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    command
-        .args(["-c", "core.fsmonitor=false"])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE");
-    command
 }
 
 /// A `git` command that failed: its stderr, or how it exited when stderr
