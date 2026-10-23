@@ -169,6 +169,23 @@ impl World {
     }
 }
 
+impl Drop for World {
+    /// A test that ends early, by a failed assertion, leaves no session
+    /// behind: the hub is killed first, so it starts no more, and then the
+    /// guard (dropped after this, as the next field) kills the sessions in
+    /// the workspace. A test that reached `finish` has taken both.
+    fn drop(&mut self) {
+        let hub = self.hub.lock().ok().and_then(|mut hub| hub.take());
+        if let Some(hub) = hub {
+            // A panic here, while a test's own panic unwinds, would abort.
+            let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                hub.kill_and_wait();
+            }));
+            drop(killed);
+        }
+    }
+}
+
 fn command(id: &str, session: &str, command: &str, args: &Value) -> String {
     json!({"id": id, "session_id": session, "command": command, "args": args}).to_string()
 }
@@ -498,4 +515,25 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
     world.end_session();
     drop((first, second));
     world.finish();
+}
+
+#[test]
+fn a_test_that_ends_early_leaves_no_session_running() {
+    let world = World::new(2);
+    let id = world.id.clone();
+    let first = world.client();
+    subscribe(&first, "c_sub", &id);
+    world.hold_imports();
+    first.send(&import("c_q", &id));
+    let writer = world.await_import();
+    let running = world.session_pids();
+    assert!(!running.is_empty(), "the held run is a session process");
+    let deadline = world.setup.deadline;
+    // Dropped as a failed assertion would drop it, with the import held.
+    drop(world);
+    assert!(
+        fakes::pids_exit(&running, deadline),
+        "waited until the deadline for the session process {running:?} to exit after the drop"
+    );
+    drop((first, writer));
 }
