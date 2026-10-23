@@ -205,6 +205,55 @@ pub(crate) fn result_caps(config: &Config) -> r#loop::ResultCaps {
 #[path = "result_caps_tests.rs"]
 mod result_caps_tests;
 
+/// Which registered tools the preamble sends deferred (`docs/tools.md`,
+/// "Tool search"): `tools."<name>".deferred` by tool name, and
+/// `mcp.servers."<server>".declare_in_full` by server. A non-boolean
+/// value leaves no entry. `tools."tool_search".deferred` has no effect:
+/// `tool_search` is never deferred, so the key gives no entry and one
+/// `config_key_ignored` notice. A key on a name the registry does not
+/// hold is kept: the build iterates the registry, so it is a silent
+/// no-op there. The result never holds `tool_search`.
+pub(crate) fn deferrals(config: &Config, notices: &mut Vec<Notice>) -> r#loop::Deferrals {
+    let mut out = r#loop::Deferrals::default();
+    let merged = config.merged(None);
+    if let Value::Object(tools) = merged.get("tools").cloned().unwrap_or_default() {
+        for (name, entry) in tools {
+            let Value::Object(entry) = entry else {
+                continue;
+            };
+            let Some(deferred) = entry.get("deferred").and_then(Value::as_bool) else {
+                continue;
+            };
+            if name == contract::provider::TOOL_SEARCH {
+                notices.push(Notice {
+                    code: contract::ErrorCode::ConfigKeyIgnored,
+                    message: "`tools.\"tool_search\".deferred` has no effect: `tool_search` is never deferred."
+                        .to_owned(),
+                    extension: None,
+                });
+            } else {
+                out.tools.insert(name, deferred);
+            }
+        }
+    }
+    if let Value::Object(mcp) = merged.get("mcp").cloned().unwrap_or_default()
+        && let Value::Object(servers) = mcp.get("servers").cloned().unwrap_or_default()
+    {
+        for (name, entry) in servers {
+            if let Value::Object(entry) = entry
+                && entry.get("declare_in_full").and_then(Value::as_bool) == Some(true)
+            {
+                out.full_servers.insert(name);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "deferrals_tests.rs"]
+mod deferrals_tests;
+
 /// Re-reads `skills.disabled` at each turn start, with the check for
 /// added and removed skills (`docs/configuration.md`, "When Fiber reads
 /// configuration"): loads the configuration as at session start, `-c`

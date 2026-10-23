@@ -221,6 +221,8 @@ struct Running {
     lines: mpsc::Receiver<Value>,
     stderr: mpsc::Receiver<String>,
     deadline: Deadline,
+    /// The session `start` opened, for `connect`.
+    id: Option<String>,
     /// Every line `wait_line` has taken, so `wait` returns the whole stream.
     taken: Vec<Value>,
 }
@@ -234,7 +236,9 @@ impl Running {
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
         args.extend(extra);
-        Self::spawn(setup, &args)
+        let mut running = Self::spawn(setup, &args);
+        running.id = Some(id.to_owned());
+        running
     }
 
     /// Spawns `fiber` with `args`, draining stdout on a thread and keeping
@@ -290,15 +294,17 @@ impl Running {
                 lines,
                 stderr,
                 deadline: setup.deadline,
+                id: None,
                 taken: Vec::new(),
             },
             stdin,
         )
     }
 
-    /// Connects a client to the session's socket, on a thread bounded by
-    /// the deadline.
-    fn connect(&self, setup: &support::Setup, id: &str) -> support::Socket {
+    /// Connects a client to the started session's socket, on a thread
+    /// bounded by the deadline.
+    fn connect(&self, setup: &support::Setup) -> support::Socket {
+        let id = self.id.as_deref().expect("connect needs a started session");
         support::Socket::connect(setup.deadline, &setup.session_socket(id))
     }
 
@@ -1025,7 +1031,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         child.await_requests(1, setup.deadline),
         "the child stalled its model call"
     );
-    let client = running.connect(&setup, &id);
+    let client = running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
@@ -1192,7 +1198,373 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
-    let client = running.connect(&setup, &id);
+    let client = running.connect(&setup);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+}
+
+/// An `openai-completions` chunk answering `text` with generation `id`.
+fn ctext_id(id: &str, text: &str) -> Value {
+    json!({"id": id, "object": "chat.completion.chunk", "choices": [{
+        "index": 0, "delta": {"role": "assistant", "content": text},
+        "finish_reason": "stop"}]})
+}
+
+/// An `openai-completions` usage chunk with generation `id` reporting
+/// `cost`: distinct ids keep delegate generations from colliding with the
+/// parent's own (`docs/delegates.md`, "Streams" counts one line per id).
+fn cusage_id(id: &str, cost: f64) -> Value {
+    json!({"id": id, "choices": [], "usage": {"prompt_tokens": 15,
+        "completion_tokens": 9, "total_tokens": 24, "cost": cost,
+        "prompt_tokens_details": {"cached_tokens": 14}}})
+}
+
+/// An `openai-completions` chunk calling `name` with generation `id`.
+fn ccall_id(id: &str, name: &str, arguments: &Value) -> Value {
+    json!({"id": id, "object": "chat.completion.chunk", "choices": [{
+        "index": 0,
+        "delta": {"role": "assistant", "tool_calls": [{
+            "id": "call_1", "type": "function",
+            "function": {"name": name, "arguments": arguments.to_string()}}]},
+        "finish_reason": "tool_calls"}]})
+}
+
+#[test]
+fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The root spawns the child, then parks in `jobs wait`; after the wait
+    // a read forces the next model request, which the trip's spend refuses.
+    // The child spawns the grandchild, then parks in `jobs wait` the same
+    // way; the grandchild's costly reply bubbles up through both logs.
+    fs::write(setup.workspace().join("note.txt"), "the note\n").unwrap();
+    // The wait and the read name the job the receipt minted, which no
+    // script can know: each server counts its session's requests, answering
+    // reviewer requests (which carry no tools) with an allow.
+    let parent = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            // Session requests declare tools; reviewer requests carry the
+            // call in history but declare none.
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("r_allow", "allow"), cusage_id("r_allow", 0.0)]);
+            }
+            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => cstream(&[
+                    ccall_id(
+                        "r_spawn",
+                        "delegate_spawn",
+                        &json!({"description": "scan", "prompt": "scan shallow", "model": "fiber:pb/m"}),
+                    ),
+                    cusage_id("r_spawn", 0.0),
+                ]),
+                1 => cstream(&[
+                    ccall_id(
+                        "r_wait",
+                        "jobs",
+                        &json!({"action": "wait", "job_id": job_id(&text), "timeout_ms": 30000}),
+                    ),
+                    cusage_id("r_wait", 0.0),
+                ]),
+                _ => cstream(&[
+                    ccall_id("r_read", "read", &json!({"path": "note.txt"})),
+                    cusage_id("r_read", 0.0),
+                ]),
+            }
+        }
+    })
+    .unwrap();
+    // The wait names the job the receipt minted, which no script can know:
+    // the server rebuilds the wait call from the receipt it sees. Held
+    // until the root parks in the wait: the grandchild's reply then lands
+    // while both ancestors wait, whatever the scheduling.
+    let child = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            // Session requests declare tools; reviewer requests carry the
+            // call in history but declare none.
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
+            }
+            // The receipt names the delegate the wait then names; it
+            // carries the spawn call too, so it comes before the prompt.
+            if text.contains("Started delegate") {
+                return match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => cstream(&[
+                        ccall_id(
+                            "c_wait",
+                            "jobs",
+                            &json!({"action": "wait", "job_id": job_id(&text), "timeout_ms": 30000}),
+                        ),
+                        cusage_id("c_wait", 0.0),
+                    ]),
+                    _ => cstream(&[ctext_id("c_done", "done"), cusage_id("c_done", 0.0)]),
+                };
+            }
+            // The grandchild's reply costs past the budget on its own.
+            if text.contains("scan deep") {
+                return cstream(&[
+                    ctext_id("g_cost", "deep scan done"),
+                    cusage_id("g_cost", 100.0),
+                ]);
+            }
+            cstream(&[
+                ccall_id(
+                    "c_spawn",
+                    "delegate_spawn",
+                    &json!({"description": "scan", "prompt": "scan deep", "model": "fiber:pb/m"}),
+                ),
+                cusage_id("c_spawn", 0.0),
+            ])
+        }
+    })
+    .unwrap();
+    providers_url(&setup, &parent.url(), &child.url(), "openai-completions");
+    standing_allow(&setup);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "budget": {"usd": 1.0}, "session": {"idle_exit_ms": 3600000}}),
+    );
+
+    // Held until the root parks in the wait: the grandchild's reply then
+    // lands while both ancestors wait, whatever the scheduling.
+    child.hold();
+    let id = doors::mint("s_");
+    let mut running = Running::start(
+        &setup,
+        &id,
+        &["--model", "pa/m", "--prompt", "scan the tree"],
+    );
+    let parked = running.wait_line("the root parked in jobs wait", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    // The spawn ran first, then the wait the root now parks in.
+    assert_eq!(parked.last().unwrap()["payload"]["name"], "jobs");
+    assert!(
+        parked
+            .iter()
+            .any(|line| line["kind"] == "tool_call_requested"
+                && line["payload"]["name"] == "delegate_spawn"),
+        "the spawn ran before the wait"
+    );
+    child.release();
+    // The crossing copy trips the budget while the root waits: the wait
+    // ends, the next request is refused, and the turn ends failed.
+    let first = running.wait_line("the budget end", |line| {
+        line["kind"] == "turn_completed" && line["payload"]["outcome"] == "failed"
+    });
+    let completed = first.last().unwrap();
+    assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
+    // The grandchild's spend lands in the root log once, naming the
+    // grandchild: one line per generation id. The spawn lines arrived
+    // before the wait the root parked in.
+    let before: Vec<Value> = parked.into_iter().chain(first.iter().cloned()).collect();
+    let copies: Vec<Value> = before
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && line["payload"]["generation_id"] == "g_cost"
+        })
+        .cloned()
+        .collect();
+    assert_eq!(copies.len(), 1, "the copy arrives once: {copies:?}");
+    assert_eq!(copies[0]["payload"]["cost"], 100.0);
+    let root_started = one(&before, "delegate_started");
+    let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(child_id)
+            .join("events.jsonl"),
+    );
+    let child_started = one(&child_lines, "delegate_started");
+    let grandchild_id = child_started["delegate_session_id"].as_str().unwrap();
+    assert_eq!(copies[0]["payload"]["origin_session_id"], grandchild_id);
+    // The child's own copy names the grandchild too: the relay preserves
+    // the originator.
+    let relayed: Vec<Value> = child_lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && line["payload"]["generation_id"] == "g_cost"
+        })
+        .cloned()
+        .collect();
+    assert_eq!(relayed.len(), 1);
+    assert_eq!(relayed[0]["payload"]["origin_session_id"], grandchild_id);
+    // The child ends cancelled by the trip, exactly once; the grandchild
+    // completed on its own before the stop reached it.
+    let mut batch: Vec<Value> = first
+        .iter()
+        .filter(|line| line["kind"] == "job_completed")
+        .cloned()
+        .collect();
+    while batch.is_empty() {
+        let more = running.wait_line("the delegate end", |line| line["kind"] == "job_completed");
+        batch.extend(
+            more.into_iter()
+                .filter(|line| line["kind"] == "job_completed"),
+        );
+    }
+    assert_eq!(batch.len(), 1, "the child ends once: {batch:?}");
+    assert_eq!(batch[0]["payload"]["status"], "cancelled");
+    let child_exited = child_lines.last().unwrap().clone();
+    assert_eq!(child_exited["kind"], "fiber_exited");
+    assert_eq!(child_exited["payload"]["exit_code"], 143);
+    let grandchild_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(grandchild_id)
+            .join("events.jsonl"),
+    );
+    let grandchild_exited = grandchild_lines.last().unwrap().clone();
+    assert_eq!(grandchild_exited["kind"], "fiber_exited");
+    // The grandchild's normal exit after its reply races the stop: it
+    // either finished first or was killed with the tree. Either way it
+    // is done, and the stalled child above proves the stop itself.
+    assert!(
+        grandchild_exited["payload"]["exit_code"] == 0
+            || grandchild_exited["payload"]["exit_code"] == 143,
+        "unexpected grandchild exit: {grandchild_exited:?}"
+    );
+    // A late spawn past the trip never runs: the next turn still fails on
+    // the budget before any model call is sent, so no delegate starts.
+    let client = running.connect(&setup);
+    subscribe(&client);
+    client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
+    let late = running.wait_line("the late turn", |line| {
+        line["kind"] == "turn_completed" && line["payload"]["outcome"] == "failed"
+    });
+    let late_completed = late.last().unwrap();
+    assert_eq!(
+        late_completed["payload"]["error"]["code"],
+        "budget_exceeded"
+    );
+    let started: Vec<Value> = before
+        .iter()
+        .chain(late.iter())
+        .filter(|line| line["kind"] == "delegate_started")
+        .cloned()
+        .collect();
+    assert_eq!(started.len(), 1, "no late delegate starts: {started:?}");
+    let ends: Vec<Value> = before
+        .iter()
+        .chain(late.iter())
+        .filter(|line| line["kind"] == "job_completed")
+        .cloned()
+        .collect();
+    assert_eq!(ends.len(), 1, "one end per job: {ends:?}");
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, _, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+}
+
+#[test]
+fn a_delegate_whose_call_fails_without_a_claimed_trip_keeps_its_own_exit_code() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The root spawns one child and parks in `jobs wait`; the child's
+    // only model call fails fast. No budget is configured anywhere, so
+    // no trip can claim and no tree stop is coming: the child's failed
+    // turn must drain with its own code, not the tree-stop code.
+    let parent = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("r_allow", "allow"), cusage_id("r_allow", 0.0)]);
+            }
+            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => cstream(&[
+                    ccall_id(
+                        "r_spawn",
+                        "delegate_spawn",
+                        &json!({"description": "scan", "prompt": "scan shallow", "model": "fiber:pb/m"}),
+                    ),
+                    cusage_id("r_spawn", 0.0),
+                ]),
+                1 => cstream(&[
+                    ccall_id(
+                        "r_wait",
+                        "jobs",
+                        &json!({"action": "wait", "job_id": job_id(&text), "timeout_ms": 30000}),
+                    ),
+                    cusage_id("r_wait", 0.0),
+                ]),
+                _ => cstream(&[ctext_id("r_done", "done"), cusage_id("r_done", 0.0)]),
+            }
+        }
+    })
+    .unwrap();
+    // Every model call fails at once: the veto header rules out retries,
+    // so the turn fails on the first attempt.
+    let child = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""tools":[{"#) {
+            return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
+        }
+        Response::status(500, "boom").header("x-should-retry", "false")
+    })
+    .unwrap();
+    install_url(
+        &setup,
+        "pa",
+        &parent.url(),
+        "openai-completions",
+        &json!({}),
+    );
+    install_url(&setup, "pb", &child.url(), "openai-completions", &json!({}));
+    standing_allow(&setup);
+    slow_idle(&setup);
+    let id = doors::mint("s_");
+    let mut running = Running::start(
+        &setup,
+        &id,
+        &["--model", "pa/m", "--prompt", "scan the tree"],
+    );
+    let parked = running.wait_line("the root parked in jobs wait", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    assert!(
+        parked
+            .iter()
+            .any(|line| line["kind"] == "tool_call_requested"
+                && line["payload"]["name"] == "delegate_spawn"),
+        "the spawn ran before the wait"
+    );
+    // The child's end: failed on its call, not cancelled by any stop.
+    let mut batch: Vec<Value> = Vec::new();
+    while batch.is_empty() {
+        let more = running.wait_line("the delegate end", |line| line["kind"] == "job_completed");
+        batch.extend(
+            more.into_iter()
+                .filter(|line| line["kind"] == "job_completed"),
+        );
+    }
+    assert_eq!(batch.len(), 1, "the child ends once: {batch:?}");
+    assert_eq!(batch[0]["payload"]["status"], "failed");
+    let root_started = one(&parked, "delegate_started");
+    let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(child_id)
+            .join("events.jsonl"),
+    );
+    // The failed turn keeps its own code: an error is recorded (a stop
+    // would leave none) and the exit is 1, not the tree-stop 143.
+    let child_exited = child_lines.last().unwrap().clone();
+    assert_eq!(child_exited["kind"], "fiber_exited");
+    assert_eq!(child_exited["payload"]["exit_code"], 1);
+    assert!(
+        child_exited["payload"]["error"]["code"].is_string(),
+        "the failure names its code: {child_exited:?}"
+    );
+    let client = running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
@@ -1840,7 +2212,7 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     pb.release();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    assert_eq!(durable_kinds(&lines), ROLE_PARENT_DURABLE);
+    assert_eq!(durable_kinds(&without_copies(&lines)), ROLE_PARENT_DURABLE);
     let delegate = one(&lines, "delegate_started");
     assert_eq!(delegate["model"], "fiber:pb/m:high");
     assert_eq!(pb.requests().len(), 1);
@@ -1871,7 +2243,10 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     pc.release();
     let (re_status, re_lines, re_stderr) = resumed.wait();
     assert_eq!(re_status.code(), Some(0), "stderr: {re_stderr}");
-    assert_eq!(durable_kinds(&re_lines), RESUMED_PARENT_DURABLE);
+    assert_eq!(
+        durable_kinds(&without_copies(&re_lines)),
+        RESUMED_PARENT_DURABLE
+    );
     let re_delegate = one(&re_lines, "delegate_started");
     assert_eq!(re_delegate["model"], "fiber:pc/m");
     assert_eq!(pc.requests().len(), 1);
@@ -2021,6 +2396,21 @@ fn durable_kinds(lines: &[Value]) -> Vec<String> {
         .iter()
         .filter(|line| line.get("seq").is_some())
         .map(|line| line["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The parent log without the delegate spend copies: a copied
+/// `usage_recorded` carries its writer in `origin_session_id`, while the
+/// parent's own lines leave it absent. Delegate spend relay is pinned by
+/// the spend tree test and the loop copy tests; the durable-shape
+/// assertions below predate it and pin the parent's own lines.
+fn without_copies(lines: &[Value]) -> Vec<Value> {
+    lines
+        .iter()
+        .filter(|line| {
+            line["kind"] != "usage_recorded" || line["payload"]["origin_session_id"].is_null()
+        })
+        .cloned()
         .collect()
 }
 
@@ -2394,7 +2784,10 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
         .unwrap();
     assert_eq!(finished["payload"]["job_id"], job.as_str());
     assert_eq!(finished["payload"]["text"], "after-steer");
-    assert_eq!(durable_kinds(&parent_lines), PARENT_DURABLE);
+    assert_eq!(
+        durable_kinds(&without_copies(&parent_lines)),
+        PARENT_DURABLE
+    );
     // The parent idles now: wait for the feed to report it before closing
     // it, so the final collection holds its status.
     wait_feed_status(&feed, &setup, &parent);
@@ -2566,7 +2959,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
             .all(|line| !line["kind"].as_str().unwrap().starts_with("steering_")),
         "the parent took no steering: {folded_kinds:?}"
     );
-    assert_eq!(durable_kinds(&folded), PARENT_DURABLE);
+    assert_eq!(durable_kinds(&without_copies(&folded)), PARENT_DURABLE);
     // The parent idles now: wait for the feed to report it before closing
     // it, so the final collection holds its status.
     wait_feed_status(&feed, &setup, &parent);
@@ -3188,7 +3581,7 @@ fn delegate_message_steers_a_running_delegate_at_its_next_step_boundary() {
     }
     let finished = one(&lines, "delegate_finished");
     assert_eq!(finished["text"], "after-steer");
-    assert_eq!(durable_kinds(&lines), STEER_PARENT_DURABLE);
+    assert_eq!(durable_kinds(&without_copies(&lines)), STEER_PARENT_DURABLE);
 }
 
 /// The resume message carried to the delegate's second run: unique to it,
@@ -3532,7 +3925,10 @@ fn delegate_message_resumes_a_finished_delegate_as_a_second_run_of_the_same_job(
     let finished = of_kind("delegate_finished");
     assert_eq!(finished[0]["payload"]["text"], "run-one-done");
     assert_eq!(finished[1]["payload"]["text"], "run-two-done");
-    assert_eq!(durable_kinds(&lines), RESUME_PARENT_DURABLE);
+    assert_eq!(
+        durable_kinds(&without_copies(&lines)),
+        RESUME_PARENT_DURABLE
+    );
 }
 
 /// The parent's durable kinds for the unknown-job run, in order, pinned
@@ -4062,7 +4458,7 @@ fn fork_parent() -> ForkParent {
     parent_running.wait_line("the parent's turn completes", |line| {
         line["kind"] == "turn_completed"
     });
-    let client = parent_running.connect(&setup, &parent_id);
+    let client = parent_running.connect(&setup);
     subscribe(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
@@ -5254,7 +5650,10 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     {
         assert_eq!(exited["payload"]["exit_code"], 0);
     }
-    assert_eq!(durable_kinds(&parent_lines), ASK_WAKE_PARENT_DURABLE);
+    assert_eq!(
+        durable_kinds(&without_copies(&parent_lines)),
+        ASK_WAKE_PARENT_DURABLE
+    );
 
     // Closing the parent ends it; its sessions leave no process behind.
     main.send(&format!(
@@ -5299,14 +5698,18 @@ fiber.tool("go", { description = "Start the scan delegate.", input_schema = { ty
 "#;
 
 /// The parent's durable kinds for one command-started delegate, pinned
-/// from a real run: the start pair, then the finish pair, with no turn
-/// anywhere, since the model was never consulted.
+/// from a real run: the start pair, the delegate's own call copied with
+/// its origin added, then the finish pair, with no turn anywhere, since
+/// the parent never consulted the model itself (`docs/events.md`,
+/// "Usage and notices": one `usage_recorded` per call however it
+/// ended, and the parent copies each delegate line).
 const DELEGATE_COMMAND_DURABLE: &[&str] = &[
     "session_started",
     "fiber_started",
     "extensions_loaded",
     "job_started",
     "delegate_started",
+    "usage_recorded",
     "delegate_finished",
     "job_completed",
 ];
@@ -5488,7 +5891,10 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         "the delegate ran exactly its held first request"
     );
     // The whole durable stream, in order, read before close: a
-    // never-prompted session's directory is deleted on close.
+    // never-prompted session's directory is deleted on close. The
+    // cancelled delegate's unfinished call still settles its
+    // `usage_recorded`, copied with the delegate as origin
+    // (`docs/events.md`, "Usage and notices").
     assert_eq!(
         durable_kinds(&read_lines(
             &support::session_dir(&setup, &id).join("events.jsonl")
@@ -5502,6 +5908,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "reloaded",
             "extensions_loaded",
             "preamble_built",
+            "usage_recorded",
             "delegate_finished",
             "job_completed",
         ]
@@ -5526,7 +5933,7 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
         .map(String::as_str)
         .collect();
-    let started_first: [&str; 15] = [
+    let started_first: [&str; 16] = [
         "session_started",
         "fiber_started",
         "extensions_loaded",
@@ -5538,6 +5945,9 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         "command_accepted",
         "extensions_loaded",
         "preamble_built",
+        // The cancelled delegate's unfinished call settles here too
+        // (`docs/events.md`, "Usage and notices").
+        "usage_recorded",
         "delegate_finished",
         "job_completed",
         "command_accepted",

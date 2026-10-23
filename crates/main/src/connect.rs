@@ -194,7 +194,8 @@ fn build(
             let responses = match cache_key_header {
                 Some(name) => Responses::new(endpoint).cache_key_header(name),
                 None => Responses::new(endpoint),
-            };
+            }
+            .deferred_tools(model.model.deferred_tools);
             let observe = diag.and_then(|diag| {
                 observed(
                     diag,
@@ -226,7 +227,8 @@ fn build(
             let messages = match cache_key_header {
                 Some(name) => Messages::new(endpoint).cache_key_header(name),
                 None => Messages::new(endpoint),
-            };
+            }
+            .deferred_tools(model.model.deferred_tools);
             let observe = diag.and_then(|diag| {
                 observed(
                     diag,

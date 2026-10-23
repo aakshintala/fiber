@@ -302,6 +302,8 @@ pub(crate) struct App {
     /// What moves on screen, and when it next moves (`docs/tui.md`,
     /// "The working line").
     motion: crate::motion::Motion,
+    /// The slabs the last frame drew for its framed surfaces.
+    frames: top::Frames,
 }
 
 impl App {
@@ -360,6 +362,7 @@ impl App {
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
             motion: crate::motion::Motion::default(),
+            frames: top::Frames::default(),
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;

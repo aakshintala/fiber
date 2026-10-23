@@ -1710,7 +1710,7 @@ fn mcp_resources_is_declared_only_when_a_server_offers_resources() {
 }
 
 #[test]
-fn the_resources_info_is_a_full_builtin_row() {
+fn the_resources_info_is_a_deferred_builtin_row() {
     let setup = Setup::new();
     let started = setup.start(vec![lazy_spec(&setup, "docs", true)]);
     assert!(started.failed.is_empty());
@@ -1725,13 +1725,37 @@ fn the_resources_info_is_a_full_builtin_row() {
         contract::events::ToolInfo {
             name: "mcp_resources".to_owned(),
             source: ToolSource::Builtin,
-            state: ToolState::Full,
+            state: ToolState::Deferred,
             bytes: serde_json::to_vec(&definition)
                 .expect("a definition writes")
                 .len() as u64,
             tokens: None,
         }
     );
+    setup.stop(started.servers);
+}
+
+/// A server tool's row is deferred, keeping its MCP source.
+#[test]
+fn a_server_tools_info_is_a_deferred_mcp_row() {
+    let setup = Setup::new();
+    setup.tools(&json!([{ "name": "echo" }]));
+    setup.result("echo", r#"{"content":[]}"#);
+    let started = setup.start(vec![setup.spec("fx")]);
+    assert!(started.failed.is_empty());
+    let info = started
+        .infos
+        .iter()
+        .find(|info| info.name == "mcp__fx__echo")
+        .expect("the echo info is declared");
+    assert_eq!(
+        info.source,
+        ToolSource::Mcp {
+            server: "fx".to_owned(),
+            tool: "echo".to_owned(),
+        }
+    );
+    assert_eq!(info.state, ToolState::Deferred);
     setup.stop(started.servers);
 }
 

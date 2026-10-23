@@ -75,7 +75,7 @@ fn declared_tools_carry_the_artifacts_dir() {
 }
 
 #[test]
-fn the_definition_carries_the_qualified_name_schema_and_no_deferral() {
+fn the_definition_carries_the_qualified_name_schema_and_deferral() {
     let dir = fakes::TempDir::new("mcp-tool-definition");
     let tool = declare(
         "fx",
@@ -88,7 +88,7 @@ fn the_definition_carries_the_qualified_name_schema_and_no_deferral() {
     assert_eq!(definition.name, "mcp__fx__echo");
     assert_eq!(definition.description, "Echoes.");
     assert_eq!(definition.input_schema, json!({"type": "object"}));
-    assert!(!definition.deferred);
+    assert!(definition.deferred);
 }
 
 #[test]

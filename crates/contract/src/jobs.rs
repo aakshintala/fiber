@@ -167,6 +167,12 @@ pub trait Jobs: Send + Sync {
     /// a rewind), before that path's first `running()` read. A second call
     /// changes nothing. Returns at once. Test fakes keep the default.
     fn close_extension_starts(&self) {}
+
+    /// Installs the watcher-side budget update: called on the thread
+    /// reading a delegate's socket for each well-formed `usage_recorded`
+    /// envelope, before the line is offered to the inbox. The default
+    /// keeps nothing, so test fakes need no new method.
+    fn install_usage_tap(&self, _tap: Option<UsageTap>) {}
 }
 
 /// `write` could not reach the job.
@@ -197,6 +203,12 @@ impl WriteError {
         }
     }
 }
+
+/// A delegate's `usage_recorded` as its socket delivered it: the
+/// watcher-side budget update. Installed by the loop through
+/// [`Jobs::install_usage_tap`]; `jobs` never depends on a concrete loop
+/// type.
+pub type UsageTap = std::sync::Arc<dyn Fn(crate::events::UsageRecorded) + Send + Sync>;
 
 /// `stop` could not ask the job to stop.
 #[derive(Debug, thiserror::Error)]

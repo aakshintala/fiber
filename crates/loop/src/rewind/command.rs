@@ -236,6 +236,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::ExtensionLog(_)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
         | Delivery::InnerCall(_)
         | Delivery::Cancelled => {}
     }

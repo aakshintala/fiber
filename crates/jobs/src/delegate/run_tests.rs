@@ -13,7 +13,7 @@ use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc, Condvar, Mutex,
+    Arc, Barrier, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
@@ -30,7 +30,9 @@ use contract::shapes::{Failure, Usage};
 use contract::{ActionId, ErrorCode, JobId, PreSessionExit, Seq, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
+use fakes::{
+    MUST_SUCCEED_WITHIN, Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within,
+};
 
 use super::{
     Fold, Fresh, Launch, Launched, POLL, Runner, Shared, Start, Stat, Watch, Watched, Watcher,
@@ -247,9 +249,11 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
     ) -> mpsc::Receiver<()> {
-        self.start_timeout(shell, bound, cap, after, None).0
+        self.start_timeout(shell, bound, cap, after, None, None).0
     }
 
+    /// Builds the runner, spawns, records and drives it. `on_usage` is
+    /// the watcher's tap; `None` keeps the existing unwired behavior.
     fn start_timeout(
         &self,
         shell: &str,
@@ -257,6 +261,7 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
         timeout: Option<Duration>,
+        on_usage: Option<super::UsageForward>,
     ) -> (mpsc::Receiver<()>, Arc<Parker>) {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
@@ -281,6 +286,7 @@ impl Rig {
             watch,
             after,
             timeout,
+            on_usage,
         );
         let launched = Launched {
             depth: 1,
@@ -354,19 +360,101 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
 /// Takes the runner's report with one wall-clock deadline for the whole
 /// wait, failing at the caller's line: `#[track_caller]` reports the
 /// test's line, which the `thread::scope` closure below cannot. `expiry`
-/// names the wait that never reported.
+/// names the wait that never reported. `DelegateUsage` deliveries the
+/// watcher's tap forwards ahead of the report are stashed in `usages`
+/// and the take loops past them until the `Job` notice arrives.
 #[track_caller]
-fn take_report(rig: &Rig, stop: &AtomicBool, expiry: &str) -> contract::inbox::JobNotice {
-    let result = Deadline::after(DEADLINE).recv(&rig.inbox);
-    stop.store(true, Ordering::Relaxed);
-    match result {
-        Ok(Delivery::Job(notice)) => notice,
-        Ok(other) => panic!("expected the runner's report, got {other:?}"),
-        Err(_) => panic!(
-            "{expiry}; now={:?} parked={:?}",
-            rig.clock.now(),
-            rig.clock.parked()
-        ),
+fn take_report(
+    rig: &Rig,
+    stop: &AtomicBool,
+    expiry: &str,
+    usages: &mut Vec<(SessionId, String)>,
+) -> contract::inbox::JobNotice {
+    let deadline = Deadline::after(DEADLINE);
+    loop {
+        match deadline.recv(&rig.inbox) {
+            Ok(Delivery::Job(notice)) => {
+                stop.store(true, Ordering::Relaxed);
+                return notice;
+            }
+            Ok(Delivery::DelegateUsage { session, line }) => {
+                usages.push((session, line.generation_id.0.clone()));
+            }
+            Ok(other) => {
+                stop.store(true, Ordering::Relaxed);
+                panic!("expected the runner's report, got {other:?}");
+            }
+            Err(_) => {
+                stop.store(true, Ordering::Relaxed);
+                panic!(
+                    "{expiry}; now={:?} parked={:?}",
+                    rig.clock.now(),
+                    rig.clock.parked()
+                );
+            }
+        }
+    }
+}
+
+/// Advances the fake clock only from the runner's own park, until `stop`
+/// is set or `deadline` runs out (docs/testing.md, "Waits and timeouts":
+/// a test advances a fake clock only after a signal that the code under
+/// test is waiting on that clock). A park at or past `horizon` wakes the
+/// runner with a zero advance, which moves no time but wakes every
+/// subscriber; `None` advances every park at most one poll ahead. The
+/// test thread's single `Deadline` receive is the wall-clock deadline for
+/// the whole wait, driver included. The stop flag is set on every outcome
+/// of that receive, before the result is inspected, so the driver always
+/// ends within `deadline` and the scope never outlives the wait.
+fn drive_runner_clock(
+    stop: &AtomicBool,
+    clock: &Arc<FakeClock>,
+    deadline: &Deadline,
+    horizon: Option<std::time::Instant>,
+) {
+    let mut carried: Option<Instant> = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if deadline.left().is_zero() {
+            panic!(
+                "the runner did not report; now={:?} parked={:?}",
+                clock.now(),
+                clock.parked()
+            );
+        }
+        let mut candidate = carried.take();
+        if candidate.is_some_and(|watched| watched <= clock.now()) {
+            candidate = None;
+        }
+        match candidate.or_else(|| park_ahead(clock)) {
+            Some(until) => {
+                if horizon.is_some_and(|horizon| until >= horizon) {
+                    // Fake time never reaches `horizon`: a zero
+                    // advance wakes the parked pass without moving
+                    // time, staying short of the park.
+                    match try_step(clock, until, Duration::ZERO) {
+                        Step::Moved | Step::NoPark => {}
+                        Step::Next(watched) => {
+                            carried = Some(watched);
+                        }
+                    }
+                } else {
+                    let now = clock.now();
+                    match until.checked_duration_since(now) {
+                        Some(gap) if gap <= super::POLL => match try_step(clock, until, gap) {
+                            Step::Moved | Step::NoPark => {}
+                            Step::Next(watched) => {
+                                carried = Some(watched);
+                            }
+                        },
+                        _ => thread::yield_now(),
+                    }
+                }
+            }
+            None => thread::yield_now(),
+        }
     }
 }
 
@@ -378,60 +466,25 @@ fn take_report(rig: &Rig, stop: &AtomicBool, expiry: &str) -> contract::inbox::J
 /// assertions; no timing is asserted here).
 #[track_caller]
 fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::inbox::JobNotice {
+    reported_with_usage_before(rig, horizon).0
+}
+
+/// [`reported_before`], also collecting the `DelegateUsage` deliveries
+/// the watcher's tap forwards ahead of the runner's report: one scoped
+/// clock driver and one shared take serve both.
+#[track_caller]
+fn reported_with_usage_before(
+    rig: &Rig,
+    horizon: Option<std::time::Instant>,
+) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
-    let driver_stop = Arc::clone(&stop);
     let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(DEADLINE);
     thread::scope(|scope| {
-        scope.spawn(move || {
-            let mut carried: Option<Instant> = None;
-            loop {
-                if driver_stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                if deadline.left().is_zero() {
-                    panic!(
-                        "the runner did not report; now={:?} parked={:?}",
-                        clock.now(),
-                        clock.parked()
-                    );
-                }
-                let mut candidate = carried.take();
-                if candidate.is_some_and(|watched| watched <= clock.now()) {
-                    candidate = None;
-                }
-                match candidate.or_else(|| park_ahead(&clock)) {
-                    Some(until) => {
-                        if horizon.is_some_and(|horizon| until >= horizon) {
-                            // Fake time never reaches `horizon`: a zero
-                            // advance wakes the parked pass without moving
-                            // time, staying short of the park.
-                            match try_step(&clock, until, Duration::ZERO) {
-                                Step::Moved | Step::NoPark => {}
-                                Step::Next(watched) => {
-                                    carried = Some(watched);
-                                }
-                            }
-                        } else {
-                            let now = clock.now();
-                            match until.checked_duration_since(now) {
-                                Some(gap) if gap <= super::POLL => {
-                                    match try_step(&clock, until, gap) {
-                                        Step::Moved | Step::NoPark => {}
-                                        Step::Next(watched) => {
-                                            carried = Some(watched);
-                                        }
-                                    }
-                                }
-                                _ => thread::yield_now(),
-                            }
-                        }
-                    }
-                    None => thread::yield_now(),
-                }
-            }
-        });
-        take_report(rig, &stop, "the runner did not report")
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, horizon));
+        let mut usages = Vec::new();
+        let notice = take_report(rig, &stop, "the runner did not report", &mut usages);
+        (notice, usages)
     })
 }
 
@@ -1217,7 +1270,12 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
                 }
             }
         });
-        take_report(&rig, &stop, "the drain's end did not report")
+        take_report(
+            &rig,
+            &stop,
+            "the drain's end did not report",
+            &mut Vec::new(),
+        )
     });
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(
@@ -1579,7 +1637,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     let rig = rig(vec![WatchReply::Block(held)]);
     let origin = rig.clock.now();
     let timeout = Duration::from_millis(500);
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout));
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
@@ -1615,7 +1673,7 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
         block.display(),
         json_line(1, "done")
     );
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10));
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None);
     let watchdog = Watchdog::group(pid_in_file(&pidfile));
     release_fifo(&block, b"go\n");
     let notice = timeout_report(&rig, &park);
@@ -1638,7 +1696,7 @@ fn timeout_report(rig: &Rig, park: &Parker) -> contract::inbox::JobNotice {
                 thread::yield_now();
             }
         });
-        take_report(rig, &stopped, "timeout runner report")
+        take_report(rig, &stopped, "timeout runner report", &mut Vec::new())
     })
 }
 
@@ -1979,6 +2037,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         watch,
         None,
         None,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -2285,7 +2344,9 @@ fn run_watch(
         clock: Arc::clone(clock) as Arc<dyn contract::clock::Clock>,
         last_check: Arc::clone(last_check),
         stat,
+        output_path: std::path::PathBuf::from("missing.log"),
         wake: waker,
+        on_usage: None,
     }
     .run();
 }
@@ -2442,6 +2503,7 @@ fn the_fold_starts_from_the_run_boundary() {
         watch,
         Some(5),
         None,
+        None,
     );
     let launched = Launched {
         depth: 1,
@@ -2497,4 +2559,681 @@ fn minted_command_ids_carry_their_prefix_and_differ() {
         );
     }
     assert_ne!(first, second, "two mints differ");
+}
+
+/// A `usage_recorded` envelope as a delegate writes it: `seq` orders the
+/// stream, the payload is the call's [`UsageRecorded`].
+fn usage_envelope(seq: u64, generation: &str, cost: Option<f64>) -> Envelope {
+    use contract::events::UsageRecorded;
+    use contract::shapes::Tokens;
+    use contract::{GenerationId, SessionId as Sid};
+    let _ = Sid;
+    let recorded = UsageRecorded {
+        generation_id: GenerationId(generation.into()),
+        model: "fake/m".into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 5,
+        },
+        input_bytes: 100,
+        input_media: None,
+        web_searches: None,
+        cost,
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+        reviewer: None,
+    };
+    envelope(
+        seq,
+        "usage_recorded",
+        serde_json::to_value(recorded).unwrap(),
+    )
+}
+
+#[test]
+fn the_stream_forwards_live_usage_past_the_run_boundary() {
+    // The socket streams two live usage lines past `after`: the stream
+    // claims each under the fold lock and forwards both in order. A
+    // boundary check that drops past-`after` lines would forward none;
+    // a dedup that forgets the first claim would forward the first
+    // twice and drop the second. The shell prints the run's
+    // `fiber_exited` to stdout: the drain folds it before the report,
+    // so the notice is `Completed` whether or not the watcher beat the
+    // reap (see #3005).
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(2, "g_2", Some(0.1)),
+        usage_envelope(3, "g_3", Some(0.2)),
+        fiber_exited_line(4, "Done."),
+    ])]);
+    let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch check ever runs, so no watcher would ever forward.
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            Some(1),
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
+    let _waited = waited;
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and both lines whichever lands first.
+    // Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
+    let (notice, usages) = take_report_with_usages(&rig, 2);
+    let generations: Vec<&str> = usages
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_2", "g_3"]);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+/// Takes the runner's Job notice and `want` streamed usages in either
+/// order (see #3005): stopping at the first Job would drop the lines
+/// when the reap beats the watcher, and stopping at the lines would
+/// drop the Job when the watcher wins. One scoped clock driver serves
+/// the take, as [`reported_with_usage_before`]'s does; the bound is
+/// liveness only, the plan's MUST_SUCCEED_WITHIN. The failure names
+/// which half never arrived.
+#[track_caller]
+fn take_report_with_usages(
+    rig: &Rig,
+    want: usize,
+) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let clock = Arc::clone(&rig.clock);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    thread::scope(|scope| {
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, None));
+        let mut usages = Vec::new();
+        let mut notice = None;
+        while notice.is_none() || usages.len() < want {
+            match deadline.recv(&rig.inbox) {
+                Ok(Delivery::Job(got)) => {
+                    if notice.is_none() {
+                        notice = Some(got);
+                    }
+                }
+                Ok(Delivery::DelegateUsage { session, line }) => {
+                    usages.push((session, line.generation_id.0.clone()));
+                }
+                Ok(other) => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("expected the report or the streamed usage, got {other:?}");
+                }
+                Err(_) => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!(
+                        "the report and the streamed usage never arrived; job={} usages={want} got={} watch_calls={}",
+                        notice.is_some(),
+                        usages.len(),
+                        rig.script.calls().len(),
+                    );
+                }
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        (notice.unwrap(), usages)
+    })
+}
+
+/// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
+/// tap forwards ahead of the runner's report: the shared core stashes
+/// each while the take loops past them, until the `Job` notice arrives.
+#[track_caller]
+fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
+    reported_with_usage_before(rig, None)
+}
+
+/// The parked forward's gate, shared with the watcher: the test owns
+/// the sender half and releases the park by dropping it, so a failed
+/// test unwinds the sender first and never leaves the watcher parked
+/// (as the `Block` watch reply). Parking forces the order a loaded
+/// machine produces by accident (see #3051): the report lands with
+/// nothing stashed, and the drain collects every line after the
+/// release, instead of racing the watcher's scheduling.
+struct Park {
+    rx: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Park {
+    /// A closed gate: the sender half that releases it, and the shared
+    /// half the forward parks on.
+    fn closed() -> (mpsc::Sender<()>, Arc<Self>) {
+        let (tx, rx) = mpsc::channel();
+        (tx, Arc::new(Self { rx: Mutex::new(rx) }))
+    }
+
+    /// Waits for the release under the plan's bound: expiry names the
+    /// missing release instead of hanging the watcher, and a dropped
+    /// sender (a failed test's unwind) releases at once.
+    fn wait(&self) {
+        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.rx.lock().unwrap()) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the report never released the parked forward")
+            }
+        }
+    }
+}
+
+/// The registry's forward behind a release gate: every watcher line
+/// parks until the test drops the sender half, then forwards as usual.
+/// The runner's reap and report never wait on the watcher, so parking
+/// cannot deadlock the report the release waits for.
+fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
+    let forward = rig.registry.usage_forward();
+    let park = Arc::clone(park);
+    Arc::new(
+        move |session: SessionId, line: contract::events::UsageRecorded| {
+            park.wait();
+            forward(session, line);
+        },
+    )
+}
+
+/// Collects streamed `DelegateUsage` deliveries until `want` have
+/// arrived, after the run already reported: the watcher's forwards
+/// always follow on the inbox (the tap runs before each offer), so a
+/// Job that precedes them (see #3005) only delays this drain. The
+/// bound is the plan's MUST_SUCCEED_WITHIN, the same bound the parked
+/// forward's release waits on: under saturation the watcher thread can
+/// go unscheduled past the old 3s report deadline (see #3001).
+fn drain_streamed_usages(
+    rig: &Rig,
+    mut usages: Vec<(SessionId, String)>,
+    want: usize,
+) -> Vec<(SessionId, String)> {
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    while usages.len() < want {
+        match deadline.recv(&rig.inbox) {
+            Ok(Delivery::DelegateUsage { session, line }) => {
+                usages.push((session, line.generation_id.0.clone()));
+            }
+            Ok(other) => panic!("expected the streamed usage, got {other:?}"),
+            Err(_) => panic!("the streamed usage never arrived"),
+        }
+    }
+    usages
+}
+
+#[test]
+fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        envelope(2, "usage_recorded", serde_json::json!({})),
+        fiber_exited_line(3, "Done."),
+    ])]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let tapped = Arc::clone(&seen);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.lock().unwrap().push(line.generation_id.0.clone());
+    })));
+    // The shell prints the run's `fiber_exited` to stdout: the drain
+    // folds it before the report, so the notice is `Completed` whether
+    // or not the watcher beat the reap (see #3005).
+    let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
+    let shell = format!("printf '%s\\n' '{exit}'");
+    // The forward parks until the report lands: a loaded machine
+    // schedules the watcher after the drain otherwise (see #3051).
+    let (release, park) = Park::closed();
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(parked_forward(&rig, &park)),
+        )
+        .0;
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    // Nothing is stashed: every line is still parked behind the
+    // release, which proves the hold before the drain releases it.
+    assert!(usages.is_empty(), "the parked forward holds every line");
+    drop(release);
+    // The well-formed line reaches the tap with the delegate's session id;
+    // the malformed one never does, and `fiber_exited` still ends watch.
+    // The Job can precede the watcher's forward, so the tap is read
+    // only after the streamed line lands on the inbox.
+    let usages = drain_streamed_usages(&rig, usages, 1);
+    assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].0, SessionId("s_child".into()));
+    assert_eq!(usages[0].1, "g_1");
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+/// Runs one watch call against a log file holding `file_seqs` usage
+/// lines while the socket yields `streamed` then closes, collecting the
+/// forwarded generations in order: what the backfill replays, what the
+/// socket streams, and what neither sends twice.
+fn run_backfill(
+    file_seqs: &[u64],
+    streamed: Vec<Envelope>,
+    after: Option<u64>,
+) -> Vec<(SessionId, String)> {
+    let dir = TempDir::new("fiber-backfill");
+    let path = dir.path().join("events.jsonl");
+    let mut text = String::new();
+    for seq in file_seqs {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(*seq, &format!("g_{seq}"), Some(0.1))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let tapped = Arc::clone(&seen);
+    let on_usage: super::UsageForward = Arc::new(
+        move |session: SessionId, line: contract::events::UsageRecorded| {
+            tapped
+                .lock()
+                .unwrap()
+                .push((session, line.generation_id.0.clone()));
+        },
+    );
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, _: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            for line in &streamed {
+                on_line(line);
+            }
+            Ok(Watched::Closed)
+        },
+    );
+    let clock = FakeClock::new();
+    let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
+    Watcher {
+        watch,
+        session_id: SessionId("s_child".into()),
+        after,
+        fold: Arc::new(Mutex::new(Fold::default())),
+        shared: Shared::new(Arc::clone(&clock) as Arc<dyn contract::clock::Clock>, BOUND),
+        cap: 1 << 20,
+        clock: Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        last_check: Arc::new(Mutex::new(None)),
+        stat: Arc::new(|| 0),
+        output_path: path,
+        wake: waker,
+        on_usage: Some(on_usage),
+    }
+    .run();
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.iter()
+            .all(|(session, _)| *session == SessionId("s_child".into())),
+        "every forward names the delegate's session: {seen:?}"
+    );
+    seen
+}
+
+#[test]
+fn the_backfill_forwards_file_usage_the_socket_missed() {
+    // The socket closes without yielding: a delegate that exits before
+    // the first subscribe connects still forwards its file's usage, in
+    // `seq` order.
+    let seen = run_backfill(&[1, 2], Vec::new(), None);
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_1", "g_2"]);
+}
+
+#[test]
+fn the_backfill_skips_what_the_socket_streamed() {
+    // The socket streams `g_1` live; the file holds `g_1` and `g_2`: the
+    // backfill sends only `g_2`, so neither path forwards a `seq` twice.
+    let seen = run_backfill(&[1, 2], vec![usage_envelope(1, "g_1", Some(0.1))], None);
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_1", "g_2"]);
+}
+
+#[test]
+fn the_backfill_skips_lines_at_or_before_after() {
+    // The run's boundary is `after`: a line at or before it belongs to
+    // an earlier run, so the backfill forwards only past it.
+    let seen = run_backfill(&[1, 2], Vec::new(), Some(1));
+    let generations: Vec<&str> = seen
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    assert_eq!(generations, ["g_2"]);
+}
+
+#[test]
+fn the_reap_replays_file_usage_the_socket_never_saw() {
+    // The socket closes without yielding: the delegate writes its usage
+    // straight to its log file and exits. The reap's file replay still
+    // forwards the line once, whichever of the watch-end and reap-end
+    // replays runs first.
+    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
+    let line = serde_json::to_string(&usage_envelope(9, "g_9", Some(0.5))).unwrap();
+    let shell = format!(
+        "printf '%s\\n' '{line}' >> '{}'; exit 0",
+        rig.events.display()
+    );
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
+    assert_eq!(usages[0].0, SessionId("s_child".into()));
+    assert_eq!(usages[0].1, "g_9");
+    // The bare shell reports no `fiber_exited`, so the job ends without
+    // a result; the forward is what this test proves.
+    let _ = notice;
+}
+
+/// Runs two file replays sharing one fold against a pre-written two-line
+/// usage file, forcing the loser's claim inside the winner's forward:
+/// the winner's first forward signals `entered`, then parks at the
+/// barrier until the test has run the loser to completion and released
+/// it. Later forwards pass through, so the barrier sees exactly two
+/// parties on old and new code alike. The `entered` receive is the
+/// signal the winner is waiting (docs/testing.md, "Waits and timeouts");
+/// the barrier release is the loser's completion. Returns the forwarded
+/// generations in forward order.
+fn raced_replays() -> Vec<String> {
+    let dir = TempDir::new("fiber-replay-race");
+    let path = dir.path().join("events.jsonl");
+    let mut text = String::new();
+    for seq in [9, 10] {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(seq, &format!("g_{seq}"), Some(0.5))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&path, text).unwrap();
+    let fold = Arc::new(Mutex::new(Fold::default()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (entered_tx, entered_rx) = mpsc::channel::<String>();
+    let release = Arc::new(Barrier::new(2));
+    let parked = Arc::new(AtomicBool::new(false));
+    let session = SessionId("s_child".into());
+    let on_usage: super::UsageForward = {
+        let seen = Arc::clone(&seen);
+        let release = Arc::clone(&release);
+        let parked = Arc::clone(&parked);
+        Arc::new(move |_: SessionId, line: contract::events::UsageRecorded| {
+            seen.lock().unwrap().push(line.generation_id.0.clone());
+            let _sent = entered_tx.send(line.generation_id.0.clone());
+            if !parked.swap(true, Ordering::SeqCst) {
+                release.wait();
+            }
+        })
+    };
+    let first = {
+        let path = path.clone();
+        let fold = Arc::clone(&fold);
+        let session = session.clone();
+        let on_usage = on_usage.clone();
+        thread::spawn(move || {
+            Watcher::replay_usage(&path, None, &fold, &session, &Some(on_usage));
+        })
+    };
+    // The winner is parked inside its forward; the loser now runs to
+    // completion on this thread, so the order is forced, never raced.
+    let entered = Deadline::after(DEADLINE).recv(&entered_rx);
+    assert!(entered.is_ok(), "the first replay forwards");
+    Watcher::replay_usage(&path, None, &fold, &session, &Some(Arc::clone(&on_usage)));
+    release.wait();
+    first.join().unwrap();
+    let forwarded = seen.lock().unwrap().clone();
+    assert_eq!(
+        forwarded,
+        ["g_9", "g_10"],
+        "the file lines forward once: {forwarded:?}"
+    );
+    // A third replay past the race still forwards nothing: the claim
+    // holds, so neither a smaller `seq` nor a repeat slips through.
+    Watcher::replay_usage(&path, None, &fold, &session, &Some(Arc::clone(&on_usage)));
+    seen.lock().unwrap().clone()
+}
+
+#[test]
+fn the_watch_replay_wins_when_it_runs_first() {
+    // The spawned thread stands for the watch-end backfill, this thread
+    // for the reap-end replay: the watch claims the line before the reap
+    // runs, the reap finds it sent and forwards nothing, so the line
+    // forwards exactly once. Both orders land on the one shared claim.
+    // Flipping the claim back to check-then-act lets the reap claim
+    // inside the watch's forward and forwards twice.
+    let seen = raced_replays();
+    assert_eq!(
+        seen,
+        ["g_9", "g_10"],
+        "the file lines forward once: {seen:?}"
+    );
+}
+
+/// The running spend the tap drives: a budget, and a stop-all counter
+/// standing in for the loop's delegate stop. Per-generation delta
+/// arithmetic is production logic owned loop-side (see the tripwire
+/// `pending_tests`); this fake only accumulates, never folds.
+struct TripTap {
+    sum: Mutex<f64>,
+    budget: f64,
+    tripped: AtomicBool,
+    stops: std::sync::atomic::AtomicUsize,
+}
+
+impl TripTap {
+    fn tap(&self, line: &contract::events::UsageRecorded) {
+        let sum = {
+            let mut sum = self.sum.lock().unwrap();
+            *sum += line.cost.unwrap_or(0.0);
+            *sum
+        };
+        if sum >= self.budget && !self.tripped.swap(true, Ordering::SeqCst) {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn sum(&self) -> f64 {
+        *self.sum.lock().unwrap()
+    }
+
+    fn stops(&self) -> usize {
+        self.stops.load(Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn the_trip_calls_stop_once_on_crossing_and_never_before() {
+    // The socket closes without yielding and the log file below holds
+    // three usage lines crossing the budget: the crossing runs on the
+    // synchronous file-replay path, never on the unjoined watcher
+    // thread, so the sum, the single stop and the three forwards hold
+    // whichever replay wins the claim (see #3005). The reap's replay
+    // runs before the report, so all three lines land first. Streamed
+    // delivery stays covered by the tap tests.
+    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
+    let mut text = String::new();
+    for (seq, generation, cost) in [(1, "g_1", 0.1), (2, "g_2", 0.15), (3, "g_3", 0.1)] {
+        text.push_str(
+            &serde_json::to_string(&usage_envelope(seq, generation, Some(cost))).unwrap(),
+        );
+        text.push('\n');
+    }
+    std::fs::write(&rig.events, text).unwrap();
+    let trip = Arc::new(TripTap {
+        sum: Mutex::new(0.0),
+        budget: 0.2,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let tapped = Arc::clone(&trip);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.tap(&line);
+    })));
+    let waited = rig
+        .start_timeout(
+            "exit 0",
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
+    let _waited = waited;
+    let (notice, usages) = reported_with_usage(&rig);
+    // Below the budget nothing trips; the crossing trips once; the line
+    // after never trips again.
+    assert_eq!(trip.sum(), 0.35);
+    assert_eq!(trip.stops(), 1);
+    assert_eq!(usages.len(), 3);
+    // The bare shell and the closed socket report no `fiber_exited`,
+    // so the job ends without a result; the trip is what this test
+    // proves.
+    assert_eq!(notice.completed.status, Outcome::Failed);
+}
+
+#[test]
+fn a_correction_applies_only_its_delta() {
+    let rig = rig(vec![WatchReply::Exited(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        usage_envelope(2, "g_1", Some(0.18)),
+        fiber_exited_line(3, "Done."),
+    ])]);
+    let trip = Arc::new(TripTap {
+        sum: Mutex::new(0.0),
+        budget: 10.0,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let tapped = Arc::clone(&trip);
+    rig.registry.install_usage_tap(Some(Arc::new(move |line| {
+        tapped.tap(&line);
+    })));
+    // The shell prints the run's `fiber_exited` to stdout: the drain
+    // folds it before the report, so the notice is `Completed` whether
+    // or not the watcher beat the reap (see #3005).
+    let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch check ever runs, so no watcher would ever forward.
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
+    let waited = rig
+        .start_timeout(
+            &shell,
+            BOUND,
+            1 << 20,
+            None,
+            None,
+            Some(rig.registry.usage_forward()),
+        )
+        .0;
+    let _waited = waited;
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and both lines whichever lands first,
+    // and the tap is read only after the take holds both streamed
+    // lines. Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
+    let (notice, usages) = take_report_with_usages(&rig, 2);
+    // Both arrivals of the corrected generation stream exactly once,
+    // and neither trips the budget. The delta arithmetic itself is
+    // production logic proved loop-side (the tripwire `pending_tests`),
+    // so no per-generation sum is asserted here.
+    assert_eq!(trip.stops(), 0);
+    assert_eq!(usages.len(), 2);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+#[test]
+fn sibling_arrivals_racing_a_publication_lose_no_delta_and_trip_once() {
+    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+        1, "Done.",
+    )])]);
+    let trip = Arc::new(TripTap {
+        sum: Mutex::new(0.0),
+        budget: 0.5,
+        tripped: AtomicBool::new(false),
+        stops: std::sync::atomic::AtomicUsize::new(0),
+    });
+    rig.registry.install_usage_tap(Some(Arc::new({
+        let trip = Arc::clone(&trip);
+        move |line| trip.tap(&line)
+    })));
+    let forward = rig.registry.usage_forward();
+    // Sibling watcher threads forward distinct generations while the
+    // publication reads beside them: every delta lands, and the crossing
+    // trips exactly once.
+    std::thread::scope(|scope| {
+        for thread in 0..8 {
+            let forward = Arc::clone(&forward);
+            scope.spawn(move || {
+                for n in 0..4 {
+                    let generation = format!("g_{thread}_{n}");
+                    forward(
+                        SessionId("s_child".into()),
+                        contract::events::UsageRecorded {
+                            generation_id: contract::GenerationId(generation),
+                            model: "fake/m".into(),
+                            tokens: contract::shapes::Tokens {
+                                input: 10,
+                                cache_read: 0,
+                                cache_write: std::collections::BTreeMap::new(),
+                                output: 5,
+                            },
+                            input_bytes: 100,
+                            input_media: None,
+                            web_searches: None,
+                            cost: Some(0.05),
+                            subscription: None,
+                            extension: None,
+                            origin_session_id: None,
+                            reviewer: None,
+                        },
+                    );
+                }
+            });
+        }
+    });
+    assert!((trip.sum() - 1.6).abs() < 1e-9);
+    assert_eq!(trip.stops(), 1);
 }
