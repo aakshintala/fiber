@@ -469,7 +469,7 @@ fn a_reload_applies_an_echo_deferral_key() {
     session.finish();
 }
 
-// debt: this session driver duplicates crates/main/tests/reload.rs's `Session` (round-2 P3); upgrade trigger: one shared binary-session driver covering both files, which needs `reload.rs` outside this part's fence.
+// debt: sharing one driver requires rewriting crates/main/tests/reload.rs's `Session` driver, which is outside this part's fence, upgrade trigger: one shared binary-session driver covering both files, which needs `reload.rs` outside this part's fence.
 /// One `fiber session` under the test's `Deadline`: prompted, reloaded
 /// and asked for its rows, then closed. The stream's kinds must run the
 /// full expected list: startup, the first turn (a search, a call, hello),
