@@ -34,3 +34,7 @@ crates/loop/src/jobs.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/
 crates/jobs/src/delegate/run_tests.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
 crates/loop/tests/resume.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
 crates/main/tests/delegates.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/main/src/session_command.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
+crates/loop/src/reviewer.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
+crates/loop/tests/reviewer.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
+crates/loop/tests/turn.rs	542	plan	2026-10-23T13:41:19Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-crash-escalation	
