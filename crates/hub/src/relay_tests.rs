@@ -2354,3 +2354,359 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
         "{line}"
     );
 }
+
+#[test]
+fn hand_once_takes_an_id_once_until_it_is_forgotten() {
+    let order = crate::retire::AckOrder::default();
+    assert!(order.hand_once("c_1"));
+    assert!(!order.hand_once("c_1"), "the second handover is refused");
+    assert!(order.hand_once("c_2"), "another id has its own");
+    order.forget_handed("c_1");
+    assert!(order.hand_once("c_1"), "a forgotten id may be handed again");
+    order.drop_ids(&[("s".to_owned(), "c_2".to_owned())]);
+    assert!(order.hand_once("c_2"), "a dropped id is forgotten");
+}
+
+/// One relay thread at its session's end, over a hub with a fake starter
+/// that resumes the session and acknowledges what it receives: the log's
+/// last line, the relay's entry, its sent and unsent commands, and the
+/// client's reads are the test's to set.
+struct Ended {
+    _held: fakes::TempDir,
+    dir: std::path::PathBuf,
+    hub: std::sync::Arc<crate::connection::Hub>,
+    starter: crate::fake::FakeStarter,
+    order: std::sync::Arc<crate::retire::AckOrder>,
+    kept: Kept,
+    client: std::io::BufReader<UnixStream>,
+    client_writer: std::sync::Arc<std::sync::Mutex<UnixStream>>,
+    /// The entry's session end, held so the entry's writes do not fail.
+    _entry_peer: Option<UnixStream>,
+    session_peer: Option<UnixStream>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+const END_SID: &str = "s_0123456789abcdef";
+
+impl Ended {
+    /// `last` is the kind of the log's last line. `entry` says whether the
+    /// relay's entry is in the map. `sent` and `unsent` are command ids.
+    fn start(last: &str, entry: bool, sent: &[&str], unsent: &[&str]) -> Self {
+        use std::sync::{Arc, Mutex};
+        let held = fakes::TempDir::new("re");
+        let dir = held.path().join("h");
+        std::fs::create_dir_all(&dir).unwrap();
+        let workspace = dir.join("w");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let log_dir = dir
+            .join("projects")
+            .join("-p")
+            .join("sessions")
+            .join(END_SID);
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("events.jsonl"),
+            format!(
+                "{{\"kind\":\"session_started\",\"seq\":0,\"session_id\":\"{END_SID}\",\"payload\":{{\"workspace\":\"{}\"}}}}\n{{\"kind\":\"{last}\",\"seq\":1,\"session_id\":\"{END_SID}\",\"payload\":{{}}}}\n",
+                workspace.display()
+            ),
+        )
+        .unwrap();
+        let clock = fakes::clock::FakeClock::new();
+        let timed: Arc<dyn contract::clock::Clock> = clock;
+        let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
+        let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
+        let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+        let order = crate::connection::lock(&relays).order.clone();
+        let epoch = crate::connection::lock(&relays).mint();
+        let command = |id: &str| {
+            json!({"id": id, "command": "reply", "args": {}})
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        let mut queued = Vec::new();
+        for id in sent {
+            queued.push(((*id).to_owned(), command(id), true));
+        }
+        for id in unsent {
+            queued.push(((*id).to_owned(), command(id), false));
+        }
+        for (id, _, _) in &queued {
+            order.enqueue(END_SID, id);
+        }
+        let kept: Kept = Arc::new(Mutex::new(queued));
+        let mut entry_peer = None;
+        if entry {
+            let (writer, peer) = UnixStream::pair().unwrap();
+            entry_peer = Some(peer);
+            crate::connection::lock(&relays).entries.push(Relay {
+                session: END_SID.to_owned(),
+                epoch,
+                writer,
+                kept: Arc::clone(&kept),
+                replayed: Replayed::default(),
+                thread: None,
+                retiring: None,
+            });
+        }
+        let (client_write, client_read) = UnixStream::pair().unwrap();
+        client_read
+            .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+            .unwrap();
+        let client_writer = Arc::new(Mutex::new(client_write));
+        let (session, session_peer) = UnixStream::pair().unwrap();
+        let thread = start_relay_thread(
+            END_SID,
+            epoch,
+            session,
+            Arc::clone(&hub),
+            Arc::clone(&client_writer),
+            Arc::clone(&relays),
+            Arc::clone(&kept),
+        );
+        Self {
+            _held: held,
+            dir,
+            hub,
+            starter,
+            order,
+            kept,
+            client: std::io::BufReader::new(client_read),
+            client_writer,
+            _entry_peer: entry_peer,
+            session_peer: Some(session_peer),
+            thread: Some(thread),
+        }
+    }
+
+    /// The session closes the relayed connection, and the relay ends.
+    fn close_session(&mut self) {
+        // Close, never shut down: on macOS a shutdown can leave the blocked
+        // read waiting (#1877).
+        drop(self.session_peer.take());
+        self.join();
+    }
+
+    /// Waits for the relay thread to end.
+    fn join(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            join_within_deadline(thread);
+        }
+    }
+
+    /// The next line the client reads.
+    fn line(&mut self) -> Value {
+        let mut text = String::new();
+        self.client
+            .read_line(&mut text)
+            .expect("the client reads a line");
+        serde_json::from_str(text.trim_end()).unwrap()
+    }
+
+    /// The ids the fake session received, in order.
+    fn received_ids(&self) -> Vec<String> {
+        self.starter
+            .received()
+            .iter()
+            .map(|text| {
+                let line: Value = serde_json::from_str(text).unwrap();
+                line["id"].as_str().unwrap().to_owned()
+            })
+            .collect()
+    }
+
+    fn say(&mut self, line: Value) {
+        use std::io::Write;
+        let mut text = line.to_string();
+        text.push('\n');
+        let peer = self.session_peer.as_mut().expect("the session is open");
+        peer.write_all(text.as_bytes()).unwrap();
+        peer.flush().unwrap();
+    }
+}
+
+fn rejection(id: &str, code: &str) -> Value {
+    json!({"kind": "command_rejected", "payload": {"command_id": id, "code": code, "message": "m"}})
+}
+
+#[test]
+fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended.close_session();
+    let ack = ended.line();
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert_eq!(ack["payload"]["command_id"], "c_1", "{ack}");
+    assert_eq!(ended.received_ids(), ["c_1"], "delivered exactly once");
+    assert_eq!(ended.starter.resumed().len(), 1);
+}
+
+#[test]
+fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    assert!(ended.order.hand_once("c_1"), "the first handover happened");
+    ended.close_session();
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    assert_eq!(
+        line["payload"]["message"], "The session ended before answering.",
+        "{line}"
+    );
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "nothing is delivered");
+    assert_eq!(ended.order.session_for("c_1"), None);
+    assert!(ended.order.hand_once("c_1"), "the answered id is forgotten");
+}
+
+#[test]
+fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    assert!(ended.order.hand_once("c_1"), "the first handover happened");
+    ended.say(rejection("c_1", "closing"));
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(line["payload"]["code"], "closing", "{line}");
+    ended.close_session();
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "nothing is delivered");
+}
+
+#[test]
+fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended.say(rejection("c_1", "closing"));
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_accepted", "{line}");
+    assert_eq!(line["payload"]["command_id"], "c_1", "{line}");
+    assert_eq!(ended.received_ids(), ["c_1"]);
+    ended.close_session();
+}
+
+#[test]
+fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
+    let (popped_tx, popped_rx) = std::sync::mpsc::channel();
+    let mut ended = Ended::start("turn_completed", true, &["c_1", "c_2"], &["c_3"]);
+    *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
+        popped_tx.send(passed).unwrap_or(());
+    }));
+    ended.close_session();
+    let first = ended.line();
+    let second = ended.line();
+    for (line, id) in [(&first, "c_1"), (&second, "c_2")] {
+        assert_eq!(line["kind"], "command_rejected", "{line}");
+        assert_eq!(line["payload"]["command_id"], id, "kept order: {line}");
+        assert_eq!(line["payload"]["code"], "indeterminate", "{line}");
+        assert_eq!(
+            line["payload"]["message"],
+            "The session ended before answering; the command may have run."
+        );
+    }
+    let passed = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&popped_rx)
+        .expect("the unsent command passes on after the rejections");
+    assert!(matches!(passed, crate::retire::PassOn::Popped(id) if id == "c_3"));
+    assert!(
+        ended.starter.await_received(1, MUST_SUCCEED_WITHIN),
+        "the unsent command reaches the resumed session"
+    );
+    assert_eq!(
+        ended.received_ids(),
+        ["c_3"],
+        "a sent command never runs again"
+    );
+}
+
+#[test]
+fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
+    let mut ended = Ended::start("rewound", true, &["c_1"], &["c_2"]);
+    ended.close_session();
+    assert!(
+        ended.starter.await_received(1, MUST_SUCCEED_WITHIN),
+        "the unsent command passes on"
+    );
+    assert_eq!(ended.received_ids(), ["c_2"]);
+    let line = ended.line();
+    assert_eq!(
+        line["payload"]["command_id"], "c_2",
+        "the first line is c_2's: {line}"
+    );
+    assert_eq!(ended.order.session_for("c_1"), None, "c_1 left the queue");
+}
+
+#[test]
+fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    let mut ended = Ended::start("fiber_exited", false, &["c_1"], &["c_2"]);
+    *crate::connection::lock(&ended.hub.on_pass_on) = Some(Box::new(move |passed| {
+        dropped_tx.send(passed).unwrap_or(());
+    }));
+    ended.close_session();
+    let passed = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&dropped_rx)
+        .expect("the queue is cleared");
+    assert!(matches!(passed, crate::retire::PassOn::Dropped(1)));
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty());
+    for id in ["c_1", "c_2"] {
+        assert_eq!(ended.order.session_for(id), None);
+    }
+    assert!(ended.kept.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    // The client's end closes: the relay's next forward fails.
+    ended.client = std::io::BufReader::new(UnixStream::pair().unwrap().0);
+    let (shut, _peer) = UnixStream::pair().unwrap();
+    shut.shutdown(std::net::Shutdown::Both).unwrap_or(());
+    *crate::connection::lock(&ended.client_writer) = shut;
+    ended.say(json!({"kind": "session_status", "payload": {}}));
+    // The failed forward ends the relay's loop; the session is not read to
+    // its end.
+    ended.join();
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "the command is dropped");
+    assert_eq!(ended.order.session_for("c_1"), None);
+}
+
+#[test]
+fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1", "c_2"], &[]);
+    ended.say(rejection("c_1", "closing"));
+    let first = ended.line();
+    assert_eq!(first["payload"]["command_id"], "c_1", "{first}");
+    // The resumed run wrote its start: the log no longer ends in
+    // `fiber_exited`, but the relay saw the exited window.
+    let events = ended
+        .dir
+        .join("projects")
+        .join("-p")
+        .join("sessions")
+        .join(END_SID)
+        .join("events.jsonl");
+    let mut text = std::fs::read_to_string(&events).unwrap();
+    text.push_str(&format!(
+        "{{\"kind\":\"fiber_started\",\"seq\":2,\"session_id\":\"{END_SID}\",\"payload\":{{}}}}\n"
+    ));
+    std::fs::write(&events, text).unwrap();
+    ended.close_session();
+    let second = ended.line();
+    assert_eq!(second["kind"], "command_accepted", "{second}");
+    assert_eq!(second["payload"]["command_id"], "c_2", "{second}");
+    assert_eq!(ended.received_ids(), ["c_1", "c_2"]);
+}
+
+#[test]
+fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended.say(rejection("c_1", "indeterminate"));
+    let line = ended.line();
+    assert_eq!(line["payload"]["code"], "indeterminate", "{line}");
+    ended.close_session();
+    assert!(ended.starter.resumed().is_empty(), "nothing is resumed");
+    assert!(ended.received_ids().is_empty(), "nothing is delivered");
+}

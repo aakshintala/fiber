@@ -34,7 +34,7 @@
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -1053,20 +1053,28 @@ fn relay(
                 match settle(ack.as_ref(), &kept, hub, session, exiting) {
                     Some(Settled::Reroute(id, line)) => {
                         exiting = true;
-                        if crate::retire::hand_over(&order, relays, session, epoch, &id, &line) {
-                            route(
-                                &CommandId(id),
-                                session,
-                                line,
-                                hub,
-                                writer,
-                                relays,
-                                Some(epoch),
-                                true,
-                            );
-                            crate::retire::pass_on(session, epoch, &kept, hub, writer, relays);
+                        // A command re-routes once: the session it was
+                        // handed to also ended without answering, so its
+                        // own `closing` goes to the client as it is.
+                        if order.hand_once(&id) {
+                            if crate::retire::hand_over(&order, relays, session, epoch, &id, &line)
+                            {
+                                route(
+                                    &CommandId(id),
+                                    session,
+                                    line,
+                                    hub,
+                                    writer,
+                                    relays,
+                                    Some(epoch),
+                                    true,
+                                );
+                                crate::retire::pass_on(session, epoch, &kept, hub, writer, relays);
+                            } else {
+                                order.forget_handed(&id);
+                            }
+                            continue;
                         }
-                        continue;
                     }
                     Some(Settled::Rewound(next)) => {
                         // The new session starts before the client reads
@@ -1139,7 +1147,20 @@ fn relay(
         }
     }
     crate::closed::on_end(session, ended && !exiting, hub, writer, relays, &gone);
-    crate::retire::drain(session, epoch, &kept, &order, hub, writer, relays);
+    // A loop that broke on a failed `forward` did not see the session
+    // close: the client is gone.
+    let client_gone = gone.load(Ordering::SeqCst) || !ended;
+    crate::retire::drain(
+        session,
+        epoch,
+        &kept,
+        &order,
+        hub,
+        writer,
+        relays,
+        exiting,
+        client_gone,
+    );
     // This worker's outstanding replays complete here, before any
     // follow-on rewind work: a disconnect or EOF before acknowledgement
     // ends the timer instead of waiting for a healthy close. Each guard
