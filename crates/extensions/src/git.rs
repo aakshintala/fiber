@@ -88,6 +88,40 @@ fn repository_missing(why: &str) -> bool {
     why.contains("not found") || why.contains("does not appear to be a git repository")
 }
 
+/// Runs `git` with `args` in `cwd`, stopped at [`GIT_DEADLINE`] on
+/// `clock`, through the scrubbed `git` builder. The call stays in Fiber's
+/// process group, so SSH prompts and credential-helper prompts on the
+/// terminal still work; an HTTPS password prompt does not. The request
+/// carries no input and an empty environment, so nothing re-adds a
+/// variable the builder removed. Callers keep their own result mapping.
+pub(crate) fn run_git(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+    clock: &dyn Clock,
+) -> Result<exec::Ran, Box<exec::ExecError>> {
+    let req = exec::ExecRequest {
+        program: program.to_owned(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: cwd.to_path_buf(),
+        // `git`'s output is not capped today, and the request carries no
+        // variable the scrubbed builder removed.
+        env: BTreeMap::new(),
+        input: None,
+        cap: usize::MAX,
+        // In Fiber's process group, so SSH prompts and credential-helper
+        // prompts on the terminal still work.
+        own_group: false,
+        #[cfg(test)]
+        stdout_read: None,
+    };
+    let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
+    // Never cancelled except by the call's own end: the sender drops when
+    // this returns.
+    let (_cancel, cancel) = mpsc::channel::<()>();
+    exec::run_git(&req, clock, Some(deadline), cancel)
+}
+
 /// Where extensions are fetched from.
 pub struct Origin {
     git: String,
@@ -112,30 +146,14 @@ impl Origin {
     }
 
     /// Runs `git` with `args` in `dir`, stopped at [`GIT_DEADLINE`] on
-    /// `clock`. The call stays in Fiber's process group, so SSH and
-    /// credential-helper prompts on the terminal still work. Without `dir`
-    /// the working directory is inherited.
+    /// `clock`. The call stays in Fiber's process group, so SSH prompts
+    /// and credential-helper prompts on the terminal still work; an HTTPS
+    /// password prompt does not, and fails as [`Error::Git`]. Without
+    /// `dir` the working directory is inherited.
     fn run(&self, args: &[&str], dir: Option<&Path>, clock: &dyn Clock) -> Result<String, Error> {
-        let req = exec::ExecRequest {
-            program: self.git.clone(),
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-            cwd: dir.map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf),
-            // `git`'s output is not capped today.
-            env: BTreeMap::new(),
-            input: None,
-            cap: usize::MAX,
-            // In Fiber's process group, so SSH and credential-helper
-            // prompts on the terminal still work as they do today.
-            own_group: false,
-            #[cfg(test)]
-            stdout_read: None,
-        };
-        let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
-        // Never cancelled except by the call's own end: the sender drops
-        // when this returns.
-        let (_cancel, cancel) = mpsc::channel::<()>();
+        let cwd = dir.map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf);
         let command = args.join(" ");
-        match exec::run(&req, clock, Some(deadline), cancel) {
+        match run_git(&self.git, args, &cwd, clock) {
             Err(failed) => Err(match failed.source {
                 Some(source) if source.kind() == std::io::ErrorKind::NotFound => Error::GitMissing,
                 Some(source) => Error::Git {

@@ -7,9 +7,13 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::{Origin, is_path, split};
+use super::{Origin, is_path, run_git, split};
 use crate::Error;
 use fakes::Deadline;
+
+use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
 
 #[test]
 fn a_path_is_told_from_a_name() {
@@ -362,5 +366,64 @@ fn tag_commit_keeps_a_non_missing_git_failure() {
     assert!(
         matches!(&err, Error::Git { .. }),
         "a non-missing failure stays git: {err}"
+    );
+}
+
+/// The child re-run markers for the redirect test.
+const REDIRECT_CHILD: &str = "FIBER_EXTENSIONS_GIT_REDIRECT_CHILD";
+const REDIRECT_REPO: &str = "FIBER_EXTENSIONS_GIT_REDIRECT_REPO";
+
+/// This test binary's path of `test`: `module_path!` carries the crate
+/// name, which is not part of a test's path.
+fn this(test: &str) -> String {
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    format!("{module}::{test}")
+}
+
+/// A `GIT_DIR` pointing at a decoy repository does not reach `run_git`:
+/// `rev-parse --absolute-git-dir` still prints the repository's own
+/// directory, resolved as git prints it.
+#[test]
+fn a_redirected_git_dir_does_not_reach_run_git() {
+    if std::env::var(REDIRECT_CHILD).is_ok() {
+        let repo = PathBuf::from(std::env::var(REDIRECT_REPO).unwrap());
+        let clock = fakes::clock::FakeClock::new();
+        let ran = run_git(
+            "git",
+            &["rev-parse", "--absolute-git-dir"],
+            &repo,
+            clock.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(ran.exit_code, Some(0));
+        assert_eq!(
+            PathBuf::from(String::from_utf8_lossy(&ran.stdout).trim().to_owned()),
+            fs::canonicalize(repo.join(".git")).unwrap()
+        );
+        return;
+    }
+    let temp = fakes::TempDir::new("extensions-git-redirect");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    let decoy = temp.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    fakes::git::git(&decoy, &["init", "--quiet"]);
+    let out = fakes::rerun_prepared(
+        &this("a_redirected_git_dir_does_not_reach_run_git"),
+        &[
+            (REDIRECT_CHILD, "1"),
+            (REDIRECT_REPO, repo.to_str().unwrap()),
+            ("GIT_DIR", decoy.join(".git").to_str().unwrap()),
+        ],
+        Deadline::after(Duration::from_secs(60)),
+        |_| {},
+    );
+    assert!(
+        out.status.success(),
+        "run_git must see past GIT_DIR:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
