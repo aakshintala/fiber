@@ -317,8 +317,11 @@ commands ("Commands and screens"). A provider is the exception: its manifest
 declares it, so `providers/<name>.lua` waits for first use. That file registers
 exactly one provider, matching its filename, and nothing else. `init.lua` holds
 the other registrations. A `fiber.provider` call in `init.lua` refuses the whole
-extension with `extension_failed`, including its data; the message names the
-provider file it belongs in. Catching a forbidden or duplicate registration
+extension with `extension_failed`; the message names the provider file it
+belongs in. At session start its data is refused with it. In a lazy extension
+the call fails the first command's start, every command of the extension
+rejects until reload, and its data stays until the next reload or session.
+Catching a forbidden or duplicate registration
 with `pcall` still fails the load. After a file finishes loading,
 `fiber.command`, `fiber.hook` and `fiber.provider` raise, including from a timer
 or callback.
