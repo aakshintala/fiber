@@ -1854,7 +1854,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     let wait_start = wait_clock.origin();
     let registry = jobs::Registry::new(
         wait_home.path().to_path_buf(),
-        Arc::clone(&wait_clock),
+        Arc::clone(&wait_clock) as Arc<dyn contract::clock::Clock>,
         Arc::new(fakes::Recorder::default()),
     );
     let waiter = registry
@@ -1923,8 +1923,8 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             .recv(&entered_rx)
             .is_ok();
         let wait_until = wait_start + std::time::Duration::from_millis(60000);
-        let parked_ok = entered_ok
-            && wait_clock.await_parked(wait_until, Deadline::after(MUST_SUCCEED_WITHIN));
+        let parked_ok =
+            entered_ok && wait_clock.await_parked(wait_until, Deadline::after(MUST_SUCCEED_WITHIN));
         let cancelled = parked_ok && cancel.cancel();
         let done = Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx);
         if !(entered_ok && parked_ok && cancelled && done.is_ok()) {
@@ -1946,10 +1946,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
         }
         turn.join().unwrap();
         assert!(entered_ok, "the jobs wait to start");
-        assert!(
-            parked_ok,
-            "the jobs wait to park in the registry wait"
-        );
+        assert!(parked_ok, "the jobs wait to park in the registry wait");
         assert!(cancelled);
         let outcome = done.expect("the cancelled turn to end");
         assert_eq!(outcome, Some(TurnOutcome::Interrupted));
