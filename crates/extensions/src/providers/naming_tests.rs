@@ -137,6 +137,29 @@ fn a_bare_id_only_the_naming_list_names_is_the_registry_error() {
 }
 
 #[test]
+fn an_unknown_bare_id_is_the_registry_error_not_an_empty_ambiguity() {
+    let providers = registry(&[("fake", vec![model("m")])]);
+    // Nothing names `nope`: no match at all is not ambiguity.
+    let error = providers.resolve_named(&[], "nope").unwrap_err();
+    assert!(matches!(error, Error::ModelMissing { .. }));
+}
+
+#[test]
+fn a_naming_match_joins_the_registry_ambiguity() {
+    let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m")])]);
+    // The registry already finds `m` ambiguous; the naming list adds the
+    // unloaded `lua/m`.
+    let naming = vec![("lua".to_owned(), "m".to_owned())];
+    let error = providers.resolve_named(&naming, "m").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
+    assert_eq!(
+        error.to_string(),
+        "The model `m` is offered by more than one provider: fake/m, lua/m, other/m. \
+         Name one as `provider/model`."
+    );
+}
+
+#[test]
 fn a_duplicate_naming_entry_does_not_make_an_exact_match_ambiguous() {
     let providers = registry(&[("fake", vec![model("m")])]);
     // The registry and the naming list name the same reference.

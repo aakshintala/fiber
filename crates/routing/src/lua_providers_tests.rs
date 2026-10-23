@@ -130,9 +130,14 @@ fn a_settings_file_that_cannot_be_read_fails_with_config_invalid() {
     assert_eq!(err.code, ErrorCode::ConfigInvalid);
 }
 
-#[test]
-fn the_session_label_and_shared_credential_name_reach_credential() {
-    let (_root, home, workspace) = setup_home("fiber-lua-credential-pair");
+/// Installs an `acme` extension whose provider script is `lua` and loads
+/// it into a session: the providers, and the extensions that must outlive
+/// them.
+fn acme_with_lua(
+    name: &str,
+    lua: &str,
+) -> (fakes::TempDir, Providers, extensions::SessionExtensions) {
+    let (root, home, workspace) = setup_home(name);
     let src = home.join("src").join("acme");
     install_extension(
         &home,
@@ -148,12 +153,8 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
             }),
         )],
     );
-    std::fs::write(
-        { std::fs::create_dir_all((src.join("providers/acme.lua")).parent().unwrap()).unwrap(); src.join("providers/acme.lua") },
-        "fiber.provider(\"acme\", { credential = { timeout = 60000, run = function(who)\
-          return { token = who.credential .. \"/\" .. who.label, expires_at = 4102444800 } end } })\n",
-    )
-    .unwrap();
+    std::fs::create_dir_all(src.join("providers")).unwrap();
+    std::fs::write(src.join("providers/acme.lua"), lua).unwrap();
     extensions::plan(
         &home,
         &extensions::Request::Path(src),
@@ -181,6 +182,16 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         &|name| std::env::var(name).ok(),
     )
     .unwrap();
+    (root, providers, extensions)
+}
+
+#[test]
+fn the_session_label_and_shared_credential_name_reach_credential() {
+    let (_root, providers, _extensions) = acme_with_lua(
+        "fiber-lua-credential-pair",
+        "fiber.provider(\"acme\", { credential = { timeout = 60000, run = function(who)\
+          return { token = who.credential .. \"/\" .. who.label, expires_at = 4102444800 } end } })\n",
+    );
     let data = providers.data("acme");
     // The lookup blocks on Lua, so it runs on its own thread under a
     // deadline instead of hanging the test.
@@ -211,4 +222,21 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
         headers,
         [("authorization".to_owned(), "Bearer shared/work".to_owned())]
     );
+}
+
+#[test]
+fn a_lua_provider_without_credential_reads_the_key_file() {
+    // The script registers `models` only, so the key file is the
+    // credential and nothing signs requests.
+    let (_root, providers, _extensions) = acme_with_lua(
+        "fiber-lua-no-credential",
+        "fiber.provider(\"acme\", { models = { timeout = 1000, run = function() return {} end } })\n",
+    );
+    let data = providers.data("acme");
+    let (key, signer) = session_credential(providers.lua("acme"), &data, "work", || {
+        Ok(config::Secret::new("file-key".to_owned()))
+    })
+    .unwrap();
+    assert_eq!(key.unwrap().expose(), "file-key");
+    assert!(signer.is_none());
 }
