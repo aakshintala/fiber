@@ -1878,6 +1878,11 @@ pub(super) fn package_members() -> Members {
     members
 }
 
+// Contract for the run-time-read tests below (`docs/testing.md`: "The
+// gate fails on any other run-time read"). Each exact list is the gate's
+// person-visible failure line for one read shape; a duplicated, missing
+// or reworded report fails, like the event-stream lists the same doc
+// page requires. `once` lists additionally pin the two-level dedupe.
 #[test]
 fn an_escaping_research_join_reports_once_with_the_builds_message() {
     // A helper joining the research directory without reading it is a

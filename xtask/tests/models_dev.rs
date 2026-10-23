@@ -156,20 +156,28 @@ static COMMITTED: &[(&str, &[u8])] = &[
         include_bytes!("../../providers/anthropic/providers/anthropic.json"),
     ),
     (
-        "providers/gemini/providers/gemini.json",
-        include_bytes!("../../providers/gemini/providers/gemini.json"),
-    ),
-    (
-        "providers/openai/providers/openai.json",
-        include_bytes!("../../providers/openai/providers/openai.json"),
+        "providers/bedrock/providers/bedrock.json",
+        include_bytes!("../../providers/bedrock/providers/bedrock.json"),
     ),
     (
         "providers/codex/providers/codex.json",
         include_bytes!("../../providers/codex/providers/codex.json"),
     ),
     (
+        "providers/databricks/thinking.lua",
+        include_bytes!("../../providers/databricks/thinking.lua"),
+    ),
+    (
+        "providers/gemini/providers/gemini.json",
+        include_bytes!("../../providers/gemini/providers/gemini.json"),
+    ),
+    (
         "providers/muse/providers/muse.json",
         include_bytes!("../../providers/muse/providers/muse.json"),
+    ),
+    (
+        "providers/openai/providers/openai.json",
+        include_bytes!("../../providers/openai/providers/openai.json"),
     ),
     (
         "providers/opencode/providers/opencode-go.json",
@@ -180,16 +188,8 @@ static COMMITTED: &[(&str, &[u8])] = &[
         include_bytes!("../../providers/opencode/providers/opencode-zen.json"),
     ),
     (
-        "providers/bedrock/providers/bedrock.json",
-        include_bytes!("../../providers/bedrock/providers/bedrock.json"),
-    ),
-    (
         "providers/vertex/providers/vertex.json",
         include_bytes!("../../providers/vertex/providers/vertex.json"),
-    ),
-    (
-        "providers/databricks/thinking.lua",
-        include_bytes!("../../providers/databricks/thinking.lua"),
     ),
     (
         "xtask/tests/models-dev.json",

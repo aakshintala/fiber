@@ -155,10 +155,6 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         ),
     ),
     (
-        "research/openai-completions-probe/raw/openrouter-cc-system.json",
-        include_bytes!("../../../research/openai-completions-probe/raw/openrouter-cc-system.json"),
-    ),
-    (
         "research/openai-completions-probe/raw/openrouter-cc-system-ttl1h.json",
         include_bytes!(
             "../../../research/openai-completions-probe/raw/openrouter-cc-system-ttl1h.json"
@@ -169,6 +165,10 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!(
             "../../../research/openai-completions-probe/raw/openrouter-cc-system-ttl5m.json"
         ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-cc-system.json",
+        include_bytes!("../../../research/openai-completions-probe/raw/openrouter-cc-system.json"),
     ),
     (
         "research/openai-completions-probe/raw/openrouter-effort-none-400.json",
@@ -193,6 +193,12 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         ),
     ),
     (
+        "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json"
+        ),
+    ),
+    (
         "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_content.json",
         include_bytes!(
             "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning_content.json"
@@ -205,15 +211,15 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         ),
     ),
     (
-        "research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json",
-        include_bytes!(
-            "../../../research/openai-completions-probe/raw/openrouter-pinned-replay-reasoning.json"
-        ),
-    ),
-    (
         "research/openai-completions-probe/raw/openrouter-replay-none.json",
         include_bytes!(
             "../../../research/openai-completions-probe/raw/openrouter-replay-none.json"
+        ),
+    ),
+    (
+        "research/openai-completions-probe/raw/openrouter-replay-reasoning.json",
+        include_bytes!(
+            "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning.json"
         ),
     ),
     (
@@ -226,12 +232,6 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         "research/openai-completions-probe/raw/openrouter-replay-reasoning_details.json",
         include_bytes!(
             "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning_details.json"
-        ),
-    ),
-    (
-        "research/openai-completions-probe/raw/openrouter-replay-reasoning.json",
-        include_bytes!(
-            "../../../research/openai-completions-probe/raw/openrouter-replay-reasoning.json"
         ),
     ),
     (

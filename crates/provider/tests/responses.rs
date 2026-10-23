@@ -480,18 +480,6 @@ fn a_search_result_whose_call_is_absent_falls_back_to_its_action_id() {
 /// file name. Names are repo-relative paths, used as parse labels.
 static RECORDINGS: &[(&str, &[u8])] = &[
     (
-        "research/opencode-probe/raw/go_stream_tools_0.sse",
-        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_0.sse"),
-    ),
-    (
-        "research/opencode-probe/raw/go_stream_tools_1.sse",
-        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse"),
-    ),
-    (
-        "research/openai-responses-probe/raw/probe.json",
-        include_bytes!("../../../research/openai-responses-probe/raw/probe.json"),
-    ),
-    (
         "crates/provider/tests/recordings/opencode-go-tool-call.sse",
         include_bytes!("recordings/opencode-go-tool-call.sse"),
     ),
@@ -504,12 +492,12 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!("../../../research/codex-responses-probe/raw/beta-with.json"),
     ),
     (
-        "research/codex-responses-probe/raw/beta-without.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/beta-without.json"),
-    ),
-    (
         "research/codex-responses-probe/raw/beta-without-nosid.json",
         include_bytes!("../../../research/codex-responses-probe/raw/beta-without-nosid.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/beta-without.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/beta-without.json"),
     ),
     (
         "research/codex-responses-probe/raw/cache-1-fresh-1.json",
@@ -560,14 +548,6 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!("../../../research/codex-responses-probe/raw/cache-3-stable-2.json"),
     ),
     (
-        "research/codex-responses-probe/raw/cachehdronly-1.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-1.json"),
-    ),
-    (
-        "research/codex-responses-probe/raw/cachehdronly-2.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-2.json"),
-    ),
-    (
         "research/codex-responses-probe/raw/cachehdr-session-id-hyphen-1.json",
         include_bytes!(
             "../../../research/codex-responses-probe/raw/cachehdr-session-id-hyphen-1.json"
@@ -600,6 +580,14 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!("../../../research/codex-responses-probe/raw/cachehdr-xreq-only-2.json"),
     ),
     (
+        "research/codex-responses-probe/raw/cachehdronly-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdronly-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-2.json"),
+    ),
+    (
         "research/codex-responses-probe/raw/cachekeyonly-1.json",
         include_bytes!("../../../research/codex-responses-probe/raw/cachekeyonly-1.json"),
     ),
@@ -624,20 +612,20 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!("../../../research/codex-responses-probe/raw/cachesplit-2.json"),
     ),
     (
-        "research/codex-responses-probe/raw/ev-text2.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/ev-text2.json"),
-    ),
-    (
         "research/codex-responses-probe/raw/ev-text.json",
         include_bytes!("../../../research/codex-responses-probe/raw/ev-text.json"),
     ),
     (
-        "research/codex-responses-probe/raw/ev-tool2.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/ev-tool2.json"),
+        "research/codex-responses-probe/raw/ev-text2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-text2.json"),
     ),
     (
         "research/codex-responses-probe/raw/ev-tool.json",
         include_bytes!("../../../research/codex-responses-probe/raw/ev-tool.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/ev-tool2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-tool2.json"),
     ),
     (
         "research/codex-responses-probe/raw/f-baseline.json",
@@ -656,12 +644,12 @@ static RECORDINGS: &[(&str, &[u8])] = &[
         include_bytes!("../../../research/codex-responses-probe/raw/f-parallel-true.json"),
     ),
     (
-        "research/codex-responses-probe/raw/f-temp0.json",
-        include_bytes!("../../../research/codex-responses-probe/raw/f-temp0.json"),
-    ),
-    (
         "research/codex-responses-probe/raw/f-temp.json",
         include_bytes!("../../../research/codex-responses-probe/raw/f-temp.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-temp0.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-temp0.json"),
     ),
     (
         "research/codex-responses-probe/raw/f-tier-auto.json",
@@ -698,6 +686,18 @@ static RECORDINGS: &[(&str, &[u8])] = &[
     (
         "research/codex-responses-probe/raw/f-verb-omitted.json",
         include_bytes!("../../../research/codex-responses-probe/raw/f-verb-omitted.json"),
+    ),
+    (
+        "research/openai-responses-probe/raw/probe.json",
+        include_bytes!("../../../research/openai-responses-probe/raw/probe.json"),
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_0.sse",
+        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_0.sse"),
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_1.sse",
+        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse"),
     ),
 ];
 

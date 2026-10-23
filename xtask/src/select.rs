@@ -233,19 +233,16 @@ fn escapes_members(resolved: &str, members: &Members) -> bool {
 fn is_scripts_path(resolved: &str) -> bool {
     resolved == "scripts" || resolved.starts_with("scripts/")
 }
-/// Whether `resolved` is exactly the repository root: a tree name,
-/// not a file, so inline uses stay unreported.
-fn is_exact_root(resolved: &str) -> bool {
-    resolved.is_empty()
-}
 /// Whether `resolved` is a run-time built path the gate reports:
 /// outside every member, not a `scripts/` fixture, not a first-party
-/// package, and not the repository root itself.
+/// package, and not the repository root itself (an empty relative path
+/// is a tree name, not a file, so inline uses stay unreported; checked
+/// inline here, the only call site).
 fn escapes(resolved: &str, members: &Members, has_manifest: bool) -> bool {
     escapes_members(resolved, members)
         && !is_scripts_path(resolved)
         && !yields_to_packages(resolved, has_manifest)
-        && !is_exact_root(resolved)
+        && !resolved.is_empty()
 }
 /// The first name in `tokens` bound to the manifest directory
 /// itself, searching inside groups: the base a bare join builds on.
@@ -375,7 +372,9 @@ fn write_muted(body: &[TokenTree]) -> BTreeSet<String> {
         .collect()
 }
 /// The literals of a bare-root join chain resolving exactly to the
-/// repository root: a helper returning the tree itself. `None` for
+/// repository root: a helper returning the tree itself. Reported at the
+/// definition site so a call-site join onto the helper cannot thread the
+/// root past the gate. `None` for
 /// any other shape: a parameter, a non-bare base, a non-join use, or
 /// a chain resolving anywhere else. Join shape only: ancestors and
 /// push chains stay out of scope.
@@ -513,7 +512,7 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
 
 // debt: the walker stays in select.rs near 1600 lines while
 // runtime_read_mismatches is its only caller; a second caller splits it
-// into select/runtime_read.rs.
+// into select/runtime_read.rs (see #3217, blocked by this pull request).
 /// Failures where a crate's Rust source reads a repository file at run
 /// time instead of compiling it in, one line each; empty when every read
 /// is compiled in (`docs/ci.md`, "Selection"). A file has a run-time
