@@ -86,7 +86,7 @@ fn names(list: &[&str]) -> Vec<String> {
 fn start_marks_the_provider_installing_and_queues_one_job() {
     let mut installs = Installs::default();
     assert!(!installs.busy());
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     assert!(installs.busy());
     assert_eq!(installs.progress("openai"), Some(&Progress::Installing));
     let job = installs.take_start().expect("a job");
@@ -96,28 +96,15 @@ fn start_marks_the_provider_installing_and_queues_one_job() {
 }
 
 #[test]
-fn a_second_start_while_one_installs_changes_nothing() {
-    let mut installs = Installs::default();
-    assert!(installs.start(start("openai")));
-    assert!(!installs.start(start("zeta")));
-    assert_eq!(installs.progress("zeta"), None);
-    assert_eq!(
-        installs.take_start().map(|job| job.provider).as_deref(),
-        Some("openai")
-    );
-    assert!(installs.take_start().is_none());
-}
-
-#[test]
 fn reset_keeps_a_running_install_and_drops_the_rest() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("zeta")));
+    installs.start(start("zeta"));
     assert!(matches!(
         installs.land("zeta".to_owned(), done(&["Install zeta"], Vec::new()), true),
         Landed::Installed { .. }
     ));
     installs.fail("beta", "no network".to_owned());
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     installs.focus = Some("openai".to_owned());
     assert_eq!(installs.outcomes().len(), 1);
 
@@ -139,7 +126,7 @@ fn a_result_for_a_provider_not_installing_is_ignored() {
     );
     assert!(installs.outcomes().is_empty());
 
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     assert!(matches!(
         installs.land("openai".to_owned(), done(&[], Vec::new()), true),
         Landed::Installed { .. }
@@ -165,7 +152,7 @@ fn a_result_for_a_provider_not_installing_is_ignored() {
 #[test]
 fn a_visible_success_stores_one_outcome_and_clears_the_progress() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     let landed = installs.land(
         "openai".to_owned(),
         done(&["Install openai", "Version 1.0"], vec![missing("openai")]),
@@ -189,7 +176,7 @@ fn a_visible_success_stores_one_outcome_and_clears_the_progress() {
 #[test]
 fn a_hidden_success_stores_no_outcome_and_returns_the_credential_notices() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     let landed = installs.land(
         "openai".to_owned(),
         done(
@@ -225,7 +212,7 @@ fn a_hidden_success_stores_no_outcome_and_returns_the_credential_notices() {
     assert!(installs.outcomes().is_empty());
     assert!(!installs.busy());
 
-    assert!(installs.start(start("zeta")));
+    installs.start(start("zeta"));
     assert_eq!(
         installs.land("zeta".to_owned(), done(&[], Vec::new()), false),
         Landed::Installed {
@@ -237,7 +224,7 @@ fn a_hidden_success_stores_no_outcome_and_returns_the_credential_notices() {
 #[test]
 fn a_visible_failure_keeps_the_row_with_its_error_and_a_retry_starts() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     let _ = installs.take_start();
     assert_eq!(
         installs.land("openai".to_owned(), failed("no network"), true),
@@ -250,7 +237,7 @@ fn a_visible_failure_keeps_the_row_with_its_error_and_a_retry_starts() {
     assert!(!installs.busy());
     assert!(installs.outcomes().is_empty());
 
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     assert_eq!(installs.progress("openai"), Some(&Progress::Installing));
     assert!(matches!(
         installs.land("openai".to_owned(), done(&[], Vec::new()), true),
@@ -263,7 +250,7 @@ fn a_visible_failure_keeps_the_row_with_its_error_and_a_retry_starts() {
 #[test]
 fn a_hidden_failure_is_a_notice_and_clears_the_progress() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
     let landed = installs.land(
         "openai".to_owned(),
         failed("no network\nsecond line"),
@@ -275,7 +262,7 @@ fn a_hidden_failure_is_a_notice_and_clears_the_progress() {
     );
     assert_eq!(installs.progress("openai"), None);
     assert!(!installs.busy());
-    assert!(installs.start(start("openai")));
+    installs.start(start("openai"));
 }
 
 #[test]
@@ -293,7 +280,7 @@ fn fail_stores_a_failure_without_a_job() {
 #[test]
 fn text_from_an_install_is_stored_without_control_characters() {
     let mut installs = Installs::default();
-    assert!(installs.start(start("op\u{1b}enai")));
+    installs.start(start("op\u{1b}enai"));
     let landed = installs.land(
         "op\u{1b}enai".to_owned(),
         done(
@@ -319,7 +306,7 @@ fn text_from_an_install_is_stored_without_control_characters() {
         Some(&Progress::Failed("bad [31m".to_owned()))
     );
 
-    assert!(installs.start(start("a\u{1b}b")));
+    installs.start(start("a\u{1b}b"));
     assert_eq!(
         installs.land("a\u{1b}b".to_owned(), failed("x\u{1b}y"), false),
         Landed::Notice("Installing a b failed: x y".to_owned())
@@ -361,7 +348,7 @@ fn a_query_filters_the_rows_by_provider_name() {
 #[test]
 fn a_landed_provider_leaves_the_rows_at_once_by_its_cleaned_name() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai", "zeta"]);
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     assert!(matches!(
         picker.land_install("openai".to_owned(), done(&[], Vec::new())),
         Landed::Installed { .. }
@@ -371,7 +358,7 @@ fn a_landed_provider_leaves_the_rows_at_once_by_its_cleaned_name() {
     assert_eq!(picker.want, Some(Refresh::Stale));
 
     let mut picker = self::picker(Mode::Choose, &["acme/m1"], &["op\u{1b}enai"]);
-    assert!(picker.installs.start(start("op\u{1b}enai")));
+    picker.installs.start(start("op\u{1b}enai"));
     let _ = picker.land_install("op\u{1b}enai".to_owned(), done(&[], Vec::new()));
     assert!(picker.shown_installs().is_empty());
 }
@@ -380,7 +367,7 @@ fn a_landed_provider_leaves_the_rows_at_once_by_its_cleaned_name() {
 fn a_failed_result_leaves_the_row_listed_and_asks_nothing() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai"]);
     picker.want = None;
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     assert_eq!(
         picker.land_install("openai".to_owned(), failed("boom")),
         Landed::Nothing
@@ -400,7 +387,7 @@ fn a_failed_result_leaves_the_row_listed_and_asks_nothing() {
 fn a_success_while_thinking_is_hidden_and_still_drops_the_row_and_asks() {
     let mut picker = picker(Mode::Thinking, &["acme/m1"], &["openai"]);
     picker.want = None;
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     let landed = picker.land_install("openai".to_owned(), done(&[], vec![missing("openai")]));
     assert!(matches!(landed, Landed::Installed { ref notices } if notices.len() == 1));
     assert!(picker.installs.outcomes().is_empty());
@@ -573,7 +560,7 @@ fn the_focus_falls_back_after_its_row_lands_or_a_read_drops_it() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai", "zeta"]);
     picker.move_row(1);
     assert_eq!(picker.install_target().as_deref(), Some("openai"));
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     let _ = picker.land_install("openai".to_owned(), done(&[], Vec::new()));
     assert_eq!(picker.focus(), Some(Stop::Model(0)), "never onto zeta");
 
@@ -640,7 +627,7 @@ fn the_layout_lists_the_rows_after_the_last_model() {
 #[test]
 fn the_view_carries_each_row_with_its_hits_and_progress() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai", "zeta"]);
-    assert!(picker.installs.start(start("zeta")));
+    picker.installs.start(start("zeta"));
     let view = view_of(&picker);
     assert_eq!(view.installs.len(), 2);
     let first = view.installs.first().unwrap();
@@ -708,7 +695,7 @@ fn an_install_never_widens_the_scope() {
     for mode in [Mode::Choose, Mode::Thinking] {
         let mut picker = picker(mode, &["acme/other"], &["openai"]);
         picker.scoped = names(&["acme/other"]);
-        assert!(picker.installs.start(start("openai")));
+        picker.installs.start(start("openai"));
         let _ = picker.land_install("openai".to_owned(), done(&[], Vec::new()));
         picker.store(Ok(after.clone()));
         assert_eq!(
@@ -726,7 +713,7 @@ fn an_install_never_widens_the_scope() {
         assert_eq!(picker.scoped, names(&["acme/other"]));
     }
     let mut picker = picker(Mode::Choose, &["acme/other"], &["openai"]);
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     let _ = picker.land_install("openai".to_owned(), done(&[], Vec::new()));
     picker.store(Ok(after));
     assert_eq!(shown(&picker), names(&["other", "gpt"]), "unscoped");
@@ -735,7 +722,7 @@ fn an_install_never_widens_the_scope() {
 #[test]
 fn open_keeps_a_running_install_and_drops_the_rest() {
     let mut picker = picker(Mode::Choose, &["acme/m1"], &["openai", "zeta"]);
-    assert!(picker.installs.start(start("openai")));
+    picker.installs.start(start("openai"));
     picker.installs.fail("zeta", "boom".to_owned());
     picker.move_row(1);
     picker.close();

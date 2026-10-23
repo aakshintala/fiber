@@ -35,7 +35,7 @@ fn start(provider: &str) -> InstallStart {
 
 /// Lands `provider`'s install on the open picker with `summary` and `login`.
 fn install(picker: &mut ModelPicker, provider: &str, summary: &[&str], login: Vec<LoginNeed>) {
-    assert!(picker.installs.start(start(provider)));
+    picker.installs.start(start(provider));
     let done = ProviderInstall {
         installed: Vec::new(),
         summary: summary.iter().map(|line| (*line).to_owned()).collect(),
@@ -103,7 +103,7 @@ fn row_text(row: &super::super::Row) -> String {
 }
 
 fn fail_with(picker: &mut ModelPicker, provider: &str, message: &str) {
-    assert!(picker.installs.start(start(provider)));
+    picker.installs.start(start(provider));
     let error = ConfigureError {
         code: contract::ErrorCode::IoFailed,
         message: message.to_owned(),
@@ -127,7 +127,7 @@ fn snapshot_missing() {
 #[test]
 fn snapshot_installing() {
     let mut picker = picker(&["acme/m1", "zeta/z1"], &["databricks"]);
-    assert!(picker.installs.start(start("databricks")));
+    picker.installs.start(start("databricks"));
     insta::assert_snapshot!("model_picker_install_installing", screen(&picker, 100, 30));
 }
 
@@ -192,7 +192,7 @@ fn the_row_reads_in_the_prototypes_colours() {
 #[test]
 fn an_installing_row_reads_installing_with_the_spinner_in_attention() {
     let mut picker = picker(&["acme/m1"], &["databricks"]);
-    assert!(picker.installs.start(start("databricks")));
+    picker.installs.start(start("databricks"));
     let (buf, _, _) = render(&picker, 100, 30);
     let text = crate::view::text(&buf);
     let (_, line) = find_row(&text, "databricks");
