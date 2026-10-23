@@ -386,6 +386,7 @@ fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
         "git -c diff.external=x diff",
+        "git --config-env=a=b log",
         "git --exec-path=/x log",
         "git --exec-path log",
         "git -p log",

@@ -246,9 +246,14 @@ fn stage_outcome(
         return Outcome::Executes;
     }
     // An exact form reads with no paths: `git status`, `git stash list`
-    // or `git branch --show-current`, whatever wrapper leads it.
+    // or `git branch --show-current`, whatever wrapper leads it, where
+    // the repository guards pass.
     if EXACT.iter().any(|row| cooked_equals(words, row)) {
-        return with_inputs(Outcome::Reads(Vec::new()), simple, dirs);
+        return with_inputs(
+            git_guarded(Outcome::Reads(Vec::new()), words, dirs),
+            simple,
+            dirs,
+        );
     }
     // `sed` has its own print-only grammar, not a table row.
     if words.first().is_some_and(|word| word.cooked == "sed") {
@@ -265,7 +270,28 @@ fn stage_outcome(
         }
         Found::None => Outcome::Executes,
     };
-    with_inputs(verdict, simple, dirs)
+    with_inputs(git_guarded(verdict, words, dirs), simple, dirs)
+}
+
+/// A git read runs only where the repository guards pass in every
+/// directory the stage may run in: a bare repository, or a `.git` file
+/// whose target Fiber cannot verify, makes the call `executes`. Any
+/// other command, and a git call the lookup refused, passes through.
+fn git_guarded(verdict: Outcome, words: &[Word], dirs: &[String]) -> Outcome {
+    let Outcome::Reads(_) = verdict else {
+        return verdict;
+    };
+    if !is_git(words) {
+        return verdict;
+    }
+    if dirs
+        .iter()
+        .all(|dir| super::git::repository_ok(Path::new(dir)))
+    {
+        verdict
+    } else {
+        Outcome::Executes
+    }
 }
 
 /// An `xargs` stage: the target must name one of the six read-only
