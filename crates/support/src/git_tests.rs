@@ -10,7 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::PathBuf;
@@ -38,8 +38,17 @@ fn builders_carry_the_scrubbed_environment() {
 fn check(build: fn(&str) -> Command, args: &[&str]) {
     let built = build("git");
     assert_eq!(built.get_program(), OsStr::new("git"));
-    let got: Vec<OsString> = built.get_args().map(|arg| arg.to_owned()).collect();
-    let wanted: Vec<OsString> = args.iter().map(OsString::from).collect();
+    // The `-c` pairs are a set: the builder promises each pair, not their order.
+    let got: BTreeSet<Vec<OsString>> = built
+        .get_args()
+        .collect::<Vec<_>>()
+        .chunks(2)
+        .map(|pair| pair.iter().map(|arg| arg.to_os_string()).collect())
+        .collect();
+    let wanted: BTreeSet<Vec<OsString>> = args
+        .chunks(2)
+        .map(|pair| pair.iter().map(OsString::from).collect())
+        .collect();
     assert_eq!(got, wanted);
     let envs: BTreeMap<&OsStr, Option<&OsStr>> = built.get_envs().collect();
     assert_eq!(

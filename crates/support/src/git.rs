@@ -12,17 +12,8 @@ use std::process::{Command, Stdio};
 /// A `git` command that runs no repository hook. Every product `git`
 /// spawn is built by this or [`hooked_command`].
 pub fn command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    command
-        .args(["-c", "core.fsmonitor=false"])
-        .args(["-c", "core.hooksPath=/dev/null"])
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        .stdin(Stdio::null());
+    let mut command = hooked_command(program);
+    command.args(["-c", "core.hooksPath=/dev/null"]);
     command
 }
 
