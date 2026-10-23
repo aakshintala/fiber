@@ -61,6 +61,7 @@ impl Surface {
     /// draws a frame of its own over the screen is in the set; the
     /// panel, the offer and the other surfaces never take the click's
     /// place.
+    // debt: explicit set stays; widen the matches! if the surveyor rules Panel/Offer in, never delete the gate while note calls decide coverage.
     pub(crate) fn closes_on_outside_click(self) -> bool {
         matches!(
             self,
@@ -103,6 +104,7 @@ impl Frames {
 
     /// Notes `surface`'s slab, replacing its earlier note; an empty slab
     /// notes nothing, so a frame squeezed to nothing takes the old path.
+    // debt: replace branch stays as double-note insurance; drop it only if notes become provably once-per-frame by construction.
     pub(crate) fn note(&self, surface: Surface, slab: Rect) {
         if slab.is_empty() {
             return;

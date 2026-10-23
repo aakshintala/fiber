@@ -202,6 +202,7 @@ pub(crate) fn render(
         let slab = crate::swapped::draw(app, area, buf, &mut targets);
         note_swapped(app, slab);
         let slab = notice_rows::overlay(app, area, buf, &mut targets);
+        // debt: five note sites stay inline; extract a shared note helper if a sixth framed surface appears.
         app.frames().note(Surface::Notice, slab);
         let mut rows_bottom = area.bottom();
         notice_rows::draw(app, area, buf, &mut rows_bottom, &mut targets);

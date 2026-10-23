@@ -38,6 +38,7 @@ impl App {
                 // pointer a release at its cell clears what no click
                 // may later use, through the existing API, and always
                 // returns `None`.
+                // debt: synthetic Release through the public API stays; switch to a Pointer disarm only if mouse.rs gains one (outside this ticket's fence).
                 let _disarmed = pointer.on_mouse(
                     &Mouse {
                         kind: MouseKind::Release,
@@ -75,6 +76,7 @@ impl App {
         targets: &[crate::mouse::Target],
         now: Instant,
     ) -> Option<Effect> {
+        // debt: re-check stays as caller insurance; drop it only if outside_press stays single-caller and the caller keeps its guard.
         if !matches!(mouse.kind, MouseKind::Press(Button::Left)) {
             return None;
         }

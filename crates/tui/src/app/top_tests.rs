@@ -521,6 +521,7 @@ fn now() -> std::time::Instant {
 
 /// The app drawn at its size: the buffer and the last frame's targets,
 /// as the loop holds them.
+// debt: two copies stay; extract to shared test support if a third render helper duplicates this.
 fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let (width, height) = app.screen_size();
     let area = Rect::new(0, 0, width, height);
@@ -991,6 +992,7 @@ fn no_frame_drawn_yet_means_no_intercept() {
 }
 
 #[test]
+// debt: struct-pinning test stays with the replace branch it covers; delete both together if the branch goes.
 fn frames_note_replace_clear_and_ignore_an_empty_slab() {
     let frames = super::Frames::default();
     assert_eq!(frames.slab_of(Surface::Quit), None);
