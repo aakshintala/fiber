@@ -95,15 +95,27 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
             .is_none()
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // `docs/events.md` promises `session_started` first, an offer before its
+    // `repository_code_resolved`, and `extensions_loaded` and `preamble_built`
+    // after `reloaded` ("Repository code", "`reloaded`", "`extensions_loaded`");
+    // it leaves the rest open, so the rest is a set.
+    let seen = kinds(&w.looped);
+    let at = |name: &str| seen.iter().position(|kind| kind == name).unwrap();
+    assert_eq!(seen[0], "session_started");
+    assert!(at("repository_code_offered") < at("repository_code_resolved"));
+    assert!(at("reloaded") < at("extensions_loaded"));
+    assert!(at("reloaded") < at("preamble_built"));
+    let mut set = seen.clone();
+    set.sort();
     assert_eq!(
-        kinds(&w.looped),
+        set,
         [
-            "session_started",
+            "extensions_loaded",
+            "preamble_built",
+            "reloaded",
             "repository_code_offered",
             "repository_code_resolved",
-            "reloaded",
-            "extensions_loaded",
-            "preamble_built"
+            "session_started"
         ]
     );
 }
