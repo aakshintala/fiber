@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use contract::shapes::Effect;
@@ -241,6 +242,19 @@ fn assert_reads(command: &str) {
     let effects = classified(command);
     assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
     assert!(effects.declared.reversible, "{command}");
+}
+
+/// The paths a `cd` call declares, as a membership: the doc promises
+/// which directories each element runs in, not their order.
+fn assert_declares(command: &str, paths: &[&str]) {
+    assert_reads(command);
+    let declared = classified(command).declared.paths.unwrap_or_default();
+    let actual: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    assert_eq!(
+        actual,
+        BTreeSet::from_iter(paths.iter().copied()),
+        "{command}"
+    );
 }
 
 fn assert_closed(command: &str) {
@@ -1196,4 +1210,110 @@ fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
     assert_configured_closed("/opt/my tools/jq . f", &spaced);
     assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
     assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
+}
+
+#[test]
+fn cd_forms_outside_the_allow_list_execute() {
+    for command in [
+        "cd",
+        "cd -",
+        "cd \"\"",
+        "cd -P",
+        "cd -L",
+        "cd -x",
+        "cd -P x",
+        "cd -L x",
+        "cd a b",
+        "cd ~",
+        "cd \"~\"",
+        "cd \"~/x\"",
+        "cd a*b",
+        "cd \"a*b\"",
+        "cd \"a?b\"",
+        "cd \"a[b]\"",
+        "cd \"a{b}\"",
+        "cd $(x)",
+        "cd `x`",
+        "cd $HOME",
+        "cd --",
+        "cd -- -",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn cd_dash_dash_names_one_directory() {
+    assert_declares("cd -- x", &["/work/x"]);
+    // A flag-like operand reads only after `--`.
+    assert_declares("cd -- -P", &["/work/-P"]);
+}
+
+#[test]
+fn cd_declares_its_directory() {
+    assert_declares("cd sub", &["/work/sub"]);
+    // A lexical join still resolves against the workdir.
+    assert_declares("cd sub/../proc", &["/work/proc"]);
+    // Under /proc the call is reviewed.
+    for command in ["cd /proc", "cd /proc/self", "cd /proc/1/fd"] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn operand_less_commands_declare_each_running_directory() {
+    // Each element declares the directories it runs in: the `cd` its own
+    // join, then the operand-less `ls` each running directory.
+    assert_declares("cd sub && ls", &["/work/sub"]);
+    for command in ["cd sub ; ls", "cd sub || ls"] {
+        assert_declares(command, &["/work", "/work/sub"]);
+    }
+}
+
+#[test]
+fn git_after_any_cd_executes() {
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd sub || git status",
+        "cd sub && git stash list",
+        "cd sub && git log",
+    ] {
+        assert_closed(command);
+    }
+    // Git before the cd still reads, declaring the joined directory.
+    assert_declares("git status && cd sub", &["/work/sub"]);
+}
+
+#[test]
+fn cd_before_an_input_redirect_checks_each_running_directory() {
+    assert_declares("cd sub && cat <f", &["/work/sub", "/work/sub/f"]);
+    for command in ["cd sub ; cat <f", "cd sub || cat <f"] {
+        assert_declares(command, &["/work", "/work/sub", "/work/f", "/work/sub/f"]);
+    }
+}
+
+#[test]
+fn cd_in_a_pipeline_moves_nothing() {
+    assert_declares("cd sub | cat f", &["/work/sub", "/work/f"]);
+}
+
+#[test]
+fn losing_the_path_executes_every_later_element() {
+    assert_reads(&cd_chain(30));
+    assert_reads(&cd_chain(31));
+    assert_closed(&cd_chain(32));
+}
+
+fn cd_chain(count: usize) -> String {
+    let mut command = String::new();
+    for n in 1..=count {
+        if n > 1 {
+            command.push_str(" ; ");
+        }
+        command.push_str(&format!("cd /d{n}"));
+    }
+    command.push_str(" ; ls");
+    command
 }

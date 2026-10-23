@@ -24,15 +24,27 @@ use tree_sitter::Node;
 /// stack it runs on.
 pub(super) const MAX_COMMAND_BYTES: usize = 10_000;
 
-/// One parsed call: its `&&`/`||`/`;` elements in source order. There is no
-/// join information: every element is one more stage.
+/// One parsed call: its `&&`/`||`/`;` elements in source order.
+/// Each element remembers the join that runs it: the first element is
+/// `First`, and the rest follow `&&`, `||` or `;`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Join {
+    First,
+    And,
+    Or,
+    Seq,
+}
+
+/// One parsed call: its elements in source order.
 pub(super) struct Script {
     pub(super) elements: Vec<Element>,
 }
 
-/// One `&&`/`||`/`;` element: its `|` pipeline stages in source order.
+/// One `&&`/`||`/`;` element: its `|` pipeline stages in source order,
+/// and the join that runs it.
 pub(super) struct Element {
     pub(super) stages: Vec<Stage>,
+    pub(super) join: Join,
 }
 
 /// One pipeline stage: a simple command the recogniser read fully, or an
@@ -92,18 +104,20 @@ pub(super) fn parse(command: &str) -> Option<Script> {
     let mut cursor = root.walk();
     let mut children = root.children(&mut cursor);
     let mut next = children.next();
+    let mut join = Join::First;
     loop {
         let statement = next?;
         if statement.kind() == "comment" {
             return None;
         }
-        push_statement(statement, command, &mut elements);
+        push_statement(statement, command, &mut elements, join);
         let Some(separator) = children.next() else {
             break;
         };
         if separator.kind() != ";" {
             return None;
         }
+        join = Join::Seq;
         next = children.next();
     }
     if elements.is_empty() {
@@ -115,34 +129,37 @@ pub(super) fn parse(command: &str) -> Option<Script> {
 /// Convert one program-level statement into elements. Every shape lands here;
 /// anything the recogniser does not implement becomes one opaque stage, so
 /// conversion itself never fails.
-fn push_statement(node: Node, src: &str, elements: &mut Vec<Element>) {
+fn push_statement(node: Node, src: &str, elements: &mut Vec<Element>, join: Join) {
     match node.kind() {
         "command" => elements.push(Element {
             stages: vec![cook_command(node, src).map_or(Stage::Opaque, Stage::Simple)],
+            join,
         }),
-        "list" => push_list(node, src, elements),
-        "pipeline" => elements.push(pipeline(node, src)),
-        "redirected_statement" => elements.extend(redirected(node, src)),
+        "list" => push_list(node, src, elements, join),
+        "pipeline" => elements.push(pipeline(node, src, join)),
+        "redirected_statement" => elements.extend(redirected(node, src, join)),
         "variable_assignment" => elements.push(Element {
             stages: vec![
                 cook_assignment(node, src).map_or(Stage::Opaque, |assignments| {
                     Stage::Simple(Simple::assigned(assignments))
                 }),
             ],
+            join,
         }),
         _ => elements.push(Element {
             stages: vec![Stage::Opaque],
+            join,
         }),
     }
 }
 
 /// Flatten a left-nested `&&`/`||` list into elements in source order, with
 /// an explicit stack instead of recursion.
-fn push_list(node: Node, src: &str, elements: &mut Vec<Element>) {
-    let mut stack = vec![node];
-    while let Some(node) = stack.pop() {
+fn push_list(node: Node, src: &str, elements: &mut Vec<Element>, incoming: Join) {
+    let mut stack = vec![(node, incoming)];
+    while let Some((node, join)) = stack.pop() {
         if node.kind() != "list" {
-            push_statement(node, src, elements);
+            push_statement(node, src, elements, join);
             continue;
         }
         let mut cursor = node.walk();
@@ -152,25 +169,39 @@ fn push_list(node: Node, src: &str, elements: &mut Vec<Element>) {
         else {
             elements.push(Element {
                 stages: vec![Stage::Opaque],
+                join,
             });
             continue;
         };
-        if children.next().is_some() || (operator.kind() != "&&" && operator.kind() != "||") {
+        let operator_join = match operator.kind() {
+            "&&" => Join::And,
+            "||" => Join::Or,
+            _ => {
+                elements.push(Element {
+                    stages: vec![Stage::Opaque],
+                    join,
+                });
+                continue;
+            }
+        };
+        if children.next().is_some() {
             elements.push(Element {
                 stages: vec![Stage::Opaque],
+                join,
             });
             continue;
         }
-        stack.push(right);
-        stack.push(left);
+        stack.push((right, operator_join));
+        stack.push((left, join));
     }
 }
 
 /// Convert one `|` pipeline into a single element. A `|&` pipe makes the
 /// whole element opaque; any other surprise does the same.
-fn pipeline(node: Node, src: &str) -> Element {
+fn pipeline(node: Node, src: &str, join: Join) -> Element {
     let opaque = || Element {
         stages: vec![Stage::Opaque],
+        join,
     };
     let mut stages = Vec::new();
     let mut cursor = node.walk();
@@ -185,7 +216,7 @@ fn pipeline(node: Node, src: &str) -> Element {
                 stages.push(cook_command(stage, src).map_or(Stage::Opaque, Stage::Simple));
             }
             "redirected_statement" => {
-                let Some(stage) = single_stage(redirected(stage, src)) else {
+                let Some(stage) = single_stage(redirected(stage, src, join)) else {
                     return opaque();
                 };
                 stages.push(stage);
@@ -208,7 +239,7 @@ fn pipeline(node: Node, src: &str) -> Element {
         }
         next = children.next();
     }
-    Element { stages }
+    Element { stages, join }
 }
 
 /// The one stage of a redirect body standing alone, if it does: exactly
@@ -230,10 +261,11 @@ fn single_stage(nested: Vec<Element>) -> Option<Stage> {
 /// Convert a redirected statement: its body plus each redirect, the leading
 /// ones onto the first stage and the trailing ones onto the last. A refused
 /// redirect opaques its stage; anything but one body opaques the call.
-fn redirected(node: Node, src: &str) -> Vec<Element> {
+fn redirected(node: Node, src: &str, incoming: Join) -> Vec<Element> {
     let opaque = || {
         vec![Element {
             stages: vec![Stage::Opaque],
+            join: incoming,
         }]
     };
     let mut body = None;
@@ -264,7 +296,7 @@ fn redirected(node: Node, src: &str) -> Vec<Element> {
         return opaque();
     };
     let mut elements = Vec::new();
-    push_statement(body, src, &mut elements);
+    push_statement(body, src, &mut elements, incoming);
     for redirect in leading.iter().rev() {
         attach_simple(&mut elements, *redirect, src, false);
     }

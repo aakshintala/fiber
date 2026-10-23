@@ -18,7 +18,14 @@ pub const SHORT_NAMES: [&str; 11] = [
 ];
 
 /// The first-party extensions under `extensions/` with short names.
-const EXTENSION_SHORT_NAMES: [&str; 5] = ["claude", "cursor-agent", "hooks", "init", "memory"];
+const EXTENSION_SHORT_NAMES: [&str; 6] = [
+    "claude",
+    "cursor-agent",
+    "hooks",
+    "init",
+    "memory",
+    "export",
+];
 
 const PROVIDERS: &str = "github.com/aakshintala/fiber/providers/";
 const EXTENSIONS: &str = "github.com/aakshintala/fiber/extensions/";
@@ -86,7 +93,14 @@ mod tests {
 
     #[test]
     fn every_extension_short_name_is_a_first_party_extension() {
-        for short in ["claude", "cursor-agent", "hooks", "init", "memory"] {
+        for short in [
+            "claude",
+            "cursor-agent",
+            "hooks",
+            "init",
+            "memory",
+            "export",
+        ] {
             let full = format!("github.com/aakshintala/fiber/extensions/{short}");
             assert_eq!(full_name(short), full);
             assert_eq!(short_name(&full), short);
@@ -158,7 +172,7 @@ mod tests {
                 "opencode",
                 "openrouter",
             ],
-            "extensions" => &["init", "memory"],
+            "extensions" => &["init", "memory", "export"],
             _ => &[],
         };
         names.iter().map(|name| (*name).to_owned()).collect()
