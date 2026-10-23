@@ -117,13 +117,13 @@ fn code_outside_every_crate_runs_no_crate() {
 
 #[test]
 fn a_compiled_in_doc_runs_its_crate_alone() {
-    for path in ["docs/events.md", "docs/errors.md", "docs/tui.md"] {
+    for (path, crates) in [
+        ("docs/events.md", &["contract"][..]),
+        ("docs/errors.md", &["contract"][..]),
+        ("docs/tui.md", &["contract", "extensions"][..]),
+    ] {
         let selection = classify(&strings(&[path]), &members());
-        assert_eq!(
-            selection,
-            Selection::Crates(strings(&["contract"])),
-            "{path}"
-        );
+        assert_eq!(selection, Selection::Crates(strings(crates)), "{path}");
         assert_eq!(selection.mode(), "crates", "{path}");
     }
 }
@@ -138,7 +138,10 @@ fn an_invocation_doc_change_runs_contract_and_main() {
 #[test]
 fn a_shared_compiled_in_doc_runs_every_crate_that_compiles_it_in() {
     let selection = classify(&strings(&["docs/tui.md"]), &members_with_tools());
-    assert_eq!(selection, Selection::Crates(strings(&["contract", "tui"])));
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["contract", "extensions", "tui"]))
+    );
     assert_eq!(selection.mode(), "crates");
 }
 
