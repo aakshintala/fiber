@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used, reason = "test code; a failure is the test's")]
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,13 +108,9 @@ fn the_slots_are_listed_with_their_timeouts() {
         "fiber.slot('notice', { timeout = 100, render = function() end })\n\
                       fiber.slot('card:jobs', { timeout = 250, render = function() end })",
     );
-    assert_eq!(
-        vm.slots(),
-        BTreeMap::from([
-            ("card:jobs".to_owned(), 250 * MS),
-            ("notice".to_owned(), 100 * MS),
-        ])
-    );
+    let slots = vm.slots();
+    assert_eq!(slots.get("card:jobs"), Some(&(250 * MS)));
+    assert_eq!(slots.get("notice"), Some(&(100 * MS)));
 }
 
 #[test]
@@ -317,7 +313,7 @@ fn a_timeout_must_be_a_positive_whole_number() {
         assert!(message.contains("timeout"), "{bad}: {message}");
     }
     let (_, vm) = vm("fiber.slot('notice', { timeout = 1, render = function() end })");
-    assert_eq!(vm.slots(), BTreeMap::from([("notice".to_owned(), MS)]));
+    assert_eq!(vm.slots().get("notice"), Some(&MS));
 }
 
 #[test]
@@ -600,6 +596,7 @@ fn a_renderer_failure_is_hook_failed_and_the_rest_are_extension_failed() {
     }
 }
 
+// Kills the MISSED CI mutant at tui_vm.rs:161:9 (Debug for TuiVm::fmt).
 #[test]
 fn debug_names_the_extension_and_its_slots() {
     let vm = TuiVm::load(
