@@ -14,11 +14,11 @@ use contract::events::{
     SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
+use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use serde_json::{Map, Value};
 
-use crate::approvals::{self, Panel, PanelKey, Queue};
+use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
@@ -27,6 +27,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Pages};
+use home::{refusal, refusal_code};
 use notices::Notices;
 use overlay::Overlay;
 use steering::Steering;
@@ -76,6 +77,7 @@ mod screen;
 mod select;
 mod session_views;
 mod status_rows;
+mod top;
 
 use screen::Screen;
 
@@ -83,6 +85,7 @@ pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use session_views::SessionView;
+pub(crate) use top::Surface;
 
 /// A line's payload as `$kind`; `None` when it does not parse, and the
 /// line is skipped.
@@ -208,11 +211,6 @@ pub(crate) struct App {
     /// The accepted-import report, while open on home or over a
     /// session (`docs/tui.md`, "Notices").
     pub(crate) import_report: Option<ImportReport>,
-    /// Every sent `import`'s source by command id: the named source,
-    /// or `None` for a bare `/import` covering both. The answer folds
-    /// the entry: an acceptance opens the report with it, any other
-    /// fold drops it, so a late answer finds nothing.
-    import_sources: HashMap<CommandId, Option<String>>,
     /// The attached session's image fetches and queued viewer opens
     /// (`docs/tui.md`, "Images").
     images: images::Images,
@@ -326,7 +324,6 @@ impl App {
             outbox: outbox::Outbox::default(),
             images: images::Images::default(),
             import_report: None,
-            import_sources: HashMap::new(),
             notices: Notices::default(),
             screen: Screen::new(),
             handle: Handle::default(),
@@ -397,18 +394,22 @@ impl App {
         self.forget_images();
     }
 
-    /// Hands one key to what is on top: the key map above the model
-    /// picker, the picker, the approval panel, a completion panel,
-    /// then the input box.
+    /// Hands one key to the surfaces on top, topmost first
+    /// ([`Surface`]): the first that handles it wins, and a key none of
+    /// them takes reaches the input box. Home's own screen keys, Ctrl+C
+    /// and the rail's keys sit between the surfaces they always have.
     fn route_key(&mut self, key: Key, now: Instant) -> Effect {
         self.copied = false;
-        // The import report owns its keys while open, ahead of every
-        // other key path: Esc closes it, arrows and pages scroll it,
-        // Ctrl+C passes through to quit, and anything else is
+        let order = self.top_surfaces();
+        // The import report owns its keys while it is on top, ahead of
+        // every other key path: Esc closes it, arrows and pages scroll
+        // it, Ctrl+C passes through to quit, and anything else is
         // swallowed so nothing reaches the draft, list or conversation
         // behind it. It runs ahead of the anchor reset, so report
         // keys never discard the conversation's held position.
-        if let Some(effect) = self.report_key(&key) {
+        if order.first() == Some(&Surface::Report)
+            && let Some(effect) = self.report_key(&key)
+        {
             return effect;
         }
         // A `/copy` waiting on a pass copies only what was on screen
@@ -432,24 +433,26 @@ impl App {
         }
         // The key map opens above the picker: Esc closes whatever is
         // on top, so its keys never reach the picker underneath.
-        if let Some(effect) = self.keymap_key(&key) {
+        if let Some(effect) = self.route_to(top::between(&order, None, Some(Surface::Picker)), &key)
+        {
             return effect;
         }
-        if let Some(effect) = self.model_picker_key(&key) {
-            return effect;
-        }
-        // Ctrl+L opens the picker ahead of home, except while the quit
-        // question is up, which keeps every key.
-        if key == Key::CtrlL && !self.quit_open() {
+        // Ctrl+L opens the picker ahead of the views and home.
+        if key == Key::CtrlL {
             return self.open_model_picker(crate::model_picker::Mode::Choose);
         }
-        if let Some(effect) = self.config_view_key(&key) {
+        let modals = top::between(
+            &order,
+            Some(Surface::Picker),
+            Some(Surface::WorkspacePicker),
+        );
+        if let Some(effect) = self.route_to(modals, &key) {
             return effect;
         }
-        if let Some(effect) = self.session_view_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.home_key(&key) {
+        // Home's question and picker swallow every key but Ctrl+C, which
+        // home's own screen leaves alone, so these keys reach it only
+        // with neither open.
+        if let Some(effect) = self.home_screen_key(&key) {
             return effect;
         }
         if key == Key::CtrlC {
@@ -459,44 +462,57 @@ impl App {
         if let Some(effect) = self.rail_key(&key) {
             return effect;
         }
-        match self.queue.on_key(&key) {
-            Some(PanelKey::Handled) => return Effect::None,
-            Some(PanelKey::Answer) => return self.answer(),
-            Some(PanelKey::Decline) => return self.decline(),
-            None => {}
-        }
-        if let Some(effect) = self.offer_key(&key) {
+        let panels = top::between(&order, Some(Surface::WorkspacePicker), Some(Surface::Offer));
+        if let Some(effect) = self.route_to(panels, &key) {
             return effect;
         }
+        // Recall's keys sit at the search panel's place: the panel while
+        // it is open, else ↑ ↓ through a recalled entry.
         if let Some(effect) = self.history_key(&key) {
             return effect;
         }
-        if let Some(effect) = self.results_key(&key) {
+        let views = top::between(&order, Some(Surface::Search), Some(Surface::Results));
+        if let Some(effect) = self.route_to(views, &key) {
             return effect;
         }
-        if let Some(effect) = self.find_key(&key) {
+        // The search bar sits at its own place whether or not it is open:
+        // Ctrl+F opens it.
+        let bar = if order.contains(&Surface::Find) {
+            self.route_to(&[Surface::Find], &key)
+        } else {
+            self.find_key(&key)
+        };
+        if let Some(effect) = bar {
             return effect;
         }
-        if let Some(effect) = self.select_key(&key) {
+        if let Some(effect) = self.selection_esc(&key) {
             return effect;
         }
-        if let Some(effect) = self.focus_key(&key) {
+        if let Some(effect) = self.route_to(
+            top::between(&order, Some(Surface::Find), Some(Surface::Focus)),
+            &key,
+        ) {
             return effect;
         }
+        // The completion panels sit at their place whether or not a row
+        // shows: an `@` search open before its results arrive takes Esc.
         if let Some(effect) = self.completion_key(&key) {
             return effect;
         }
         // A running `tty` job's view types into the job ahead of the
         // input box, behind every overlay above.
-        if let Some(effect) = self.item_job_key(&key) {
-            return effect;
-        }
-        if let Some(effect) = self.draft_key(&key) {
+        self.route_to(top::between(&order, Some(Surface::Completion), None), &key)
+            .unwrap_or(Effect::None)
+    }
+
+    /// A key no surface above the input box took: the box's own keys,
+    /// then the ones that act on the screen as a whole.
+    fn input_key(&mut self, key: &Key) -> Effect {
+        if let Some(effect) = self.draft_key(key) {
             return effect;
         }
         match key {
             Key::Enter => self.on_enter(),
-            Key::Esc if self.notices.close() => Effect::None,
             // Esc with a queued row selected puts the draft back, and
             // interrupts nothing.
             Key::Esc if self.steering.is_selected() => {
@@ -506,7 +522,7 @@ impl App {
             Key::Esc if self.item_open() => self.item_esc(),
             Key::Esc => self.on_esc(),
             Key::PageUp | Key::PageDown => {
-                self.page(key == Key::PageUp);
+                self.page(*key == Key::PageUp);
                 Effect::None
             }
             Key::CtrlO => {
@@ -527,11 +543,11 @@ impl App {
             Key::CtrlR => self.open_search(),
             Key::CtrlV => self.paste.press(self.draft.serial()),
             Key::CtrlF => Effect::None,
-            // Ctrl+L opens the picker ahead of `home_key`, so it never
+            // Ctrl+L opens the picker ahead of every view, so it never
             // reaches here.
             Key::CtrlL => Effect::None,
             Key::CtrlG => self.open_in_editor(),
-            Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(&key),
+            Key::AltUp | Key::AltDown | Key::AltX => self.steering_key(key),
         }
     }
 
@@ -1550,7 +1566,8 @@ impl App {
                 | Kind::Steer
                 | Kind::Reply
                 | Kind::Shell
-                | Kind::Command,
+                | Kind::Command
+                | Kind::Import(_),
                 _,
             )) => {
                 self.notices.push(code, message);
@@ -1563,18 +1580,52 @@ impl App {
 
     /// An accepted `import`: one report overlay naming what the import
     /// copied and left behind, and no notices, since imported items
-    /// apply on the next reload. A late or duplicate answer finds no
-    /// source entry and changes nothing. A rejection drops the entry
-    /// through `refused` unchanged.
-    fn import_answered(&mut self, source: Option<String>, accepted: &CommandAccepted) {
+    /// apply on the next reload. Returns whether the report opened; a
+    /// late or duplicate answer finds no entry and changes nothing.
+    fn import_answered(&mut self, source: Option<String>, accepted: &CommandAccepted) -> bool {
         let Some(CommandResult::Import {
             imported,
             left_behind,
         }) = &accepted.result
         else {
-            return;
+            return false;
         };
         self.open_import_report(source, imported.clone(), left_behind.clone());
+        true
+    }
+
+    /// Settles an accepted command through its pending entry: the entry
+    /// closes once, whatever surface shows. An accepted `import` opens
+    /// exactly one of its report or one refusal notice; a late or
+    /// duplicate answer finds no entry and changes nothing. An answer
+    /// the terminal cannot read as a command answer still closes a
+    /// pending `import` entry, with the refusal path's one notice, and
+    /// leaves every other kind untouched.
+    fn accepted_settled(
+        &mut self,
+        envelope: &Envelope,
+        accepted: Option<&CommandAccepted>,
+    ) -> Option<(Kind, Draft)> {
+        let id = envelope.payload.get("command_id")?.as_str()?;
+        let entry = match accepted {
+            Some(_) => self.outbox.answered(id),
+            // An unparseable accept closes only a pending import: any
+            // other kind keeps its silent drop.
+            None if matches!(self.outbox.pending.get(id), Some((Kind::Import(_), _))) => {
+                self.outbox.answered(id)
+            }
+            None => return None,
+        };
+        if let Some((Kind::Import(source), _)) = entry.as_ref() {
+            let opened = accepted.is_some_and(|answer| {
+                self.import_answered(source.arg().map(str::to_owned), answer)
+            });
+            if !opened {
+                self.notices
+                    .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
+            }
+        }
+        entry
     }
 
     /// Drops a pending command, returning its draft to an empty box.
@@ -1626,9 +1677,8 @@ impl App {
             self.item_session_line(envelope);
             match envelope.kind.as_str() {
                 "command_accepted" => {
-                    if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        self.outbox.answered(&accepted.command_id.0);
-                    }
+                    let accepted = read!(envelope, CommandAccepted);
+                    self.accepted_settled(envelope, accepted.as_ref());
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
@@ -1646,28 +1696,21 @@ impl App {
             // entry when its answer arrives, as on screen
             // (`docs/invocation.md`, "The command line"). `reply_ack`
             // above already settled a `reply`, including its decline's
-            // `cancel`, so a second settle here finds nothing to do.
+            // `cancel`, so a second settle here finds nothing to do. An
+            // accepted import opens its report on whatever surface
+            // shows, through the same settle as the attached session's.
             match envelope.kind.as_str() {
                 "command_accepted" => {
-                    if let Some(accepted) = read!(envelope, CommandAccepted) {
-                        // No `commands_answered`: a `commands` answer from
-                        // another session is ignored, and a resent command
-                        // needs only its pending entry closed. A background
-                        // import drops its source entry with it, silently:
-                        // no report opens off screen, and a later
-                        // duplicate finds nothing.
-                        self.outbox.answered(&accepted.command_id.0);
-                        self.import_sources.remove(&accepted.command_id);
-                    }
+                    // No `commands_answered`: a `commands` answer from
+                    // another session is ignored, and a resent command
+                    // needs only its pending entry closed.
+                    let accepted = read!(envelope, CommandAccepted);
+                    self.accepted_settled(envelope, accepted.as_ref());
                 }
                 "command_rejected" => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
-                        // A refused background import drops its source
-                        // entry beside its pending entry, so a later
-                        // accept for the id opens no stale report.
-                        self.import_sources.remove(&id);
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -1704,15 +1747,10 @@ impl App {
         let mut changed = applied.changed;
         match envelope.kind.as_str() {
             "command_accepted" => {
-                if let Some(accepted) = read!(envelope, CommandAccepted) {
-                    let sent = self.outbox.answered(&accepted.command_id.0);
+                let accepted = read!(envelope, CommandAccepted);
+                let sent = self.accepted_settled(envelope, accepted.as_ref());
+                if let Some(accepted) = accepted {
                     self.commands_answered(&accepted);
-                    // The accepted import's source entry is consumed by
-                    // its answer: a late or duplicate answer finds
-                    // nothing and changes nothing.
-                    if let Some(source) = self.import_sources.remove(&accepted.command_id) {
-                        self.import_answered(source, &accepted);
-                    }
                     changed |= self.offer.file_answered(&accepted);
                     let shell = sent.filter(|(kind, _)| *kind == Kind::Shell);
                     let item = shell
@@ -1734,9 +1772,6 @@ impl App {
                 {
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
-                    // A refused import drops its source entry with its
-                    // answer, as an accepted one consumes it.
-                    self.import_sources.remove(&id);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }

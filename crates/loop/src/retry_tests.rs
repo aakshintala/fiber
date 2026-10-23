@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -541,7 +541,7 @@ struct AdvanceOnScheduledClock {
 
 impl AdvanceOnScheduledClock {
     fn set_watcher(&self, watcher: log::Watcher) {
-        *self.watcher.lock().unwrap_or_else(PoisonError::into_inner) = Some(watcher);
+        *support::lock(&self.watcher) = Some(watcher);
     }
 
     /// Latches `scheduled` once `retry_scheduled` reaches the wrapper's own
@@ -550,7 +550,7 @@ impl AdvanceOnScheduledClock {
         if self.scheduled.load(Ordering::SeqCst) {
             return;
         }
-        let mut slot = self.watcher.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut slot = support::lock(&self.watcher);
         let Some(watcher) = slot.as_mut() else {
             return;
         };
@@ -593,10 +593,7 @@ impl Clock for AdvanceOnScheduledClock {
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
         let subscriptions = {
-            let mut pending = self
-                .subscriptions
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut pending = support::lock(&self.subscriptions);
             std::mem::take(&mut *pending)
         };
         for waker in subscriptions {
@@ -608,10 +605,7 @@ impl Clock for AdvanceOnScheduledClock {
     // Install subscriptions at wait entry: an advance from `now()` must
     // not re-enter SharedWake while its park lock is held.
     fn subscribe(&self, waker: Weak<dyn Wake>) {
-        self.subscriptions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(waker);
+        support::lock(&self.subscriptions).push(waker);
     }
 }
 

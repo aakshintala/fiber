@@ -5,12 +5,13 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use contract::SessionId;
 use contract::events::CommandAccepted;
-use contract::{CommandId, SessionId};
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
 use crate::editor::Target;
+use crate::import_report::ImportSource;
 use crate::input::Draft;
 use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
@@ -331,12 +332,11 @@ fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     // generic title.
     let rest = rest.trim();
     let args = (!rest.is_empty()).then(|| json!({"source": rest}));
-    let source = (!rest.is_empty()).then(|| rest.to_owned());
-    let (effect, id) = app.send_command("import", args);
-    let Some(id) = id else {
-        return Some(effect);
-    };
-    app.import_sources.insert(CommandId(id), source);
+    // The entry carries the import's source, so the accepted answer's
+    // report names it; an unknown source stays a plain command, and
+    // its accept opens no report.
+    let kind = ImportSource::parse(rest).map_or(Kind::Command, Kind::Import);
+    let (effect, _) = app.send_kind(kind, "import", args);
     Some(effect)
 }
 
@@ -477,13 +477,21 @@ impl App {
         self.armed_at = None;
         self.copy_owed = false;
         self.history.cancel();
-        // The open report owns every key through `route_key`, so a
-        // paste or a home-owned arrow reaching here changes neither
-        // the draft nor the report behind it. It runs ahead of the
-        // picker, the chip row and the draft, as `report_key` runs
-        // ahead of every other key path.
-        if self.import_report_open() {
+        // The quit question and the import report own every key through
+        // `route_key`, so a paste or a home-owned arrow reaching here
+        // changes neither the draft nor the surface behind them. They run
+        // ahead of the picker, the chip row and the draft, as their keys
+        // run ahead of every other key path.
+        let top = self.top_surface();
+        if matches!(top, Surface::Quit | Surface::Report) {
             return Effect::None;
+        }
+        // The key map above the picker takes the edit: Left and Right
+        // move between its tabs, every other edit does nothing behind it.
+        if top == Surface::Keymap
+            && let Some(effect) = self.keyboard.edit_key(&edit)
+        {
+            return effect;
         }
         // The open picker owns every edit but Ctrl+C, which never
         // arrives as one.
@@ -499,9 +507,6 @@ impl App {
         // Delete on a focused home row asks to delete it when it
         // exited, ahead of the focus early return below.
         if let Some(effect) = self.home_edit(&edit) {
-            return effect;
-        }
-        if let Some(effect) = self.keyboard.edit_key(&edit) {
             return effect;
         }
         // The `/keys` screen takes every stroke in `on_press`, so only
@@ -682,13 +687,24 @@ impl App {
         command: &str,
         args: Option<serde_json::Value>,
     ) -> (Effect, Option<String>) {
+        self.send_kind(Kind::Command, command, args)
+    }
+
+    /// Sends `command` of `kind` to the attached session, returning the
+    /// minted command id beside the effect. A rejection returns the draft.
+    fn send_kind(
+        &mut self,
+        kind: Kind,
+        command: &str,
+        args: Option<serde_json::Value>,
+    ) -> (Effect, Option<String>) {
         let Some((session, _)) = self.command_session() else {
             return (Effect::None, None);
         };
         let id = mint();
         let line = session_command(&id, command, &session, args).to_string();
         let draft = std::mem::take(&mut self.draft);
-        self.outbox.insert(id.clone(), Kind::Command, draft);
+        self.outbox.insert(id.clone(), kind, draft);
         (Effect::Send(vec![line]), Some(id))
     }
 

@@ -2,7 +2,11 @@
 //! replies (`docs/tui.md`, "Keys", "Mouse and hover"). [`default_event`]
 //! maps a stroke to the key or edit the app's handlers match.
 
+use std::sync::LazyLock;
+
 use crate::appearance::{self, Osc};
+use crate::bindings::BINDINGS;
+use crate::keyset::Canon;
 use crate::look::Appearance;
 use crate::stroke::{Code, Mods, Stroke, fold_shift};
 
@@ -163,9 +167,29 @@ pub(crate) enum Event {
     Focus(bool),
 }
 
-/// The key or edit a stroke meant before rebinding: the parser's old mapping
-/// from a delivered key to the [`Key`] or [`Edit`] the app's handlers match
-/// (`docs/tui.md`, "Keys"). `None` for a stroke no binding uses.
+/// Every default key of [`BINDINGS`] with the event it gives on its own, in
+/// table order. A default name that does not parse is skipped.
+static DEFAULT_EVENTS: LazyLock<Vec<(Stroke, Canon)>> = LazyLock::new(|| {
+    BINDINGS
+        .iter()
+        .flat_map(|binding| binding.defaults.iter().zip(binding.default_events))
+        .filter_map(|(name, canon)| Some((Stroke::parse(name).ok()?, canon.clone())))
+        .collect()
+});
+
+/// The event a `Canon` is: the key or edit it holds, nothing for an action.
+fn canon_event(canon: &Canon) -> Option<Event> {
+    match canon {
+        Canon::Key(key) => Some(Event::Key(key.clone())),
+        Canon::Edit(edit) => Some(Event::Edit(edit.clone())),
+        Canon::Action => None,
+    }
+}
+
+/// The key or edit a stroke means before rebinding (`docs/tui.md`, "Keys"):
+/// a character typed, else the event its default key gives in `BINDINGS`,
+/// else one of the strokes no row names: space, PageUp, PageDown and Right.
+/// `None` for any other stroke.
 pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
     // Typing: a character alone is itself, and a shifted letter is its
     // uppercase form.
@@ -186,46 +210,30 @@ pub(crate) fn default_event(stroke: &Stroke) -> Option<Event> {
             return Some(Event::Key(Key::AltDigit(n.saturating_sub(b'0'))));
         }
     }
-    let key = |key: Key| Some(Event::Key(key));
-    let edit = |edit: Edit| Some(Event::Edit(edit));
-    match stroke.name().as_str() {
-        "enter" => key(Key::Enter),
-        "shift+enter" => edit(Edit::ShiftEnter),
-        "esc" => key(Key::Esc),
-        "backspace" => key(Key::Backspace),
-        "alt+backspace" => edit(Edit::DeleteWord),
-        "ctrl+u" => edit(Edit::DeleteToLineStart),
-        "tab" => key(Key::Tab),
-        "shift+tab" => key(Key::BackTab),
-        "space" => key(Key::Char(' ')),
-        "pageup" => key(Key::PageUp),
-        "pagedown" => key(Key::PageDown),
-        "end" => key(Key::End),
-        "up" => key(Key::Up),
-        "alt+up" => key(Key::AltUp),
-        "down" => key(Key::Down),
-        "alt+down" => key(Key::AltDown),
-        "left" => edit(Edit::Left),
-        "right" => edit(Edit::Right),
-        "alt+left" | "ctrl+left" | "alt+b" => edit(Edit::WordLeft),
-        "alt+right" | "ctrl+right" | "alt+f" => edit(Edit::WordRight),
-        "super+left" => edit(Edit::LineStart),
-        "super+right" => edit(Edit::LineEnd),
-        "delete" => edit(Edit::Delete),
-        "f1" => key(Key::F1),
-        "ctrl+c" => key(Key::CtrlC),
-        "ctrl+o" => key(Key::CtrlO),
-        "ctrl+g" => key(Key::CtrlG),
-        "ctrl+r" => key(Key::CtrlR),
-        "ctrl+v" => key(Key::CtrlV),
-        "ctrl+l" => key(Key::CtrlL),
-        "ctrl+f" | "super+f" => key(Key::CtrlF),
-        "ctrl+j" => edit(Edit::CtrlJ),
-        "alt+a" => key(Key::AltA),
-        "alt+x" => key(Key::AltX),
-        "alt+p" => key(Key::AltP),
-        "alt+r" => key(Key::AltR),
-        _ => None,
+    if let Some((_, canon)) = DEFAULT_EVENTS.iter().find(|(known, _)| known == stroke) {
+        return canon_event(canon);
+    }
+    if stroke.mods != Mods::NONE {
+        return None;
+    }
+    match stroke.code {
+        Code::Space => Some(Event::Key(Key::Char(' '))),
+        Code::PageUp => Some(Event::Key(Key::PageUp)),
+        Code::PageDown => Some(Event::Key(Key::PageDown)),
+        Code::Right => Some(Event::Edit(Edit::Right)),
+        Code::Char(_)
+        | Code::Enter
+        | Code::Esc
+        | Code::Tab
+        | Code::Backspace
+        | Code::Delete
+        | Code::Insert
+        | Code::Home
+        | Code::End
+        | Code::Up
+        | Code::Down
+        | Code::Left
+        | Code::F(_) => None,
     }
 }
 
@@ -295,7 +303,7 @@ impl Parser {
                 // The marker ends in this read, so its end is past `held`.
                 let after = at.saturating_add(PASTE_END.len()).saturating_sub(held);
                 paste.truncate(at);
-                let text = paste_text(paste);
+                let text = crate::text::paste_clean(&String::from_utf8_lossy(paste));
                 self.paste = None;
                 if !text.is_empty() {
                     out.push(Event::Edit(Edit::Paste(text)));
@@ -336,17 +344,6 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
         .map(|at| at.saturating_add(from))
-}
-
-/// A paste's text: `\r\n` and `\r` become `\n`, and every control
-/// character but `\n` and `\t` goes.
-fn paste_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-        .collect()
 }
 
 /// The events of the bytes at the start of a buffer and how many bytes
@@ -736,7 +733,7 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         127 => Code::Backspace,
         _ => {
             let ch = char::from_u32(code)?;
-            if ch.is_control() {
+            if !crate::text::printable(ch) {
                 return None;
             }
             // Shift on a character that is not a letter is dropped.
@@ -797,7 +794,7 @@ fn decode_char(buf: &[u8]) -> Step {
         .ok()
         .and_then(|text| text.chars().next())
     {
-        Some(ch) if ch.is_control() => Some((Vec::new(), len)),
+        Some(ch) if !crate::text::printable(ch) => Some((Vec::new(), len)),
         Some(ch) => {
             let (code, mods) = char_stroke(ch, Mods::NONE);
             stroke(code, mods, len)

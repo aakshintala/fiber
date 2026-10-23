@@ -45,10 +45,7 @@ static READ_TAPS: std::sync::Mutex<Vec<std::sync::mpsc::Sender<()>>> =
 #[cfg(test)]
 pub(crate) fn tap_reads() -> std::sync::mpsc::Receiver<()> {
     let (sent, received) = std::sync::mpsc::channel();
-    READ_TAPS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(sent);
+    support::lock(&READ_TAPS).push(sent);
     received
 }
 
@@ -79,10 +76,7 @@ static SILENCE_TAPS: std::sync::Mutex<Vec<std::sync::mpsc::Sender<()>>> =
 #[cfg(test)]
 pub(crate) fn tap_silence() -> std::sync::mpsc::Receiver<()> {
     let (sent, received) = std::sync::mpsc::channel();
-    SILENCE_TAPS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(sent);
+    support::lock(&SILENCE_TAPS).push(sent);
     received
 }
 

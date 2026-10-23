@@ -114,17 +114,10 @@ impl App {
     /// A key for the open results view, before the search bar in
     /// [`App::route_key`], so Enter jumps instead of stepping and ↑/↓ move
     /// the selection instead of the current match (`docs/tui.md`,
-    /// "Search"). `None` while the view is closed, for Esc with the notice
-    /// overlay open, and for the keys the bar and the handlers below it
+    /// "Search"). `None` while the view is closed, and for the keys the bar and the handlers below it
     /// take: typing edits the query and closes the view.
     pub(in crate::app) fn results_key(&mut self, key: &Key) -> Option<Effect> {
         if !self.results_open() {
-            return None;
-        }
-        // Esc with the notice overlay open closes it first, as the
-        // overlay's own arm does (`docs/tui.md`, "Keys": Esc closes
-        // whatever is on top).
-        if *key == Key::Esc && self.notice_overlay().is_some() {
             return None;
         }
         let height = self.results_height();

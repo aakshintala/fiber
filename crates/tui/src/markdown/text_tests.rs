@@ -213,8 +213,8 @@ fn wrapping_spaces_and_a_zero_width_character_ends() {
     };
     for text in ["     ", "\u{200b}", "a \u{200b} b", " \u{200b}\u{200b} "] {
         for width in 1..4 {
-            let rows = super::super::wrap_joined(&cells(text), width, width, true);
-            let kept: usize = rows.iter().map(|(row, _)| row.len()).sum();
+            let rows = super::super::wrap_joined_indices(&cells(text), width, width, true);
+            let kept: usize = rows.iter().map(|(row, _, _)| row.len()).sum();
             assert!(kept <= text.chars().count(), "{text:?} at {width}");
             assert!(rows.len() <= text.chars().count(), "{text:?} at {width}");
         }

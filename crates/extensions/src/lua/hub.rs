@@ -55,7 +55,9 @@ pub(crate) struct Hub {
 
 /// Where a test may pause an extension delivery, inside the hub lock:
 /// `send` has chosen the sender or the buffer, or `set_inbox` has
-/// set the sender and taken the buffer but not yet flushed it.
+/// set the sender and taken the buffer but not yet flushed it. `cfg(test)`:
+/// no public API reaches these points inside the hub lock, so the window is
+/// the only way to hold a delivery there.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Window {

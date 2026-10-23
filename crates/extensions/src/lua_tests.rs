@@ -2450,3 +2450,132 @@ fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
         "command-ran"
     );
 }
+
+/// Every `fiber.hook` refusal names the entry when one is declared, and
+/// matches today's string without one.
+#[test]
+fn hook_refusals_name_the_entry_when_given() {
+    // Each refusal as the point expression, the spec's fields and the
+    // reason, emitted declaring `fmt`; one refusal without an entry pins
+    // today's unlabelled string. Rows that fail the same check the same
+    // way share one pin (`0` stands in for `-5`, `"100"` for `1.5`,
+    // `"maybe"` for `1`, `{[2] = ...}` for `{[1] = ..., [3] = ...}`); the
+    // numeric point guards nothing `after_call` does not, so it has none.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "\"after_tool\"",
+            "on_failure = \"blocking\", run = run",
+            "missing `timeout`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, run = run",
+            "missing `on_failure`",
+        ),
+        (
+            "\"after_call\"",
+            "timeout = 100, on_failure = \"blocking\", run = run",
+            "`after_call` is not a hook point",
+        ),
+        (
+            "\"after_tool\"",
+            "phase = \"late\", timeout = 100, on_failure = \"blocking\", run = run",
+            "`phase` must be `sanitize`, `transform` or `check`",
+        ),
+        (
+            "\"after_tool\"",
+            "phase = \"check\", timeout = 100, on_failure = \"blocking\", run = run",
+            "a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"blocking\", run = \"no\"",
+            "`run` must be a function",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 0, on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = \"100\", on_failure = \"blocking\", run = run",
+            "`timeout` must be a whole number of milliseconds above 0",
+        ),
+        (
+            "\"after_tool\"",
+            "timeout = 100, on_failure = \"maybe\", run = run",
+            "`on_failure` must be `blocking` or `non-blocking`",
+        ),
+    ];
+    let mut init = String::from("local run = function() end\n");
+    let mut expected = Vec::new();
+    for (point, fields, why) in cases {
+        init.push_str(&format!(
+            "fiber.hook({point}, {{ entry = \"fmt\", {fields} }})\n"
+        ));
+        let name = point.trim_matches('"');
+        expected.push(format!(
+            "`{name}` hook not registered for entry `fmt`: {why}"
+        ));
+    }
+    init.push_str("fiber.hook(\"after_tool\", { on_failure = \"blocking\", run = run })\n");
+    expected.push("`after_tool` hook not registered: missing `timeout`".to_owned());
+    init.push_str("fiber.hook(\"after_tool\", \"no\")\n");
+    expected.push(
+        "`after_tool` hook not registered: it takes a table of `timeout`, `on_failure` and `run`"
+            .to_owned(),
+    );
+    init.push_str(
+        "fiber.hook(\"before_tool\", { entry = \"fmt\", phase = \"check\", timeout = 1, on_failure = \"blocking\", run = run })\n",
+    );
+    let dir = extension("entry-labeled-refusals", &init);
+    let clock = FakeClock::new();
+    let ext = LuaExtension::new(
+        "ext",
+        dir.path(),
+        PathBuf::from("/nonexistent-fiber-home"),
+        clock,
+    );
+    let declared = ext.hooks().expect("the entry script runs");
+    assert_eq!(declared.problems, expected);
+    // The valid entry-carrying hook registered: the label changes only
+    // refusals.
+    assert_eq!(declared.by_point.get("before_tool").map(Vec::len), Some(1));
+}
+
+/// Test-only wrappers over the hub's probes: each reaches hub state no
+/// public API exposes, so the rendezvous and drain proofs call them.
+impl LuaExtension {
+    /// The installed diagnostic sink, if any. Test-only: no public API
+    /// exposes it, and attachment is otherwise observable only through
+    /// HTTP observation.
+    pub(crate) fn hub_diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.hub.diagnostics()
+    }
+
+    /// Whether the hub lock is free right now. Test-only: the rendezvous
+    /// proof reads it while an observed worker waits past it. No public
+    /// API exposes the lock, and the ordering is otherwise unobservable.
+    pub(crate) fn hub_unlocked(&self) -> bool {
+        self.hub.try_lock().is_some()
+    }
+
+    /// Fires `hook` once when the drain's pre-replay wait parks with a
+    /// watcher delivery still queued or running: the test's proof the wait
+    /// engaged before it releases the parked delivery.
+    pub(crate) fn pause_at_drain_wait(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.hub.pause_at_windows(Arc::new(move |_, window| {
+            if matches!(window, hub::Window::DrainWait) {
+                hook();
+            }
+        }));
+    }
+
+    /// Runs the hook `index` registered at `point`, in registration order
+    /// from 0, passing `arg`, and returns what its `run` returned as JSON.
+    pub(crate) fn hook(&self, point: &str, index: usize, arg: Value) -> Result<Value, Error> {
+        self.hook_with(point, index, arg, |value| Ok((value, false)))
+            .map(|(value, _, _)| value)
+    }
+}

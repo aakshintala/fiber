@@ -107,10 +107,10 @@ impl App {
         self.session_views.open.is_some()
     }
 
-    /// Hands `key` to the open session view. `None` with no view open, for
-    /// Ctrl+C, or while the quit question is open.
+    /// Hands `key` to the open session view. `None` with no view open or
+    /// for Ctrl+C.
     pub(in crate::app) fn session_view_key(&mut self, key: &Key) -> Option<Effect> {
-        if !self.session_view_open() || self.quit_open() || *key == Key::CtrlC {
+        if !self.session_view_open() || *key == Key::CtrlC {
             return None;
         }
         if *key == Key::Esc {

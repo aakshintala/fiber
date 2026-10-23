@@ -775,15 +775,15 @@ impl App {
         self.model_picker.is_open()
     }
 
-    /// A key for the open picker; `None` while it is closed, for Ctrl+C,
-    /// for the global actions' keys, and while the quit question is up,
-    /// so quitting and every global action keep their keys. Enter toggles
+    /// A key for the open picker; `None` while it is closed, for Ctrl+C
+    /// and for the global actions' keys, so quitting and every global
+    /// action keep their keys. Enter toggles
     /// the checklist's focused mark and types nothing; on a choosing
     /// picker Enter chooses and saves, Ctrl+S chooses for this session
     /// only. Every other key but the picker's own does nothing, and no
     /// key cycles.
     pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
-        if !self.model_picker_open() || self.quit_open() {
+        if !self.model_picker_open() {
             return None;
         }
         match key {
@@ -880,12 +880,10 @@ impl App {
     /// Chooses in the open picker for this session only, through the
     /// `session_only` action: Ctrl+S chooses at once, sending one `model`
     /// command and saving nothing, or saves the open checklist as
-    /// `scoped_models`. Nothing while the picker is closed, while the
-    /// quit question is up, or while the key map is open above the
-    /// picker, so nothing reaches the picker underneath. With no row
+    /// `scoped_models`. Nothing while the picker is closed. With no row
     /// to choose the picker stays open, sending nothing.
     pub(in crate::app) fn model_picker_session_only(&mut self) -> super::Effect {
-        if !self.model_picker_open() || self.quit_open() || self.keymap_top().is_some() {
+        if !self.model_picker_open() {
             return super::Effect::None;
         }
         // A rebound `session_only` key saves the checklist too.
@@ -903,11 +901,9 @@ impl App {
     }
 
     /// An edit for the open picker: the arrows move the selected row's
-    /// chip, and every other edit does nothing. `None` while it is closed,
-    /// while the quit question is up, and while the key map is open above
-    /// it, so nothing reaches the picker underneath.
+    /// chip, and every other edit does nothing. `None` while it is closed.
     pub(in crate::app) fn model_picker_edit(&mut self, edit: &Edit) -> Option<super::Effect> {
-        if !self.model_picker_open() || self.quit_open() || self.keymap_top().is_some() {
+        if !self.model_picker_open() {
             return None;
         }
         match edit {

@@ -13,6 +13,7 @@ use crate::format::{cut, width, wrap};
 use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
+use crate::text::to_u16;
 
 #[path = "logo.rs"]
 mod logo;
@@ -66,7 +67,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let draft = app.input().rows(inner);
     let height = draft.len().clamp(MIN_BOX, MAX_BOX);
     // The box is its ▄ edge, the draft rows, the chip row and its ▀ edge.
-    let boxed = super::to_u16(height).saturating_add(3);
+    let boxed = to_u16(height).saturating_add(3);
     // A rejected `start` draws its message above the box, wrapped at its
     // width, staying while the list fills.
     let blockers: Vec<String> = screen
@@ -74,8 +75,8 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         .iter()
         .flat_map(|line| wrap(line, usize::from(inner)))
         .collect();
-    let need = 12u16.saturating_add(super::to_u16(blockers.len()));
-    let four = area.height >= need && area.width >= super::to_u16(logo::width_cells());
+    let need = 12u16.saturating_add(to_u16(blockers.len()));
+    let four = area.height >= need && area.width >= to_u16(logo::width_cells());
     let logo_rows = if four { 4 } else { 1 };
     let logo = area.y;
     let foot = area.bottom().saturating_sub(1);
@@ -85,9 +86,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
         .max(area.y);
     let list_top = area.y.saturating_add(5);
     let list_end = if area.height >= 12 {
-        box_top
-            .saturating_sub(super::to_u16(blockers.len()))
-            .max(area.y)
+        box_top.saturating_sub(to_u16(blockers.len())).max(area.y)
     } else {
         list_top
     };
@@ -95,7 +94,7 @@ fn layout(app: &App, screen: &HomeScreen, area: Rect) -> Placed {
     let top = row.saturating_add(1).saturating_sub(height);
     let shown = draft.into_iter().skip(top).take(height).collect();
     let draft_top = box_top.saturating_add(1);
-    let chip = draft_top.saturating_add(super::to_u16(height));
+    let chip = draft_top.saturating_add(to_u16(height));
     Placed {
         x,
         width,
@@ -293,6 +292,24 @@ fn draw_import_question(question: &str, area: Rect, buf: &mut Buffer, targets: &
     }
 }
 
+/// The rows over which home's notice overlay draws, in `area`.
+fn notice_area(placed: &Placed, area: Rect) -> Rect {
+    Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        placed
+            .box_top
+            .saturating_sub(to_u16(placed.blockers.len()))
+            .saturating_sub(area.y),
+    )
+}
+
+/// The rows of `area` over which home's notice overlay draws.
+pub(crate) fn notice_rows_area(app: &App, screen: &HomeScreen, area: Rect) -> Rect {
+    notice_area(&layout(app, screen, area), area)
+}
+
 /// The session list's window in `area`: the rows' rect, and the
 /// highest first row the window shows, the rows past the window.
 /// The wheel over the rect scrolls the list.
@@ -400,7 +417,7 @@ fn list_rows(screen: &HomeScreen) -> Vec<ListRow> {
                     style(Role::Accent).add_modifier(Modifier::BOLD),
                 ));
                 if let Some(key) = start {
-                    row.plus = Some((*key, super::to_u16(width(name).saturating_add(1))));
+                    row.plus = Some((*key, to_u16(width(name).saturating_add(1))));
                     row.left.push(Span::styled(" +", style(Role::Accent)));
                 }
                 row.left
@@ -543,7 +560,7 @@ fn draw_list(
     if screen.empty {
         let y = placed
             .list_top
-            .saturating_add(super::to_u16(capacity.saturating_sub(2) / 2));
+            .saturating_add(to_u16(capacity.saturating_sub(2) / 2));
         for (i, text) in [
             "No sessions yet.",
             "Type below and press Enter to start one.",
@@ -551,13 +568,13 @@ fn draw_list(
         .into_iter()
         .enumerate()
         {
-            let y = y.saturating_add(super::to_u16(i));
+            let y = y.saturating_add(to_u16(i));
             if y < placed.list_end {
                 put(
                     buf,
                     area,
                     area.x
-                        .saturating_add(area.width.saturating_sub(super::to_u16(width(text))) / 2),
+                        .saturating_add(area.width.saturating_sub(to_u16(width(text))) / 2),
                     y,
                     text,
                     area.width,
@@ -567,10 +584,10 @@ fn draw_list(
         }
     }
     for (at, row) in rows.iter().skip(start).take(capacity).enumerate() {
-        let y = placed.list_top.saturating_add(super::to_u16(at));
+        let y = placed.list_top.saturating_add(to_u16(at));
         let body = placed.width.saturating_sub(if row.stop { 2 } else { 0 });
         let right = ratatui::text::Line::from(row.right.clone());
-        let right_width = super::to_u16(right.width()).min(body);
+        let right_width = to_u16(right.width()).min(body);
         let right_x = placed.x.saturating_add(body.saturating_sub(right_width));
         let left = ratatui::text::Line::from(row.left.clone());
         buf.set_line(placed.x, y, &left, body.saturating_sub(right_width));
@@ -695,9 +712,7 @@ pub(super) fn render(
         );
     }
     // The blocker lines sit above the box, wrapped at its width.
-    let mut blocker_y = placed
-        .box_top
-        .saturating_sub(super::to_u16(placed.blockers.len()));
+    let mut blocker_y = placed.box_top.saturating_sub(to_u16(placed.blockers.len()));
     for line in &placed.blockers {
         put(
             buf,
@@ -742,7 +757,7 @@ pub(super) fn render(
         );
     }
     for (at, row) in placed.shown.iter().enumerate() {
-        let y = placed.draft_top.saturating_add(super::to_u16(at));
+        let y = placed.draft_top.saturating_add(to_u16(at));
         if screen.placeholder && placed.top == 0 && at == 0 {
             // The placeholder's prompt is `info` like a draft's; the rest
             // stays dim (`docs/tui.md`, "The input box").
@@ -760,7 +775,7 @@ pub(super) fn render(
         let (row, col) = app.input().cursor(placed.inner);
         let y = placed
             .draft_top
-            .saturating_add(super::to_u16(row.saturating_sub(placed.top)));
+            .saturating_add(to_u16(row.saturating_sub(placed.top)));
         let x = text_x.saturating_add(col.min(placed.inner.saturating_sub(1)));
         // The draft sits below the area's top row by construction, so
         // only the bottom needs the guard.
@@ -804,7 +819,7 @@ pub(super) fn render(
                 BOX_TINT
             },
         );
-        let wide = super::to_u16(width(text));
+        let wide = to_u16(width(text));
         if let Some(spot) = &chip.spot {
             let end = chip_x.saturating_add(wide).min(box_end);
             if end > chip_x {
@@ -874,21 +889,13 @@ pub(super) fn render(
     if placed.foot >= area.y {
         let at = if foot.width() <= usize::from(area.width) {
             area.x
-                .saturating_add(area.width.saturating_sub(super::to_u16(foot.width())) / 2)
+                .saturating_add(area.width.saturating_sub(to_u16(foot.width())) / 2)
         } else {
             area.x
         };
         buf.set_line(at, placed.foot, foot, area.width);
     }
-    let rows = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        placed
-            .box_top
-            .saturating_sub(super::to_u16(placed.blockers.len()))
-            .saturating_sub(area.y),
-    );
+    let rows = notice_area(&placed, area);
     bottom = rows.bottom();
     super::notice_rows::overlay(app, rows, buf, &mut targets);
     // The rows sit above the banner, unreserved, over the area's bottom
@@ -923,20 +930,21 @@ pub(super) fn render(
     // delete frames: one overlay with both counts, no notices
     // (`docs/tui.md`, "Overlays"). The slab swallows the clicks landing
     // on it, as the question frames do.
-    let before = targets.len();
-    let slab = crate::import_report::draw_report(app, area, buf, &mut targets);
-    if !slab.is_empty() {
-        targets.insert(
-            before.min(targets.len()),
-            Target {
-                id: TargetId::Home(Spot::Question),
-                rect: slab,
-            },
-        );
-    }
-    if app.quit_open() {
-        super::quit::draw(app, area, buf, &mut targets);
-    }
+    // The surfaces that draw a frame go up bottom first, so the quit
+    // question draws above the report.
+    super::draw_framed(app, area, buf, &mut targets, |targets, buf| {
+        let before = targets.len();
+        let slab = crate::import_report::draw_report(app, area, buf, targets);
+        if !slab.is_empty() {
+            targets.insert(
+                before.min(targets.len()),
+                Target {
+                    id: TargetId::Home(Spot::Question),
+                    rect: slab,
+                },
+            );
+        }
+    });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row))
         && !matches!(id, TargetId::Home(Spot::Question))
     {
@@ -1107,7 +1115,7 @@ fn draw_typed_picker(
         typed.missing,
         usize::from(area.height.saturating_sub(CHROME)),
     );
-    let tall = super::to_u16(body_rows.len()).saturating_add(CHROME);
+    let tall = to_u16(body_rows.len()).saturating_add(CHROME);
     let centred_bottom = area
         .y
         .saturating_add(area.height.saturating_sub(tall) / 2)
@@ -1265,7 +1273,7 @@ fn token_targets(app: &App, area: Rect, placed: &Placed, targets: &mut Vec<Targe
         else {
             continue;
         };
-        let y = placed.draft_top.saturating_add(super::to_u16(dy));
+        let y = placed.draft_top.saturating_add(to_u16(dy));
         if y >= area.bottom() {
             continue;
         }
@@ -1303,7 +1311,7 @@ pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Posit
     let (row, col) = app.input().cursor(placed.inner);
     let y = placed
         .draft_top
-        .saturating_add(super::to_u16(row.saturating_sub(placed.top)));
+        .saturating_add(to_u16(row.saturating_sub(placed.top)));
     if y >= area.bottom() {
         return None;
     }

@@ -27,6 +27,38 @@ use crate::view::overlay::{self, Place, Row};
 /// (`docs/tui.md`, "Overlays").
 pub(crate) const PREFER: u16 = 71;
 
+/// Which harness an `/import` copies: the named source, or both for
+/// a bare `/import`. The answer's report is titled from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImportSource {
+    ClaudeCode,
+    Codex,
+    Both,
+}
+
+impl ImportSource {
+    /// The source `/import <arg>` names: empty means both, anything
+    /// else the hub refuses. The caller trims.
+    pub(crate) fn parse(arg: &str) -> Option<Self> {
+        match arg {
+            "" => Some(Self::Both),
+            "claude-code" => Some(Self::ClaudeCode),
+            "codex" => Some(Self::Codex),
+            _ => None,
+        }
+    }
+
+    /// The report title's source: the harness name, or `None` for a
+    /// bare `/import` covering both.
+    pub(crate) fn arg(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("claude-code"),
+            Self::Codex => Some("codex"),
+            Self::Both => None,
+        }
+    }
+}
+
 /// The report's title for `source`: the harness the import copied, or
 /// the generic title for a bare `/import` covering both.
 pub(crate) fn title_for(source: Option<&str>) -> String {
@@ -237,6 +269,9 @@ impl App {
         imported: ImportedNames,
         left_behind: Vec<LeftBehindEntry>,
     ) {
+        // The report covers whatever the panels showed: close them as
+        // if Esc had, so none shows again after the report closes.
+        self.close_completion_panels();
         self.import_report = Some(ImportReport::open(source.as_deref(), imported, left_behind));
     }
 
@@ -299,13 +334,7 @@ impl App {
     /// rows and PgUp/PgDn by pages, Ctrl+C passes through to quit,
     /// and anything else is swallowed so nothing reaches the draft,
     /// the list or the conversation behind it. `None` while closed.
-    /// While the quit question is open every key passes through to
-    /// it: it draws above the report and takes every key first, so
-    /// the report resumes when the question closes.
     pub(crate) fn report_key(&mut self, key: &Key) -> Option<Effect> {
-        if self.quit_open() {
-            return None;
-        }
         self.import_report.as_ref()?;
         match key {
             Key::Esc => {

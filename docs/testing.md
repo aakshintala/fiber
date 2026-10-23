@@ -105,6 +105,14 @@ its count is fixed, such as one `clients` line per attach, the test asserts
 the count, so a duplicate or a missing line still fails. Otherwise the test
 asserts it only when it is the line under test.
 
+A test asserts an order or a count only where a doc promises it. For each
+pair of lines whose order the test pins, and each count it asserts, such as
+the number of turns, the review finds the `docs/<area>.md` line that promises
+it. Where the doc leaves the order open, the test asserts the lines as a set,
+or forces one order with a pause point. For example, a job notice waiting in
+the inbox joins the running turn at its next step (`docs/loop.md`, "One
+step"), so the number of turns is open unless the test holds the turn.
+
 It ignores fields it is not testing, as a conforming consumer must: adding a
 field is a compatible change (`docs/events.md`, "Versioning"), so a test that
 failed on one would be stricter than the contract.
@@ -238,6 +246,9 @@ that signal. A test advances a fake clock to a named park only through
 a poll driver that is the clock's only mover uses
 `fakes::clock::FakeClock::try_advance_when_parked` instead;
 the ban on raw advances lands with their migration in a later pull request.
+A park count names every thread that can park on that clock at that point. A
+test whose code under test starts other threads on the same clock, such as an
+extension host's Lua threads, waits for the named park, not for a count.
 A test creates every watcher, log watch or registration before it starts the
 thread whose event it waits for. That second rule is a review rule: no helper
 can see an event nobody watched, so the review traces each changed test's

@@ -49,6 +49,7 @@ fn request(program: &str, args: &[&str], cwd: PathBuf, cap: usize) -> ExecReques
         args: args.iter().map(|s| (*s).into()).collect(),
         cwd,
         env: BTreeMap::new(),
+        input: None,
         cap,
         own_group: true,
         stdout_read: None,
@@ -62,6 +63,7 @@ fn sh_pid(script: &str, cwd: PathBuf, cap: usize) -> ExecRequest {
         args: vec!["-c".into(), script.into()],
         cwd,
         env: BTreeMap::new(),
+        input: None,
         cap,
         own_group: false,
         stdout_read: None,
@@ -920,6 +922,7 @@ fn a_pid_mode_missing_program_reports_its_spawn_error() {
         args: Vec::new(),
         cwd,
         env: BTreeMap::new(),
+        input: None,
         cap: CAP,
         own_group: false,
         stdout_read: None,
@@ -1542,4 +1545,138 @@ fn resolve_in_package_a_missing_program_inside_resolves_for_the_spawn_to_report(
         resolve_in_package("bin/missing", &package),
         Ok(package.join("bin").join("missing").display().to_string())
     );
+}
+
+/// `host.exec` `input` reaches the child's stdin: bytes echo byte-exact
+/// then EOF ends the run, empty streams empty then EOF, and no input
+/// keeps today's null stdin.
+#[test]
+fn stdin_carries_bytes_empty_and_absent() {
+    let clock = FakeClock::new();
+    let (_echo_dir, echo_cwd) = dir("fiber-exec-stdin-echo");
+    let mut bytes = sh("cat", echo_cwd, CAP);
+    bytes.input = Some(b"hello stdin\n".to_vec());
+    let (_cancel, done) = spawn(bytes, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the stdin run")
+        .expect("the stdin run spawns");
+    assert_eq!(ran.exit_code, Some(0));
+    assert_eq!(ran.stdout, b"hello stdin\n");
+    assert!(!ran.timed_out);
+
+    let (_empty_dir, empty_cwd) = dir("fiber-exec-stdin-empty");
+    let mut empty = sh("cat", empty_cwd, CAP);
+    empty.input = Some(Vec::new());
+    let (_cancel, done) = spawn(empty, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the empty-input run")
+        .expect("the empty-input run spawns");
+    assert_eq!(ran.exit_code, Some(0));
+    assert!(ran.stdout.is_empty(), "empty input echoes nothing");
+
+    let (_null_dir, null_cwd) = dir("fiber-exec-stdin-null");
+    let absent = sh("cat", null_cwd, CAP);
+    assert!(absent.input.is_none(), "the helper passes no input");
+    let (_cancel, done) = spawn(absent, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the null-stdin run")
+        .expect("the null-stdin run spawns");
+    assert_eq!(ran.exit_code, Some(0));
+    assert!(ran.stdout.is_empty(), "null stdin reads EOF at once");
+}
+
+/// Input past the stream cap is streamed, not retained: 2 MiB through a
+/// 1 MiB cap, and the child counts the bytes instead of echoing them.
+#[test]
+fn large_input_is_streamed_not_capped() {
+    let (_dir, cwd) = dir("fiber-exec-stdin-large");
+    let clock = FakeClock::new();
+    let input = vec![b'x'; 2 << 20];
+    let mut req = sh("wc -c", cwd, 1 << 20);
+    req.input = Some(input);
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the large-input run")
+        .expect("the large-input run is not capped");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "2097152",
+        "every input byte reached the child"
+    );
+}
+
+/// A full-duplex echo neither deadlocks nor retains: 2 MiB in while the
+/// readers drain 2 MiB out, and `cat` echoes byte-exact. Writing everything
+/// before reading, or retaining a copy past the stream, would either hang
+/// on the full pipe or fail the cap.
+#[test]
+fn full_duplex_echo_neither_deadlocks_nor_retains() {
+    let (_dir, cwd) = dir("fiber-exec-stdin-duplex");
+    let clock = FakeClock::new();
+    let input: Vec<u8> = (0..(2 << 20))
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let mut req = sh("cat", cwd, 3 << 20);
+    req.input = Some(input.clone());
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the duplex run")
+        .expect("the duplex run spawns");
+    assert_eq!(ran.stdout.len(), input.len(), "the echo keeps every byte");
+    assert_eq!(
+        ran.stdout
+            .iter()
+            .zip(input.iter())
+            .position(|(got, want)| got != want),
+        None,
+        "the echo is byte-exact"
+    );
+}
+
+/// An escaped stdin holder does not hang the run: the child forks a
+/// background sleep inheriting stdin, then exits without draining, with
+/// input larger than the pipe. The hook's deadline stops the run within
+/// the existing bounds (deadline, `GRACE`, `DRAIN`): the group is
+/// signalled first, the writer closes stdin at the run's end, and the
+/// run returns instead of parking on the full pipe.
+#[test]
+fn an_escaped_stdin_holder_does_not_hang_the_run() {
+    let (_dir, cwd) = dir("fiber-exec-stdin-holder");
+    let clock = FakeClock::new();
+    let ready = ready_in(&cwd);
+    let script = format!(
+        "(exec sleep 1000) &\necho $$ > '{}'\nexit 0\n",
+        ready.path().display()
+    );
+    let deadline = clock.now() + Duration::from_millis(500);
+    let mut req = sh(&script, cwd, CAP);
+    req.input = Some(vec![b'y'; 1 << 18]);
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    // At the callback's deadline the run stops, although nothing
+    // dropped its cancel; the group signal frees the parked writer.
+    step_to_deadline(&clock, deadline);
+    let kill_at = clock.now() + Duration::from_millis(800);
+    clock.advance_when_parked(
+        Some(kill_at),
+        None,
+        Duration::from_millis(800),
+        &Deadline::after(DEADLINE),
+    );
+    let ran = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the stdin-holder run")
+        .expect("the stdin-holder run returns within its bounds");
+    assert!(ran.timed_out, "the deadline stopped the run");
+    assert!(
+        !group::alive(pgid),
+        "the run returned only once the group was empty"
+    );
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }

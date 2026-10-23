@@ -189,7 +189,7 @@ fn wrap(line: &str, width: u16) -> Vec<String> {
             expanded.push_str(&" ".repeat(spaces));
             column = column.saturating_add(spaces);
         } else {
-            let ch = if ch.is_control() { ' ' } else { ch };
+            let ch = if crate::text::printable(ch) { ch } else { ' ' };
             expanded.push(ch);
             column = column.saturating_add(crate::format::width(&ch.to_string()));
         }

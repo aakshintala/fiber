@@ -244,7 +244,7 @@ impl App {
     /// swallowed so the draft keeps nothing typed into the picker. A
     /// key that queues a directory sends its `directories` lines while
     /// the link is up.
-    pub(super) fn picker_key(&mut self, key: &Key) -> Option<Effect> {
+    pub(in crate::app) fn picker_key(&mut self, key: &Key) -> Option<Effect> {
         match key {
             Key::CtrlC => return None,
             Key::Up => self.move_picker(false),

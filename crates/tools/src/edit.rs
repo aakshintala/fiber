@@ -18,8 +18,7 @@ use matching::{Applied, Block, MatchError, Report};
 
 use crate::error::{EditError, FileError};
 use crate::files::{
-    InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text,
-    resolve, resolved,
+    Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text, resolve,
 };
 use crate::tool_util::errored;
 use crate::write::line_changes;
@@ -107,15 +106,15 @@ impl Tool for Edit {
             Ok(blocks) => blocks,
             Err(error) => return errored(error),
         };
-        let key = match resolved(self.shared.workspace(), &raw) {
+        let key = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(output) => return output,
+            Err(error) => return errored(EditError::from(FileError::from(error))),
         };
         let locks = self.shared.locks();
         let _guard = locks.lock(&key);
-        let path = match resolved(self.shared.workspace(), &raw) {
+        let path = match resolve(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(output) => return output,
+            Err(error) => return errored(EditError::from(FileError::from(error))),
         };
         let judged = self.shared.judged(&raw);
         if let Err(error) = crate::tool_util::recheck(
@@ -153,14 +152,7 @@ impl Tool for Edit {
                     hint,
                 }));
             }
-            Err(InspectError::NotFound) => {
-                return errored(EditError::from(FileError::NotFound {
-                    path: path.to_path_buf(),
-                }));
-            }
-            Err(InspectError::Tool(message)) => {
-                return errored(EditError::from(FileError::Inspect { message }));
-            }
+            Err(error) => return errored(EditError::from(FileError::from(error))),
         };
         let applied = match matching::apply(&text, blocks) {
             Ok(applied) => applied,

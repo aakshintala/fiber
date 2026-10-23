@@ -426,6 +426,7 @@ fn columns_grow_by_a_single_step() {
                 contexts: crate::keyset::Contexts::ALL,
                 defaults: &[],
                 events: &[],
+                default_events: &[],
             }
         };
     // Widest (7, 2, 2): at inner 16 the room is 10, the area takes 5
@@ -529,6 +530,7 @@ fn columns_spare_step_grows_action_or_stays_unused() {
                 contexts: crate::keyset::Contexts::ALL,
                 defaults: &[],
                 events: &[],
+                default_events: &[],
             }
         };
     // Widest (7, 6, 2): at inner 16 the room is 10, the area takes 5

@@ -772,7 +772,11 @@ type SettleHook = Arc<dyn Fn(&Target, Pause) + Send + Sync>;
 /// A test's pause inside `settle`, at admission and before an OAuth start,
 /// or a signal after a timer callback completes. The hook runs without the
 /// hub lock; tests can coordinate without sleeps. It sees only calls for the
-/// tool it names; every other call passes through.
+/// tool it names; every other call passes through. `cfg(test)`: `settle` is
+/// entered only from the extension thread, so no public API of
+/// `LuaExtension` reaches the interleavings between the admission decision
+/// and the OAuth start or the timer's completion, and the pause is the only
+/// way to hold them there.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
 

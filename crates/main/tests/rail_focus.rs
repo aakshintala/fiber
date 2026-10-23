@@ -59,59 +59,49 @@ fn card_row_at(grid: &Grid, name: &str) -> Option<usize> {
     grid.rows.iter().position(|row| row.contains(name))
 }
 
-/// The first row containing the card of the session named `name`.
-fn card_row(grid: &Grid, name: &str) -> usize {
-    card_row_at(grid, name).unwrap_or_else(|| panic!("a card for {name:?}:\n{}", grid.contents))
+/// The background of the named card's third-column cell, `None` when the
+/// grid holds no such card.
+fn card_bg(grid: &Grid, name: &str) -> Option<Colour> {
+    card_row_at(grid, name).map(|row| grid.cell(2, u16::try_from(row).unwrap()).bg)
 }
 
 /// The background of the first card's third-column cell, `None` when the
 /// grid holds no such card.
 fn first_card_bg(grid: &Grid) -> Option<Colour> {
-    card_row_at(grid, "first live").map(|row| grid.cell(2, u16::try_from(row).unwrap()).bg)
+    card_bg(grid, "first live")
 }
 
 /// Which of the three hint-and-lift conditions holds on `grid`: the foot
 /// hint, the first card's lift, the second card's flat tint. A missing
-/// card counts as false, so the report names it instead of panicking.
+/// card, or a `raised` that is not `Rgb`, counts as false, so the report
+/// names it instead of panicking.
 fn hint_lift_checks(grid: &Grid, raised: &Colour, flat: &Colour) -> (bool, bool, bool) {
     let hint = grid.contents.contains(HINT_MIDDLE);
-    let first = first_card_bg(grid).is_some_and(|bg| bg == lifted(raised));
-    let second = card_row_at(grid, "second live")
-        .is_some_and(|row| grid.cell(2, u16::try_from(row).unwrap()).bg == *flat);
+    let first =
+        first_card_bg(grid).is_some_and(|bg| try_lift(raised).is_some_and(|lift| bg == lift));
+    let second = card_bg(grid, "second live").is_some_and(|bg| bg == *flat);
     (hint, first, second)
 }
 
 /// Waits for the hint and the lifted first card, reporting which of the
 /// three conditions was false in the last checked grid when the wait
 /// expires, with the first card's actual background (`none` when the card
-/// is absent), `raised` and `lifted(raised)`. It keeps `wait_screen`'s deadline and fast-fail path: the
-/// report rides on the timeout panic instead of replacing it.
+/// is absent), `raised` and `lifted(raised)`. It keeps `wait_screen`'s
+/// deadline and fast-fail path; the report leads the one failure panic, so
+/// it comes first, then the wait's name, then the screen dump.
 #[track_caller]
 fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
     let last = std::cell::Cell::new((false, false, false));
     let first_bg = std::cell::Cell::new(None);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run.wait_screen("the hint and the lifted first card", |grid| {
-            // Recorded before the checks: a `lifted` panic still leaves the
-            // card's background for the report.
+    run.wait_screen_leading(
+        "the hint and the lifted first card",
+        |grid| {
             first_bg.set(first_card_bg(grid));
             let checks = hint_lift_checks(grid, raised, flat);
             last.set(checks);
             checks.0 && checks.1 && checks.2
-        })
-    }));
-    match result {
-        Ok(grid) => grid,
-        Err(payload) => {
-            let base = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|held| (*held).to_owned())
-                })
-                .unwrap_or_else(|| "the hint and the lifted first card".to_owned());
+        },
+        || {
             let (hint, first, second) = last.get();
             let card = first_bg
                 .get()
@@ -120,18 +110,17 @@ fn wait_hint_lifted(run: &mut Run, raised: &Colour, flat: &Colour) -> Grid {
                 || "none (raised is not Rgb)".to_owned(),
                 |lift| format!("{lift:?}"),
             );
-            panic!(
-                "{base}; last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}"
-            );
-        }
-    }
+            format!(
+                "last check: hint present={hint}, first card lifted={first}, second card flat={second}, first card bg={card}, raised={raised:?}, lifted(raised)={lift}; "
+            )
+        },
+    )
 }
 
 /// The bg of a cell inside the named card's text rows: the cards start at
 /// the third column, and the tint covers the card's full width.
 fn tint(grid: &Grid, name: &str) -> Colour {
-    grid.cell(2, u16::try_from(card_row(grid, name)).unwrap())
-        .bg
+    card_bg(grid, name).unwrap_or_else(|| panic!("a card for {name:?}:\n{}", grid.contents))
 }
 
 /// The header row of the second project ("v", the sibling workspace):
@@ -161,6 +150,13 @@ fn done_bg(grid: &Grid) -> Colour {
     let found = grid.rows[row].chars().position(|cell| cell == '✓').unwrap();
     grid.cell(u16::try_from(found).unwrap(), u16::try_from(row).unwrap())
         .bg
+}
+
+/// Whether both sampled card tints differ from the rail region's
+/// background: a card cell still showing the rail slab is not ready,
+/// even when the rail header and both card names already draw.
+fn cards_ready(header_bg: Colour, first: Colour, second: Colour) -> bool {
+    first != header_bg && second != header_bg
 }
 
 /// Whether the rail draws: a row starts with its project header.
@@ -250,11 +246,28 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
     let (first, second, launch_guard, other_guard) = start_two(&setup, &control);
     let mut run = Run::spawn(&setup, 160, 48, &["resume", first.as_str()], &TRUECOLOUR);
     run.ready();
-    // Both cards draw; the on-screen card's tint differs from the other's.
+    // Both cards draw with tints of their own: each card's tint differs
+    // from the rail region's background, read from the header row's
+    // third-column cell on the same grid, so an un-lifted frame whose
+    // card cell still shows the rail slab cannot pass as ready.
     let grid = run.wait_screen("the rail with both cards", |grid| {
-        rail_drawn(grid)
-            && grid.contents.contains("first live")
-            && grid.contents.contains("second live")
+        if !(grid.contents.contains("first live") && grid.contents.contains("second live")) {
+            return false;
+        }
+        let Some(header_row) = grid
+            .rows
+            .iter()
+            .position(|row| row.starts_with(RAIL_HEADER))
+        else {
+            return false;
+        };
+        let header_bg = grid.cell(2, u16::try_from(header_row).unwrap()).bg;
+        let (Some(first_bg), Some(second_bg)) =
+            (card_bg(grid, "first live"), card_bg(grid, "second live"))
+        else {
+            return false;
+        };
+        cards_ready(header_bg, first_bg, second_bg)
     });
     let raised = tint(&grid, "first live");
     let flat = tint(&grid, "second live");
@@ -476,6 +489,14 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
         "the failure names the wait: {message:?}"
     );
     assert!(
+        message.starts_with("last check:"),
+        "the report leads: {message:?}"
+    );
+    assert!(
+        message.contains("screen:\n"),
+        "the screen dump follows: {message:?}"
+    );
+    assert!(
         message.contains("hint present=false"),
         "the failure names the hint: {message:?}"
     );
@@ -542,6 +563,29 @@ fn hint_lift_reports_which_condition_was_false_on_a_spent_deadline() {
     );
 }
 
+/// The readiness guard takes the baseline only from a frame whose card
+/// cells no longer show the rail region's background: the header's own
+/// background fed as either card tint rejects, while two distinct card
+/// tints accept.
+#[test]
+fn readiness_guard_rejects_a_card_tint_matching_the_rail() {
+    let rail = Colour::Rgb(10, 20, 30);
+    let raised = Colour::Rgb(40, 50, 60);
+    let flat = Colour::Rgb(70, 80, 90);
+    assert!(
+        !cards_ready(rail, rail, flat),
+        "the first card still shows the rail slab"
+    );
+    assert!(
+        !cards_ready(rail, raised, rail),
+        "the second card still shows the rail slab"
+    );
+    assert!(
+        cards_ready(rail, raised, flat),
+        "both cards carry tints of their own"
+    );
+}
+
 /// The failure message of a spent-deadline hint-and-lift wait on a grid
 /// holding a first card painted with background `1;2;3` and nothing else.
 fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) -> String {
@@ -572,7 +616,7 @@ fn spent_wait_message_with_a_painted_first_card(raised: &Colour, flat: &Colour) 
 
 /// The report carries the first card's actual background beside `raised`
 /// and `lifted(raised)`, and survives a `raised` that cannot be lifted:
-/// the `lifted` panic inside the check no longer hides the card's tint.
+/// the check reads it as not lifted, so the card's tint stays in the report.
 #[test]
 fn hint_lift_report_shows_the_first_cards_actual_background() {
     let flat = Colour::Rgb(40, 50, 60);
@@ -589,8 +633,12 @@ fn hint_lift_report_shows_the_first_cards_actual_background() {
     );
     let message = spent_wait_message_with_a_painted_first_card(&Colour::Indexed(7), &flat);
     assert!(
-        message.contains("an Rgb tint, not Indexed(7)"),
-        "the original panic stays in the report: {message:?}"
+        message.contains("first card lifted=false"),
+        "a raised tint that cannot lift is a false check: {message:?}"
+    );
+    assert!(
+        message.starts_with("last check:") && message.contains("screen:\n"),
+        "the report still leads the wait and the screen: {message:?}"
     );
     assert!(
         message.contains(

@@ -19,6 +19,7 @@ use crate::diff::{diff_lines, gutter_prefix, gutter_width, styled_spans};
 use crate::keys::{Edit, Key};
 use crate::markdown::{Role, style};
 use crate::swapped::Ink;
+use crate::text::to_u16;
 
 /// The line every offer shows.
 pub(crate) const TUI_FILES: &str = "A package's TUI files are never installed from a repository.";
@@ -756,11 +757,6 @@ fn diff_rows(diff: &str) -> Vec<Row> {
             Row::text(Line::from(spans))
         })
         .collect()
-}
-
-/// A column count as a screen coordinate.
-fn to_u16(value: usize) -> u16 {
-    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

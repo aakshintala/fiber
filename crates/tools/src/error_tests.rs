@@ -1,11 +1,15 @@
 //! Tests for [`crate::error`]: one row per case, pinning each code and
 //! each message verbatim.
 
+use std::io;
+use std::path::PathBuf;
+
 use contract::ErrorCode;
 
 use super::{
-    ArgumentsError, AskUserError, EditError, FileError, ImageReadError, PdfError, ReadError,
-    SkillError, ToolError, WebSearchError, WriteError,
+    ArgumentsError, AskUserError, EditError, FileError, ImageReadError, InspectError, PdfError,
+    ReadError, ResolveError, ShellError, SkillError, ToolError, UrlError, WebFetchError,
+    WebSearchError, WriteError,
 };
 use crate::error::{SessionListError, SessionMessageError};
 
@@ -558,28 +562,94 @@ fn an_invalid_edit_and_a_boundary_keep_their_codes() {
         error.to_string(),
         "The edit could not be applied: a match offset was not a character boundary."
     );
-    let root = ToolError::from(EditError::from(FileError::NotFound {
-        path: std::path::PathBuf::from("/a.txt"),
-    }));
+    let root = ToolError::from(EditError::from(FileError::from(InspectError::NotFound {
+        path: PathBuf::from("/a.txt"),
+    })));
     assert_eq!(root.code(), ErrorCode::NotFound);
 }
 
 #[test]
 fn a_missing_file_names_itself() {
-    let error = FileError::NotFound {
-        path: std::path::PathBuf::from("/a.txt"),
+    let error = InspectError::NotFound {
+        path: PathBuf::from("/a.txt"),
     };
     assert_eq!(error.code(), ErrorCode::NotFound);
     assert_eq!(error.to_string(), "`/a.txt` does not exist.");
 }
 
 #[test]
-fn an_inspection_failure_keeps_its_message() {
-    let error = FileError::Inspect {
-        message: "`/a.txt` is a fifo.".to_owned(),
+fn an_unreadable_file_names_its_source() {
+    let error = InspectError::Unreadable {
+        path: PathBuf::from("/a.txt"),
+        source: io::Error::other("disk gone"),
     };
     assert_eq!(error.code(), ErrorCode::ToolError);
-    assert_eq!(error.to_string(), "`/a.txt` is a fifo.");
+    assert_eq!(error.to_string(), "`/a.txt` could not be read: disk gone.");
+}
+
+#[test]
+fn a_size_that_overflows_names_the_file() {
+    let error = InspectError::SizeOverflow {
+        path: PathBuf::from("/a.txt"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`/a.txt` could not be read: its size does not fit in 64 bits."
+    );
+}
+
+#[test]
+fn a_path_that_does_not_resolve_names_its_case() {
+    let error = ResolveError::DotDotThroughMissing {
+        raw: "nope/../a.txt".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`nope/../a.txt` cannot be resolved: `..` points through a directory that does not exist."
+    );
+    let error = ResolveError::TooManyLinks {
+        raw: "link0".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`link0` could not be resolved: too many levels of symbolic links."
+    );
+    let error = ResolveError::Unreadable {
+        path: PathBuf::from("/d/a"),
+        source: io::Error::other("denied"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(error.to_string(), "`/d/a` could not be resolved: denied.");
+    let error = ResolveError::EmptyLink {
+        path: PathBuf::from("/d/link"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`/d/link` could not be resolved: the symbolic link is empty."
+    );
+    let error = ResolveError::NotADirectory {
+        raw: "f/../a.txt".to_owned(),
+        path: PathBuf::from("/d/f"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "`f/../a.txt` could not be resolved: `/d/f` is not a directory."
+    );
+}
+
+#[test]
+fn a_root_path_error_keeps_its_code() {
+    let root = ToolError::from(ReadError::from(FileError::from(
+        ResolveError::DotDotThroughMissing {
+            raw: "x/../y".to_owned(),
+        },
+    )));
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
 }
 
 #[test]
@@ -618,20 +688,329 @@ fn pages_on_a_non_pdf_names_the_file() {
     );
 }
 
+/// The parser's refusal of a URL with a space in its host.
+fn invalid_uri() -> ureq::http::uri::InvalidUri {
+    "http://exa mple.com/"
+        .parse::<ureq::http::Uri>()
+        .unwrap_err()
+}
+
 #[test]
-fn an_unresolvable_path_keeps_its_text() {
-    let error = FileError::PathInvalid {
-        message: "`..` escapes the workspace.".to_owned(),
+fn a_url_refusal_keeps_its_text_and_code_through_the_fetch() {
+    let error = UrlError::Malformed {
+        url: "http://exa mple.com/".to_owned(),
+        source: invalid_uri(),
     };
-    assert_eq!(error.code(), ErrorCode::InvalidArguments);
-    assert_eq!(error.to_string(), "`..` escapes the workspace.");
-    let error = FileError::PathUnresolved {
-        message: "`/a.txt` is a symlink loop.".to_owned(),
+    let expected = format!(
+        "`http://exa mple.com/` is not a URL to fetch: {}.",
+        invalid_uri()
+    );
+    let root = ToolError::from(WebFetchError::from(error));
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+    assert_eq!(root.to_string(), expected);
+    let error = UrlError::WrongScheme {
+        url: "ftp://x".to_owned(),
+    };
+    let root = ToolError::from(WebFetchError::from(error));
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        root.to_string(),
+        "`ftp://x` is not a URL to fetch: the scheme must be `http` or `https`."
+    );
+    let error = UrlError::NoHost {
+        url: "https://".to_owned(),
+    };
+    let root = ToolError::from(WebFetchError::from(error));
+    assert_eq!(root.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        root.to_string(),
+        "`https://` is not a URL to fetch: it names no host."
+    );
+}
+
+#[test]
+fn a_redirect_to_a_refused_url_is_an_http_error() {
+    let error = WebFetchError::BadRedirect {
+        from: "http://a/".to_owned(),
+        location: "ftp://b".to_owned(),
+        source: UrlError::WrongScheme {
+            url: "ftp://b".to_owned(),
+        },
+    };
+    assert_eq!(error.code(), ErrorCode::HttpError);
+    assert_eq!(
+        error.to_string(),
+        "http://a/ redirected to `ftp://b`: `ftp://b` is not a URL to fetch: the scheme must be `http` or `https`."
+    );
+}
+
+#[test]
+fn a_redirect_past_the_limit_names_the_last_url() {
+    let error = WebFetchError::TooManyRedirects {
+        last: "http://a/".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::HttpError);
+    assert_eq!(
+        error.to_string(),
+        "more than 10 redirects, the last from http://a/."
+    );
+}
+
+#[test]
+fn a_fetch_that_cannot_start_or_resolve_names_its_cause() {
+    let error = WebFetchError::NoWatcher {
+        source: io::Error::other("no thread"),
     };
     assert_eq!(error.code(), ErrorCode::ToolError);
-    assert_eq!(error.to_string(), "`/a.txt` is a symlink loop.");
-    let root = ToolError::from(ReadError::from(error));
+    assert_eq!(
+        error.to_string(),
+        "could not start the fetch's watcher: no thread."
+    );
+    let error = WebFetchError::Unresolved {
+        host: "nx.example".to_owned(),
+        source: io::Error::other("no such host"),
+    };
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed);
+    assert_eq!(
+        error.to_string(),
+        "could not resolve nx.example: no such host."
+    );
+    let error = WebFetchError::NoAddress {
+        host: "e.example".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed);
+    assert_eq!(error.to_string(), "e.example resolved to no address.");
+    let error = WebFetchError::NotFetched {
+        uri: "http://a/".to_owned(),
+        message: "the fetch was stopped".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed);
+    assert_eq!(
+        error.to_string(),
+        "could not fetch http://a/: the fetch was stopped."
+    );
+}
+
+#[test]
+fn a_blocked_host_keeps_its_code_through_the_root() {
+    let error = WebFetchError::Blocked {
+        host: "169.254.169.254".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::BlockedHost);
+    assert_eq!(
+        error.to_string(),
+        "`169.254.169.254` is a link-local address or a cloud metadata host, which `web_fetch` does not reach."
+    );
+    let root = ToolError::from(error);
+    assert_eq!(root.code(), ErrorCode::BlockedHost);
+}
+
+#[test]
+fn a_page_past_the_limit_or_unsaved_names_its_cause() {
+    let error = WebFetchError::TooLarge {
+        uri: "http://a/big".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::TooLarge);
+    assert_eq!(
+        error.to_string(),
+        "http://a/big is larger than 10 MiB (10485760 bytes); nothing was kept."
+    );
+    let error = WebFetchError::Unsaved {
+        path: PathBuf::from("/d/w.pdf"),
+        source: io::Error::other("disk full"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "could not save the download to /d/w.pdf: disk full."
+    );
+}
+
+#[test]
+fn an_unsupported_page_names_its_content_type_or_none() {
+    let error = WebFetchError::UnsupportedType {
+        uri: "http://a/x".to_owned(),
+        content_type: "application/zip".to_owned(),
+        length: 9,
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        "http://a/x is `application/zip`, which `web_fetch` cannot read (9 bytes)."
+    );
+    let error = WebFetchError::NoContentType {
+        uri: "http://a/x".to_owned(),
+        length: 9,
+    };
+    assert_eq!(error.code(), ErrorCode::UnsupportedFile);
+    assert_eq!(
+        error.to_string(),
+        "http://a/x is of no content type, which `web_fetch` cannot read (9 bytes)."
+    );
+}
+
+#[test]
+fn a_refused_status_keeps_the_start_of_its_body() {
+    let error = WebFetchError::Refused {
+        status: 404,
+        uri: "http://a/x".to_owned(),
+        body: "gone".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::HttpError);
+    assert_eq!(
+        error.to_string(),
+        "HTTP 404 from http://a/x. The body begins:\ngone"
+    );
+}
+
+#[test]
+fn a_timed_out_fetch_names_its_limit() {
+    let error = WebFetchError::RequestTimeout {
+        uri: "http://a/x".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(
+        error.to_string(),
+        "http://a/x: the request took over 60 seconds."
+    );
+    let error = WebFetchError::FetchTimeout {
+        uri: "http://a/x".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(
+        error.to_string(),
+        "http://a/x: the fetch took over 5 minutes."
+    );
+}
+
+#[test]
+fn the_arguments_of_a_fetch_keep_their_code() {
+    let source = || serde_json::from_str::<u8>("\"x\"").unwrap_err();
+    let error = WebFetchError::Arguments(ArgumentsError::DoNotFit { source: source() });
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        format!("The arguments do not fit the schema: {}.", source())
+    );
+}
+
+#[test]
+fn a_bad_shell_argument_keeps_its_text_and_code() {
+    let error = ShellError::NotADirectory {
+        path: PathBuf::from("/d/x"),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`/d/x` is not a directory. Give a directory as `workdir`."
+    );
+    let error = ShellError::MonitorAlone;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`monitor` cannot be combined with `run_in_background` or `tty`."
+    );
+    let error = ShellError::MonitorTimeout;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "A monitor's limit is `deadline_ms`.");
+    let error = ShellError::DeadlineWithoutMonitor;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`deadline_ms` is a monitor's deadline; set `monitor: true` with it."
+    );
+    let error = ShellError::NoJobs;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "Background jobs are not available in this session."
+    );
+    let error = ShellError::BareWait;
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "This command waits with `sleep` for 25 seconds or more. Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop."
+    );
+}
+
+#[test]
+fn a_deadline_past_the_session_longest_names_the_longest_twice() {
+    let error = ShellError::DeadlineTooLong { max_ms: 600_000 };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`deadline_ms` is more than 600000, the longest a monitor may run here. Give 600000 or less."
+    );
+}
+
+#[test]
+fn a_command_that_cannot_start_or_be_reaped_is_a_tool_error() {
+    let error = ShellError::NotStarted {
+        source: io::Error::other("no such file"),
+    };
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The command could not be started: no such file."
+    );
+    let error = ShellError::NotReaped;
+    assert_eq!(error.code(), ErrorCode::ToolError);
+    assert_eq!(
+        error.to_string(),
+        "The command's process could not be reaped."
+    );
+    let root = ToolError::from(error);
     assert_eq!(root.code(), ErrorCode::ToolError);
+}
+
+#[test]
+fn a_stopped_command_keeps_its_closing_line() {
+    let error = ShellError::Indeterminate;
+    assert_eq!(error.code(), ErrorCode::Indeterminate);
+    assert_eq!(
+        error.to_string(),
+        "The command was stopped, and Fiber cannot tell whether it completed."
+    );
+    let error = ShellError::TimedOut { ms: 1000 };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(error.to_string(), crate::shell::timeout_line(1000));
+    let error = ShellError::DeadlinePassed { ms: 1000 };
+    assert_eq!(error.code(), ErrorCode::Timeout);
+    assert_eq!(error.to_string(), crate::shell::deadline_line(1000));
+    let error = ShellError::Killed {
+        signal: "SIGKILL".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::Signal);
+    assert_eq!(error.to_string(), "Killed by SIGKILL.");
+    assert_eq!(error.to_string(), crate::shell::killed_line("SIGKILL"));
+    let error = ShellError::Exited { code: 3 };
+    assert_eq!(error.code(), ErrorCode::NonzeroExit);
+    assert_eq!(error.to_string(), "Exit code 3.");
+    assert_eq!(error.to_string(), crate::shell::exit_line(3));
+}
+
+#[test]
+fn a_limit_stop_says_what_its_line_says() {
+    for monitor in [false, true] {
+        let limit = crate::shell::Limit { ms: 1000, monitor };
+        assert_eq!(limit.stopped().to_string(), limit.line());
+    }
+}
+
+#[test]
+fn a_capped_or_flooded_job_keeps_its_text() {
+    let error = ShellError::Capped;
+    assert_eq!(error.code(), ErrorCode::OutputCap);
+    assert_eq!(
+        error.to_string(),
+        "The output passed 5 GB and the job was stopped."
+    );
+    let error = ShellError::Flooded;
+    assert_eq!(error.code(), ErrorCode::Flooded);
+    assert_eq!(
+        error.to_string(),
+        "The monitor's output was suppressed for 30 seconds, so it was stopped. Restart it with a more selective source."
+    );
 }
 
 #[derive(Debug, serde::Deserialize)]

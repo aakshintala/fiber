@@ -8,7 +8,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -341,7 +341,7 @@ struct PauseState {
 
 impl Pause {
     fn lock(&self) -> MutexGuard<'_, PauseState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.state)
     }
 
     /// Bumps the sequence, and sets the flag when `cancel`, under the lock,

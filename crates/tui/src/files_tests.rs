@@ -1,7 +1,8 @@
 //! Tests for file search: the ranking, the listing and the worker.
 
 use super::{
-    CHECK_EVERY, KEPT, Limits, Query, Roots, Search, entries, find, list, rank, resolve, split,
+    CHECK_EVERY, KEPT, Limits, Paths, Query, Roots, Search, entries, find, list, rank, resolve,
+    split,
 };
 use crate::Input;
 use fakes::Deadline;
@@ -520,7 +521,7 @@ fn file_name_matches_come_first_then_shorter_then_by_path() {
         "Src/b.rs",
         "README",
     ]);
-    let found = rank(&paths, "SRC", || false);
+    let found = rank(&Paths::new(paths), "SRC", || false);
     assert_eq!(
         found,
         Some(owned(&[
@@ -536,13 +537,16 @@ fn file_name_matches_come_first_then_shorter_then_by_path() {
 #[test]
 fn an_empty_query_matches_every_path_shortest_first() {
     let paths = owned(&["bb", "a", "ab"]);
-    assert_eq!(rank(&paths, "", || false), Some(owned(&["a", "ab", "bb"])));
+    assert_eq!(
+        rank(&Paths::new(paths), "", || false),
+        Some(owned(&["a", "ab", "bb"]))
+    );
 }
 
 #[test]
 fn only_the_first_fifty_are_kept() {
     let paths: Vec<String> = (0..120).rev().map(|at| format!("f{at:03}")).collect();
-    let found = rank(&paths, "f", || false).unwrap_or_default();
+    let found = rank(&Paths::new(paths), "f", || false).unwrap_or_default();
     assert_eq!(found.len(), KEPT);
     assert_eq!(found.first().map(String::as_str), Some("f000"));
     assert_eq!(found.last().map(String::as_str), Some("f049"));
@@ -552,7 +556,7 @@ fn only_the_first_fifty_are_kept() {
 fn exactly_fifty_matches_are_all_kept_and_one_more_is_cut() {
     for count in [KEPT, KEPT + 1] {
         let paths: Vec<String> = (0..count).rev().map(|at| format!("g{at:03}")).collect();
-        let found = rank(&paths, "g", || false).unwrap_or_default();
+        let found = rank(&Paths::new(paths), "g", || false).unwrap_or_default();
         assert_eq!(found.len(), KEPT, "{count} matches");
         assert_eq!(found.first().map(String::as_str), Some("g000"), "{count}");
         assert_eq!(found.last().map(String::as_str), Some("g049"), "{count}");
@@ -562,7 +566,7 @@ fn exactly_fifty_matches_are_all_kept_and_one_more_is_cut() {
 #[test]
 fn cancellation_is_checked_every_1024_paths() {
     assert_eq!(CHECK_EVERY, 1024);
-    let paths: Vec<String> = (0..3000).map(|at| format!("p{at}")).collect();
+    let paths = Paths::new((0..3000).map(|at| format!("p{at}")).collect());
     let asked = Cell::new(0usize);
     let found = rank(&paths, "zz", || {
         asked.set(asked.get() + 1);
@@ -578,6 +582,49 @@ fn cancellation_is_checked_every_1024_paths() {
     });
     assert_eq!(found, None);
     assert_eq!(asked.get(), 2);
+}
+
+#[test]
+fn a_path_is_lowercased_once_when_the_listing_arrives_and_never_by_a_search() {
+    use super::{Listing, search};
+    let paths: Vec<String> = (0..3000).map(|n| format!("Dir{n}/file{n}.rs")).collect();
+    let reference = Paths::new(paths.clone());
+    let mut listing = Listing::new(move || Ok(paths));
+    let roots = nowhere();
+    crate::work::take();
+    let first = search(&mut listing, &roots, "f", || false);
+    assert_eq!(crate::work::take().path_lowercases, 3000);
+    assert_eq!(first, Some(Ok(rank(&reference, "f", || false).unwrap())));
+    crate::work::take();
+    for query in ["fi", "fil", "FILE", "e1"] {
+        let found = search(&mut listing, &roots, query, || false);
+        assert_eq!(crate::work::take().path_lowercases, 0, "{query}");
+        assert_eq!(
+            found,
+            Some(Ok(rank(&reference, query, || false).unwrap())),
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn a_lowercase_path_keeps_no_second_copy() {
+    crate::work::take();
+    let paths = Paths::new(owned(&["src/lib.rs", "Src/Lib.rs"]));
+    assert_eq!(crate::work::take().path_lowercases, 2);
+    assert_eq!(paths.paths[0], ("src/lib.rs".to_owned(), None));
+    assert_eq!(
+        paths.paths[1],
+        ("Src/Lib.rs".to_owned(), Some("src/lib.rs".into()))
+    );
+}
+
+#[test]
+fn ranking_sorts_by_the_original_paths_length_when_lowercasing_changes_it() {
+    // "İ" lowercases to two code points, so "İa" is 3 bytes and its
+    // lowercase form 4: the sort key stays the 3.
+    let paths = Paths::new(owned(&["abcd", "İa"]));
+    assert_eq!(rank(&paths, "", || false), Some(owned(&["İa", "abcd"])));
 }
 
 #[test]

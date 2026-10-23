@@ -14,6 +14,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -343,6 +344,107 @@ fn a_slow_start_of_one_session_does_not_block_another() {
     );
     drop(release_tx);
     slow.join().unwrap();
+}
+
+#[test]
+fn a_rewind_in_flight_is_stopped_and_refused_when_the_store_lands() {
+    // The sessions stop lands while the new session's start is held at
+    // the starter: the refuse kills the started session, exactly once.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let inner = FakeStarter::hang(&temp.dir);
+    let starter = GateStarter {
+        inner: inner.clone(),
+        held: SessionId(next.clone()),
+        entered: entered_tx,
+        release: Mutex::new(Some(release)),
+    };
+    let hub = temp.hub(starter);
+    let finished = thread::Builder::new()
+        .name("hub-test-rewind-stop".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let (from, next) = (from.clone(), next.clone());
+            move || reach(&hub, &SessionId(from), &SessionId(next))
+        })
+        .unwrap();
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the rewind reaches the starter"
+    );
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 1);
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    drop(release_tx);
+    let Err(refused) = finished.join().expect("the rewind answers") else {
+        panic!("the rewind in flight is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+    // The refused bind kills the session it started.
+    assert_eq!(inner.kills(), [SessionId(next)]);
+}
+
+#[test]
+fn a_rewind_after_the_store_is_refused_at_entry() {
+    let temp = Temp::new();
+    let inner = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub(inner.clone());
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    // Admitted after the store: refused at once, the starter never run.
+    let Err(refused) = reach(&hub, &SessionId(id(1)), &SessionId(id(2))) else {
+        panic!("the rewind after the store is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert!(inner.rewound().is_empty(), "the starter never ran");
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
+#[test]
+fn a_rewind_passes_the_nested_stopping_refusal_through() {
+    // The new session is logged, so the reach resumes it: the nested
+    // resume admits while the test holds the resume gate, then refuses
+    // once the store lands, and the refusal passes through unchanged.
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &next, &workspace, None, &[]);
+    let inner = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub(inner.clone());
+    let _gate = support::lock(&hub.resume_gate);
+    let finished = thread::Builder::new()
+        .name("hub-test-rewind-nested".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let (from, next) = (from.clone(), next.clone());
+            move || reach(&hub, &SessionId(from), &SessionId(next))
+        })
+        .unwrap();
+    // The nested resume admitted behind the reach: two binds in flight.
+    crate::testkit::await_true("the nested resume admits", {
+        let hub = Arc::clone(&hub);
+        move || hub.inflight_binds.load(Ordering::SeqCst) == 2
+    });
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    drop(_gate);
+    let Err(refused) = finished.join().expect("the rewind answers") else {
+        panic!("the nested refusal passes through");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    // The nested resume refused on its loop re-check, before any
+    // starter call: neither resume nor rewind ran, and the base
+    // wording never appears.
+    assert!(inner.resumed().is_empty(), "the nested resume never binds");
+    assert!(inner.rewound().is_empty(), "the reach resumed, not rewound");
+    assert!(inner.kills().is_empty(), "nothing started, nothing killed");
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
 }
 
 /// A starter that fails every `rewind` with `message` as its io error text.

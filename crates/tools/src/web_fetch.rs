@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
@@ -24,18 +23,19 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
-use crate::tool_util::{failed, text_output};
+use crate::error::WebFetchError;
+use crate::tool_util::{errored, text_output};
 use download::{Artifact, Html, Sink, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
 
 /// The most a body may hold: a download past it fails `too_large`.
-const MAX_BODY: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_BODY: u64 = 10 * 1024 * 1024;
 
 /// How much of an error response's body the failure message keeps.
 const ERROR_BODY: u64 = 2048;
 
 /// How many redirects are followed; the next one fails.
-const MAX_REDIRECTS: u32 = 10;
+pub(crate) const MAX_REDIRECTS: u32 = 10;
 
 /// How long one request may take, and how long the whole fetch.
 const REQUEST_LIMIT: Duration = Duration::from_secs(60);
@@ -139,13 +139,13 @@ impl Tool for WebFetch {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let args: Args = match crate::tool_util::arguments(arguments) {
+        let args: Args = match crate::tool_util::parsed(arguments) {
             Ok(args) => args,
-            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+            Err(error) => return errored(WebFetchError::from(error)),
         };
-        match target::parse(&args.url) {
+        match target::checked(&args.url) {
             Ok(uri) => self.fetch(uri, cancel),
-            Err(message) => failed(ErrorCode::InvalidArguments, message),
+            Err(error) => errored(WebFetchError::from(error)),
         }
     }
 }
@@ -201,31 +201,30 @@ impl WebFetch {
             match reply {
                 Ok(Reply::Redirect(location)) => {
                     if redirects == MAX_REDIRECTS {
-                        return failed(
-                            ErrorCode::HttpError,
-                            format!("more than {MAX_REDIRECTS} redirects, the last from {uri}."),
-                        );
+                        return errored(WebFetchError::TooManyRedirects {
+                            last: uri.to_string(),
+                        });
                     }
                     redirects += 1;
-                    match target::parse(&target::join(&uri, &location)) {
+                    match target::checked(&target::join(&uri, &location)) {
                         Ok(next) => uri = next,
-                        Err(why) => {
-                            return failed(
-                                ErrorCode::HttpError,
-                                format!("{uri} redirected to `{location}`: {why}"),
-                            );
+                        Err(source) => {
+                            return errored(WebFetchError::BadRedirect {
+                                from: uri.to_string(),
+                                location,
+                                source,
+                            });
                         }
                     }
                 }
                 Ok(Reply::Page(head, body)) => return self.page(&uri, &head, body),
-                Ok(Reply::Refused(head, bytes)) => return refused(&uri, &head, &bytes),
+                Ok(Reply::Refused(head, bytes)) => {
+                    return errored(refused(&uri, &head, &bytes));
+                }
                 Err(Ended::Stopped(stop)) => return stopped_output(&uri, stop),
-                Err(Ended::Failed(output)) => return *output,
-                Err(Ended::NoWatcher(error)) => {
-                    return failed(
-                        ErrorCode::ToolError,
-                        format!("could not start the fetch's watcher: {error}."),
-                    );
+                Err(Ended::Failed(error)) => return errored(error),
+                Err(Ended::NoWatcher(source)) => {
+                    return errored(WebFetchError::NoWatcher { source });
                 }
             }
         }
@@ -238,10 +237,10 @@ impl WebFetch {
         hop: &Arc<Hop>,
         uri: &Uri,
         proxy: Option<&ureq::Proxy>,
-    ) -> Result<Reply, Box<Output>> {
+    ) -> Result<Reply, WebFetchError> {
         let (host, port) = target::host_and_port(uri);
         if target::blocked_name(&host) {
-            return Err(Box::new(blocked(&host)));
+            return Err(blocked(&host));
         }
         let via_proxy = proxy.is_some_and(|proxy| !proxy.is_no_proxy(uri));
         // debt: a name lookup blocked in the OS is not interruptible; a stop
@@ -252,24 +251,16 @@ impl WebFetch {
             // The proxy resolves the target; only an address found here can
             // refuse it.
             Err(_) if via_proxy => Vec::new(),
-            Err(error) => {
-                return Err(Box::new(failed(
-                    ErrorCode::ConnectionFailed,
-                    format!("could not resolve {host}: {error}."),
-                )));
-            }
+            Err(source) => return Err(WebFetchError::Unresolved { host, source }),
         };
         if addresses
             .iter()
             .any(|address| target::blocked_addr(address.ip()))
         {
-            return Err(Box::new(blocked(&host)));
+            return Err(blocked(&host));
         }
         if addresses.is_empty() && !via_proxy {
-            return Err(Box::new(failed(
-                ErrorCode::ConnectionFailed,
-                format!("{host} resolved to no address."),
-            )));
+            return Err(WebFetchError::NoAddress { host });
         }
         let request = Get {
             uri,
@@ -278,11 +269,9 @@ impl WebFetch {
         };
         let stopped = || hop.stopped().is_some();
         hop.get(&request, |head, body| self.read_reply(head, body, &stopped))
-            .map_err(|message| {
-                Box::new(failed(
-                    ErrorCode::ConnectionFailed,
-                    format!("could not fetch {uri}: {message}."),
-                ))
+            .map_err(|message| WebFetchError::NotFetched {
+                uri: uri.to_string(),
+                message,
             })
     }
 
@@ -298,10 +287,9 @@ impl WebFetch {
             | Body::Unsupported { length } => *length,
         };
         if length > MAX_BODY {
-            return failed(
-                ErrorCode::TooLarge,
-                format!("{uri} is larger than 10 MiB ({MAX_BODY} bytes); nothing was kept."),
-            );
+            return errored(WebFetchError::TooLarge {
+                uri: uri.to_string(),
+            });
         }
         let first = format!(
             "{uri} {} {}",
@@ -315,7 +303,7 @@ impl WebFetch {
                     markdown.insert_str(0, &format!("{first}; raw page at {path}\n\n"));
                     text_output(markdown)
                 }
-                Err(message) => failed(ErrorCode::ToolError, message),
+                Err(error) => errored(error),
             },
             Body::Text(bytes) => {
                 let mut text = String::from_utf8(bytes).unwrap_or_else(|invalid| {
@@ -328,17 +316,19 @@ impl WebFetch {
                 Ok(path) => text_output(format!(
                     "{first}\n\nSaved to {path} ({length} bytes). Read it with `read`.\n"
                 )),
-                Err(message) => failed(ErrorCode::ToolError, message),
+                Err(error) => errored(error),
             },
-            Body::Unsupported { length } => failed(
-                ErrorCode::UnsupportedFile,
-                format!(
-                    "{uri} is {}, which `web_fetch` cannot read ({length} bytes).",
-                    head.content_type
-                        .as_deref()
-                        .map_or("of no content type".to_owned(), |ty| format!("`{ty}`"))
-                ),
-            ),
+            Body::Unsupported { length } => errored(match head.content_type.as_deref() {
+                Some(content_type) => WebFetchError::UnsupportedType {
+                    uri: uri.to_string(),
+                    content_type: content_type.to_owned(),
+                    length,
+                },
+                None => WebFetchError::NoContentType {
+                    uri: uri.to_string(),
+                    length,
+                },
+            }),
         }
     }
 
@@ -454,40 +444,31 @@ fn read_up_to(body: &mut dyn Read, limit: u64, hint: Option<u64>) -> io::Result<
     Ok(bytes)
 }
 
-fn refused(uri: &Uri, head: &Head, bytes: &[u8]) -> Output {
+fn refused(uri: &Uri, head: &Head, bytes: &[u8]) -> WebFetchError {
     let text = String::from_utf8_lossy(bytes);
     let cut = text.floor_char_boundary(usize::try_from(ERROR_BODY).unwrap_or(usize::MAX));
-    failed(
-        ErrorCode::HttpError,
-        format!(
-            "HTTP {} from {uri}. The body begins:\n{}",
-            head.status,
-            text.get(..cut).unwrap_or_default()
-        ),
-    )
+    WebFetchError::Refused {
+        status: head.status,
+        uri: uri.to_string(),
+        body: text.get(..cut).unwrap_or_default().to_owned(),
+    }
 }
 
-fn blocked(host: &str) -> Output {
-    failed(
-        ErrorCode::BlockedHost,
-        format!(
-            "`{host}` is a link-local address or a cloud metadata host, which `web_fetch` \
-             does not reach."
-        ),
-    )
+fn blocked(host: &str) -> WebFetchError {
+    WebFetchError::Blocked {
+        host: host.to_owned(),
+    }
 }
 
 fn stopped_output(uri: &Uri, stop: Stop) -> Output {
     match stop {
         Stop::Cancelled => text_output("Cancelled and stopped.\n".to_owned()),
-        Stop::Timeout(Limit::Request) => failed(
-            ErrorCode::Timeout,
-            format!("{uri}: the request took over 60 seconds."),
-        ),
-        Stop::Timeout(Limit::Fetch) => failed(
-            ErrorCode::Timeout,
-            format!("{uri}: the fetch took over 5 minutes."),
-        ),
+        Stop::Timeout(Limit::Request) => errored(WebFetchError::RequestTimeout {
+            uri: uri.to_string(),
+        }),
+        Stop::Timeout(Limit::Fetch) => errored(WebFetchError::FetchTimeout {
+            uri: uri.to_string(),
+        }),
     }
 }
 
