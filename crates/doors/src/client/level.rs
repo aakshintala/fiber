@@ -14,6 +14,7 @@ use contract::inbox::Delivery;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use log::Injector;
 
+use super::writer::{Flight, write_counted};
 use super::{Conn, control_line, reject};
 
 /// The control kind the reader pushes to switch its writer: never written
@@ -240,11 +241,13 @@ pub(super) fn change(
 /// response, then writes it before the prelude snapshots; installs the
 /// new watcher, level and cutoff. With no switch pending it changes
 /// nothing. A failed write, a cancelled response, or the old watcher
-/// ending during the drain, is returned as an error.
+/// ending during the drain, is returned as an error. The response and the
+/// prelude are acknowledgements: they are marked answered through `flight`.
 pub(super) fn apply(
     writing: &mut Writing,
     switches: &mpsc::Receiver<Switch>,
     stream: &mut dyn Write,
+    flight: Option<&Flight>,
 ) -> std::io::Result<()> {
     let switch = match switches.try_recv() {
         Ok(switch) => switch,
@@ -290,11 +293,11 @@ pub(super) fn apply(
             .recv()
             .map_err(|_| std::io::Error::other("the switch's response was cancelled"))?;
         for line in &settled {
-            super::write_line(stream, line)?;
+            write_counted(stream, line, flight)?;
         }
     }
     for line in &switch.prelude {
-        super::write_line(stream, line)?;
+        write_counted(stream, line, flight)?;
     }
     writing.watcher = switch.watcher;
     writing.summary = switch.summary;

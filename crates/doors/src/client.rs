@@ -6,6 +6,8 @@ mod level;
 mod writer;
 
 #[cfg(test)]
+pub(crate) use writer::Flight;
+#[cfg(test)]
 pub(crate) use writer::write_loop;
 pub(crate) use writer::{Prelude, STOP, control_line, spawn_writer, write_line};
 

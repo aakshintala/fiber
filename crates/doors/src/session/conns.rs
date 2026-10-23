@@ -1,19 +1,31 @@
 //! Owns the live connection registry and the waits used to shut it down.
 
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
 use std::sync::PoisonError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use super::lock;
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::thread::{self, JoinHandle, ThreadId};
+use std::time::{Duration, Instant};
 
+use contract::SessionId;
 use contract::clock::Clock;
 
 // debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
 /// How long [`super::Session::close`] waits for a connection's writer to finish
 /// before it shuts the socket.
 pub(super) const GRACE: Duration = Duration::from_secs(2);
+
+// debt: 250 ms is picked, not measured; the measured time a cut writer takes to flush its `indeterminate` lines would set it.
+/// How long [`super::Session::close`] waits, after the grace, for the writers
+/// it cut to write their lines before it shuts the sockets.
+pub(super) const CUT_FLUSH: Duration = Duration::from_millis(250);
+
+/// A control line that tells a writer the grace passed: never written to
+/// the client.
+pub(crate) const CUT: &str = "doors.cut";
 
 /// The live connections, how many writers are open, and the next connection id.
 pub(crate) struct Conns {
@@ -32,9 +44,46 @@ pub(crate) struct State {
 
 struct Live {
     reader: Option<JoinHandle<()>>,
+    /// The reader's thread, to tell `reap` from the reader itself.
+    reader_thread: ThreadId,
     writer: Option<JoinHandle<()>>,
-    /// The stored closure: it stops the reader and shuts the socket.
-    shutdown: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Stops the reader and shuts the socket. [`Conns::quiet_readers`]
+    /// drops it to stop the reader and leave the socket open.
+    ender: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Shuts the socket and stops nothing: what shuts it once the ender is
+    /// gone.
+    shut: Box<dyn Fn() + Send + Sync>,
+    /// Pushes into the queue the connection's writer is reading, once it
+    /// registered.
+    wake: Option<log::Injector>,
+    /// The close grace passed: the writer answers what it holds
+    /// `indeterminate` and ends.
+    cut: bool,
+    /// The reader returned from its work, while the gate was stopped.
+    finished: bool,
+}
+
+impl Live {
+    /// Shuts the socket, through the ender while it is still there.
+    fn shut_now(&self) {
+        match self.ender.as_ref() {
+            Some(ender) => ender(),
+            None => (self.shut)(),
+        }
+    }
+}
+
+/// The closure that shuts `stream` and stops nothing.
+pub(crate) fn shutter(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
+    Box::new(move || {
+        #[cfg(test)]
+        if crate::session::shutdown_skipped_for_test() {
+            return;
+        }
+        match stream.shutdown(Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+    })
 }
 
 impl Conns {
@@ -50,8 +99,7 @@ impl Conns {
         }
     }
 
-    pub(super) fn wait_writers(&self, clock: &dyn Clock) {
-        let until = clock.now() + GRACE;
+    pub(super) fn wait_writers(&self, clock: &dyn Clock, until: Instant) {
         let mut state = lock(&self.state);
         while should_wait(state.writers_open, clock.now(), until) {
             // The guard is held into the condvar wait; `None` relocks.
@@ -60,19 +108,43 @@ impl Conns {
         }
     }
 
-    pub(super) fn join_clients(&self) {
+    /// Ends the connections: shuts every socket, waits until `until` for each
+    /// reader to return, then reaps them outside the lock. A reader still
+    /// inside a command then is detached, not joined, and counted in the
+    /// result: its line was answered by the cut, and the thread ends with
+    /// the process.
+    pub(super) fn join_clients(&self, clock: &dyn Clock, until: Instant) -> usize {
         let live = {
             let mut state = lock(&self.state);
+            for (_, live) in &state.live {
+                live.shut_now();
+            }
+            let me = thread::current().id();
+            while clock.now() < until
+                && state
+                    .live
+                    .iter()
+                    .any(|(_, live)| !live.finished && live.reader_thread != me)
+            {
+                state =
+                    support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)
+                        .unwrap_or_else(|| lock(&self.state));
+            }
             std::mem::take(&mut state.live)
         };
+        let mut detached = 0;
         for (_, live) in live {
-            reap(live);
+            if reap(live) {
+                detached += 1;
+            }
         }
+        detached
     }
 
-    /// Records `handle` and `shutdown` together, and returns the id `serve`
-    /// finishes the connection with. `close` joins the reader; the stored
-    /// closure stops the reader and shuts the socket. A published connection never lacks one. The
+    /// Records `handle`, `ender` and `shut` together, and returns the id
+    /// `serve` finishes the connection with. `close` joins the reader; the
+    /// ender stops the reader and shuts the socket, and `shut` shuts it
+    /// once the ender is gone. A published connection never lacks them. The
     /// stopped check and the publication share the connection lock with
     /// [`Conns::mark_stopped`] and [`Conns::join_clients`], so a reader
     /// admitted after the stop is rejected: its stream is shut down and
@@ -80,12 +152,13 @@ impl Conns {
     pub(crate) fn push_reader(
         &self,
         handle: JoinHandle<()>,
-        shutdown: Box<dyn Fn() + Send + Sync>,
+        ender: Box<dyn Fn() + Send + Sync>,
+        shut: Box<dyn Fn() + Send + Sync>,
     ) -> Result<u64, JoinHandle<()>> {
         let mut state = lock(&self.state);
         if self.stop.load(Ordering::Relaxed) {
             drop(state);
-            shutdown();
+            ender();
             return Err(handle);
         }
         let id = state.next;
@@ -93,9 +166,14 @@ impl Conns {
         state.live.push((
             id,
             Live {
+                reader_thread: handle.thread().id(),
                 reader: Some(handle),
                 writer: None,
-                shutdown: Some(shutdown),
+                ender: Some(ender),
+                shut,
+                wake: None,
+                cut: false,
+                finished: false,
             },
         ));
         Ok(id)
@@ -111,12 +189,29 @@ impl Conns {
     }
 
     /// Drops this connection's socket and joins its writer. The reader calls
-    /// it as it exits.
+    /// it as it exits. While the gate is stopped the entry stays, marked
+    /// finished: its writer may still be writing answers, and
+    /// [`Conns::join_clients`] reaps it after the writers are done.
     pub(crate) fn finish(&self, id: u64) {
         let taken = {
             let mut state = lock(&self.state);
             let pos = state.live.iter().position(|(slot, _)| *slot == id);
-            pos.map(|pos| state.live.swap_remove(pos).1)
+            if self.stopped() {
+                if let Some(pos) = pos
+                    && let Some((_, live)) = state.live.get_mut(pos)
+                {
+                    live.finished = true;
+                }
+                None
+            } else {
+                // The reader is the caller, or returned already (the accept
+                // thread finishes a connection whose reader never started).
+                pos.map(|pos| {
+                    let mut live = state.live.swap_remove(pos).1;
+                    live.finished = true;
+                    live
+                })
+            }
         };
         if let Some(live) = taken {
             reap(live);
@@ -127,19 +222,56 @@ impl Conns {
         self.writers.notify_all();
     }
 
-    /// Runs the live connection's stored closure, if any,
-    /// without removing its entry: it stops the reader and shuts the
-    /// socket, so the reader runs its normal cleanup, and the client sees
-    /// EOF. Runs under the connection lock
-    /// and never joins (`docs/code-quality.md`, "Threads"): a writer
-    /// whose watcher failed calls it from the writer thread, while the
-    /// reader reaps that thread.
+    /// Shuts the live connection's socket, if any, without removing its
+    /// entry: it stops the reader while the ender is there, so the reader
+    /// runs its normal cleanup, and the client sees EOF. Runs under the
+    /// connection lock and never joins (`docs/code-quality.md`, "Threads"):
+    /// a writer whose watcher failed calls it from the writer thread, while
+    /// the reader reaps that thread.
     pub(crate) fn shut(&self, id: u64) {
         let state = lock(&self.state);
-        if let Some((_, live)) = state.live.iter().find(|(slot, _)| *slot == id)
-            && let Some(shutdown) = live.shutdown.as_ref()
-        {
-            shutdown();
+        if let Some((_, live)) = state.live.iter().find(|(slot, _)| *slot == id) {
+            live.shut_now();
+        }
+    }
+
+    /// Stops every reader from reading its next line, and leaves the
+    /// sockets open: a reader finishes the line it is dispatching, and
+    /// answers it, then ends. The ender is dropped without being called,
+    /// and dropping the reader's `Stop` stops its read
+    /// (`support::stoppable`). Never joins.
+    pub(super) fn quiet_readers(&self) {
+        let mut state = lock(&self.state);
+        for (_, live) in &mut state.live {
+            drop(live.ender.take());
+        }
+    }
+
+    /// Registers `wake`, the injector of the queue connection `conn`'s writer
+    /// reads, and says whether the connection was cut. One hold of the
+    /// connection lock, which [`Conns::cut_all`] also takes to set the flag
+    /// and push the control line, so a writer never waits on a queue after
+    /// a cut it has not seen. A connection no longer here counts as cut.
+    pub(crate) fn register_wake(&self, conn: u64, wake: log::Injector) -> bool {
+        let mut state = lock(&self.state);
+        match state.live.iter_mut().find(|(slot, _)| *slot == conn) {
+            Some((_, live)) => {
+                live.wake = Some(wake);
+                live.cut
+            }
+            None => true,
+        }
+    }
+
+    /// The grace passed: marks every live connection cut and wakes its
+    /// writer, which answers what it holds `indeterminate` and ends.
+    pub(super) fn cut_all(&self, session: &SessionId) {
+        let mut state = lock(&self.state);
+        for (_, live) in &mut state.live {
+            live.cut = true;
+            if let Some(wake) = &live.wake {
+                wake.push_kept(crate::client::control_line(session, CUT, 0));
+            }
         }
     }
 
@@ -237,18 +369,18 @@ impl State {
         self.live.iter().any(|(slot, _)| *slot == id)
     }
 
-    /// Some live connection keeps its reader, its writer and its shutdown.
+    /// Some live connection keeps its reader, its writer and its ender.
     pub(crate) fn has_full_entry(&self) -> bool {
-        self.live.iter().any(|(_, live)| {
-            live.reader.is_some() && live.writer.is_some() && live.shutdown.is_some()
-        })
+        self.live
+            .iter()
+            .any(|(_, live)| live.reader.is_some() && live.writer.is_some() && live.ender.is_some())
     }
 
-    /// Some live connection keeps its reader and its shutdown.
+    /// Some live connection keeps its reader and its ender.
     pub(crate) fn has_reader_shutdown(&self) -> bool {
         self.live
             .iter()
-            .any(|(_, live)| live.reader.is_some() && live.shutdown.is_some())
+            .any(|(_, live)| live.reader.is_some() && live.ender.is_some())
     }
 }
 
@@ -271,21 +403,26 @@ pub(super) fn should_wait(
     }
 }
 
-/// Stops the reader and shuts the socket through the stored closure, then
-/// joins the threads still running on it.
-/// A reader reaping itself detaches its own handle; joining it would deadlock.
-fn reap(live: Live) {
-    if let Some(shutdown) = live.shutdown {
-        shutdown();
-    }
+/// Shuts the socket, joins the writer, and joins the reader once it
+/// returned. A reader reaping itself detaches its own handle; joining it
+/// would deadlock. A reader still inside a command is detached too, and
+/// the result says so: it is `true` only for that case.
+fn reap(live: Live) -> bool {
+    live.shut_now();
     if let Some(writer) = live.writer {
         super::join(writer);
     }
-    if let Some(reader) = live.reader {
-        if reader.thread().id() == thread::current().id() {
-            drop(reader);
-        } else {
-            super::join(reader);
-        }
+    let Some(reader) = live.reader else {
+        return false;
+    };
+    if reader.thread().id() == thread::current().id() {
+        drop(reader);
+        false
+    } else if live.finished {
+        super::join(reader);
+        false
+    } else {
+        drop(reader);
+        true
     }
 }

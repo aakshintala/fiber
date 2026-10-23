@@ -27,6 +27,7 @@ use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
+use log::diag::{Diag, Level, Process, Severity};
 use log::{Injector, Log, Watcher};
 
 mod accept;
@@ -38,10 +39,11 @@ mod event;
 mod shells;
 use accept::accept_loop;
 use accepted::Accepted;
+pub(crate) use accepted::Answered;
 use clients::Clients as ClientCounts;
+pub(crate) use conns::CUT;
 use conns::Conns;
-#[cfg(test)]
-use conns::GRACE;
+use conns::{CUT_FLUSH, GRACE};
 pub(crate) use event::envelope;
 use shells::Shells;
 pub(crate) use shells::Stopped;
@@ -636,30 +638,46 @@ impl Session {
         self.gate.wait_shells();
     }
 
-    /// Ends the door side: marks the gate stopped, unlinks the socket,
-    /// drops `log`
-    /// (the last handle, which releases the lock), waits up to [`conns::GRACE`] for
-    /// each writer, then shuts down whatever is still open. Every driver
-    /// shell is cancelled first, since shutting its socket does not stop the
-    /// tool, and waited for: its thread is not joined, and its answer is
-    /// queued before it ends. The accept thread is detached, never joined
-    /// and never woken: a wake would take a blocking `UnixStream::connect`,
-    /// which on Linux blocks forever when a replacement listener's backlog
-    /// is full, and when the path is gone, or was rebound by another
-    /// listener, nothing can wake this session's `accept`, so a join would
-    /// block forever; process exit ends the thread. A connection the loop
-    /// admits after the stop is rejected, not served: the stopped check and
-    /// the reader's publication share the connection lock, so a late
-    /// reader's stream is shut down and its thread ends instead of leaking.
-    /// A reader can still admit one until it is
-    /// joined; that shell starts cancelled and is waited for once no reader
-    /// is left, though its answer may reach no writer.
+    /// Ends the door side, in this order. It cancels every driver shell and
+    /// waits for each, since shutting its socket does not stop the tool; the
+    /// shell's thread is not joined, and its answer is queued before it
+    /// ends. It marks the gate stopped, then stops every reader from reading
+    /// another line (a reader finishes and answers the line it is
+    /// dispatching, and a line already in its buffer is still dispatched),
+    /// and unlinks the socket. It ends every watcher's stream with
+    /// `log.end_watchers()`, which keeps the lock, then drops `log`. Every
+    /// line a reader read gets exactly one answer on its connection: its
+    /// own, or `indeterminate` when [`conns::GRACE`] passes first. At the
+    /// grace each writer that still waits is cut, and [`conns::CUT_FLUSH`]
+    /// more lets it write its lines before the sockets are shut. The
+    /// readers are joined only up to the grace: a reader still inside a
+    /// command then is detached, since its line was answered, and process
+    /// exit ends it. One `timeout` line in the session's diagnostic log
+    /// (`docs/state.md`, "What each part holds") names each connection the
+    /// close stopped waiting for. The accept thread is detached, never
+    /// joined and never woken: a wake would take a blocking
+    /// `UnixStream::connect`, which on Linux blocks forever when a
+    /// replacement listener's backlog is full, and when the path is gone,
+    /// or was rebound by another listener, nothing can wake this session's
+    /// `accept`, so a join would block forever; process exit ends the
+    /// thread. A connection the loop admits after the stop is rejected, not
+    /// served: the stopped check and the reader's publication share the
+    /// connection lock, so a late reader's stream is shut down and its
+    /// thread ends instead of leaking. A reader can still admit a shell
+    /// from a line already in its buffer when the readers were stopped;
+    /// that shell starts cancelled, its answer is written before its writer
+    /// ends or the line is cut `indeterminate` at the grace, and the second
+    /// `wait_shells` waits for it.
     pub fn close(self, log: Arc<Log>) {
         self.gate.cancel_shells();
         self.gate.wait_shells();
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.conns.mark_stopped();
+        // A reader that stops detaches its connection: no `clients` line
+        // follows the shutdown, as after `quiesce`.
+        self.gate.clients.seal();
+        self.gate.conns.quiet_readers();
         // The inbox sender is dropped here, so a kept receiver sees
         // `Disconnected`: the detached accept thread keeps its own `Arc`
         // until process exit and can no longer be relied on to release it.
@@ -672,9 +690,19 @@ impl Session {
         if !prompted(&self.dir) {
             fs::remove_dir_all(&self.dir).unwrap_or(());
         }
+        // A process that keeps its own `Arc<Log>` until it exits never drops
+        // the last one, so the writers' end comes from here.
+        log.end_watchers();
         drop(log);
-        self.gate.conns.wait_writers(self.gate.clock.as_ref());
-        self.gate.conns.join_clients();
+        let clock = self.gate.clock.as_ref();
+        let until = clock.now() + GRACE;
+        self.gate.conns.wait_writers(clock, until);
+        self.gate.conns.cut_all(&self.gate.session_id);
+        self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
+        let detached = self.gate.conns.join_clients(clock, until);
+        for _ in 0..detached {
+            self.stopped_waiting();
+        }
         self.gate.wait_shells();
         // The printer's watcher returns only on a `client::STOP` line or
         // the log's end: with nothing written and another `Arc<Log>` still
@@ -685,6 +713,24 @@ impl Session {
         #[cfg(test)]
         self.gate.note(tests::Probe::PrinterStopQueued);
         join(self.printer);
+    }
+
+    /// One `warn` line in the session's diagnostic log: the close stopped
+    /// waiting for a command still running at the grace.
+    fn stopped_waiting(&self) {
+        let diag = Diag::new(
+            &self.gate.home,
+            Process::Session,
+            Level::Info,
+            Arc::clone(&self.gate.clock),
+        );
+        diag.attach(&self.gate.session_id);
+        diag.line(
+            Severity::Warn,
+            None,
+            "timeout",
+            "A command was still running when the session closed; it was answered indeterminate and the session stopped waiting for it.",
+        );
     }
 
     fn start_accept(&self) -> Result<(), Failure> {
