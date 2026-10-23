@@ -5,7 +5,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::process::ExitStatus;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use contract::JobId;
@@ -565,9 +565,7 @@ pub(super) fn align_char_boundary(slice: &[u8]) -> &[u8] {
     slice.get(start..).unwrap_or_default()
 }
 
-pub(super) fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
-}
+pub(super) use support::lock;
 
 #[cfg(test)]
 #[path = "output_tests.rs"]

@@ -11,8 +11,6 @@
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
-#[cfg(test)]
-use std::sync::PoisonError;
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, Instant};
 
@@ -297,7 +295,7 @@ type CleanupPause = Option<(u32, mpsc::Sender<()>, mpsc::Receiver<()>)>;
 /// group's kill and blocks until `release` arrives. The pause is one-shot.
 #[cfg(test)]
 fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
-    *CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((pgid, entered, release));
+    *support::lock(&CLEANUP_PAUSE) = Some((pgid, entered, release));
 }
 
 /// Reports the worker sent the group's kill and blocks until the test
@@ -306,7 +304,7 @@ fn arm_cleanup_pause(pgid: u32, entered: mpsc::Sender<()>, release: mpsc::Receiv
 #[cfg(test)]
 fn cleanup_pause(id: u32) {
     let point = {
-        let mut paused = CLEANUP_PAUSE.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut paused = support::lock(&CLEANUP_PAUSE);
         match paused.as_ref() {
             Some((pgid, _, _)) if *pgid == id => paused.take(),
             Some(_) | None => None,

@@ -19,7 +19,7 @@ use std::io;
 use std::os::unix::io::AsFd as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -202,7 +202,7 @@ pub(crate) struct PipeWake {
 
 impl Wake for PipeWake {
     fn wake(&self) {
-        let write = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        let write = support::lock(&self.write);
         rustix::io::write(write.as_fd(), b"x").unwrap_or(0);
     }
 }
