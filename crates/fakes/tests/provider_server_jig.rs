@@ -12,7 +12,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
 use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc;
@@ -24,16 +24,23 @@ use fakes::Deadline;
 #[path = "support/provider_server.rs"]
 mod support;
 
-/// The deadline on each wait: the jig printing its address, the client's
-/// exchange, and the jig printing the request. A stall fails naming the
-/// wait (`docs/testing.md`, "Waits and timeouts").
+/// The deadline on each wait: the jig's exchange, the jig printing the
+/// request, and the jig's exit. A stall fails naming the wait
+/// (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// How long the jig may take to print its listening line, process start
-/// included: the first exec of a freshly linked binary can stall under
-/// load. This is the bound `crates/loop/tests/review_jig.rs` gives a built
-/// binary's first start. The exchange after the line keeps [`DEADLINE`].
+/// included. The first exec of a freshly linked binary can stall under load,
+/// past [`DEADLINE`], so the line gets this bound. This is the bound
+/// `crates/loop/tests/review_jig.rs` gives a built binary's first start. The
+/// exchange after the line keeps [`DEADLINE`].
 const START_BOUND: Duration = Duration::from_secs(30);
+
+const _: () = assert!(START_BOUND.as_secs() > DEADLINE.as_secs());
+
+/// The signal the watchdog's group kill sends, the same on Linux and macOS.
+/// No jig signals itself, so a jig that dies of it was still running.
+const SIGKILL: i32 = 9;
 
 /// The example `cargo test` built beside this test binary
 /// (`target/<profile>/examples/provider-server`), so the test starts no
@@ -118,54 +125,62 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     serve_one_fixture(command);
 }
 
-/// The reported flake: the built binary's first start outlasts the wait for
-/// its listening line. `/bin/sh` holds the jig on a FIFO until the test
-/// releases it. The release comes after the old bound, so the wait for the
-/// line expires first.
+/// The listening wait takes [`START_BOUND`]. Its one statement is found in
+/// this file's source; a wait on [`DEADLINE`] instead leaves the count at
+/// zero. The needle is split so this test's own text does not match it.
 #[test]
-fn a_slow_process_start_still_prints_the_listening_line() {
-    let dir = fakes::TempDir::new("provider-server-jig");
-    let fixture = dir.path().join("reply.sse");
-    std::fs::write(&fixture, "data: hi\n\n").unwrap();
-    let gate = dir.path().join("start");
-    fakes::fifo(&gate);
-    let mut command = Command::new("/bin/sh");
-    command
-        .arg("-c")
-        .arg("read line < \"$0\"; exec \"$@\"")
-        .arg(&gate)
-        .arg(example_path())
-        .arg(&fixture);
-    // The deadline is made here, before the jig starts, so the release
-    // follows the listening wait's own bound. The sender stays alive, so the
-    // receive ends at the deadline and not at a disconnect.
-    let hold = Deadline::after(fakes::MUST_SUCCEED_WITHIN + Duration::from_secs(1));
-    thread::spawn(move || {
-        let (_keep, never) = mpsc::channel::<()>();
-        match hold.recv(&never) {
-            Ok(()) | Err(_) => {}
-        }
-        let mut release = std::fs::OpenOptions::new().write(true).open(&gate).unwrap();
-        release.write_all(b"go\n").unwrap();
-    });
-    serve_one_fixture(command);
+fn the_listening_wait_takes_the_start_bound() {
+    let source = include_str!("provider_server_jig.rs");
+    let wait = concat!("Deadline::after(", "START_BOUND).recv(&rx)");
+    assert_eq!(source.matches(wait).count(), 1);
 }
 
-/// A jig that exits before its line fails the listening wait at once, and
-/// the failure names the stderr it wrote. The child exits, so its output is
-/// in the pipe before the wait fails: no timing decides the expected text.
+/// A jig that exits before its line fails the listening wait at once. The
+/// failure names the exit status and the stderr the jig wrote.
 #[test]
-#[should_panic(expected = "its stderr: boom")]
-fn a_jig_that_exits_before_its_line_names_its_stderr() {
+fn a_jig_that_exits_before_its_line_names_its_status_and_stderr() {
     let mut command = Command::new("/bin/sh");
     command.arg("-c").arg("echo boom >&2");
-    serve_one_fixture(command);
+    let message = failure_message(command);
+    assert!(
+        message.contains("its state: exited, exit status: 0\n"),
+        "{message}"
+    );
+    assert!(message.contains("its stderr: boom\n"), "{message}");
+}
+
+/// A jig that never prints its line and never exits on its own: `read`
+/// blocks on the standard input the harness holds open. The listening wait
+/// expires at its bound, the group kill ends the jig, and the failure says
+/// it was still running.
+#[test]
+fn a_jig_still_running_at_its_line_bound_is_reported_as_running() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("read line");
+    let message = failure_message(command);
+    assert!(
+        message.contains("its state: still running at its deadline\n"),
+        "{message}"
+    );
+}
+
+/// The panic message of a jig that fails [`serve_one_fixture`].
+fn failure_message(command: Command) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        serve_one_fixture(command);
+    }))
+    .expect_err("the jig's listening wait should fail");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("a formatted panic message")
 }
 
 /// Starts the jig through `command`, which runs it with its fixture, then
 /// checks one exchange and the request the jig printed.
 fn serve_one_fixture(mut command: Command) {
     let mut child = command
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
@@ -173,31 +188,45 @@ fn serve_one_fixture(mut command: Command) {
         .unwrap();
     // The child is in its own process group, so dropping this kills the
     // group and never the test's own; no pid or `pkill` names it.
-    let watchdog = fakes::Watchdog::group(child.id());
+    let mut watchdog = Some(fakes::Watchdog::group(child.id()));
     let (tx, rx) = mpsc::channel();
     spawn_reader(child.stdout.take().unwrap(), tx);
+    // Held until the function returns, so a jig that reads its standard
+    // input blocks until the group kill, not until end-of-file.
+    let _stdin = child.stdin.take();
+    // One thread reaps the child and reads its stderr to end-of-file, so
+    // the failure path and the success path take the same result.
     let mut stderr = child.stderr.take().unwrap();
-
-    let printed = match Deadline::after(START_BOUND).recv(&rx) {
-        Ok(printed) => printed,
-        Err(err) => {
-            // The group kill closes the jig's stderr, so its read ends.
-            drop(watchdog);
-            let errors = fakes::within(
-                "the killed jig's stderr",
-                Deadline::after(DEADLINE),
-                move || {
-                    let mut text = String::new();
-                    stderr.read_to_string(&mut text).unwrap();
-                    text
-                },
-            );
-            panic!(
-                "the provider-server jig printed its listening line: {err:?} \
-                 within {START_BOUND:?}\nits stderr: {errors}"
-            );
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let status = child.wait();
+        let mut errors = String::new();
+        stderr.read_to_string(&mut errors).unwrap();
+        match done.send((status, errors)) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
         }
-    };
+    });
+
+    let listening = Deadline::after(START_BOUND).recv(&rx);
+    let printed = listening.unwrap_or_else(|err| {
+        // The kill ends a jig still running. A SIGKILL status is the kill's
+        // own; any other status is the jig's exit before the kill.
+        drop(watchdog.take());
+        let (status, errors) = Deadline::after(DEADLINE).recv_or_fail(
+            &finished,
+            "the killed provider-server jig's exit and stderr",
+        );
+        let status = status.expect("reaping the killed provider-server jig");
+        let state = if status.signal() == Some(SIGKILL) {
+            "still running at its deadline".to_owned()
+        } else {
+            format!("exited, {status}")
+        };
+        panic!(
+            "the provider-server jig printed its listening line: {err:?} \
+             (bound {START_BOUND:?})\nits state: {state}\nits stderr: {errors}"
+        );
+    });
     assert!(printed.starts_with("listening on http://"), "{printed}");
     let addr: SocketAddr = printed
         .trim_start_matches("listening on http://")
@@ -231,19 +260,11 @@ fn serve_one_fixture(mut command: Command) {
     );
 
     // The child served its fixture: killing its group ends it.
-    drop(watchdog);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || match done.send(child.wait()) {
-        Ok(()) | Err(mpsc::SendError(_)) => {}
-    });
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => panic!("reaping the provider-server jig failed: {e}"),
-        Err(_) => panic!("the provider-server jig: not reaped within {DEADLINE:?}"),
-    }
-    // The child has exited, so every write end is closed and this reads
-    // the buffered remainder to end-of-file.
-    let mut errors = String::new();
-    stderr.read_to_string(&mut errors).unwrap();
+    drop(watchdog.take());
+    let (status, errors) =
+        Deadline::after(DEADLINE).recv_or_fail(&finished, "the provider-server jig to exit");
+    status.expect("reaping the provider-server jig");
+    // The child has exited, so every write end is closed and the reaper
+    // read the buffered remainder to end-of-file.
     assert!(errors.is_empty(), "{errors}");
 }
