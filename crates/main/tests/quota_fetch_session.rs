@@ -104,25 +104,6 @@ fn session_lines(setup: &Setup, id: &str) -> Vec<Value> {
     complete_lines(&text)
 }
 
-/// Every complete line of every session log: a pty run owns its
-/// session id, so the test finds the session-start fetch by globbing.
-fn all_session_lines(setup: &Setup) -> Vec<Value> {
-    let mut lines = Vec::new();
-    let entries = match fs::read_dir(setup.home().join("logs")) {
-        Ok(entries) => entries,
-        Err(_) => return lines,
-    };
-    for entry in entries {
-        let path = entry.unwrap().path();
-        let name = path.file_name().unwrap().to_string_lossy();
-        if !name.starts_with("session-") || !name.ends_with(".log") {
-            continue;
-        }
-        lines.extend(complete_lines(&fs::read_to_string(&path).unwrap()));
-    }
-    lines
-}
-
 #[test]
 fn a_model_call_through_an_open_session_fetches_lua_quota() {
     let setup = Setup::new();
@@ -451,24 +432,12 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
     // The session start's fetch can still be in flight here: the view's
     // read would share that flight (`docs/invocation.md`, `quota`) and
-    // never reach the gate, so the hold below would time out. Poll the
-    // session logs for the fetch's `provider_request` record, then focus
-    // in (the terminal asks for cached quota on focus-in) and wait for
-    // the fetched value before arming: only the view's fetch can
-    // arrive now.
-    loop {
-        let ended = all_session_lines(&setup)
-            .into_iter()
-            .any(|line| line["code"] == "provider_request" && line["data"]["purpose"] == "quota");
-        if ended {
-            break;
-        }
-        assert!(
-            !setup.deadline.left().is_zero(),
-            "waited until the deadline for the session start's quota provider_request record"
-        );
-        std::thread::yield_now();
-    }
+    // never reach the gate, so the hold below would time out. Focus in
+    // (the terminal asks for cached quota on focus-in, answered from the
+    // caches without starting a fetch) and wait for the fetched value
+    // before arming: a drawn value means `finish_quota` stored it and
+    // cleared the flight under one lock, and the fresh cache starts no
+    // new flight on its own, so only the view's fetch can arrive now.
     run.write(b"\x1b[I");
     run.wait_screen("the fetched quota value", |grid| {
         grid.contents.contains("58%")
