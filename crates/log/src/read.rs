@@ -603,6 +603,25 @@ impl Watcher {
         self.next_line(Wait::Now).unwrap_or(Ok(None))
     }
 
+    /// The next line pushed into this watcher's queue, waiting for one,
+    /// whatever the log's end. For a caller that has seen [`Watcher::recv`]
+    /// return `None`: only kept lines arrive then, and `recv` would return
+    /// `None` again at once. It never re-reads the log and never returns
+    /// the end.
+    pub fn recv_after_end(&mut self) -> Envelope {
+        let mut state = self.queue.lock();
+        loop {
+            if let Some(line) = state.queue.pop_front() {
+                return line;
+            }
+            state = self
+                .queue
+                .ready
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     /// What [`Watcher::recv`] would return, if it returns before `timeout`
     /// passes with nothing arriving in this watcher's queue; `None` if it
     /// does not. A timeout consumes nothing: the next call carries on. A

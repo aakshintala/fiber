@@ -1223,3 +1223,103 @@ fn a_dropped_subscription_gets_no_further_offer() {
     );
     assert!(rx.try_recv().is_err());
 }
+
+fn ended_log(name: &str) -> (fakes::TempDir, Log) {
+    let sessions = fakes::TempDir::new(name);
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    (sessions, log)
+}
+
+#[test]
+fn end_watchers_ends_a_watcher_after_its_queued_lines_and_keeps_the_lock() {
+    let (sessions, log) = ended_log("log-unit-end-watchers");
+    let mut watcher = log.watch();
+    log.append(&status("idle"), None, None).unwrap();
+    log.end_watchers();
+    assert!(
+        matches!(
+            Log::open(
+                sessions.path(),
+                SessionId("s_1".into()),
+                fakes::clock::FakeClock::new()
+            ),
+            Err(Error::Held { .. })
+        ),
+        "the session lock stays held"
+    );
+    let queued = watcher.recv().unwrap().expect("the queued line first");
+    assert_eq!(queued.kind, "session_status");
+    assert!(watcher.recv().unwrap().is_none(), "then the end");
+    // Idempotent.
+    log.end_watchers();
+    assert!(watcher.recv().unwrap().is_none());
+}
+
+#[test]
+fn a_watcher_registered_after_end_watchers_starts_ended() {
+    let (_sessions, log) = ended_log("log-unit-end-late-watch");
+    log.append(&started(), None, None).unwrap();
+    log.append(&status("idle"), None, None).unwrap();
+    log.end_watchers();
+    let mut plain = log.watch();
+    assert!(plain.recv().unwrap().is_none());
+    let mut all = log.watch_all();
+    assert_eq!(all.recv().unwrap().expect("seq 0").kind, "fiber_started");
+    assert!(all.recv().unwrap().is_none());
+    let mut seeded = log.watch_all_seeded();
+    let mut kinds = Vec::new();
+    while let Some(line) = seeded.recv().unwrap() {
+        kinds.push(line.kind);
+    }
+    assert_eq!(kinds, ["fiber_started", "session_status"]);
+}
+
+#[test]
+fn dropping_the_log_still_ends_the_watchers() {
+    let (_sessions, log) = ended_log("log-unit-drop-ends");
+    let mut watcher = log.watch();
+    drop(log);
+    assert!(watcher.recv().unwrap().is_none());
+}
+
+#[test]
+fn an_append_after_the_end_writes_nothing_and_returns_ended() {
+    let (sessions, log) = ended_log("log-unit-append-after-end");
+    let mut watcher = log.watch();
+    log.append(&status("idle"), None, None).unwrap();
+    log.end_watchers();
+    let events = sessions.path().join("s_1").join("events.jsonl");
+    let length = std::fs::metadata(&events).unwrap().len();
+    let count = log.count();
+    let latest = log.latest("session_status");
+    let steering = log.latest("steering_queue");
+    for event in [
+        status("running"),
+        Event::SteeringQueue(contract::events::SteeringQueue { messages: vec![] }),
+    ] {
+        let error = log.append(&event, None, None).unwrap_err();
+        assert!(matches!(error, Error::Ended { .. }), "{error:?}");
+        assert_eq!(error.code(), ErrorCode::Closing);
+        assert_eq!(
+            error.to_string(),
+            "session s_1 has ended; nothing more is written to it"
+        );
+    }
+    assert_eq!(std::fs::metadata(&events).unwrap().len(), length);
+    assert_eq!(log.count(), count);
+    assert_eq!(log.latest("session_status"), latest);
+    assert_eq!(log.latest("steering_queue"), steering);
+    assert_eq!(
+        watcher.recv().unwrap().expect("the line before").kind,
+        "session_status"
+    );
+    assert!(
+        watcher.recv().unwrap().is_none(),
+        "no new line before the end"
+    );
+}

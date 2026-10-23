@@ -578,6 +578,8 @@ fn replay_exited_delegate(
 fn exited_fold(dir: &std::path::Path) -> Result<Vec<contract::Envelope>, ErrorCode> {
     let segments = log::history(dir).map_err(|error| match error {
         log::Error::NotFound(_) => ErrorCode::SessionNotFound,
+        // Only an append meets `Ended`; a history is read.
+        log::Error::Ended { .. } => ErrorCode::Closing,
         log::Error::Held { .. }
         | log::Error::Poisoned { .. }
         | log::Error::Ambiguous { .. }
