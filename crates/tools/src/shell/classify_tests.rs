@@ -351,6 +351,14 @@ fn an_assignment_after_the_name_is_an_operand() {
 }
 
 #[test]
+fn only_a_blessed_assignment_name_reads_for_git_status() {
+    // `git status` blesses `LC_ALL` but no other name: an unlisted name
+    // executes even though the entry holds a takes-value flag.
+    assert_closed("FOO=1 git status");
+    assert_reads("LC_ALL=C git status");
+}
+
+#[test]
 fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
