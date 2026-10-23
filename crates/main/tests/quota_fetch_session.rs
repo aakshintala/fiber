@@ -430,7 +430,18 @@ fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     // session start's fetch takes longer and stays in flight.
     run.write(b"hi\r");
     run.wait_screen("the answered turn", |grid| grid.contents.contains("Hello."));
-    // Arm the gate before the view's fetch: only it can arrive now.
+    // The session start's fetch can still be in flight here: the view's
+    // read would share that flight (`docs/invocation.md`, `quota`) and
+    // never reach the gate, so the hold below would time out. Focus in
+    // (the terminal asks for cached quota on focus-in, answered from the
+    // caches without starting a fetch) and wait for the fetched value
+    // before arming: a drawn value means `finish_quota` stored it and
+    // cleared the flight under one lock, and the fresh cache starts no
+    // new flight on its own, so only the view's fetch can arrive now.
+    run.write(b"\x1b[I");
+    run.wait_screen("the fetched quota value", |grid| {
+        grid.contents.contains("58%")
+    });
     quota_gate.lock().unwrap().armed = true;
     run.write(b"/quota\r");
     run.wait_screen("the view's fetching mark", |grid| {
