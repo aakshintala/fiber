@@ -115,13 +115,14 @@ impl Loop {
                 .map(|(_, _, definition)| definition.clone())
                 .collect();
             rewound.preamble = Some(Preamble::logged(&built, tools));
-            // Without a factory no request defers: the logged D is dropped
-            // and the first request renders logged searches as text. With
-            // one and a non-empty logged D, the rewind path builds the
+            // Without a factory, or on a model without deferral, no
+            // request defers: the logged D is dropped and the first
+            // request renders logged searches as text. With one and a
+            // non-empty logged D, the rewind path builds the
             // search tool from the logged-D catalogue and registers it
             // before the first request, so an unchanged tool set sends its
             // bytes (`docs/tools.md`, "Tool search").
-            if start.factory.is_none() {
+            if start.factory.is_none() || !rewound.provider.defers() {
                 if let Some(preamble) = rewound.preamble.as_mut() {
                     preamble.deferred = None;
                 }

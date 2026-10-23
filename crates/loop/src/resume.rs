@@ -367,6 +367,12 @@ impl Loop {
         } else {
             None
         };
+        // A resumed delegate stays one: the first line's
+        // `session_started` names its parent.
+        let is_delegate = lines.first().is_some_and(|line| {
+            line.kind == "session_started"
+                && line.payload.get("parent").is_some_and(|v| !v.is_null())
+        });
         let mut resumed = Self::new(
             session,
             crate::Seed {
@@ -395,6 +401,7 @@ impl Loop {
                 ledger,
                 carry,
                 chosen: thinking.and_then(|level| level.parse().ok()),
+                is_delegate,
             },
         )?;
         resumed.mark_orphans(orphans)?;

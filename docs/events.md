@@ -1131,7 +1131,9 @@ extension, which then loads in that process, with no `reloaded`
 following `reloaded`. It always carries the whole set, never a
 difference; the latest wins, and a `summary` connection is sent the latest.
 A client half reads it to decide whether it draws for this session
-(`docs/extensions.md`, "Client halves").
+(`docs/extensions.md`, "Client halves"). It lists a lazy extension from
+session start, with its version and `replaces`, whether or not its VM has
+started.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|

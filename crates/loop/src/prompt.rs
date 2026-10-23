@@ -436,7 +436,8 @@ pub(crate) fn build(
     // "Deferral is a property of the model" and "What is deferred by
     // default"): a model without deferral, or no factory, defers nothing.
     // Otherwise a per-tool key wins over `full_servers`, which wins over
-    // the tool's own definition.
+    // the tool's own definition. A hosted tool is never effectively
+    // deferred: the provider runs it, so there is nothing to load.
     let deferring = provider.defers() && factory.is_some();
     let mut effective: std::collections::BTreeMap<&str, bool> = std::collections::BTreeMap::new();
     for (name, (by, _, definition)) in tools.iter() {
@@ -444,7 +445,10 @@ pub(crate) fn build(
             Some(deferred) => *deferred,
             None => definition.deferred && !inputs.deferrals.full_servers.contains(by),
         };
-        effective.insert(name.as_str(), deferring && own);
+        effective.insert(
+            name.as_str(),
+            deferring && own && definition.hosted.is_none(),
+        );
     }
     // The catalogue and sources the factory builds the search tool from:
     // the deferred definitions in registry order, and the sorted,
@@ -533,9 +537,17 @@ pub(crate) fn build(
         })
         .collect();
     let system = system_prompt(inputs, model, unattended, &infos);
+    // The definitions the request sends carry the effective flag, so the
+    // wire and `preamble_built` agree on every tool (a key turning a tool
+    // off, or a server declared in full, sends it in full). The
+    // factory-built search definition keeps `deferred: false`.
     let definitions: Vec<contract::provider::ToolDefinition> = ordered
         .iter()
-        .map(|(_, _, definition, _)| definition.clone())
+        .map(|(_, _, definition, deferred)| {
+            let mut definition = definition.clone();
+            definition.deferred = *deferred;
+            definition
+        })
         .collect();
     let wire = provider.wire_tools(&definitions);
     let sent: Vec<contract::events::SentTool> = ordered

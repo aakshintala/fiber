@@ -189,6 +189,7 @@ fn prepared() -> ReloadPrepared {
             extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
             cache_lifetime: CacheLifetime::FiveMinutes,
+            deferrals: Default::default(),
         },
         tools: Vec::new(),
         extensions: Vec::new(),

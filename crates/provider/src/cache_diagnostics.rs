@@ -5,22 +5,11 @@
 
 use serde_json::Value;
 
-/// SHA-256 over the encoded segment bytes, as lowercase hex. The digest
-/// stands in for the bytes: the bytes themselves never reach the line.
-/// Pure, no I/O.
-pub(crate) fn digest(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// The digest of one segment value as the body sends it: objects
 /// serialize with their keys sorted, because serde_json's
 /// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
 pub(crate) fn segment(value: &Value) -> String {
-    digest(value.to_string().as_bytes())
+    support::sha256_hex(value.to_string().as_bytes())
 }
 
 /// Each cumulative message prefix's digest, in order: the digest of the
@@ -39,19 +28,19 @@ mod tests {
     #[test]
     fn sha256_matches_the_nist_vectors() {
         assert_eq!(
-            digest(b""),
+            support::sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            digest(b"abc"),
+            support::sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 
     #[test]
     fn a_digest_is_deterministic_lowercase_hex() {
-        let first = digest(b"system prompt bytes");
-        assert_eq!(first, digest(b"system prompt bytes"));
+        let first = support::sha256_hex(b"system prompt bytes");
+        assert_eq!(first, support::sha256_hex(b"system prompt bytes"));
         assert_eq!(first.len(), 64);
         assert!(
             first
@@ -64,10 +53,10 @@ mod tests {
     #[test]
     fn a_digest_holds_no_byte_of_its_input() {
         let prompt = "You are terse.";
-        let hashed = digest(prompt.as_bytes());
+        let hashed = support::sha256_hex(prompt.as_bytes());
         assert!(!hashed.contains(prompt), "no prompt text in {hashed}");
         assert_ne!(hashed, prompt);
-        assert_ne!(digest(b"You are verbose."), hashed);
+        assert_ne!(support::sha256_hex(b"You are verbose."), hashed);
     }
 
     #[test]
@@ -75,7 +64,7 @@ mod tests {
         let value = serde_json::json!({"b": 1, "a": [true, "x"]});
         assert_eq!(
             segment(&value),
-            digest(br#"{"a":[true,"x"],"b":1}"#),
+            support::sha256_hex(br#"{"a":[true,"x"],"b":1}"#),
             "keys sort as the body sends them"
         );
     }

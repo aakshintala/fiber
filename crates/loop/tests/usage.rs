@@ -20,8 +20,8 @@ use fakes::{Scripted, call_usage, unnamed_usage};
 use serde_json::Value;
 
 use support::{
-    REVIEWER_MODEL, Session, allow, calls_reply, delivery, kinds, on_request, paris,
-    reply_delivery, shell,
+    REVIEWER_MODEL, Session, allow, calls_reply, child_usage, delivery, kinds, on_request, paris,
+    reply_delivery, send_child, shell,
 };
 
 fn failed_after(generation: &str, input: u64, output: u64, bytes: u64) -> Scripted {
@@ -422,6 +422,147 @@ fn a_minted_record_s_cost_is_null_on_a_priced_model() {
     let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.cost, None);
+}
+
+/// Runs one completed turn after `send`, and returns every line through
+/// its `turn_completed`.
+fn turned(session: &mut Session, send: impl FnOnce(&Session)) -> Vec<Envelope> {
+    use support::delivery;
+    send(session);
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines()
+}
+
+/// The `usage_recorded` lines for `generation`, in log order.
+fn copies<'a>(lines: &'a [Envelope], generation: &str) -> Vec<&'a Envelope> {
+    lines
+        .iter()
+        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == generation)
+        .collect()
+}
+
+#[test]
+fn a_direct_child_s_usage_is_copied_with_the_child_as_origin() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    let lines = turned(&mut session, |session| {
+        send_child(
+            session,
+            "s_child",
+            child_usage("g_child", Some(0.01), None, None),
+        );
+    });
+    // The copy is written once, with no turn and no action, naming the
+    // sending delegate as the origin.
+    let found = copies(&lines, "g_child");
+    assert_eq!(found.len(), 1);
+    assert!(found[0].action_id.is_none());
+    assert!(found[0].turn_id.is_none());
+    assert_eq!(found[0].payload["origin_session_id"], "s_child");
+    assert_eq!(found[0].payload["cost"], 0.01);
+    // The ledger holds the copy beside the turn's own call: 10 input and
+    // 3 output tokens each.
+    let all = log::read(&session.dir).unwrap();
+    let records: Vec<UsageRecorded> = all
+        .iter()
+        .filter(|l| l.kind == "usage_recorded")
+        .map(|l| serde_json::from_value(Value::Object(l.payload.clone())).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(log::usage(&records).tokens.input, 20);
+    assert_eq!(log::usage(&records).tokens.output, 6);
+    assert_eq!(log::usage(&records).cost, Some(0.01));
+}
+
+#[test]
+fn a_grandchild_copy_keeps_its_origin() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    let lines = turned(&mut session, |session| {
+        send_child(
+            session,
+            "s_child",
+            child_usage(
+                "g_grand",
+                Some(0.02),
+                Some(SessionId("s_grand".into())),
+                None,
+            ),
+        );
+    });
+    // The middle delegate forwards the line untouched: the copy still
+    // names the grandchild that made the call.
+    let found = copies(&lines, "g_grand");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].payload["origin_session_id"], "s_grand");
+}
+
+#[test]
+fn a_duplicate_copy_counts_once() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    turned(&mut session, |session| {
+        let line = child_usage("g_child", Some(0.01), None, None);
+        send_child(session, "s_child", line.clone());
+        send_child(session, "s_child", line);
+    });
+    // Both arrivals are written, but the spend holds one call: the
+    // duplicate never doubles the ledger.
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let written = all
+        .iter()
+        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == "g_child")
+        .count();
+    assert_eq!(written, 2);
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
+    assert_eq!(exited.payload["usage"]["tokens"]["output"], 6);
+    assert_eq!(exited.payload["usage"]["cost"], 0.01);
+}
+
+#[test]
+fn a_correction_applies_only_its_delta() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    turned(&mut session, |session| {
+        send_child(
+            session,
+            "s_child",
+            child_usage("g_child", Some(0.10), None, None),
+        );
+        send_child(
+            session,
+            "s_child",
+            child_usage("g_child", Some(0.18), None, None),
+        );
+    });
+    // The second arrival replaces the first in every total: the spend
+    // holds the latest billed figure once, not both.
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.payload["usage"]["cost"], 0.18);
+}
+
+#[test]
+fn a_subscription_copy_counts_subscription_spend() {
+    let mut session = Session::new(vec![support::reasoning_reply("Think.", "Hi.")], None);
+    let lines = turned(&mut session, |session| {
+        send_child(
+            session,
+            "s_child",
+            child_usage("g_child", Some(0.05), None, Some(true)),
+        );
+    });
+    // The copy keeps the subscription flag, so the spend treats its cost
+    // as an estimate, not money billed.
+    let found = copies(&lines, "g_child");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].payload["subscription"], true);
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.payload["usage"]["subscription_cost"], 0.05);
 }
 
 #[test]

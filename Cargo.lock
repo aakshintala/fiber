@@ -914,7 +914,6 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "flate2",
- "ring",
  "rustix",
  "serde_json",
  "support",
@@ -2265,7 +2264,6 @@ dependencies = [
  "fakes",
  "net",
  "provider",
- "ring",
  "serde_json",
  "support",
  "thiserror 2.0.21",
@@ -3021,6 +3019,7 @@ name = "support"
 version = "0.0.0"
 dependencies = [
  "fakes",
+ "ring",
  "rustix",
  "thiserror 2.0.21",
 ]

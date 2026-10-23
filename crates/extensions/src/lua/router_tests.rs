@@ -62,6 +62,7 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
         | Delivery::ProposeNotes(..)
         | Delivery::ExtensionJob(..)
         | Delivery::ExtensionUsage(_)
+        | Delivery::DelegateUsage { .. }
         | Delivery::Cancelled => None,
     }
 }

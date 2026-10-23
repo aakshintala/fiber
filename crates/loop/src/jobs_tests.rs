@@ -8,7 +8,7 @@
     reason = "test code"
 )]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -22,7 +22,7 @@ use contract::emit::Emit;
 use contract::events::{
     CallStatus, Clients, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted,
     JobStarted, Notice, OnFork, Outcome, Parent, RepositoryCodeOffered, ShellCommand,
-    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome, UsageRecorded,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, HookFailure, Hooks, JobDelivery, StateLine,
@@ -38,7 +38,8 @@ use contract::shapes::{
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Settle, Tool};
 use contract::{
-    ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId, TurnId,
+    ActionId, CommandId, Envelope, ErrorCode, GenerationId, JobId, RequestId, Seq, SessionId,
+    TurnId,
 };
 use fakes::Deadline;
 use fakes::jobs::FakeJobs;
@@ -2007,6 +2008,177 @@ impl World {
     fn home(&self) -> &std::path::Path {
         self._home.path()
     }
+}
+
+/// Suspends a fresh loop with no turns, rewrites the first line's
+/// `parent` to `parent`, and resumes: `None` keeps the genuine
+/// root line (the field absent), so the resume stays a root; `Some`
+/// names a parent, so the resume stays a delegate. The log is
+/// reopened after the rewrite: the edit changes the first line's
+/// byte length, which would invalidate the open handle's offset table.
+fn resumed_with_parent(parent: Option<Value>) -> (Loop, Arc<FakeJobs>, fakes::TempDir) {
+    let mut world = World::new(vec![], Vec::new(), |_| Vec::new());
+    // The loop's session holds the log's other half: `..` would drop
+    // it too late, so both halves go before the reopen takes the lock.
+    drop(world.looped.take());
+    drop(world.watched.take());
+    let World {
+        _home: home,
+        dir,
+        log,
+        provider,
+        clock,
+        ..
+    } = world;
+    drop(log);
+    crate::fiber_exited(
+        &Log::open(
+            home.path(),
+            SessionId("s_test".into()),
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+        &dir,
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
+    if let Some(parent) = parent {
+        let path = dir.join("events.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut lines: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        lines[0]["payload"]["parent"] = parent;
+        let rewritten: Vec<String> = lines
+            .iter()
+            .map(|line| serde_json::to_string(line).unwrap())
+            .collect();
+        std::fs::write(&path, rewritten.join("\n") + "\n").unwrap();
+    }
+    let log = Arc::new(
+        Log::open(
+            home.path(),
+            SessionId("s_test".into()),
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    );
+    let resumed = crate::resumed(&dir).expect("the exit suspends a batch");
+    let workspace = home.path().join("workspace");
+    let jobs_dir = home.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let jobs = FakeJobs::new(&jobs_dir);
+    let (_, inbox_rx) = mpsc::channel();
+    let looped = Loop::resume(
+        crate::Session {
+            log: Arc::clone(&log),
+            provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: inbox_rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(AskGated),
+            },
+        },
+        resumed,
+    )
+    .unwrap()
+    .budget(Some(1.0))
+    .jobs(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    // The home directory outlives the loop's log handle: dropping it
+    // first would take the session directory with it.
+    (looped, jobs, home)
+}
+
+/// A $100 copy against a $1 budget, as the relayed watcher line:
+/// unaffordable either way, so the budget end trips on it.
+fn hundred_copy() -> UsageRecorded {
+    UsageRecorded {
+        generation_id: GenerationId("g_cost".into()),
+        model: "fake/m".into(),
+        tokens: Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 0,
+        },
+        input_bytes: 0,
+        input_media: None,
+        web_searches: None,
+        cost: Some(100.0),
+        subscription: None,
+        extension: None,
+        origin_session_id: Some(SessionId("s_grandchild".into())),
+        reviewer: None,
+    }
+}
+
+#[test]
+fn a_resumed_delegate_budget_end_with_a_claimed_trip_shuts_down_with_the_tree_stop_code() {
+    // The first line names a parent: the resume stays a delegate, so
+    // its budget end preempts its failed drain with the tree stop.
+    let (mut looped, jobs, _home) = resumed_with_parent(Some(
+        json!({"session_id": "s_parent", "delegate_id": "j_parent"}),
+    ));
+    looped
+        .copy_usage(&SessionId("s_grandchild".into()), hundred_copy())
+        .unwrap();
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert!(completed.error.is_none());
+    assert_eq!(looped.cancel.shutdown_code(), Some(143));
+    // Once for the copy's publish, once for the budget end itself.
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn a_resumed_root_budget_end_with_a_claimed_trip_shuts_down_nothing() {
+    // The genuine root line carries no parent field: the resume stays
+    // a root, so its budget end reports the failed turn and keeps
+    // serving, whatever its trip holds.
+    let (mut looped, jobs, _home) = resumed_with_parent(None);
+    looped
+        .copy_usage(&SessionId("s_child".into()), hundred_copy())
+        .unwrap();
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert_eq!(looped.cancel.shutdown_code(), None);
+    // Once for the copy's publish, once for the budget end itself.
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn a_resumed_root_with_an_explicitly_null_parent_shuts_down_nothing() {
+    // An explicit null is no parent: the resume stays a root even
+    // though the field is present.
+    let (mut looped, jobs, _home) = resumed_with_parent(Some(Value::Null));
+    looped
+        .copy_usage(&SessionId("s_child".into()), hundred_copy())
+        .unwrap();
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert_eq!(looped.cancel.shutdown_code(), None);
+    assert_eq!(jobs.stop_delegates_calls(), 2);
 }
 
 #[track_caller]

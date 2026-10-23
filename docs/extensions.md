@@ -65,6 +65,16 @@ An extension is one directory. Its manifest, `extension.json`, states
   as `https://{workspace}/ai-gateway/anthropic/v1`, and the setting that fills it
   (`docs/model-routing.md`, "A per-account host"). So what an install or an
   offer shows is everything the extension can take over
+- the commands it registers, each with a description and an optional argument
+  hint (`commands`, `docs/configuration.md`, "An extension's manifest"). A
+  `commands` key makes the extension lazy: its `init.lua` runs on the first
+  run of one of its commands instead of at session start, and it registers
+  only the commands the manifest declares. Any other registration from a lazy
+  start stops the extension loading with the notice `extension_failed`, as a
+  replacement or provider the manifest does not declare does. An extension
+  that also registers tools, hooks, watchers, harnesses or search backends
+  leaves `commands` out of its manifest and registers its commands at session
+  start
 - the files in its data directories whose text goes in the opening message,
   and their byte budget (`opening`; `docs/system-prompt.md`, "Extension
   sections")
@@ -301,7 +311,9 @@ backend, its extension and the result's position.
 A tool, harness, search backend, hook or watcher registers before the
 session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
 every enabled Lua extension with `init.lua` runs it at session start ("Loading,
-and cost when nothing is loaded"). A provider is the exception: its manifest
+and cost when nothing is loaded"), except a lazy extension whose manifest
+declares `commands`: its `init.lua` runs on the first run of one of its
+commands ("Commands and screens"). A provider is the exception: its manifest
 declares it, so `providers/<name>.lua` waits for first use. That file registers
 exactly one provider, matching its filename, and nothing else. `init.lua` holds
 the other registrations. A `fiber.provider` call in `init.lua` refuses the whole
@@ -1338,12 +1350,34 @@ plain: `/databricks-models`, not
 gets it, a `notice` names both, and configuration can rename one. An
 extension may replace a built-in command by name, as it may a tool.
 
+A lazy extension's declared commands appear in the `/` list and the
+`commands` answer from its manifest, without starting its VM: each entry
+carries the manifest's name, description and argument hint, the extension's
+name as its tag, and `extension` set to true, and the manifest's description
+and hint win over any in the `fiber.command` call. A disabled extension lists
+none. Configuration's rename (`extensions."<name>".commands."<command>"`,
+`docs/configuration.md`) applies to a declared name. A same-name clash
+between two declared commands, or between a declared command and one a
+session-start extension registers, follows the rule above: neither gets it,
+and a `notice` names both. The clash resolves when the list is fixed, after
+every non-lazy extension has started.
+
 The `command` driver command is answered with `command_accepted` once it is
 admitted, before `run` runs, and `run`'s return value is ignored. A command
 reports through `host.status`, `host.widget`, `host.ask` or `host.emit`, and a
 `run` that errors gives a `notice` naming the extension. A command is allowed
 during a turn and joins the extension's ordered stream in session order; a
 `host.drive` inside it follows each driver command's own rules.
+
+Running one of a lazy extension's commands starts the extension first, under
+the 2 s `init.lua` bound ("How an extension runs"); `command_accepted` still
+comes before `run` runs. A start that fails or passes the bound rejects the
+command with `extension_failed`, and the extension stays unstarted for the
+session, as one that fails at session start does; `reload` tries again
+(`docs/invocation.md`). A declared command the started extension did not
+register is rejected `extension_failed`, naming the command. Concurrent first
+runs share one start: later commands wait for it, and there is one VM and
+one `init.lua` run.
 `host.ask(kind, spec)` takes the keys of `interaction_requested` for that kind
 (`prompt`, `options`, `fields`) and returns the answer keys of
 `interaction_resolved` (`confirmed`, `labels`, `text`, `answers`, `note`), or
@@ -1421,6 +1455,8 @@ client.
 
 Each Lua extension gets its own Lua VM and thread. At session start, every
 installed Lua extension with `init.lua` that is enabled for the project runs it,
+except a lazy extension whose manifest declares `commands` ("Commands and
+screens"),
 because a tool, hook, watcher, harness or search backend must register before
 the session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), and Fiber
 cannot know a non-provider extension's registrations without running it. Each started
@@ -1436,7 +1472,9 @@ nothing at start:
   and the provider is unloaded once the list is written. Its other Lua
   functions run only when the session uses one of its models;
 - the first-party `hooks` extension in a session whose configuration has no
-  `hooks` key ("Hooks declared in configuration").
+  `hooks` key ("Hooks declared in configuration");
+- an extension whose only Lua registrations are declared commands, which
+  starts on the first run of one of them ("Commands and screens").
 
 A provider-only package starts no VM until its provider file is needed. First
 use loads the file into the extension's running VM, or creates one when none
@@ -1477,7 +1515,8 @@ manifest"). The install summary shows a raised cap ("What an install shows").
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
 Lua extension with `init.lua` runs it again in a new VM before the new tool set is
-declared, and each process extension is restarted. Both are handed their current state again, as it stands in the session.
+declared, except a lazy extension that never started, which stays unstarted,
+and each process extension is restarted. Both are handed their current state again, as it stands in the session.
 
 ## When an extension misbehaves
 
@@ -1604,7 +1643,7 @@ new package adds one. `fiber extension install openrouter` means
 `github.com/aakshintala/fiber/providers/openrouter`. Today the provider short
 names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`, `opencode`,
 `databricks`, `muse`, `bedrock`, `vertex` and `azure`, and `claude`,
-`cursor-agent`, `hooks`, `init` and `memory` are short names for
+`cursor-agent`, `hooks`, `init`, `memory` and `export` are short names for
 `github.com/aakshintala/fiber/extensions/<name>`. A harness's short name is
 the name it registers (`docs/delegates.md`, "Harness extensions").
 A short name also names the extension's directories in Fiber home
@@ -1731,18 +1770,19 @@ start ("Loading, and cost when nothing is loaded").
 ### A fresh install
 
 A fresh install has every first-party extension: the eleven providers,
-the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills") and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
+the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`) and `export`. They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
-A provider, `hooks`, `init` or `memory` costs nothing in a session that does not use it. A
+A provider, `hooks`, `init`, `memory` or `export` costs nothing in a session that does not use it. A
 provider that is pure data is only read, a Lua provider runs only to refresh a
 stale model list or when a session uses one of its models, and `hooks` loads only when configuration has
 a `hooks` key. `init` has no code, and its one prompt template is read only as a
 skill. `memory` has no code, and its opening-message section adds
-nothing while the store is empty.
+nothing while the store is empty. `export` runs nothing until the first run
+of `/export`.
 
 A person who removed a provider can install it again with
 `fiber extension install <name>`, or by choosing it in the terminal's model

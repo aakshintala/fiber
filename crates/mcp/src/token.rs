@@ -418,11 +418,7 @@ pub(crate) fn canonical_url(url: &str) -> Result<String, TokenError> {
     }
 }
 pub(crate) fn key(canonical: &str) -> String {
-    ring::digest::digest(&ring::digest::SHA256, canonical.as_bytes())
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    support::sha256_hex(canonical.as_bytes())
 }
 /// The file name of the token for `url`: the lowercase hex SHA-256 of
 /// the canonical URL's bytes (`docs/mcp.md`, "What Fiber does with
