@@ -71,8 +71,7 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
-    // The hub unlinks its socket after answering `stop`, so the socket
-    // assertions run only once the hub has exited.
+    // The hub unlinks its socket at exit (`docs/state.md`, "Sockets"), so check sockets only after it exits.
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     assert!(
         !hub.wait().success(),
