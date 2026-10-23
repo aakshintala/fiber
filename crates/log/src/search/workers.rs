@@ -7,31 +7,11 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
-use std::thread::{self, Scope};
+use std::thread;
 
 use contract::tool::Cancel;
 
 use super::Collect;
-
-/// One worker's body, handed to a [`Spawn`].
-pub(super) type Body<'scope> = Box<dyn FnOnce() + Send + 'scope>;
-
-/// Starts one worker on its own thread in `scope`. An error means the thread
-/// did not start.
-pub(super) type Spawn<'a> = dyn for<'scope, 'env> Fn(&'scope Scope<'scope, 'env>, Body<'scope>) -> io::Result<()>
-    + Sync
-    + 'a;
-
-/// The [`Spawn`] a search uses: a thread named `session-search`.
-pub(super) fn spawn<'scope>(
-    scope: &'scope Scope<'scope, '_>,
-    body: Body<'scope>,
-) -> io::Result<()> {
-    thread::Builder::new()
-        .name("session-search".to_owned())
-        .spawn_scoped(scope, body)
-        .map(drop)
-}
 
 /// How many workers search `sessions` sessions: as many threads as
 /// `parallelism` reports, the calling thread among them, never more than the
@@ -60,15 +40,15 @@ type Found = (Collect, Vec<(usize, Collect)>);
 /// Searches `sessions` with `search` on `workers` threads, the calling
 /// thread one of them, each session into its own [`Collect`] keeping
 /// `limit` hits. A worker checks `cancel` after it claims a session and
-/// reads no more once it is cancelled. When `spawn` fails, no further
-/// thread starts and the running workers read the rest.
+/// reads no more once it is cancelled. When a thread cannot start, no
+/// further thread starts, and the calling thread with the workers already
+/// running reads the rest.
 pub(super) fn run(
     sessions: &[&Path],
     workers: usize,
     limit: usize,
     cancel: &dyn Cancel,
     search: &(dyn Fn(&Path, &mut Collect) + Sync),
-    spawn: &Spawn<'_>,
 ) -> Searched {
     if sessions.is_empty() {
         return Searched::default();
@@ -95,9 +75,13 @@ pub(super) fn run(
     };
     thread::scope(|scope| {
         for _ in 1..workers {
-            if spawn(scope, Box::new(&work)).is_err() {
+            let Ok(()) = thread::Builder::new()
+                .name("session-search".to_owned())
+                .spawn_scoped(scope, work)
+                .map(drop)
+            else {
                 break;
-            }
+            };
         }
         work();
     });
