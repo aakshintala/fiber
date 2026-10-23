@@ -112,7 +112,7 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{
-    Model, Providers, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
+    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
 };
 pub use release::fetch_nightly_tag;
 pub use release::install_docs_if_missing;

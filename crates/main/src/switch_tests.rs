@@ -1804,12 +1804,12 @@ fn a_scripted_model_the_session_did_not_start_with_is_rejected() {
         let switching = scripted_switching(&fixture, overrides);
         let rejection = rejected(&switching, &args("scripted/r.json"), None);
         assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-        assert_eq!(rejection.message, crate::scripted::START_ONLY);
+        assert_eq!(rejection.message, extensions::START_ONLY);
     }
     // Any other unknown reference keeps its own message.
     let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
     let rejection = rejected(&switching, &args("nobody/m"), None);
-    assert_ne!(rejection.message, crate::scripted::START_ONLY);
+    assert_ne!(rejection.message, extensions::START_ONLY);
 }
 
 #[test]

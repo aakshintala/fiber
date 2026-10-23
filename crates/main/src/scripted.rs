@@ -15,11 +15,6 @@ use crate::lua_providers::Access;
 #[path = "scripted_tests.rs"]
 mod tests;
 
-/// Why a switch to a scripted model the session did not start with is
-/// rejected: the registry a session switches within is fixed at start.
-pub(crate) const START_ONLY: &str =
-    "Choose a scripted model when the session starts: `fiber ask --model scripted/<path>`.";
-
 /// Adds to `providers` each scripted model the session may name: the
 /// configured `model` (which `--model` sets), the resumed session's
 /// `recorded` model, `reviewer.model` and the `fiber:` references in `roles.*`.

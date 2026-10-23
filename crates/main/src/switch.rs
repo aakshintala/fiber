@@ -673,7 +673,10 @@ pub(crate) fn prepare(
         None => None,
     };
     let now = switching.reloadable();
-    let resolved = resolve(&switching.registry, &switching.naming, &args.model)?;
+    let resolved = switching
+        .registry
+        .resolve_named(&switching.naming, &args.model)
+        .map_err(invalid)?;
     crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();
     let context_window = crate::settings::context_window(resolved.model, &reference)
@@ -895,129 +898,6 @@ fn hosted(
     Ok((r#loop::Hosted::Declare(tool), Some(applied)))
 }
 
-/// The typed model against the switch registry and the naming list: an
-/// exact `provider/model` resolves as at startup, while a bare id counts
-/// every provider that names it, configured or not. A bare id tries the
-/// full typed id first, so a literal id ending in a thinking level matches
-/// before the suffix strips (`docs/model-routing.md`, "Naming a model": the
-/// exact match comes first, since OpenRouter ids contain colons); only when
-/// nothing names the full id does the stripped id count. Every failure is
-/// the resolution's own message as `invalid_arguments`.
-fn resolve<'a>(
-    registry: &'a Providers,
-    naming: &[(String, String)],
-    typed: &str,
-) -> Result<extensions::Model<'a>, Rejection> {
-    let (rest, _) = Providers::split_thinking(typed);
-    if rest.contains('/') {
-        // A scripted model is added to the registry only at start.
-        return registry.resolve(typed).map_err(|error| {
-            invalid(if rest.starts_with("scripted/") {
-                crate::scripted::START_ONLY.to_owned()
-            } else {
-                error.to_string()
-            })
-        });
-    }
-    if typed != rest
-        && let Some(prepared) = resolve_literal(registry, naming, typed)
-    {
-        return prepared;
-    }
-    let mut matches = named(naming, rest);
-    match registry.resolve(typed) {
-        Ok(model) => {
-            let reference = model.reference();
-            if !matches.contains(&reference) {
-                matches.push(reference);
-            }
-            if matches.len() > 1 {
-                return Err(ambiguous(rest, &mut matches));
-            }
-            Ok(model)
-        }
-        Err(error) => {
-            if let extensions::Error::Ambiguous {
-                matches: theirs, ..
-            } = &error
-            {
-                for reference in theirs {
-                    if !matches.contains(reference) {
-                        matches.push(reference.clone());
-                    }
-                }
-            }
-            if matches.len() > 1 {
-                return Err(ambiguous(rest, &mut matches));
-            }
-            Err(invalid(error.to_string()))
-        }
-    }
-}
-
-/// The `provider/model` references the naming list holds for the bare id
-/// `text`.
-fn named(naming: &[(String, String)], text: &str) -> Vec<String> {
-    naming
-        .iter()
-        .filter(|(_, id)| id == text)
-        .map(|(provider, id)| format!("{provider}/{id}"))
-        .collect()
-}
-
-/// A bare id that is also a literal model id ending in a thinking level:
-/// the full typed id against the registry and the naming list, before the
-/// suffix strips. `Some` when the full id names anything: the match or its
-/// ambiguity. `None` when nothing in the registry names it, and the
-/// stripped id counts instead.
-fn resolve_literal<'a>(
-    registry: &'a Providers,
-    naming: &[(String, String)],
-    typed: &str,
-) -> Option<Result<extensions::Model<'a>, Rejection>> {
-    let mut matches = named(naming, typed);
-    // Check the exact provider/model first: bare resolution can discard an
-    // unconfigured literal for suffix matches. Qualified resolution can
-    // strip a suffix too, so require the error to name this exact reference.
-    if let [reference] = matches.as_slice()
-        && let Err(extensions::Error::Unconfigured { message }) = registry.resolve(reference)
-        && message.starts_with(&format!("The model `{reference}` "))
-    {
-        return Some(Err(invalid(message)));
-    }
-    match registry.resolve(typed) {
-        // The registry's own exact-first order tries the full id before
-        // the suffix strips, so a model whose id is the full text is a
-        // full-id match; anything else resolved through the suffix.
-        Ok(model) if model.model.id == typed => {
-            let reference = model.reference();
-            if !matches.contains(&reference) {
-                matches.push(reference);
-            }
-            if matches.len() > 1 {
-                return Some(Err(ambiguous(typed, &mut matches)));
-            }
-            return Some(Ok(model));
-        }
-        Err(extensions::Error::Ambiguous {
-            id,
-            matches: theirs,
-        }) if id == typed => {
-            for reference in theirs {
-                if !matches.contains(&reference) {
-                    matches.push(reference.clone());
-                }
-            }
-            return Some(Err(ambiguous(typed, &mut matches)));
-        }
-        Ok(_) | Err(_) => {}
-    }
-    if matches.len() > 1 {
-        return Some(Err(ambiguous(typed, &mut matches)));
-    }
-    None
-}
-
 /// A rejected switch: the message with code `invalid_arguments`.
 fn invalid(message: String) -> Rejection {
     Rejection {
@@ -1032,18 +912,6 @@ fn rejection(failure: Failure) -> Rejection {
         code: failure.code,
         message: failure.message,
     }
-}
-
-/// A bare id more than one provider names, in the shape `resolve` names
-/// it.
-fn ambiguous(id: &str, matches: &mut Vec<String>) -> Rejection {
-    matches.sort();
-    matches.dedup();
-    invalid(format!(
-        "The model `{id}` is offered by more than one provider: {}. \
-         Name one as `provider/model`.",
-        matches.join(", ")
-    ))
 }
 
 #[cfg(test)]
