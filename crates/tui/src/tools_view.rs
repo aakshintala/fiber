@@ -434,10 +434,12 @@ impl Tools {
             format!(" · {}", row.size)
         };
         let scoped = row.group.is_some();
-        let project = " · this project ";
-        let everywhere = " · everywhere ";
+        let project = " · this project";
+        let everywhere = " · everywhere";
+        // Each switch follows a column that holds the focus mark, in the
+        // place of the space before it.
         let widest = if scoped {
-            format!("{project}{WIDEST_SWITCH}{everywhere}{WIDEST_SWITCH}")
+            format!("{project} {WIDEST_SWITCH}{everywhere} {WIDEST_SWITCH}")
         } else {
             String::new()
         };
@@ -447,19 +449,32 @@ impl Tools {
         let Some(group) = &row.group else {
             return vec![(head, None, Ink::Plain)];
         };
+        let selected = index == self.list.selected();
         let switch = |scope: SwitchScope, at: usize| {
+            let mark = if selected && self.focus == scope {
+                ("›".to_owned(), None, Ink::Heading)
+            } else {
+                (" ".to_owned(), None, Ink::Plain)
+            };
             let (word, ink) = if self.on_in_scope(group, &row.name, scope) {
                 ("[on]", Ink::Heading)
             } else {
                 ("[off]", Ink::Muted)
             };
-            (word.to_owned(), Some(Spot::Switch { row: index, at }), ink)
+            [
+                mark,
+                (word.to_owned(), Some(Spot::Switch { row: index, at }), ink),
+            ]
         };
+        let [project_mark, project_switch] = switch(SwitchScope::Project, 0);
+        let [everywhere_mark, everywhere_switch] = switch(SwitchScope::Everywhere, 1);
         vec![
             (format!("{head}{project}"), None, Ink::Plain),
-            switch(SwitchScope::Project, 0),
+            project_mark,
+            project_switch,
             (everywhere.to_owned(), None, Ink::Plain),
-            switch(SwitchScope::Everywhere, 1),
+            everywhere_mark,
+            everywhere_switch,
         ]
     }
 }

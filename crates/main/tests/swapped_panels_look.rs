@@ -137,18 +137,30 @@ fn tool_row(grid: &Grid) -> Option<(u16, String)> {
     Some((y, text.trim_end().to_owned()))
 }
 
-/// Whether `text` reads `notes_save · full · <digits,> bytes · this project
-/// <project> · everywhere <everywhere>`.
-fn reads_as_tool_row(text: &str, project: &str, everywhere: &str) -> bool {
+/// The two columns before the switches of a row whose focus is on
+/// everywhere or on this project: the focused one holds the mark "›".
+fn marks(on_everywhere: bool) -> (&'static str, &'static str) {
+    if on_everywhere {
+        (" ", "›")
+    } else {
+        ("›", " ")
+    }
+}
+
+/// Whether `text` reads `notes_save · full · <digits,> bytes · this
+/// project›<project> · everywhere <everywhere>`, the mark "›" on the
+/// focused switch's side and a space on the other.
+fn reads_as_tool_row(text: &str, project: &str, everywhere: &str, on_everywhere: bool) -> bool {
     let Some(rest) = text.strip_prefix("notes_save · full · ") else {
         return false;
     };
-    let Some((size, rest)) = rest.split_once(" bytes · this project ") else {
+    let (project_mark, everywhere_mark) = marks(on_everywhere);
+    let Some((size, rest)) = rest.split_once(" bytes · this project") else {
         return false;
     };
     size.chars().all(|ch| ch.is_ascii_digit() || ch == ',')
         && !size.is_empty()
-        && rest == format!("{project} · everywhere {everywhere}")
+        && rest == format!("{project_mark}{project} · everywhere{everywhere_mark}{everywhere}")
 }
 
 /// Whether the cells from `x` on row `y` spell the switch `word`, `[on]`
@@ -169,11 +181,11 @@ fn switch_weighs(grid: &Grid, y: u16, x: u16, word: &str) -> bool {
 /// bold headings, the row with its two switches in `project` and
 /// `everywhere` form with those switches' weight, the "› " gutter on it
 /// and the dim last row.
-fn tools_ready(grid: &Grid, project: &str, everywhere: &str) -> bool {
+fn tools_ready(grid: &Grid, project: &str, everywhere: &str, on_everywhere: bool) -> bool {
     let Some((y, text)) = tool_row(grid) else {
         return false;
     };
-    if !reads_as_tool_row(&text, project, everywhere) {
+    if !reads_as_tool_row(&text, project, everywhere, on_everywhere) {
         return false;
     }
     let Some(x) = col_at_or(grid, y, "notes_save") else {
@@ -182,15 +194,22 @@ fn tools_ready(grid: &Grid, project: &str, everywhere: &str) -> bool {
     if x < 2 || grid.cell(x - 2, y).symbol != "›" || grid.cell(x - 1, y).symbol != " " {
         return false;
     }
-    let switch_after =
-        |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
-    let (Some(at_project), Some(at_everywhere)) =
-        (switch_after("this project "), switch_after("everywhere "))
+    let after = |label: &str| col_at_or(grid, y, label).map(|x| x + label.chars().count() as u16);
+    let (Some(at_project), Some(at_everywhere)) = (after("this project"), after("everywhere"))
     else {
         return false;
     };
-    if !(switch_weighs(grid, y, at_project, project)
-        && switch_weighs(grid, y, at_everywhere, everywhere))
+    // The mark is bold on the focused side and a plain space on the other;
+    // the switch follows it.
+    let (project_mark, everywhere_mark) = marks(on_everywhere);
+    for (at, mark) in [(at_project, project_mark), (at_everywhere, everywhere_mark)] {
+        let cell = grid.cell(at, y);
+        if cell.symbol != mark || cell.bold != (mark == "›") {
+            return false;
+        }
+    }
+    if !(switch_weighs(grid, y, at_project + 1, project)
+        && switch_weighs(grid, y, at_everywhere + 1, everywhere))
     {
         return false;
     }
@@ -212,7 +231,9 @@ fn the_tools_view_matches_the_doc() {
     let setup = tools_setup(json!({}));
     let mut run = turned(&setup);
     run.write(b"/tools\r");
-    let grid = run.wait_screen("the tools rows", |grid| tools_ready(grid, "[on]", "[on]"));
+    let grid = run.wait_screen("the tools rows", |grid| {
+        tools_ready(grid, "[on]", "[on]", false)
+    });
     // The headings: a built-in source and the extension's, which names
     // its own installed name.
     let heading = row_with(&grid, "Extension · ");
@@ -235,21 +256,31 @@ fn the_tools_view_matches_the_doc() {
     // The focused row has the gutter and no reverse video: the row's
     // switches draw as their own cells do.
     let (y, text) = tool_row(&grid).expect("the tool row");
-    assert!(reads_as_tool_row(&text, "[on]", "[on]"), "{text}");
+    assert!(reads_as_tool_row(&text, "[on]", "[on]", false), "{text}");
     let x = col_at(&grid, y, "notes_save");
     assert_eq!(grid.cell(x - 2, y).symbol, "›");
     assert!(!grid.cell(x - 2, y).inverse);
     assert!(is_plain_of_reverse(&grid, y, "notes_save · full · "));
-    assert!(is_plain_of_reverse(&grid, y, "[on] · everywhere [on]"));
+    assert!(is_plain_of_reverse(&grid, y, "›[on] · everywhere [on]"));
     assert_eq!(grid.cell(x - 2, read).symbol, " ", "no gutter on read");
     // Space flips the focused switch, this project's, and the gutter stays.
     run.write(b" ");
     let grid = run.wait_screen("the project switch off", |grid| {
-        tools_ready(grid, "[off]", "[on]")
+        tools_ready(grid, "[off]", "[on]", false)
     });
     let (y, text) = tool_row(&grid).expect("the tool row");
-    assert!(reads_as_tool_row(&text, "[off]", "[on]"), "{text}");
+    assert!(reads_as_tool_row(&text, "[off]", "[on]", false), "{text}");
     assert_eq!(grid.cell(col_at(&grid, y, "notes_save") - 2, y).symbol, "›");
+    // → moves the bold mark to the everywhere switch; the gutter stays
+    // and no column moves.
+    let project_x = col_at(&grid, y, "[off]");
+    run.write(b"\x1b[C");
+    let grid = run.wait_screen("the mark on everywhere", |grid| {
+        tools_ready(grid, "[off]", "[on]", true)
+    });
+    let (y, text) = tool_row(&grid).expect("the tool row");
+    assert!(reads_as_tool_row(&text, "[off]", "[on]", true), "{text}");
+    assert_eq!(col_at(&grid, y, "[off]"), project_x);
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }

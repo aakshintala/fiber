@@ -1,0 +1,29 @@
+---
+source: crates/tui/src/tools_view_tests.rs
+assertion_line: 863
+expression: "text.join(\"\\n\")"
+---
+ Tools  /tools                                                       Esc returns
+  Built-in
+  read · full · 100 bytes
+
+  Extension · memory
+› notes · full · 100 bytes · this project›[on] · everywhere [on]
+
+  MCP · docs
+  gone · off · this project [on] · everywhere [off]
+  search · deferred · ~460 · this project [on] · everywhere [on]
+
+
+
+
+
+
+
+
+
+
+
+
+
+a change rebuilds the cache (~84k tokens · $0.31) on reload

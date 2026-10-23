@@ -305,9 +305,11 @@ fn a_tool_row_reads_as_the_doc_writes_it() {
     assert_eq!(
         kinds,
         [
-            ("notes · full · 100 bytes · this project ", None, Ink::Plain),
+            ("notes · full · 100 bytes · this project", None, Ink::Plain),
+            ("›", None, Ink::Heading),
             ("[off]", Some(Spot::Switch { row: 1, at: 0 }), Ink::Muted),
-            (" · everywhere ", None, Ink::Plain),
+            (" · everywhere", None, Ink::Plain),
+            (" ", None, Ink::Plain),
             ("[on]", Some(Spot::Switch { row: 1, at: 1 }), Ink::Heading),
         ]
     );
@@ -323,8 +325,8 @@ fn this_project_reads_the_project_lists_and_everywhere_the_global() {
     let tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
     let frame = frame(&tools);
     assert_eq!(frame.rows.len(), 2);
-    assert_eq!(frame.rows[1][1].0, "[off]");
-    assert_eq!(frame.rows[1][3].0, "[on]");
+    assert_eq!(frame.rows[1][2].0, "[off]");
+    assert_eq!(frame.rows[1][5].0, "[on]");
 }
 
 #[test]
@@ -378,6 +380,63 @@ fn left_and_right_choose_the_switch_and_stop_at_each_end() {
     assert_eq!(switched[1].2, SwitchScope::Project);
 }
 
+/// The mark cells of the tool row at `row`: the project switch's and the
+/// everywhere switch's.
+fn marks(tools: &Tools, row: usize) -> (String, String) {
+    let cells = &frame(tools).rows[row];
+    (cells[1].0.clone(), cells[4].0.clone())
+}
+
+#[test]
+fn a_bold_chevron_marks_the_focused_switch_of_the_focused_row_only() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Extension("e".to_owned()),
+        &[],
+        &[],
+    )]);
+    let mut tools = opened(&fake, &[extension("t", "e"), extension("u", "e")], None);
+    // Rows: heading, t, u. The first tool row is focused, on this project.
+    assert_eq!(marks(&tools, 1), ("›".to_owned(), " ".to_owned()));
+    assert_eq!(frame(&tools).rows[1][1].2, Ink::Heading);
+    // The other row has no mark.
+    assert_eq!(marks(&tools, 2), (" ".to_owned(), " ".to_owned()));
+    // → moves the mark to everywhere, ← moves it back.
+    tools.edit_key(&Edit::Right);
+    assert_eq!(marks(&tools, 1), (" ".to_owned(), "›".to_owned()));
+    assert_eq!(frame(&tools).rows[1][4].2, Ink::Heading);
+    tools.edit_key(&Edit::Left);
+    assert_eq!(marks(&tools, 1), ("›".to_owned(), " ".to_owned()));
+    // ↓ moves the focus to the next row, keeping the switch.
+    tools.edit_key(&Edit::Right);
+    tools.key(&Key::Down, &ctx(&fake, None));
+    assert_eq!(marks(&tools, 1), (" ".to_owned(), " ".to_owned()));
+    assert_eq!(marks(&tools, 2), (" ".to_owned(), "›".to_owned()));
+}
+
+#[test]
+fn the_mark_takes_the_place_of_the_space_so_columns_do_not_move() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Extension("e".to_owned()),
+        &[],
+        &[],
+    )]);
+    let mut tools = opened(&fake, &[extension("t", "e"), extension("u", "e")], None);
+    // The columns before each switch's word, on the focused row and on
+    // the other one.
+    let at = |tools: &Tools, row: usize, switch: usize| -> usize {
+        frame(tools).rows[row][..switch]
+            .iter()
+            .map(|(text, _, _)| width_of(text))
+            .sum()
+    };
+    for _ in 0..2 {
+        for switch in [2, 5] {
+            assert_eq!(at(&tools, 1, switch), at(&tools, 2, switch), "{switch}");
+        }
+        tools.edit_key(&Edit::Right);
+    }
+}
+
 #[test]
 fn a_click_on_a_switch_selects_its_row_and_switches_it() {
     let fake = fake_with(vec![group_switches(
@@ -402,7 +461,7 @@ fn a_click_on_a_switch_selects_its_row_and_switches_it() {
         )]
     );
     assert_eq!(frame(&tools).rows.len(), 6);
-    assert_eq!(frame(&tools).rows[5][3].0, "[off]");
+    assert_eq!(frame(&tools).rows[5][5].0, "[off]");
 }
 
 #[test]
@@ -532,14 +591,14 @@ fn a_disabled_tool_the_answer_lacks_is_an_off_row() {
     let tools = opened(&fake, &[], None);
     assert_eq!(tool_names(&tools), vec!["gone"]);
     let rows = names(&tools);
-    assert_eq!(rows[1], "gone · off · this project [off] · everywhere [on]");
+    assert_eq!(rows[1], "gone · off · this project›[off] · everywhere [on]");
     let frame = frame(&tools);
     assert!(matches!(
-        frame.rows[1][1].1,
+        frame.rows[1][2].1,
         Some(Spot::Switch { row: 1, at: 0 })
     ));
     assert!(matches!(
-        frame.rows[1][3].1,
+        frame.rows[1][5].1,
         Some(Spot::Switch { row: 1, at: 1 })
     ));
 }
@@ -647,7 +706,7 @@ fn a_successful_switch_says_nothing_below() {
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], Some(180_000));
     tools.key(&Key::Char(' '), &ctx(&fake, Some(180_000)));
     assert!(frame(&tools).below.is_empty());
-    assert_eq!(frame(&tools).rows[1][1].0, "[off]");
+    assert_eq!(frame(&tools).rows[1][2].0, "[off]");
 }
 
 #[test]
@@ -686,7 +745,7 @@ fn a_failed_switch_shows_its_message_and_keeps_the_rows() {
     let frame = frame(&tools);
     assert_eq!(frame.below, vec!["config.json: not JSON".to_owned()]);
     assert_eq!(tool_names(&tools), vec!["t"]);
-    assert_eq!(frame.rows[1][1].0, "[on]");
+    assert_eq!(frame.rows[1][2].0, "[on]");
 }
 
 #[test]
@@ -702,7 +761,7 @@ fn a_switch_that_wrote_then_failed_shows_what_the_files_hold() {
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     let frame = frame(&tools);
-    assert_eq!(frame.rows[1][1].0, "[off]");
+    assert_eq!(frame.rows[1][2].0, "[off]");
     assert!(!frame.below.is_empty());
 }
 
@@ -776,7 +835,7 @@ fn a_narrow_width_clips_without_panicking() {
     for width in [0, 1, 10, 40, 65] {
         let tools = widest_row(&"e".repeat(30));
         let cells = &tools.frame(width, None).rows[1];
-        assert_eq!(cells.len(), 4, "width {width}");
+        assert_eq!(cells.len(), 6, "width {width}");
         let area = Rect::new(0, 0, u16::try_from(width).unwrap_or(0), 5);
         render(
             &tools.frame(width, None),
