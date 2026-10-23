@@ -7,10 +7,10 @@
 
 use super::{
     FeedbackError, ReportContext, build_report, crash_details, diagnostics, install_method,
-    issue_link, title, write,
+    issue_link, select_session, title, write,
 };
-use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
+use contract::{ErrorCode, SessionId};
 use fakes::clock::FakeClock;
 use std::fs;
 use std::path::Path;
@@ -456,6 +456,83 @@ impl Home {
         let session = session.map(|id| SessionId(id.to_owned()));
         diagnostics(self.0.path(), FakeClock::new().as_ref(), session.as_ref())
     }
+
+    fn session(&self, stored_in: &Path, workspace: &Path, id: &str, ts: u64, parent: Option<&str>) {
+        let project = doors::project(stored_in);
+        let dir = log::sessions_dir(self.0.path(), &project).join(id);
+        fs::create_dir_all(&dir).unwrap();
+        let mut payload = serde_json::json!({
+            "workspace": workspace,
+            "variables": {"path": "", "names": [], "source": "inherited"}
+        });
+        if let Some(parent) = parent {
+            payload["parent"] = serde_json::json!({
+                "session_id": parent,
+                "delegate_id": "j_1"
+            });
+        }
+        let started = serde_json::json!({
+            "kind": "session_started",
+            "session_id": id,
+            "ts": ts,
+            "schema_version": 1,
+            "seq": 0,
+            "payload": payload
+        });
+        fs::write(dir.join("events.jsonl"), format!("{started}\n")).unwrap();
+    }
+}
+
+#[test]
+fn select_session_accepts_an_explicit_non_delegate_id() {
+    let home = Home::new();
+    let workspace = home.0.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    home.session(&workspace, &workspace, SESSION, 1, None);
+
+    assert_eq!(
+        select_session(
+            home.0.path(),
+            &workspace,
+            Some(SessionId(SESSION.to_owned()))
+        )
+        .unwrap(),
+        Some(SessionId(SESSION.to_owned()))
+    );
+}
+
+#[test]
+fn select_session_rejects_an_explicit_delegate_id() {
+    let home = Home::new();
+    let workspace = home.0.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    home.session(&workspace, &workspace, SESSION, 1, Some(OTHER));
+
+    let error = select_session(
+        home.0.path(),
+        &workspace,
+        Some(SessionId(SESSION.to_owned())),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::SessionNotFound);
+}
+
+#[test]
+fn select_session_without_an_id_uses_the_newest_session_in_the_workspace_project() {
+    let home = Home::new();
+    let workspace = home.0.path().join("workspace");
+    let other_workspace = home.0.path().join("elsewhere");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&other_workspace).unwrap();
+    home.session(&workspace, &workspace, SESSION, 1, None);
+    // A session directory in this project's store can still record a different
+    // workspace; selection must not use its later timestamp.
+    home.session(&workspace, &other_workspace, OTHER, 2, None);
+
+    assert_eq!(
+        select_session(home.0.path(), &workspace, None).unwrap(),
+        Some(SessionId(SESSION.to_owned()))
+    );
 }
 
 /// One recorded line of `process`; its message is `tag`, so a test can
