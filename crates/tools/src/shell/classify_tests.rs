@@ -259,8 +259,8 @@ fn assert_declares(command: &str, paths: &[&str]) {
 
 /// The network a `gh` read declares: the default GitHub API endpoint,
 /// in the shape `web_fetch` declares it.
-fn assert_network(command: &str, paths: &[&str]) {
-    let effects = classified(command);
+fn assert_network(command: &str, entries: &[(String, Vec<String>)], paths: &[&str]) {
+    let effects = classified_with(command, entries);
     assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
     assert_eq!(
         effects.hosts,
@@ -445,48 +445,14 @@ fn hostile_git_forms_execute() {
 
 #[test]
 fn gh_read_only_forms_read() {
-    for (command, paths) in [
-        ("gh pr view 123", vec!["/work/123"]),
-        (
-            "gh pr view 123 --json number,title --comments --repo owner/name -R owner/name",
-            vec!["/work/123"],
-        ),
-        (
-            "gh pr list --state open -s open --author me --assignee me --label bug --limit 30 -L 30 --base main --head feature --search term --json number --draft --app mine --repo owner/name -R owner/name",
-            vec!["/work"],
-        ),
-        (
-            "gh pr diff 123 --color always --name-only --patch --repo owner/name -R owner/name",
-            vec!["/work/123"],
-        ),
-        (
-            "gh pr checks 123 --watch --required --fail-fast --json state --interval 10 --repo owner/name -R owner/name",
-            vec!["/work/123"],
-        ),
-        (
-            "gh issue view 123 --json title --comments --repo owner/name -R owner/name",
-            vec!["/work/123"],
-        ),
-        (
-            "gh issue list --state open -s open --assignee me --author me --label bug --limit 30 -L 30 --milestone v1 --search term --json number --app mine --repo owner/name -R owner/name",
-            vec!["/work"],
-        ),
-        (
-            "gh repo view owner/name --json name",
-            vec!["/work/owner/name"],
-        ),
-        (
-            "gh run list --branch main -b main --status success -s success --workflow ci -w ci --limit 30 -L 30 --json databaseId --repo owner/name -R owner/name --event push -e push --user me -u me --created 2024-01-01 --commit abc -c abc",
-            vec!["/work"],
-        ),
-        (
-            "gh run view 123 --log --log-failed --exit-status --verbose -v --json conclusion --repo owner/name -R owner/name --job build -j build --attempt 2 -a 2",
-            vec!["/work/123"],
-        ),
-    ] {
-        assert_network(command, &paths);
-    }
-    assert_network("LC_ALL=C gh pr view 123", &["/work/123"]);
+    // The table tests below prove every flag alone and every row reads;
+    // one combined row pins the declared network, host and paths.
+    assert_network(
+        "gh pr view 123 --json number,title --comments --repo owner/name -R owner/name",
+        &[],
+        &["/work/123"],
+    );
+    assert_network("LC_ALL=C gh pr view 123", &[], &["/work/123"]);
 }
 
 #[test]
@@ -514,6 +480,9 @@ fn other_gh_forms_execute() {
         "gh pr view 123 --web",
         "gh pr view -- x",
         "gh -R owner/name pr view 123",
+        "gh pr view 123 --repo github.corp/owner/repo",
+        "gh pr view 123 --repo=github.corp/owner/repo",
+        "gh pr view 123 -R github.corp/owner/repo",
         "gh issue close 123",
         "gh repo clone owner/name",
         "gh auth status",
@@ -526,26 +495,14 @@ fn other_gh_forms_execute() {
     // name. A configured `gh pr status` is honoured: no built-in owns it.
     let view = [configured("gh pr view", &["--web"])];
     assert_configured_closed("gh pr view 123 --web", &view);
+    // Only echo stages print statically-known words: a gh stage's output
+    // leaves a later `xargs` reader unproven, so the call is reviewed.
+    assert_closed("gh pr view 123 | xargs wc -l");
     let status = [configured("gh pr status", &["--json="])];
     // A configured `gh` entry hits the network too, so it declares
     // `Network` with the default host instead of `Reads`.
-    for (command, paths) in [
-        ("gh pr status 123", vec!["/work/123"]),
-        ("gh pr status 123 --json number", vec!["/work/123"]),
-    ] {
-        let effects = classified_with(command, &status);
-        assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
-        assert_eq!(
-            effects.hosts,
-            Some(vec!["https://api.github.com/".to_owned()]),
-            "{command}"
-        );
-        assert_eq!(
-            effects.declared.paths,
-            Some(paths.iter().map(|path| (*path).to_owned()).collect()),
-            "{command}"
-        );
-    }
+    assert_network("gh pr status 123", &status, &["/work/123"]);
+    assert_network("gh pr status 123 --json number", &status, &["/work/123"]);
     assert_eq!(
         classified_with("gh pr status 123 --web", &status)
             .declared
@@ -727,7 +684,7 @@ fn every_listed_command_with_a_plain_operand_reads() {
         // with the default host instead of `Reads`.
         if command.name.starts_with("gh ") {
             let line = format!("{} x", command.name);
-            assert_network(&line, &["/work/x"]);
+            assert_network(&line, &[], &["/work/x"]);
             continue;
         }
         let line = format!("{} x", command.name);
@@ -755,7 +712,7 @@ fn each_allowed_flag_keeps_the_command_read_only() {
                 } else {
                     format!("{} {}", command.name, flag.spelling)
                 };
-                assert_network(&line, &["/work"]);
+                assert_network(&line, &[], &["/work"]);
             }
             continue;
         }

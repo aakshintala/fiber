@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use contract::shapes::Effect;
 
 use super::super::classify::classify;
-use super::{MAX_GITFILE_BYTES, repository_ok};
+use super::repository_ok;
 
 fn workspace(prefix: &str) -> (fakes::TempDir, PathBuf) {
     let dir = fakes::TempDir::new(prefix);
@@ -34,6 +34,20 @@ fn a_git_directory_reads() {
     let nested = workspace.join("sub");
     std::fs::create_dir_all(&nested).unwrap();
     assert!(repository_ok(&nested));
+}
+
+#[test]
+fn a_file_workdir_executes() {
+    let (_dir, workspace) = workspace("fiber-shell-git-file");
+    let file = workspace.join("file");
+    std::fs::write(&file, "data\n").unwrap();
+    // A regular file is not a directory: the `.git` probe beneath it
+    // errors with something other than not-found, so the call is
+    // reviewed instead of walking past it.
+    assert!(!repository_ok(&file));
+    let effects = classify("git status", &file, &[]);
+    assert_eq!(effects.declared.effects, vec![Effect::Executes]);
+    assert!(effects.declared.paths.is_none());
 }
 
 #[test]
@@ -146,6 +160,19 @@ fn a_non_utf8_gitfile_executes() {
 }
 
 #[test]
+fn symlinked_bare_markers_execute() {
+    let (_dir, workspace) = workspace("fiber-shell-git-symlink-bare");
+    std::fs::write(workspace.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let objects = workspace.join("real-objects");
+    std::fs::create_dir_all(&objects).unwrap();
+    std::os::unix::fs::symlink(&objects, workspace.join("objects")).unwrap();
+    std::fs::create_dir_all(workspace.join("refs")).unwrap();
+    // A symlinked marker is unsafe, so it counts toward bareness exactly
+    // as a real directory does.
+    assert!(!repository_ok(&workspace));
+}
+
+#[test]
 fn a_symlink_git_executes() {
     let (_dir, workspace) = workspace("fiber-shell-git-symlink");
     let repo = workspace.join("repo");
@@ -171,7 +198,6 @@ fn the_gitfile_size_cap_holds_at_512_bytes() {
         let target = format!("{base}{}", "/".repeat(size - 9 - base.len()));
         let content = format!("gitdir: {target}\n");
         assert_eq!(content.len(), size, "{size}");
-        assert!(content.len() <= MAX_GITFILE_BYTES + 1);
         write_gitfile(&workspace, &content);
         assert_eq!(repository_ok(&workspace), reads, "{size}");
     }

@@ -266,13 +266,6 @@ const GH_PR_CHECKS: &[Flag] = &[
     value("-R"),
 ];
 
-const GH_ISSUE_VIEW: &[Flag] = &[
-    value("--json"),
-    flag("--comments"),
-    value("--repo"),
-    value("-R"),
-];
-
 const GH_ISSUE_LIST: &[Flag] = &[
     value("--state"),
     value("-s"),
@@ -584,7 +577,7 @@ pub(super) const COMMANDS: &[Command] = &[
     gh("gh pr list", GH_PR_LIST),
     gh("gh pr diff", GH_PR_DIFF),
     gh("gh pr checks", GH_PR_CHECKS),
-    gh("gh issue view", GH_ISSUE_VIEW),
+    gh("gh issue view", GH_PR_VIEW),
     gh("gh issue list", GH_ISSUE_LIST),
     gh("gh repo view", GH_REPO_VIEW),
     gh("gh run list", GH_RUN_LIST),

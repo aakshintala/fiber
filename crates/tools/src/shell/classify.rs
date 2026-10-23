@@ -174,22 +174,19 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
             // proven only when at least one earlier stage ran and every
             // one printed statically-known words; any other producer
             // leaves stdin unproven and its `xargs` reader reviewed.
-            match stage_outcome(
+            let verdict = stage_outcome(
                 stage,
                 &dirs,
                 configured,
                 saw_cd,
                 &stdin_words,
                 stdin_known && stdin_static,
-            ) {
+            );
+            let network = matches!(verdict, Outcome::Network(_));
+            match verdict {
                 Outcome::Executes => saw_executes = true,
-                Outcome::Reads(more) => {
-                    stdin_known = true;
-                    stdin_static = stdin_static && static_words(stage, &mut stdin_words);
-                    paths.extend(more);
-                }
-                Outcome::Network(more) => {
-                    saw_network = true;
+                Outcome::Reads(more) | Outcome::Network(more) => {
+                    saw_network = saw_network || network;
                     stdin_known = true;
                     stdin_static = stdin_static && static_words(stage, &mut stdin_words);
                     paths.extend(more);
@@ -300,7 +297,9 @@ fn stage_outcome(
 }
 
 /// A `gh` read hits the API: it declares `Network` with the default host
-/// beside the paths it read. Any other verdict passes through.
+/// beside the paths it read. A `--repo`/`-R` value naming a host reaches
+/// past that endpoint, so the call is reviewed instead. Any other verdict
+/// passes through.
 fn networked(verdict: Outcome, words: &[Word]) -> Outcome {
     let Outcome::Reads(paths) = verdict else {
         return verdict;
@@ -308,7 +307,33 @@ fn networked(verdict: Outcome, words: &[Word]) -> Outcome {
     if !is_gh(words) {
         return Outcome::Reads(paths);
     }
+    if repo_selects_host(words) {
+        return Outcome::Executes;
+    }
     Outcome::Network(paths)
+}
+
+/// Whether a `--repo`/`-R` value in a `gh` call names a host:
+/// `HOST/OWNER/REPO` reaches past the default endpoint, so the call is
+/// reviewed. A bare `OWNER/REPO`, or a value with no slash, cannot name
+/// one. A `--repo` word consumed as another flag's value keeps its
+/// own meaning, but such a call is reviewed too: it stays fail-closed.
+fn repo_selects_host(words: &[Word]) -> bool {
+    words
+        .iter()
+        .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
+        || words.windows(2).any(|pair| {
+            let [flag, value] = pair else {
+                return false;
+            };
+            (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
+        })
+}
+
+/// Whether a `--repo`/`-R` value holds a host part: more than
+/// `OWNER/REPO` can name.
+fn has_host(value: &str) -> bool {
+    value.split('/').count() > 2
 }
 
 /// A git read runs only where the repository guards pass in every

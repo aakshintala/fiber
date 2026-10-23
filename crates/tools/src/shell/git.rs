@@ -5,7 +5,7 @@
 //! or configuration the person never saw, and neither case is proven safe.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The most bytes read from a `.git` file: a longer file is `executes`.
 pub(super) const MAX_GITFILE_BYTES: usize = 512;
@@ -57,11 +57,24 @@ pub(super) fn repository_ok(dir: &Path) -> bool {
 
 /// Whether `dir` is a bare repository: it holds `HEAD` as a file with
 /// `objects/` and `refs/` beside it, and no `.git` (the caller checked).
+/// A marker that exists as a symlink is unsafe, so it counts exactly as
+/// a real file or directory does.
 fn is_bare(dir: &Path) -> bool {
-    let head = std::fs::symlink_metadata(dir.join("HEAD")).is_ok_and(|meta| meta.is_file());
-    let objects = std::fs::symlink_metadata(dir.join("objects")).is_ok_and(|meta| meta.is_dir());
-    let refs = std::fs::symlink_metadata(dir.join("refs")).is_ok_and(|meta| meta.is_dir());
-    head && objects && refs
+    marker_file(&dir.join("HEAD"))
+        && marker_dir(&dir.join("objects"))
+        && marker_dir(&dir.join("refs"))
+}
+
+/// Whether a bare marker exists as a file. A symlink counts exactly as
+/// a real file does.
+fn marker_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() || meta.is_symlink())
+}
+
+/// Whether a bare marker exists as a directory. A symlink counts exactly
+/// as a real directory does; a regular file does not count.
+fn marker_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() || meta.is_symlink())
 }
 
 /// Whether `dir`'s `.git` file names a verifiable target: one line
@@ -95,11 +108,7 @@ fn gitfile_ok(dir: &Path) -> bool {
     if target.is_empty() {
         return false;
     }
-    let joined = if Path::new(target).is_absolute() {
-        PathBuf::from(target)
-    } else {
-        dir.join(target)
-    };
+    let joined = dir.join(target);
     let Ok(canonical) = joined.canonicalize() else {
         return false;
     };
