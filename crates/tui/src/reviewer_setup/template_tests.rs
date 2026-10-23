@@ -4,10 +4,7 @@
 
 use contract::notes::Topic;
 
-use super::{
-    DiffRow, LCS_CELLS, NotesLayer, Op, Source, clean_line, default_layer, diff, merge, ops,
-    ops_within, owned,
-};
+use super::{DiffRow, NotesLayer, Source, clean_line, default_layer, diff, merge, owned};
 
 fn s(text: &str) -> String {
     text.to_string()
@@ -606,8 +603,8 @@ fn rows_hold_lines_without_their_endings() {
 
 #[test]
 fn a_fifty_thousand_line_text_with_one_bullet_changed_diffs_to_its_rows() {
-    // A whole-text LCS table of 50,000 by 50,000 cells would not fit in
-    // memory: only the changed middle takes the table.
+    // A table over the whole text, 50,000 by 50,000 cells, would not fit in
+    // memory.
     let mut before = String::from("### Source control\n- a\n- b\n");
     for n in 0..50_000 {
         before.push_str(&format!("prose line {n}\n"));
@@ -622,7 +619,6 @@ fn a_fifty_thousand_line_text_with_one_bullet_changed_diffs_to_its_rows() {
 
 #[test]
 fn a_change_at_the_top_of_a_fifty_thousand_line_text_diffs_to_its_rows() {
-    // The unchanged tail is trimmed as a suffix, not run through the table.
     let mut before = String::from("### Source control\n- a\n- b\n");
     for n in 0..50_000 {
         before.push_str(&format!("prose line {n}\n"));
@@ -660,115 +656,6 @@ fn changes_at_both_ends_of_a_large_text_diff_to_their_rows() {
             context("### Routine actions"),
             context("- c"),
             removed("- d"),
-        ]
-    );
-}
-
-// ------------------------------------------------------------------ ops
-
-fn lines(count: usize, prefix: &str) -> Vec<String> {
-    (0..count).map(|n| format!("{prefix}{n}\n")).collect()
-}
-
-fn equal_count(found: &[Op]) -> usize {
-    found.iter().filter(|op| matches!(op, Op::Equal(_))).count()
-}
-
-/// Two middles of `cells` table cells whose only shared line is one that
-/// the trim cannot reach: the first line of `before`, the last of `after`.
-fn crossed(rows: usize, cols: usize) -> (Vec<String>, Vec<String>) {
-    let mut before = vec![s("shared\n")];
-    before.extend(lines(rows - 1, "p"));
-    let mut after = lines(cols - 1, "q");
-    after.push(s("shared\n"));
-    (before, after)
-}
-
-#[test]
-fn the_table_runs_at_the_cell_cap_and_one_cell_below_it() {
-    let (before, after) = crossed(2_000, LCS_CELLS / 2_000);
-    let before: Vec<&str> = before.iter().map(String::as_str).collect();
-    let after: Vec<&str> = after.iter().map(String::as_str).collect();
-    assert_eq!(before.len() * after.len(), LCS_CELLS);
-    assert_eq!(
-        equal_count(&ops(&before, &after)),
-        1,
-        "no shared line found"
-    );
-
-    let (before, after) = crossed(1_999, 2_000);
-    let before: Vec<&str> = before.iter().map(String::as_str).collect();
-    let after: Vec<&str> = after.iter().map(String::as_str).collect();
-    assert!(before.len() * after.len() < LCS_CELLS);
-    assert_eq!(
-        equal_count(&ops(&before, &after)),
-        1,
-        "no shared line found"
-    );
-}
-
-#[test]
-fn above_the_cell_cap_every_middle_line_is_removed_then_added() {
-    let (before, after) = crossed(2_000, LCS_CELLS / 2_000 + 1);
-    let before: Vec<&str> = before.iter().map(String::as_str).collect();
-    let after: Vec<&str> = after.iter().map(String::as_str).collect();
-    assert!(before.len() * after.len() > LCS_CELLS);
-    let found = ops(&before, &after);
-    assert_eq!(equal_count(&found), 0);
-    assert_eq!(
-        found.len(),
-        before.len() + after.len(),
-        "a line was dropped or repeated"
-    );
-    let first_added = found
-        .iter()
-        .position(|op| matches!(op, Op::Added(_)))
-        .expect("an added line");
-    assert_eq!(first_added, before.len(), "removals read before additions");
-}
-
-/// The shared lines found in a middle of `rows` by `cols` lines under a
-/// cap of 9 cells.
-fn tiny_cross(rows: usize, cols: usize) -> usize {
-    let (before, after) = crossed(rows, cols);
-    let before: Vec<&str> = before.iter().map(String::as_str).collect();
-    let after: Vec<&str> = after.iter().map(String::as_str).collect();
-    equal_count(&ops_within(&before, &after, 9))
-}
-
-#[test]
-fn the_cell_cap_runs_the_table_at_the_cap_and_below_and_not_above() {
-    assert_eq!(tiny_cross(3, 3), 1, "at the cap: 9 cells");
-    assert_eq!(tiny_cross(2, 4), 1, "one below the cap: 8 cells");
-    assert_eq!(tiny_cross(2, 5), 0, "one above the cap: 10 cells");
-    assert_eq!(tiny_cross(3, 4), 0, "above the cap: 12 cells");
-}
-
-#[test]
-fn the_common_prefix_and_suffix_are_equal_ops_around_the_middle() {
-    let found = ops(&["a\n", "x\n", "z\n"], &["a\n", "y\n", "z\n"]);
-    assert_eq!(
-        found,
-        [
-            Op::Equal("a\n"),
-            Op::Removed("x\n"),
-            Op::Added("y\n"),
-            Op::Equal("z\n")
-        ]
-    );
-}
-
-#[test]
-fn a_shared_line_inside_the_middle_is_found() {
-    let found = ops(&["a\n", "k\n", "b\n"], &["c\n", "k\n", "d\n"]);
-    assert_eq!(
-        found,
-        [
-            Op::Removed("a\n"),
-            Op::Added("c\n"),
-            Op::Equal("k\n"),
-            Op::Removed("b\n"),
-            Op::Added("d\n"),
         ]
     );
 }

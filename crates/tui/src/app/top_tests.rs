@@ -26,13 +26,12 @@ use contract::{JobId, SessionId};
 
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
-/// The 20 surfaces, top first, as the ticket orders them.
-const ORDER: [Surface; 20] = [
+/// The 19 surfaces, top first, as the ticket orders them.
+const ORDER: [Surface; 19] = [
     Surface::Quit,
     Surface::Report,
     Surface::KeysScreen,
     Surface::Keymap,
-    Surface::ReviewerSetup,
     Surface::Picker,
     Surface::ConfigView,
     Surface::SessionView,

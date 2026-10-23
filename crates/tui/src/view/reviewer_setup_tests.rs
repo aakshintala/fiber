@@ -6,12 +6,14 @@ use std::sync::Arc;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use serde_json::{Value, json};
 
 use contract::clock::Clock;
 use contract::notes::Topic;
 
-use super::{draw, frame};
+use super::{clip, draw, frame, wrap_spans};
 use crate::app::{App, Effect, Surface};
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, NotesFile, NotesSaved, ReviewerNotes,
@@ -378,6 +380,9 @@ fn barred(fx: &Fixture) -> usize {
         .count()
 }
 
+/// `bars` is 1 on a screen with a focused choice and 0 on one without:
+/// `docs/tui.md`, "Overlays", "Choices", "Exactly one row is barred", for
+/// the focused choice's row.
 #[track_caller]
 fn checked(mut fx: Fixture, name: &str, bars: usize) -> String {
     fits_80_columns(&fx);
@@ -521,6 +526,7 @@ fn a_thirty_line_screen_keeps_the_focused_row_in_view_with_one_barred_row() {
             "line {at} is out of view:\n{screen}"
         );
         let framed = overlay_of(&fx, 120, 24);
+        // `docs/tui.md`, "Overlays", "Choices": "Exactly one row is barred".
         assert_eq!(
             framed.body.iter().filter(|row| row.barred).count(),
             1,
@@ -567,6 +573,7 @@ fn a_long_focused_line_stays_within_the_capacity_and_ends_in_an_ellipsis() {
         let bars = framed.body.iter().filter(|row| row.barred).count();
         assert!(bars >= 1, "height {height}: a barred row");
         if height == 9 {
+            // `docs/tui.md`, "Overlays", "Choices": "Exactly one row is barred".
             assert_eq!(bars, 1, "one row fits at height 9");
         }
         let last = framed.body.last().expect("a body row");
@@ -843,4 +850,76 @@ fn the_import_report_draws_over_the_setup() {
     let mut twin_buf = Buffer::empty(area);
     crate::view::render(&twin.app, area, &mut twin_buf, None);
     assert_eq!(cells_in(&buf, report), cells_in(&twin_buf, report));
+}
+
+// -------------------------------------------------- wrapping and clipping
+
+fn dimmed() -> Style {
+    Style::new().add_modifier(Modifier::DIM)
+}
+
+fn pieces<'a>(row: &'a [Span<'static>]) -> Vec<(&'a str, Style)> {
+    row.iter()
+        .map(|span| (span.content.as_ref(), span.style))
+        .collect()
+}
+
+#[test]
+fn a_wrap_at_a_space_leaves_the_next_word_its_own_style() {
+    let spans = [Span::raw("aaaa bbbb "), Span::styled("cccc", dimmed())];
+    let rows = wrap_spans(&spans, 11);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(pieces(&rows[0]), [("aaaa bbbb", Style::new())]);
+    assert_eq!(pieces(&rows[1]), [("  ", Style::new()), ("cccc", dimmed())]);
+}
+
+#[test]
+fn a_wrap_at_a_newline_leaves_the_next_line_its_own_style() {
+    let spans = [Span::raw("aa\n"), Span::styled("bb", dimmed())];
+    let rows = wrap_spans(&spans, 11);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(pieces(&rows[0]), [("aa", Style::new())]);
+    assert_eq!(pieces(&rows[1]), [("  ", Style::new()), ("bb", dimmed())]);
+}
+
+#[test]
+fn a_word_broken_at_the_edge_keeps_every_character_and_style() {
+    let spans = [Span::raw("aaaaa"), Span::styled("bbbbb", dimmed())];
+    let rows = wrap_spans(&spans, 8);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(pieces(&rows[0]), [("aaaaa", Style::new()), ("b", dimmed())]);
+    assert_eq!(pieces(&rows[1]), [("  ", Style::new()), ("bbbb", dimmed())]);
+}
+
+fn one_row(spans: Vec<Span<'static>>) -> super::Row {
+    super::row(spans)
+}
+
+#[test]
+fn clip_keeps_the_first_rows_and_ends_the_last_in_an_ellipsis_in_its_style() {
+    let mut rows = vec![
+        one_row(vec![Span::raw("first")]),
+        one_row(vec![Span::styled("second", dimmed())]),
+        one_row(vec![Span::raw("third")]),
+    ];
+    clip(&mut rows, 2, 20);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        pieces(&rows[1].spans),
+        [("second", dimmed()), ("…", dimmed())]
+    );
+    assert_eq!(pieces(&rows[0].spans), [("first", Style::new())]);
+}
+
+#[test]
+fn clip_cuts_a_last_row_wider_than_the_panel_to_the_width_with_the_ellipsis() {
+    let mut rows = vec![one_row(vec![
+        Span::raw("ab"),
+        Span::styled("cdefgh", dimmed()),
+    ])];
+    clip(&mut rows, 1, 6);
+    assert_eq!(
+        pieces(&rows[0].spans),
+        [("ab", Style::new()), ("cde…", dimmed())]
+    );
 }

@@ -1203,6 +1203,7 @@ and an expiry wakes the loop even with no input.
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
 | `no_model` | event | Fades 10 s after it shows. |
+| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
@@ -1539,6 +1540,8 @@ what it started keeps running.
   ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
   panel's legend says. The ✕ and a press outside the panel, which is Esc,
   are its mouse targets, and the mouse wheel does nothing while it is open.
+  Enter on a diff that would change neither layer closes the setup with one
+  notice, `notes_unchanged`, and writes no file.
   The notice that names the command, shown the first time in a session the
   reviewer blocks a call while both layers of the notes are empty, closes on
   any key, and that key goes nowhere else.

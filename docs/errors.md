@@ -364,6 +364,7 @@ the lines that carry it.
 | `no_model` | exit, notice, driver command (`rewind`), hub command | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id; or a hub `configure` operation sets `model` to one no installed provider has | event |
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
+| `notes_unchanged` | notice | `/reviewer-setup` reached its diff and the save would change neither layer, so no file was written (`docs/tui.md`, "Rules") | event |
 | `orphaned` | job | the process that ran the job died | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
 | `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run | — |

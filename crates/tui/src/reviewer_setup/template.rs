@@ -3,8 +3,10 @@
 //! (`docs/permissions.md`, "Setting up the notes").
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use contract::notes::Topic;
+use similar::{Algorithm, DiffTag, capture_diff_slices};
 
 /// The notes layer a line goes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,110 +316,6 @@ pub(crate) enum DiffRow {
     Added(String),
 }
 
-/// One line of the line diff.
-#[derive(Debug, PartialEq, Eq)]
-enum Op<'a> {
-    Equal(&'a str),
-    Removed(&'a str),
-    Added(&'a str),
-}
-
-/// The most table cells the longest-common-subsequence runs on: 16 MB of
-/// `u32`.
-// debt: a changed middle over this many cells, from edits far apart in a
-// very large file, diffs as all removed then all added instead of minimal;
-// replace the table with Myers' O(ND) walk when a real notes file hits it.
-const LCS_CELLS: usize = 4_000_000;
-
-/// The line diff of `before` against `after`: the common prefix and suffix
-/// are equal lines, and the longest common subsequence runs on the middle
-/// only, so a large file with a few changes costs no table of its own size.
-fn ops<'a>(before: &[&'a str], after: &[&'a str]) -> Vec<Op<'a>> {
-    ops_within(before, after, LCS_CELLS)
-}
-
-/// [`ops`] with the table capped at `cells`: a middle with more cells than
-/// that is all removed, then all added.
-fn ops_within<'a>(before: &[&'a str], after: &[&'a str], cells: usize) -> Vec<Op<'a>> {
-    let prefix = before.iter().zip(after).take_while(|(b, a)| b == a).count();
-    let (before_rest, after_rest) = (
-        before.get(prefix..).unwrap_or_default(),
-        after.get(prefix..).unwrap_or_default(),
-    );
-    let suffix = before_rest
-        .iter()
-        .rev()
-        .zip(after_rest.iter().rev())
-        .take_while(|(b, a)| b == a)
-        .count();
-    let middle = |rest: &'_ [&'a str]| rest.get(..rest.len() - suffix).unwrap_or_default().to_vec();
-    let (b_mid, a_mid) = (middle(before_rest), middle(after_rest));
-
-    let mut found: Vec<Op<'a>> = before.iter().take(prefix).copied().map(Op::Equal).collect();
-    if b_mid.len().saturating_mul(a_mid.len()) > cells {
-        found.extend(b_mid.iter().copied().map(Op::Removed));
-        found.extend(a_mid.iter().copied().map(Op::Added));
-    } else {
-        found.extend(common(&b_mid, &a_mid));
-    }
-    found.extend(before_rest.iter().skip(b_mid.len()).copied().map(Op::Equal));
-    found
-}
-
-/// The table of common-subsequence lengths between the suffixes of two
-/// line lists.
-struct Table {
-    cols: usize,
-    cells: Vec<u32>,
-}
-
-impl Table {
-    fn at(&self, row: usize, col: usize) -> u32 {
-        self.cells
-            .get(row * self.cols + col)
-            .copied()
-            .unwrap_or_default()
-    }
-}
-
-fn common<'a>(before: &[&'a str], after: &[&'a str]) -> Vec<Op<'a>> {
-    let cols = after.len() + 1;
-    let mut table = Table {
-        cols,
-        cells: vec![0; (before.len() + 1) * cols],
-    };
-    for (row, b) in before.iter().enumerate().rev() {
-        for (col, a) in after.iter().enumerate().rev() {
-            let cell = if b == a {
-                table.at(row + 1, col + 1) + 1
-            } else {
-                table.at(row + 1, col).max(table.at(row, col + 1))
-            };
-            if let Some(slot) = table.cells.get_mut(row * cols + col) {
-                *slot = cell;
-            }
-        }
-    }
-    let (mut row, mut col) = (0, 0);
-    let mut found = Vec::new();
-    while let (Some(b), Some(a)) = (before.get(row), after.get(col)) {
-        if b == a {
-            found.push(Op::Equal(b));
-            row += 1;
-            col += 1;
-        } else if table.at(row + 1, col) >= table.at(row, col + 1) {
-            found.push(Op::Removed(b));
-            row += 1;
-        } else {
-            found.push(Op::Added(a));
-            col += 1;
-        }
-    }
-    found.extend(before.iter().skip(row).copied().map(Op::Removed));
-    found.extend(after.iter().skip(col).copied().map(Op::Added));
-    found
-}
-
 /// The topic each line of a text belongs to: a heading or a bullet of a
 /// block. Prose belongs to none.
 fn line_topics(lines: &[&str]) -> Vec<Option<Topic>> {
@@ -428,6 +326,23 @@ fn line_topics(lines: &[&str]) -> Vec<Option<Topic>> {
         }
     }
     topics
+}
+
+/// The rows `make` builds from the lines of `range`, each with its topic
+/// and without its line ending.
+fn lines_of<'a>(
+    lines: &'a [&str],
+    topics: &'a [Option<Topic>],
+    range: Range<usize>,
+    make: fn(String) -> DiffRow,
+) -> impl Iterator<Item = (Option<Topic>, DiffRow)> + 'a {
+    range.filter_map(move |at| {
+        let line = lines.get(at)?;
+        Some((
+            topics.get(at).copied().flatten(),
+            make(split_ending(line).0.to_string()),
+        ))
+    })
 }
 
 /// The rows the final screen draws for one layer: the line diff of the text
@@ -443,34 +358,15 @@ pub(crate) fn diff(before: &str, after: &str) -> Vec<DiffRow> {
     let before: Vec<&str> = before.split_inclusive('\n').collect();
     let after: Vec<&str> = after.split_inclusive('\n').collect();
     let (before_topics, after_topics) = (line_topics(&before), line_topics(&after));
-    let topic_at = |topics: &[Option<Topic>], at: usize| topics.get(at).copied().flatten();
 
-    let (mut i, mut j) = (0, 0);
     let mut rows: Vec<(Option<Topic>, DiffRow)> = Vec::new();
-    for op in ops(&before, &after) {
-        match op {
-            Op::Equal(line) => {
-                rows.push((
-                    topic_at(&after_topics, j),
-                    DiffRow::Context(split_ending(line).0.to_string()),
-                ));
-                i += 1;
-                j += 1;
-            }
-            Op::Removed(line) => {
-                rows.push((
-                    topic_at(&before_topics, i),
-                    DiffRow::Removed(split_ending(line).0.to_string()),
-                ));
-                i += 1;
-            }
-            Op::Added(line) => {
-                rows.push((
-                    topic_at(&after_topics, j),
-                    DiffRow::Added(split_ending(line).0.to_string()),
-                ));
-                j += 1;
-            }
+    for op in capture_diff_slices(Algorithm::Myers, &before, &after) {
+        let (tag, old, new) = op.as_tag_tuple();
+        if tag == DiffTag::Equal {
+            rows.extend(lines_of(&after, &after_topics, new, DiffRow::Context));
+        } else {
+            rows.extend(lines_of(&before, &before_topics, old, DiffRow::Removed));
+            rows.extend(lines_of(&after, &after_topics, new, DiffRow::Added));
         }
     }
     let changed: Vec<Topic> = rows

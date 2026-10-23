@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
-use contract::{Envelope, SessionId};
+use contract::{CommandId, Envelope, SessionId};
 use serde_json::Value;
 
 use super::{App, Effect, Kind, Phase, mint, read, session_command};
@@ -46,11 +46,11 @@ pub(super) struct State {
     open: Option<Open>,
     /// Request ids to settle silently when their answers arrive: dropped
     /// by Esc, a close, or a signal that the answer may never come.
-    dropped: BTreeSet<String>,
+    dropped: BTreeSet<CommandId>,
     /// Sessions whose notice showed or whose notes were found, by id: the
     /// notes are fixed for the session, so neither is read again. Held in
     /// memory only.
-    done: BTreeSet<String>,
+    done: BTreeSet<SessionId>,
 }
 
 /// A setup with the session and workspace it is bound to.
@@ -62,7 +62,7 @@ struct Open {
     /// writes belong to its project.
     workspace: PathBuf,
     /// The `propose_notes` waiting for its answer.
-    pending: Option<String>,
+    pending: Option<CommandId>,
 }
 
 impl App {
@@ -176,7 +176,7 @@ impl App {
         if !is_block(envelope)
             || self.pass_open()
             || self.reviewer_setup.open.is_some()
-            || self.reviewer_setup.done.contains(&envelope.session_id.0)
+            || self.reviewer_setup.done.contains(&envelope.session_id)
         {
             return;
         }
@@ -188,7 +188,7 @@ impl App {
         let Ok(notes) = seam.reviewer_notes(&workspace) else {
             return;
         };
-        self.reviewer_setup.done.insert(session.0.clone());
+        self.reviewer_setup.done.insert(session.clone());
         if !(notes.global.text.trim().is_empty() && notes.project.text.trim().is_empty()) {
             return;
         }
@@ -203,11 +203,14 @@ impl App {
                 let Some(open) = self.reviewer_setup.open.as_mut() else {
                     return Effect::None;
                 };
-                let id = mint();
+                let id = CommandId(mint());
                 let args = serde_json::to_value(&args).ok();
-                let line = session_command(&id, "propose_notes", &open.session, args).to_string();
+                let line = session_command(&id.0, "propose_notes", &open.session, args).to_string();
                 open.pending = Some(id.clone());
-                match self.outbox.send(id, Kind::Command, Draft::default(), line) {
+                match self
+                    .outbox
+                    .send(id.0, Kind::Command, Draft::default(), line)
+                {
                     Some(line) => Effect::Send(vec![line]),
                     None => Effect::None,
                 }
@@ -303,14 +306,15 @@ impl App {
         let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str) else {
             return false;
         };
-        if self.reviewer_setup.dropped.remove(id) {
-            self.outbox.answered(id);
+        let id = CommandId(id.to_owned());
+        if self.reviewer_setup.dropped.remove(&id) {
+            self.outbox.answered(&id.0);
             return true;
         }
         let Some(open) = self.reviewer_setup.open.as_mut() else {
             return false;
         };
-        if open.pending.as_deref() != Some(id) || open.session != envelope.session_id {
+        if open.pending.as_ref() != Some(&id) || open.session != envelope.session_id {
             return false;
         }
         if envelope.kind == "command_accepted" {
@@ -333,7 +337,7 @@ impl App {
             open.setup.refused(&rejected.message);
         }
         open.pending = None;
-        self.outbox.answered(id);
+        self.outbox.answered(&id.0);
         true
     }
 

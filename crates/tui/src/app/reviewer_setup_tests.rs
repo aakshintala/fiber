@@ -969,29 +969,6 @@ fn with_a_session_working_the_second_ctrl_c_asks_and_esc_returns_to_the_same_scr
 // -------------------------------------------------------------- surfaces
 
 #[test]
-fn the_setup_sits_between_the_key_map_and_the_picker() {
-    let (mut app, _) = app();
-    start(&mut app);
-    open(&mut app, Surface::Keymap);
-    open(&mut app, Surface::Picker);
-    let ours: Vec<Surface> = app
-        .top_surfaces()
-        .into_iter()
-        .filter(|surface| {
-            matches!(
-                surface,
-                Surface::Keymap | Surface::ReviewerSetup | Surface::Picker
-            )
-        })
-        .collect();
-    assert_eq!(
-        ours,
-        [Surface::Keymap, Surface::ReviewerSetup, Surface::Picker]
-    );
-    assert_eq!(app.top_surface(), Surface::Keymap);
-}
-
-#[test]
 fn the_setup_is_absent_once_another_session_is_on_screen() {
     let (mut app, _) = app();
     start(&mut app);

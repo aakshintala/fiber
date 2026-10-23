@@ -9,12 +9,13 @@ use ratatui::text::Span;
 
 use crate::app::App;
 use crate::configure::FileOutcome;
-use crate::format::{cut, width as cells, wrap};
+use crate::format::wrap;
 use crate::mouse::{Target, TargetId};
 use crate::reviewer_setup::template::{DiffRow, NotesLayer};
 use crate::reviewer_setup::{LineRow, LineState, Screen, Setup};
 use crate::theme::Role;
 use crate::view::overlay::{self, Overlay, Place, Row};
+use crate::view::panel::fit_spans;
 
 /// The panel's preferred content width: the question class.
 const PREFER: u16 = 71;
@@ -334,19 +335,10 @@ fn lines(setup: &Setup, inner: usize, capacity: usize) -> (Vec<Row>, Row) {
 fn clip(rows: &mut Vec<Row>, max: usize, inner: usize) {
     rows.truncate(max);
     if let Some(last) = rows.last_mut() {
-        let mut kept: Vec<Span<'static>> = Vec::new();
-        let mut room = inner.saturating_sub(1);
-        for span in last.spans.drain(..) {
-            if room == 0 {
-                break;
-            }
-            let text = cut(&span.content, room);
-            room = room.saturating_sub(cells(&text));
-            kept.push(Span::styled(text, span.style));
-        }
-        let style = kept.last().map_or_else(Style::new, |span| span.style);
-        kept.push(Span::styled("…", style));
-        last.spans = kept;
+        let style = last.spans.last().map_or_else(Style::new, |span| span.style);
+        let mut spans = std::mem::take(&mut last.spans);
+        spans.push(Span::styled("…", style));
+        last.spans = fit_spans(spans, inner);
     }
 }
 
@@ -452,40 +444,34 @@ fn saved(setup: &Setup, inner: usize) -> (Vec<Row>, Row) {
 /// hanging two cells under the first: the style follows each character.
 fn wrap_spans(spans: &[Span<'static>], inner: usize) -> Vec<Vec<Span<'static>>> {
     let whole: String = spans.iter().map(|span| span.content.as_ref()).collect();
-    let mut styles: Vec<Style> = Vec::new();
-    for span in spans {
-        styles.extend(span.content.chars().map(|_| span.style));
-    }
-    let mut at = 0usize;
+    let mut chars = spans
+        .iter()
+        .flat_map(|span| span.content.chars().map(|ch| (ch, span.style)))
+        .peekable();
     let mut rows = Vec::new();
-    for (n, line) in wrap(&whole, inner.saturating_sub(2).max(1))
+    for (at, text) in wrap(&whole, inner.saturating_sub(2).max(1))
         .into_iter()
         .enumerate()
     {
-        let mut out: Vec<Span<'static>> = Vec::new();
-        if n > 0 {
-            out.push(Span::raw("  "));
-        }
+        // The wrap dropped the spaces and newlines it broke at.
+        while chars.next_if(|(ch, _)| matches!(ch, ' ' | '\n')).is_some() {}
+        let mut out = if at > 0 {
+            vec![Span::raw("  ")]
+        } else {
+            Vec::new()
+        };
         let mut run = String::new();
-        let mut run_style: Option<Style> = None;
-        for ch in line.chars() {
-            // The wrap dropped the spaces it broke at: skip to the character.
-            while whole.chars().nth(at).is_some_and(|next| next != ch) {
-                at += 1;
+        let mut run_style = Style::new();
+        for ch in text.chars() {
+            let style = chars.next().map_or(run_style, |(_, style)| style);
+            if style != run_style && !run.is_empty() {
+                out.push(Span::styled(std::mem::take(&mut run), run_style));
             }
-            let style = styles.get(at).copied().unwrap_or_default();
-            at += 1;
-            if run_style.is_some_and(|current| current != style) {
-                out.push(Span::styled(
-                    std::mem::take(&mut run),
-                    run_style.unwrap_or_default(),
-                ));
-            }
-            run_style = Some(style);
+            run_style = style;
             run.push(ch);
         }
-        if let Some(style) = run_style {
-            out.push(Span::styled(run, style));
+        if !run.is_empty() {
+            out.push(Span::styled(run, run_style));
         }
         rows.push(out);
     }

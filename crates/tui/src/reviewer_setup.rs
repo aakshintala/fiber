@@ -7,18 +7,21 @@
 //! command or reads a file.
 
 use std::cell::Cell;
-use std::collections::BTreeSet;
 
-use contract::notes::{Evidence, EvidenceKind, ProposeNotesArgs, Proposed, Topic};
+use contract::notes::{Evidence, ProposeNotesArgs, Proposed, Topic};
 use contract::shapes::Failure;
 
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, NotesSaved, NotesWrite, ReviewerNotes,
 };
 use crate::keys::Key;
-use template::{DiffRow, NotesLayer, Source, clean_line, default_layer, diff, merge, owned};
+use lines::{Flow, Run, Struck, is_struck};
+use template::{DiffRow, NotesLayer, diff, merge, owned};
 
+mod lines;
 pub(crate) mod template;
+
+pub(crate) use lines::{LineRow, LineState};
 
 /// The screen the setup is on: one value, so the flags cannot contradict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,62 +70,6 @@ pub(crate) enum Act {
     Unchanged,
 }
 
-/// Where a line stands.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LineState {
-    /// A proposal the person has not decided.
-    Open,
-    /// A proposal confirmed or an earlier line kept.
-    Kept,
-    /// Struck: kept out of the notes.
-    Struck,
-}
-
-/// One row of a lines screen, as the view draws it.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct LineRow<'a> {
-    /// Whether the line is already in the notes.
-    pub(crate) earlier: bool,
-    /// The layer it goes to or is in.
-    pub(crate) layer: NotesLayer,
-    /// The layer the rule gave it, when the person flipped it off that.
-    pub(crate) flipped_from: Option<NotesLayer>,
-    /// The line.
-    pub(crate) text: &'a str,
-    /// Where it stands.
-    pub(crate) state: LineState,
-    /// Whether the focus is on it.
-    pub(crate) focused: bool,
-    /// The edit field's text while the person edits this line.
-    pub(crate) editing: Option<&'a str>,
-}
-
-/// A proposed line: its text as shown and saved, the layer the rule gave
-/// it, the layer it will go to and where it stands.
-struct Proposal {
-    text: String,
-    default: NotesLayer,
-    layer: NotesLayer,
-    state: LineState,
-}
-
-enum Item {
-    /// A bullet the layer's text already holds.
-    Earlier {
-        layer: NotesLayer,
-        text: String,
-    },
-    Proposal(Proposal),
-}
-
-/// One request's lines: the earlier lines, then the proposals.
-struct Run {
-    evidence: Vec<String>,
-    items: Vec<Item>,
-    focus: usize,
-    edit: Option<String>,
-}
-
 /// The answer typed for a topic and the lines its last request gave.
 #[derive(Default)]
 struct TopicState {
@@ -130,36 +77,13 @@ struct TopicState {
     run: Option<Run>,
 }
 
-/// A [`TopicState`] for each topic, with no index to get wrong.
-#[derive(Default)]
-struct PerTopic {
-    source_control: TopicState,
-    internal_hosts: TopicState,
-    internal_tools: TopicState,
-    routine_actions: TopicState,
-    never: TopicState,
-}
-
-impl PerTopic {
-    fn get(&self, topic: Topic) -> &TopicState {
-        match topic {
-            Topic::SourceControl => &self.source_control,
-            Topic::InternalHosts => &self.internal_hosts,
-            Topic::InternalTools => &self.internal_tools,
-            Topic::RoutineActions => &self.routine_actions,
-            Topic::Never => &self.never,
-        }
-    }
-
-    fn get_mut(&mut self, topic: Topic) -> &mut TopicState {
-        match topic {
-            Topic::SourceControl => &mut self.source_control,
-            Topic::InternalHosts => &mut self.internal_hosts,
-            Topic::InternalTools => &mut self.internal_tools,
-            Topic::RoutineActions => &mut self.routine_actions,
-            Topic::Never => &mut self.never,
-        }
-    }
+/// A topic's place in [`Topic::ALL`], which is also its place in
+/// [`Setup`]'s states.
+fn place(topic: Topic) -> usize {
+    Topic::ALL
+        .iter()
+        .position(|t| *t == topic)
+        .unwrap_or_default()
 }
 
 /// Both layers as they will be saved, and the rows that show the change.
@@ -183,13 +107,14 @@ pub(crate) struct LayerDiff<'a> {
 /// The setup's state.
 pub(crate) struct Setup {
     notes: ReviewerNotes,
-    topics: PerTopic,
+    /// A state for each topic, in [`Topic::ALL`] order.
+    topics: [TopicState; Topic::ALL.len()],
     topic: Topic,
     screen: Screen,
     /// A dim row under the question or the diff.
     error: Option<String>,
     /// Earlier bullets struck, which later runs and the save keep.
-    struck: Vec<(NotesLayer, Topic, String)>,
+    struck: Struck,
     prepared: Option<Prepared>,
     /// The diff's first visible row.
     scroll: usize,
@@ -209,7 +134,7 @@ impl Setup {
     pub(crate) fn open(notes: ReviewerNotes) -> Self {
         Self {
             notes,
-            topics: PerTopic::default(),
+            topics: Default::default(),
             topic: FIRST,
             screen: Screen::Question,
             error: None,
@@ -245,15 +170,12 @@ impl Setup {
 
     /// The topic's place in the setup's order, from 1.
     pub(crate) fn number(&self) -> usize {
-        Topic::ALL
-            .iter()
-            .position(|t| *t == self.topic)
-            .map_or(1, |at| at + 1)
+        place(self.topic) + 1
     }
 
     /// The answer typed for the topic.
     pub(crate) fn answer(&self) -> &str {
-        &self.topics.get(self.topic).answer
+        self.here().map_or("", |state| &state.answer)
     }
 
     /// The dim row under the question or the diff, when there is one.
@@ -263,51 +185,16 @@ impl Setup {
 
     /// The evidence texts the topic's lines cite, in the order given.
     pub(crate) fn evidence(&self) -> &[String] {
-        self.topics
-            .get(self.topic)
-            .run
-            .as_ref()
-            .map_or(&[], |run| run.evidence.as_slice())
+        self.here()
+            .and_then(|state| state.run.as_ref())
+            .map_or(&[], Run::evidence)
     }
 
     /// The topic's lines, earlier ones first.
     pub(crate) fn line_rows(&self) -> Vec<LineRow<'_>> {
-        let topic = self.topic;
-        let Some(run) = self.topics.get(topic).run.as_ref() else {
-            return Vec::new();
-        };
-        run.items
-            .iter()
-            .enumerate()
-            .map(|(at, item)| {
-                let focused = at == run.focus;
-                let editing = run.edit.as_deref().filter(|_| focused);
-                match item {
-                    Item::Earlier { layer, text } => LineRow {
-                        earlier: true,
-                        layer: *layer,
-                        flipped_from: None,
-                        text,
-                        state: if self.is_struck(*layer, topic, text) {
-                            LineState::Struck
-                        } else {
-                            LineState::Kept
-                        },
-                        focused,
-                        editing,
-                    },
-                    Item::Proposal(p) => LineRow {
-                        earlier: false,
-                        layer: p.layer,
-                        flipped_from: (p.layer != p.default).then_some(p.default),
-                        text: &p.text,
-                        state: p.state,
-                        focused,
-                        editing,
-                    },
-                }
-            })
-            .collect()
+        self.here()
+            .and_then(|state| state.run.as_ref())
+            .map_or_else(Vec::new, |run| run.rows(self.topic, &self.struck))
     }
 
     /// The diff screen's layers, global first.
@@ -360,10 +247,12 @@ impl Setup {
         })
     }
 
-    fn is_struck(&self, layer: NotesLayer, topic: Topic, text: &str) -> bool {
-        self.struck
-            .iter()
-            .any(|(l, t, s)| *l == layer && *t == topic && s == text)
+    fn here(&self) -> Option<&TopicState> {
+        self.topics.get(place(self.topic))
+    }
+
+    fn here_mut(&mut self) -> Option<&mut TopicState> {
+        self.topics.get_mut(place(self.topic))
     }
 
     fn text_of(&self, layer: NotesLayer) -> &str {
@@ -399,10 +288,14 @@ impl Setup {
     pub(crate) fn paste(&mut self, text: &str) {
         let text = text.replace(['\n', '\r'], " ");
         match self.screen {
-            Screen::Question => self.topics.get_mut(self.topic).answer.push_str(&text),
+            Screen::Question => {
+                if let Some(state) = self.here_mut() {
+                    state.answer.push_str(&text);
+                }
+            }
             Screen::Lines => {
-                if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
-                    field.push_str(&text);
+                if let Some(run) = self.run_mut() {
+                    run.paste(&text);
                 }
             }
             Screen::Waiting | Screen::Diff | Screen::Saved | Screen::Notice => {}
@@ -411,9 +304,13 @@ impl Setup {
 
     fn question_key(&mut self, key: &Key) -> Act {
         if let Key::Char(c) = key {
-            self.topics.get_mut(self.topic).answer.push(*c);
+            if let Some(state) = self.here_mut() {
+                state.answer.push(*c);
+            }
         } else if *key == Key::Backspace {
-            self.topics.get_mut(self.topic).answer.pop();
+            if let Some(state) = self.here_mut() {
+                state.answer.pop();
+            }
         } else if *key == Key::Enter {
             return self.propose();
         } else if *key == Key::Esc {
@@ -426,9 +323,8 @@ impl Setup {
     /// first topic.
     fn back_from_question(&mut self) -> Act {
         self.error = None;
-        let at = Topic::ALL.iter().position(|t| *t == self.topic);
-        let previous = at
-            .and_then(|at| at.checked_sub(1))
+        let previous = place(self.topic)
+            .checked_sub(1)
             .and_then(|at| Topic::ALL.get(at));
         match previous {
             None => Act::Close,
@@ -463,7 +359,7 @@ impl Setup {
             let live = [NotesLayer::Global, NotesLayer::PerProject]
                 .into_iter()
                 .filter(|l| self.holds(*l, self.topic, &text))
-                .any(|l| !self.is_struck(l, self.topic, &text));
+                .any(|l| !is_struck(&self.struck, l, self.topic, &text));
             if live && !lines.contains(&text) {
                 lines.push(text);
             }
@@ -491,154 +387,29 @@ impl Setup {
     }
 
     fn run_mut(&mut self) -> Option<&mut Run> {
-        self.topics.get_mut(self.topic).run.as_mut()
+        self.here_mut().and_then(|state| state.run.as_mut())
     }
 
     fn lines_key(&mut self, key: &Key) -> Act {
-        if self.run_mut().is_some_and(|run| run.edit.is_some()) {
-            return self.edit_key(key);
-        }
-        let empty = self.run_mut().is_none_or(|run| run.items.is_empty());
-        if *key == Key::Esc {
-            self.topics.get_mut(self.topic).run = None;
-            self.screen = Screen::Question;
-        } else if *key == Key::Enter {
-            self.decide(Decision::Keep);
-            return self.advance();
-        } else if *key == Key::Char('x') && !empty {
-            self.decide(Decision::Strike);
-            return self.advance();
-        } else if *key == Key::Char('e') {
-            self.start_edit();
-        } else if *key == Key::Tab {
-            self.flip();
-        } else if *key == Key::Up {
-            self.focus_by(-1);
-        } else if *key == Key::Down {
-            self.focus_by(1);
-        }
-        Act::None
-    }
-
-    fn edit_key(&mut self, key: &Key) -> Act {
-        if let Key::Char(c) = key {
-            if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
-                field.push(*c);
-            }
-        } else if *key == Key::Backspace {
-            if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
-                field.pop();
-            }
-        } else if *key == Key::Esc {
-            if let Some(run) = self.run_mut() {
-                run.edit = None;
-            }
-        } else if *key == Key::Enter {
-            let field = self
-                .run_mut()
-                .and_then(|run| run.edit.take())
-                .unwrap_or_default();
-            let text = clean_line(&field);
-            if text.is_empty() {
-                self.decide(Decision::Strike);
-            } else {
-                self.decide(Decision::Edited(text));
-            }
-            return self.advance();
-        }
-        Act::None
-    }
-
-    fn start_edit(&mut self) {
-        if let Some(run) = self.run_mut()
-            && let Some(Item::Proposal(p)) = run.items.get(run.focus)
-        {
-            run.edit = Some(p.text.clone());
-        }
-    }
-
-    fn flip(&mut self) {
-        if let Some(run) = self.run_mut()
-            && let Some(Item::Proposal(p)) = run.items.get_mut(run.focus)
-        {
-            p.layer = match p.layer {
-                NotesLayer::Global => NotesLayer::PerProject,
-                NotesLayer::PerProject => NotesLayer::Global,
-            };
-        }
-    }
-
-    fn focus_by(&mut self, step: isize) {
-        if let Some(run) = self.run_mut() {
-            let last = run.items.len().saturating_sub(1);
-            run.focus = run.focus.saturating_add_signed(step).min(last);
-        }
-    }
-
-    /// Applies a decision to the focused line.
-    fn decide(&mut self, decision: Decision) {
-        let topic = self.topic;
-        let Some(run) = self.topics.get_mut(topic).run.as_mut() else {
-            return;
-        };
-        match run.items.get_mut(run.focus) {
-            Some(Item::Proposal(p)) => match decision {
-                Decision::Keep => p.state = LineState::Kept,
-                Decision::Strike => p.state = LineState::Struck,
-                Decision::Edited(text) => {
-                    p.text = text;
-                    p.state = LineState::Kept;
-                }
-            },
-            Some(Item::Earlier { layer, text }) => {
-                let entry = (*layer, topic, text.clone());
-                match decision {
-                    Decision::Strike => {
-                        if !self.struck.contains(&entry) {
-                            self.struck.push(entry);
-                        }
-                    }
-                    Decision::Keep | Decision::Edited(_) => self.struck.retain(|e| *e != entry),
-                }
-            }
-            None => {}
-        }
-    }
-
-    /// Moves to the next undecided proposal below the focus, wrapping to
-    /// above; with none left, to the next topic.
-    fn advance(&mut self) -> Act {
-        let Some(run) = self.run_mut() else {
+        let state = self.topics.get_mut(place(self.topic));
+        let Some(run) = state.and_then(|state| state.run.as_mut()) else {
             return Act::None;
         };
-        let open = |item: &Item| matches!(item, Item::Proposal(p) if p.state == LineState::Open);
-        let after = run
-            .items
-            .iter()
-            .enumerate()
-            .skip(run.focus + 1)
-            .find(|(_, item)| open(item));
-        let before = run
-            .items
-            .iter()
-            .enumerate()
-            .take(run.focus)
-            .find(|(_, item)| open(item));
-        match after.or(before) {
-            Some((at, _)) => {
-                run.focus = at;
-                Act::None
+        match run.key(key, self.topic, &mut self.struck) {
+            Flow::Stay => {}
+            Flow::Back => {
+                if let Some(state) = self.here_mut() {
+                    state.run = None;
+                }
+                self.screen = Screen::Question;
             }
-            None => self.next_topic(),
+            Flow::Next => return self.next_topic(),
         }
+        Act::None
     }
 
     fn next_topic(&mut self) -> Act {
-        let next = Topic::ALL
-            .iter()
-            .position(|t| *t == self.topic)
-            .and_then(|at| Topic::ALL.get(at + 1));
-        match next {
+        match Topic::ALL.get(place(self.topic) + 1) {
             Some(topic) => {
                 self.topic = *topic;
                 self.screen = Screen::Question;
@@ -661,17 +432,9 @@ impl Setup {
             .map(|(_, topic, text)| (*topic, text.clone()))
             .collect();
         let mut added: Vec<(Topic, String)> = Vec::new();
-        for topic in Topic::ALL {
-            let Some(run) = self.topics.get(topic).run.as_ref() else {
-                continue;
-            };
-            for item in &run.items {
-                if let Item::Proposal(p) = item
-                    && p.state == LineState::Kept
-                    && p.layer == layer
-                {
-                    added.push((topic, p.text.clone()));
-                }
+        for (state, topic) in self.topics.iter().zip(Topic::ALL) {
+            if let Some(run) = state.run.as_ref() {
+                added.extend(run.kept(layer).map(|text| (topic, text.to_owned())));
             }
         }
         merge(self.text_of(layer), &struck, &added)
@@ -768,45 +531,10 @@ impl Setup {
             self.refused(&failure.message);
             return;
         }
-        let mut items: Vec<Item> = self
-            .earlier_items()
-            .into_iter()
-            .map(|(layer, text)| Item::Earlier { layer, text })
-            .collect();
-        let mut cited: BTreeSet<usize> = BTreeSet::new();
-        for line in proposed {
-            let text = clean_line(line.text());
-            let Some(source) = source_of(line.cites(), evidence) else {
-                continue;
-            };
-            if text.is_empty() {
-                continue;
-            }
-            cited.extend(line.cites().iter().filter(|at| **at < evidence.len()));
-            let default = default_layer(source);
-            items.push(Item::Proposal(Proposal {
-                text,
-                default,
-                layer: default,
-                state: LineState::Open,
-            }));
+        let run = Run::new(self.earlier_items(), evidence, proposed);
+        if let Some(state) = self.here_mut() {
+            state.run = Some(run);
         }
-        let evidence = evidence
-            .iter()
-            .enumerate()
-            .filter(|(at, _)| cited.contains(at))
-            .map(|(_, item)| clean_line(item.text()))
-            .collect();
-        let focus = items
-            .iter()
-            .position(|item| matches!(item, Item::Proposal(_)))
-            .unwrap_or(0);
-        self.topics.get_mut(self.topic).run = Some(Run {
-            evidence,
-            items,
-            focus,
-            edit: None,
-        });
         self.screen = Screen::Lines;
         self.top.set(0);
     }
@@ -857,31 +585,6 @@ impl Setup {
             Err(error) => self.error = Some(error.message),
         }
     }
-}
-
-enum Decision {
-    Keep,
-    Strike,
-    Edited(String),
-}
-
-/// The one source a proposal's cites name, or `None` when none is in range
-/// of the evidence or they name more than one kind.
-fn source_of(cites: &[usize], evidence: &[Evidence]) -> Option<Source> {
-    let cited: Vec<&Evidence> = cites.iter().filter_map(|at| evidence.get(*at)).collect();
-    let kind = cited.first()?.kind();
-    if cited.iter().any(|item| item.kind() != kind) {
-        return None;
-    }
-    Some(match kind {
-        EvidenceKind::Files => Source::Files,
-        EvidenceKind::Answer => Source::Answer,
-        EvidenceKind::Session => Source::Session {
-            all_here: cited
-                .iter()
-                .all(|item| matches!(item, Evidence::Session(tally) if tally.all_here())),
-        },
-    })
 }
 
 #[cfg(test)]
