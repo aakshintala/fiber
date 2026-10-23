@@ -508,6 +508,13 @@ impl LuaExtension {
         self.hub.lock().misplaced
     }
 
+    /// Whether the VM's thread has been spawned, by a command, a provider's
+    /// first use or a registration read, and so whether it has begun the entry
+    /// script, whether it succeeded or failed.
+    pub(crate) fn started(&self) -> bool {
+        !matches!(self.hub.lock().phase, Phase::Idle)
+    }
+
     /// Every command the entry script registered: its name and description.
     /// Starts the extension.
     pub fn commands(&self) -> Result<Vec<(String, String)>, Error> {
