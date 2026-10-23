@@ -114,7 +114,7 @@ fn to_the_edge(
     let mark = clock.advance_when_parked(
         Some(end),
         None,
-        READ_LIMIT - Duration::from_millis(1),
+        READ_LIMIT.checked_sub(Duration::from_millis(1)).unwrap(),
         &Deadline::after(DEADLINE),
     );
     assert!(
