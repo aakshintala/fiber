@@ -366,6 +366,12 @@ impl Runner {
     /// report. A surviving member's cleanup continues after the report and
     /// never delays the wake.
     ///
+    /// The Runner thread running `drive` owns the teardown: the
+    /// `try_wait` reap below, and past the shutdown bound the group
+    /// SIGKILL the stop sends, which ends the leader and any grandchild
+    /// it spawned. The watcher thread never kills: it only owns the
+    /// blocking socket read.
+    ///
     /// The leader is reaped with `try_wait` under the list's lock, which
     /// is also where its group retires or its surviving member is
     /// killed: no `waitid` peek is needed, and none is used, because

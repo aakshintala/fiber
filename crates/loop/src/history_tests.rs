@@ -249,6 +249,47 @@ fn a_two_segment_chain_folds_the_parent_to_the_point_and_the_child_after() {
     assert_eq!(folded.window, (0, 3));
 }
 
+fn delegate_started(job: &str, session: &str) -> Event {
+    Event::DelegateStarted(contract::events::DelegateStarted {
+        job_id: contract::JobId(job.to_owned()),
+        delegate_session_id: SessionId(session.to_owned()),
+        harness: "fiber".to_owned(),
+        model: "fake/model-1".to_owned(),
+        workspace: "/w".to_owned(),
+        worktree: None,
+        forked_from: None,
+    })
+}
+
+#[test]
+fn the_delegate_session_map_holds_only_the_own_segments_starts() {
+    let (_home, sessions) = sessions("delegate-sessions");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &delegate_started("j_parent", "s_parent")),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 1)))),
+            envelope(B, 1, None, None, &delegate_started("j_own", "s_own")),
+        ],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert_eq!(folded.delegate_sessions.len(), 1);
+    assert_eq!(
+        folded
+            .delegate_sessions
+            .get(&contract::JobId("j_own".to_owned())),
+        Some(&SessionId("s_own".to_owned()))
+    );
+}
+
 #[test]
 fn the_ledger_and_the_block_count_hold_only_the_own_log() {
     let (_home, sessions) = sessions("ledger");

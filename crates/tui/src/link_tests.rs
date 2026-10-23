@@ -314,6 +314,7 @@ fn identity(input: &Input) -> String {
         | Input::Feedback(_)
         | Input::Viewed { .. }
         | Input::Models(_)
+        | Input::Install { .. }
         | Input::Login { .. } => panic!("a hub line, not another input"),
     }
 }

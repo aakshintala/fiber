@@ -333,6 +333,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Signal(_)
             | Input::Files { .. }
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Image { .. }
             | Input::Feedback(_)

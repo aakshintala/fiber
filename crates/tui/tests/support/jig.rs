@@ -32,6 +32,7 @@ pub(crate) fn example_path(name: &str) -> PathBuf {
 /// `finished` and leaves no process behind.
 #[track_caller]
 pub(crate) fn run_jig(binary: &str, args: &[&str], finished: &str) -> Output {
+    fakes::warm_up(&example_path(binary), &[], 2);
     let child = Command::new(example_path(binary))
         .args(args)
         .stdout(Stdio::piped())

@@ -3342,6 +3342,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "signal-hook",
+ "similar",
  "support",
  "thiserror 2.0.21",
 ]

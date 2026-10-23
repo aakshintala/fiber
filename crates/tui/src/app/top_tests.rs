@@ -231,6 +231,7 @@ fn launch(app: &mut App, surface: Surface) {
         Surface::Keymap => {
             app.open_keymap();
         }
+        Surface::ReviewerSetup => open_reviewer_setup(app),
         Surface::Panel => {
             app.on_line(session_line(
                 "permission_requested",
@@ -515,14 +516,14 @@ fn the_keys_screen_gives_the_context_below_it() {
 }
 
 /// The injected clock's now, as the input handling takes it.
-fn now() -> std::time::Instant {
+pub(in crate::app) fn now() -> std::time::Instant {
     fakes::clock::FakeClock::new().now()
 }
 
 /// The app drawn at its size: the buffer and the last frame's targets,
 /// as the loop holds them.
 // debt: two copies stay; extract to shared test support if a third render helper duplicates this.
-fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+pub(in crate::app) fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let (width, height) = app.screen_size();
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
@@ -532,7 +533,12 @@ fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
 
 /// A left press at (`col`, `row`) through the loop's mouse path, with a
 /// fresh pointer.
-fn press_at(app: &mut App, targets: &[crate::mouse::Target], col: u16, row: u16) -> Effect {
+pub(in crate::app) fn press_at(
+    app: &mut App,
+    targets: &[crate::mouse::Target],
+    col: u16,
+    row: u16,
+) -> Effect {
     let mut pointer = Pointer::default();
     app.on_mouse(
         &Mouse {
@@ -550,7 +556,7 @@ fn press_at(app: &mut App, targets: &[crate::mouse::Target], col: u16, row: u16)
 /// The first screen corner outside `slab` that is no model-picker header
 /// cell: the header's whole top row closes the picker outright instead.
 #[track_caller]
-fn outside_corner(
+pub(in crate::app) fn outside_corner(
     label: &str,
     targets: &[crate::mouse::Target],
     slab: Rect,
@@ -584,6 +590,18 @@ fn open_report(app: &mut App) {
 
 fn open_keymap(app: &mut App) {
     open(app, Surface::Keymap);
+}
+
+/// Opens the reviewer setup the way a person does: the seam installed and
+/// `/reviewer-setup` typed on the attached session.
+pub(in crate::app) fn open_reviewer_setup(app: &mut App) {
+    let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_configure(Some(seam as Arc<dyn crate::Configure>));
+    crate::app::commands::commands_testkit::enter(app, "/reviewer-setup");
+}
+
+fn open_setup(app: &mut App) {
+    open(app, Surface::ReviewerSetup);
 }
 
 fn open_picker(app: &mut App) {
@@ -689,6 +707,12 @@ const OUTSIDE_CASES: &[OutsideCase] = &[
     ("session quit", session_app, open_quit, Surface::Quit),
     ("session report", session_app, open_report, Surface::Report),
     ("session keymap", session_app, open_keymap, Surface::Keymap),
+    (
+        "session reviewer setup",
+        session_app,
+        open_setup,
+        Surface::ReviewerSetup,
+    ),
     ("session picker", session_app, open_picker, Surface::Picker),
     (
         "session login",

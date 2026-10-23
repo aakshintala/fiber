@@ -257,6 +257,10 @@ impl App {
     /// hub-global read fails (after its notice) or a local terminal names
     /// none.
     fn view_workspace(&mut self) -> Option<PathBuf> {
+        if self.installing() {
+            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            return None;
+        }
         match self.workspace() {
             Some(workspace) => Some(workspace),
             None => {
@@ -285,6 +289,12 @@ impl App {
         text: &str,
     ) -> Option<Result<Saved, ConfigureError>> {
         let seam = self.config_views.seam.clone()?;
+        if self.installing() {
+            return Some(Err(ConfigureError {
+                code: contract::ErrorCode::IoFailed,
+                message: Self::INSTALLING_TEXT.to_owned(),
+            }));
+        }
         Some(match self.workspace() {
             Some(workspace) => seam.set(&workspace, Layer::Global, key, text),
             // With no local workspace the hub-global parent stands in
@@ -306,6 +316,10 @@ impl App {
     /// Opens `view`, closing any open, its unsaved edit dropped. With no
     /// seam the view says it is not available.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
+        if self.installing() {
+            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            return Effect::None;
+        }
         self.draft.clear();
         self.model_picker.close();
         self.close_session_view();
