@@ -25,7 +25,7 @@ use support::write_record;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Output, group_alive, spawn_watched};
+use support::{Deadline, KillGroup, Output, spawn_watched};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -148,10 +148,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
@@ -747,10 +744,7 @@ fn fiber_in(setup: &Setup, dir: &Path, args: &[&str]) -> Output {
         ),
     }
     .into();
-    assert!(
-        !group_alive(setup.deadline, group),
-        "`fiber` left a process behind"
-    );
+    assert!(!fakes::group_alive(group), "`fiber` left a process behind");
     std::mem::forget(guard);
     watchdog.stand_down(setup.deadline.cleanup_phase());
     output
