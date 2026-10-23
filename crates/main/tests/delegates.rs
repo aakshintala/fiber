@@ -359,6 +359,19 @@ impl Running {
         }
     }
 
+    /// Stdout lines until one completes `done`, bounded by
+    /// `MUST_SUCCEED_WITHIN`: the line wait loops inside a fresh success
+    /// bound, so a staging hang fails fast instead of running to the
+    /// test's deadline. The test's deadline is restored afterwards.
+    #[track_caller]
+    fn wait_line_within(&mut self, what: &str, done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+        let saved = self.deadline;
+        self.deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+        let got = self.wait_line(what, done);
+        self.deadline = saved;
+        got
+    }
+
     /// Waits for the process to exit: the wait runs on a thread under the
     /// deadline, and expiry kills the group and reaps it. Stands the
     /// watchdog down first: dropping it would kill the group. Every stdout
@@ -1253,18 +1266,18 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // end and its wake turn complete before the release: the sibling's end
     // lands in its own later turn and the stream order is fixed.
     support::kill_matching(setup.deadline, &child_ids[0]).unwrap();
-    let mut ends = running.wait_line("the crashed delegate end", |line| {
+    let mut ends = running.wait_line_within("the crashed delegate end", |line| {
         line["kind"] == "job_completed"
     });
     ends.retain(|line| line["kind"] == "job_completed");
     assert_eq!(ends.len(), 1, "the crashed delegate ends: {ends:?}");
-    running.wait_line("the crashed end's wake turn", |line| {
+    running.wait_line_within("the crashed end's wake turn", |line| {
         line["kind"] == "turn_completed"
     });
     child.release();
     // The sibling's end arrives, each delegate ending once.
     while ends.len() < 2 {
-        let more = running.wait_line("the sibling delegate end", |line| {
+        let more = running.wait_line_within("the sibling delegate end", |line| {
             line["kind"] == "job_completed"
         });
         ends.extend(
@@ -1275,7 +1288,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     assert_eq!(ends.len(), 2, "each delegate ends once: {ends:?}");
     // The sibling's wake turn completes before the steer, so the steered
     // spawn starts its own turn and the stream order is fixed.
-    running.wait_line("the sibling end's wake turn", |line| {
+    running.wait_line_within("the sibling end's wake turn", |line| {
         line["kind"] == "turn_completed"
     });
     // The registry still answers commands: steer the parent, which spawns

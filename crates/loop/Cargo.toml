@@ -22,6 +22,9 @@ thiserror.workspace = true
 # `contract` without `cfg(test)`.
 contract = { path = "../contract", features = ["test-gates"] }
 fakes = { path = "../fakes" }
+# The mid-`jobs wait` cancel test enters the production `JobsTool::wait`
+# on a real registry.
+jobs = { path = "../jobs" }
 proptest.workspace = true
 
 # The jigs (docs/testing.md, "Jigs").

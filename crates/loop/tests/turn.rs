@@ -1747,28 +1747,20 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     // (`docs/delegates.md`, "Lifetime").
     // Overbuild finding 2 is subsumed here: a `Session::blocking` scaffold
     // cannot prove a mid-`jobs wait` cancel, so this keeps its own wait tool.
-    use contract::clock::Wake;
     use contract::events::Outcome;
     use contract::jobs::{Jobs, Opening, Stop};
-    use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+    use contract::shapes::{DeclaredEffects, Effect};
     use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Condvar, Mutex, mpsc};
+    use std::sync::mpsc;
 
-    #[derive(Default)]
-    struct WaitLatch {
-        fired: Mutex<bool>,
-        changed: Condvar,
-    }
-    impl Wake for WaitLatch {
-        fn wake(&self) {
-            *self.fired.lock().unwrap() = true;
-            self.changed.notify_all();
-        }
-    }
-    /// A `jobs wait` stand-in: signals when its wait starts, then holds
-    /// until the turn cancels it, as a real wait does.
+    /// A `jobs wait` stand-in that enters the real wait: it signals when
+    /// its wait starts, then blocks in the production `JobsTool::wait`
+    /// on a job that never ends, so the turn's cancel releases the same
+    /// `registry.wait` path a model-held wait parks in.
     struct JobsWait {
+        jobs: Arc<jobs::JobsTool>,
+        job_id: String,
         entered: mpsc::Sender<()>,
     }
     impl Tool for JobsWait {
@@ -1798,25 +1790,14 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             &self,
             _: &serde_json::Map<String, Value>,
             cancel: &dyn Cancel,
-            _: &dyn contract::emit::Emit,
+            emit: &dyn contract::emit::Emit,
         ) -> Output {
+            let mut arguments = serde_json::Map::new();
+            arguments.insert("action".into(), json!("wait"));
+            arguments.insert("job_id".into(), json!(self.job_id.clone()));
+            arguments.insert("timeout_ms".into(), json!(60000));
             self.entered.send(()).unwrap();
-            let latch: Arc<WaitLatch> = Arc::default();
-            cancel.subscribe(Arc::downgrade(&latch) as std::sync::Weak<dyn Wake>);
-            if !cancel.is_cancelled() {
-                let fired = latch.fired.lock().unwrap();
-                let (fired, _) = latch
-                    .changed
-                    .wait_timeout_while(fired, MUST_SUCCEED_WITHIN, |fired| !*fired)
-                    .unwrap();
-                assert!(*fired, "timed out waiting for the turn's cancel");
-            }
-            Output {
-                content: vec![ContentPart::Text {
-                    text: "still running\n".into(),
-                }],
-                ..Output::default()
-            }
+            self.jobs.run(&arguments, cancel, emit)
         }
         fn bound(&self) -> contract::tool::Bound {
             contract::tool::Bound::DEFAULT
@@ -1824,9 +1805,32 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     }
 
     let (entered_tx, entered_rx) = mpsc::channel();
+    // The production wait parks on its own registry: a job that never
+    // ends, held open below, so only the turn's cancel releases the real
+    // `registry.wait` the fake enters.
+    let wait_home = fakes::TempDir::new("fiber-wait");
+    let registry = jobs::Registry::new(
+        wait_home.path().to_path_buf(),
+        fakes::clock::FakeClock::new(),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let waiter = registry
+        .open(Opening {
+            tool: "sleep".into(),
+            description: "never ends".into(),
+            stop: Stop(Box::new(|| {})),
+            input: None,
+            lines: false,
+        })
+        .unwrap();
     let tool = Arc::new(JobsWait {
+        jobs: Arc::new(jobs::JobsTool::new(Arc::clone(&registry))),
+        job_id: waiter.started.job_id.0.clone(),
         entered: entered_tx,
     });
+    // Held to the end of the test: dropping the end would report the
+    // waited-on job failed, ending the real wait before the cancel.
+    let _never_ends = waiter;
     let mut session = Session::with_tools(
         vec![
             support::calls_reply(
