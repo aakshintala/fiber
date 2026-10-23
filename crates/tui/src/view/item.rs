@@ -12,6 +12,7 @@ use crate::app::items::Spot;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
+use crate::text::to_u16;
 
 /// The header's rows: the breadcrumb and the status row.
 pub(crate) const ITEM_HEADER_ROWS: usize = 2;
@@ -116,11 +117,9 @@ pub(crate) fn draw_body(app: &App, area: Rect, buf: &mut Buffer) {
         style(Role::Muted),
     );
     let height = usize::from(area.height).saturating_sub(1);
-    let rows = app.item_output_rows(area.width, super::to_u16(height));
+    let rows = app.item_output_rows(area.width, to_u16(height));
     for (index, row) in rows.iter().enumerate() {
-        let y = area
-            .y
-            .saturating_add(super::to_u16(index).saturating_add(1));
+        let y = area.y.saturating_add(to_u16(index).saturating_add(1));
         buf.set_stringn(area.x, y, format::cut(row, wide), wide, style(Role::Text));
     }
 }

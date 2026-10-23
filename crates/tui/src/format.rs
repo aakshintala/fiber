@@ -250,79 +250,11 @@ fn first_line(text: &str) -> Option<&str> {
     text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
-/// How many columns `text` takes on screen.
-pub(crate) fn width(text: &str) -> usize {
-    Span::raw(text).width()
-}
-
-/// Each drawn piece of `text`, from left to right: every grapheme
-/// whole, with the control characters `Span::styled_graphemes` skips kept
-/// one by one, so they measure exactly as when the text is walked one
-/// char at a time. Stops early when `emit` says so. `emit` also takes
-/// each piece's byte offset in `text`, so a caller can keep ranges
-/// without holding the borrow the piece itself carries.
-fn each_piece(text: &str, mut emit: impl FnMut(&str, usize) -> bool) {
-    let mut start: Option<usize> = None;
-    for (at, ch) in text.char_indices() {
-        if !ch.is_control() {
-            if start.is_none() {
-                start = Some(at);
-            }
-            continue;
-        }
-        if let Some(from) = start.take()
-            && !emit_graphemes(&text[from..at], from, &mut emit)
-        {
-            return;
-        }
-        if !emit(&text[at..at + ch.len_utf8()], at) {
-            return;
-        }
-    }
-    if let Some(from) = start {
-        emit_graphemes(&text[from..], from, &mut emit);
-    }
-}
-
-/// Every grapheme of `run` to `emit`; false when `emit` stops the walk.
-/// `run` holds no control character, so no grapheme is skipped. `base`
-/// is `run`'s byte offset in the walked text.
-fn emit_graphemes(run: &str, base: usize, emit: &mut impl FnMut(&str, usize) -> bool) -> bool {
-    let mut at = base;
-    for grapheme in Span::raw(run).styled_graphemes(Style::default()) {
-        if !emit(grapheme.symbol, at) {
-            return false;
-        }
-        at = at.saturating_add(grapheme.symbol.len());
-    }
-    true
-}
-
-/// How many columns one drawn piece takes, counted as width work:
-/// every piece `cut` or `wrap_joined` sizes is measured once.
-fn measured(piece: &str) -> usize {
-    crate::work::add(|work| work.grapheme_widths += 1);
-    width(piece)
-}
+pub(crate) use crate::text::width;
 
 /// `text` cut to at most `max` columns.
 pub(crate) fn cut(text: &str, max: usize) -> String {
-    let mut out = String::new();
-    let mut taken = 0usize;
-    // One drawn piece at a time, as `Rows::pad` plans them: a grapheme
-    // that does not fit is dropped whole, never split. The width so far
-    // is carried, so each piece is measured once: the kept pieces and at
-    // most the first rejected one, since the walk stops there.
-    each_piece(text, |piece, _| {
-        let cell = measured(piece);
-        if taken.saturating_add(cell) > max {
-            return false;
-        }
-        out.push_str(piece);
-        taken = taken.saturating_add(cell);
-        true
-    });
-    out
+    crate::text::cut(text, max, "")
 }
 
 /// `text` wrapped at word boundaries into rows at most `max` columns wide;
@@ -349,7 +281,7 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
         // grapheme containing a space (such as `" \u{301}"`) stays
         // inside its word instead of being torn apart.
         let mut words: Vec<String> = vec![String::new()];
-        each_piece(line, |piece, _| {
+        crate::text::each_piece(line, |piece, _| {
             if piece == " " {
                 words.push(String::new());
             } else if let Some(word) = words.last_mut() {
@@ -364,8 +296,8 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
             // borrow a piece carries cannot be stored.
             let mut pieces: Vec<(usize, usize, usize)> = Vec::new();
             let mut word_width = 0usize;
-            each_piece(word, |piece, at| {
-                let cell = measured(piece);
+            crate::text::each_piece(word, |piece, at| {
+                let cell = crate::text::measured(piece);
                 word_width = word_width.saturating_add(cell);
                 pieces.push((at, piece.len(), cell));
                 true
