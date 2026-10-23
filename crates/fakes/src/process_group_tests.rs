@@ -5,7 +5,11 @@ use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, ChildStdout, Command, Stdio};
 
 use std::os::unix::process::ExitStatusExt;
-use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -16,9 +20,10 @@ use rustix::process::{Pid, Signal};
 
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
-    bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
-    listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
-    signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
+    bounded, group_alive, group_empties, group_empties_with, group_lives, kill_group,
+    kill_matching, kill_pid, listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit,
+    read_lookup, signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits,
+    wait_exits,
 };
 use crate::deadline::Deadline;
 
@@ -593,6 +598,65 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
         Deadline::after(MUST_SUCCEED_WITHIN).recv(&answer),
         Ok(true),
         "waited {MUST_SUCCEED_WITHIN:?} for group_empties to see the emptied group"
+    );
+}
+
+/// An `EPERM` probe answer reads as a live group: only `ESRCH` retires one.
+/// The probe answers are forced by the injected closure, never by timing.
+#[test]
+fn group_empties_does_not_read_eperm_as_empty() {
+    assert!(
+        !group_empties_with(2, Deadline::after(Duration::from_millis(100)), |_| {
+            Err(rustix::io::Errno::PERM)
+        }),
+        "an EPERM probe must not read as empty"
+    );
+}
+
+/// An `EPERM` window that ends in `ESRCH` retires the group: the wait
+/// answers `true` after exactly the forced four probes.
+#[test]
+fn group_empties_returns_once_an_eperm_window_ends_in_esrch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&calls);
+    assert!(
+        group_empties_with(2, Deadline::after(MUST_SUCCEED_WITHIN), move |_| {
+            let call = counting.fetch_add(1, Ordering::SeqCst) + 1;
+            if call <= 3 {
+                Err(rustix::io::Errno::PERM)
+            } else {
+                Err(rustix::io::Errno::SRCH)
+            }
+        }),
+        "waited {MUST_SUCCEED_WITHIN:?} for the ESRCH probe to retire the group"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        4,
+        "the wait must retire on the fourth probe, the first ESRCH one"
+    );
+}
+
+/// The Linux sequence is unchanged: `Ok` reads live, `ESRCH` reads gone.
+#[test]
+fn group_empties_reads_ok_as_live_and_esrch_as_gone() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counting = Arc::clone(&calls);
+    assert!(
+        group_empties_with(2, Deadline::after(MUST_SUCCEED_WITHIN), move |_| {
+            let call = counting.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 1 {
+                Ok(())
+            } else {
+                Err(rustix::io::Errno::SRCH)
+            }
+        }),
+        "waited {MUST_SUCCEED_WITHIN:?} for the ESRCH probe to retire the group"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the wait must retire on the second probe, the first ESRCH one"
     );
 }
 

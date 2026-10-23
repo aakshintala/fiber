@@ -4,7 +4,7 @@
 //! of 1 or less is refused before anything runs. The command-line form
 //! refuses an empty match, which reaches every process the user owns.
 //!
-//! Signals and the exit probes (`alive`, `group_lives`) go through the
+//! Signals and the exit probes (`alive`, `probe_group`) go through the
 //! kill(2) call itself, starting no process; the waits built on the probes
 //! (`pids_exit`, `matching_exits`) start none per pass. The one child left,
 //! `pgrep`, is waited for under a deadline on the wall clock.
@@ -130,8 +130,10 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// empty, and returns whether it did. One probe right after the group's
 /// leader exits is a race: a transient child, such as a `cat` in a command
 /// substitution, can outlive it for a moment under load. The probes run on
-/// a thread, so the deadline holds even when a probe is slow. Any probe
-/// error (no such group, no permission) counts as empty.
+/// a thread, so the deadline holds even when a probe is slow. Only `ESRCH`
+/// (no such group) counts as empty: `Ok` and every other errno read the
+/// group as still holding a process, since a killed child not yet reaped
+/// probes `EPERM` on macOS and `Ok` on Linux.
 ///
 /// # Panics
 ///
@@ -139,10 +141,22 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// wait then returns `false`.
 #[must_use]
 pub fn group_empties(group: u32, deadline: Deadline) -> bool {
+    group_empties_with(group, deadline, probe_group)
+}
+
+/// [`group_empties`] with the probe injected: `probe` answers each
+/// kill(-group, 0), so tests force probe answers without timing. The
+/// injected probe replaces the refusal of an id of 1 or less, so tests
+/// pass a group id above 1.
+fn group_empties_with(
+    group: u32,
+    deadline: Deadline,
+    mut probe: impl FnMut(u32) -> rustix::io::Result<()> + Send + 'static,
+) -> bool {
     let (emptied, empty) = mpsc::channel();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
-        while group_lives(group) {
+        while lives(probe(group)) {
             if stop_closed(&stopped) {
                 return;
             }
@@ -154,6 +168,23 @@ pub fn group_empties(group: u32, deadline: Deadline) -> bool {
     let result = deadline.recv(&empty).is_ok();
     drop(stop);
     result
+}
+
+/// Whether a probe answer still names a live group: every answer but
+/// `ESRCH` reads live, the same predicate as `support::group::alive`.
+fn lives(answer: rustix::io::Result<()>) -> bool {
+    !matches!(answer, Err(rustix::io::Errno::SRCH))
+}
+
+/// The kill(-group, 0) probe [`group_empties`] waits on, starting no
+/// process. Panics when `group` is 1 or less.
+#[allow(
+    clippy::expect_used,
+    reason = "a probe of an id past the pid range panics, like a refused id"
+)]
+fn probe_group(group: u32) -> rustix::io::Result<()> {
+    let id = checked(group, "process group").expect("a group past the pid range is never live");
+    rustix::process::test_kill_process_group(id)
 }
 
 /// Sends `signal` (`CONT`, `HUP`, `INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
@@ -386,14 +417,15 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Whether process group `group` has a member: kill(-group, 0), starting no
-/// process. Panics when `group` is 1 or less.
+/// process. Panics when `group` is 1 or less. Test-only: the wait reads
+/// the probe through [`probe_group`] and [`lives`].
 #[allow(
     clippy::expect_used,
     reason = "a probe of an id past the pid range panics, like a refused id"
 )]
+#[cfg(test)]
 fn group_lives(group: u32) -> bool {
-    let id = checked(group, "process group").expect("a group past the pid range is never live");
-    rustix::process::test_kill_process_group(id).is_ok()
+    lives(probe_group(group))
 }
 
 /// How long each liveness wait holds between probes: one bounded wait
