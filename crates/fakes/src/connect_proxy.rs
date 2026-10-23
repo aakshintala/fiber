@@ -6,7 +6,10 @@
 use std::io;
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+/// A lock that outlives a panicked holder: the state is plain data, and a
+/// test thread that panicked has already failed its test.
+use support::lock;
 
 use contract::clock::Clock;
 
@@ -110,12 +113,6 @@ impl ConnectProxy {
             .unwrap_or_else(PoisonError::into_inner);
         guard.closed >= count
     }
-}
-
-/// A lock that outlives a panicked holder: the state is plain data, and a
-/// test thread that panicked has already failed its test.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Serves one connection: anything but `CONNECT` gets a 405, and a
