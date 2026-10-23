@@ -368,7 +368,7 @@ impl Login {
     /// anything the last action said, at least three body rows before
     /// the window clips them, and the legend footer. A step draws its
     /// own overlay; any other mode draws nothing yet.
-    pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
         if matches!(
             self.mode,
             Mode::Waiting(_)
@@ -378,8 +378,7 @@ impl Login {
                 | Mode::Choices(_)
                 | Mode::Ended(_)
         ) {
-            self.draw_step(area, buf, targets);
-            return;
+            return self.draw_step(area, buf, targets);
         }
         let width = overlay::width(u16::MAX, 96, area.width);
         let inner_w = overlay::inner(width);
@@ -498,7 +497,7 @@ impl Login {
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets);
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets)
     }
 
     /// The target rows' indices in display order.
@@ -1233,9 +1232,9 @@ impl Login {
     /// between steps. The body is built top to bottom and cut at the
     /// row count in order; over a short area it is clipped to the body
     /// budget the list shows there.
-    fn draw_step(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) {
+    fn draw_step(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) -> Rect {
         let Some(name) = self.step_name() else {
-            return;
+            return Rect::default();
         };
         let content = step_content_width(&name, &self.targets);
         let content_u16 = u16::try_from(content).unwrap_or(u16::MAX);
@@ -1243,7 +1242,7 @@ impl Login {
         let inner = usize::from(overlay::inner(slab_w));
         let dim = Style::new().add_modifier(Modifier::DIM);
         let (content_rows, legend): (Vec<overlay::Row>, overlay::Row) = match &self.mode {
-            Mode::Rows => return,
+            Mode::Rows => return Rect::default(),
             Mode::Waiting(waiting) => match &waiting.progress {
                 Progress::Starting => (
                     wrapped_rows(
@@ -1282,7 +1281,7 @@ impl Login {
             },
             Mode::Panel(panel) => {
                 let Some(target) = self.targets.get(panel.target) else {
-                    return;
+                    return Rect::default();
                 };
                 if target.kind == LoginKind::Secret {
                     let mut rows =
@@ -1374,7 +1373,7 @@ impl Login {
             ),
             Mode::Host(host) => {
                 let Some(gap) = host.gaps.first() else {
-                    return;
+                    return Rect::default();
                 };
                 let prompt = match gap.env.as_deref() {
                     Some(env) => format!("`{}` (`{env}`):", gap.name),
@@ -1417,7 +1416,7 @@ impl Login {
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out);
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out)
     }
 }
 

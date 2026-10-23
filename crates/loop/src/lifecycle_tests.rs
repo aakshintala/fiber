@@ -9,14 +9,16 @@
     reason = "test code"
 )]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::{InputItem, TextDelta, ToolCallRequested, TurnOutcome, TurnStarted};
+use contract::events::{
+    InputItem, TextDelta, ToolCallRequested, TurnOutcome, TurnStarted, UsageRecorded,
+};
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
     BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer, CheckOutcome, Context,
@@ -24,9 +26,9 @@ use contract::hook::{
 };
 use contract::inbox::{Ack, Answer, Delivery, Message};
 use contract::provider::{Delta, ReplyAction};
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Usage};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Tokens, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, ErrorCode, SessionId, TurnId};
+use contract::{CommandId, Envelope, ErrorCode, GenerationId, SessionId, TurnId};
 use fakes::{Deadline, NoRules};
 use log::Log;
 
@@ -2776,6 +2778,92 @@ fn a_refusal_fails_the_turn_budget_exceeded_and_stops_the_delegates() {
         "the provider got no request for that step"
     );
     assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+/// The tree test's grandchild spend as the child's watcher relays it: a
+/// $100 copy the budget cannot hold.
+fn relayed_copy() -> UsageRecorded {
+    UsageRecorded {
+        generation_id: GenerationId("g_cost".into()),
+        model: "fake/m".into(),
+        tokens: Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 0,
+        },
+        input_bytes: 0,
+        input_media: None,
+        web_searches: None,
+        cost: Some(100.0),
+        subscription: None,
+        extension: None,
+        origin_session_id: Some(SessionId("s_grandchild".into())),
+        reviewer: None,
+    }
+}
+
+/// A budgeted loop with a jobs attachment, as the refusal test builds:
+/// `budget_end` stops delegates through it.
+fn budgeted() -> (World, Arc<fakes::jobs::FakeJobs>) {
+    let mut world = started(vec![], None);
+    let jobs_dir = world._home.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let jobs = fakes::jobs::FakeJobs::new(&jobs_dir);
+    world.looped = world.looped.take().map(|looped| {
+        looped
+            .budget(Some(1.0))
+            .jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>)
+    });
+    (world, jobs)
+}
+
+#[test]
+fn a_delegate_budget_end_with_a_claimed_trip_shuts_down_with_the_tree_stop_code() {
+    let (mut world, jobs) = budgeted();
+    let mut looped = world.looped.take().unwrap();
+    // A delegate's loop: its tree stop must preempt its failed drain.
+    looped.is_delegate = true;
+    // The relayed copy claims the one-way trip, so the parent's stop
+    // signal is already coming for the same spend.
+    looped
+        .copy_usage(&SessionId("s_grandchild".into()), relayed_copy())
+        .unwrap();
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert!(completed.error.is_none());
+    assert_eq!(looped.cancel.shutdown_code(), Some(143));
+    // Once for the copy's publish, once for the budget end itself.
+    assert_eq!(jobs.stop_delegates_calls(), 2);
+}
+
+#[test]
+fn a_delegate_budget_end_without_a_claimed_trip_shuts_down_nothing() {
+    let (mut world, jobs) = budgeted();
+    let mut looped = world.looped.take().unwrap();
+    looped.is_delegate = true;
+    // No copy arrived: the trip is unclaimed, so no tree stop is coming
+    // and the failed turn keeps its own drain.
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert_eq!(looped.cancel.shutdown_code(), None);
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+#[test]
+fn a_root_budget_end_with_a_claimed_trip_shuts_down_nothing() {
+    let (mut world, jobs) = budgeted();
+    let mut looped = world.looped.take().unwrap();
+    // A root is never preempted: it reports the failed turn and keeps
+    // serving, whatever its trip holds.
+    looped
+        .copy_usage(&SessionId("s_child".into()), relayed_copy())
+        .unwrap();
+    let completed = looped.budget_end(crate::ended(TurnOutcome::Failed, None));
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert_eq!(looped.cancel.shutdown_code(), None);
+    // Once for the copy's publish, once for the budget end itself.
+    assert_eq!(jobs.stop_delegates_calls(), 2);
 }
 
 #[test]

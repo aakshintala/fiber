@@ -194,10 +194,11 @@ fn binding_rows(
 }
 
 /// Draws the key map over `area`: the title, the dim lines, the tabs, the
-/// search line and the bindings, docked at the bottom full width.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// search line and the bindings, docked at the bottom full width. Returns
+/// the slab it drew, empty when the map is closed.
+pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
     let Some(map) = app.keymap() else {
-        return;
+        return Rect::default();
     };
     let keys = app.keys();
     let visible = map.visible(keys);
@@ -276,7 +277,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
             .then(|| overlay::legend(&[("↑↓", "move"), ("←→", "tabs"), ("Esc", "closes")])),
         prefer: u16::MAX,
     };
-    overlay::draw(buf, area, &framed, Place::Dock, targets);
+    overlay::draw(buf, area, &framed, Place::Dock, targets)
 }
 
 #[cfg(test)]

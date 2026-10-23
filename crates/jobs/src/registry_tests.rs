@@ -183,8 +183,10 @@ fn open_without_the_registry_arc_records_nothing() {
         inner: Mutex::new(super::Inner {
             jobs: Vec::new(),
             inbox: None,
+            usage_tap: None,
             foreground: Vec::new(),
             extension_starts_closed: false,
+            stop_all_delegates: false,
         }),
         park: Parker::new(),
         start_gate: Mutex::new(()),
@@ -1605,6 +1607,84 @@ fn stop_delegates_stops_only_running_delegates() {
         registry.stop_delegates(),
         0,
         "an ended delegate sends nothing"
+    );
+}
+
+#[test]
+fn a_stop_racing_a_gated_start_stops_the_starting_delegate() {
+    // The spend trip can fire while a delegate spawn sits inside the
+    // admission gate, spawned but not yet registered: the scan misses it,
+    // and the one-way trip never fires again. The stop latches, so the
+    // starting delegate observes it at commit and stops at once, exactly
+    // once. Forced order over channels, no sleeps: the start parks inside
+    // the gate; the crossing fires and completes; the start commits after.
+    // Without the latch the start escapes unstopped.
+    let (_dir, registry) = world();
+    let stops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (id_tx, id_rx) = mpsc::channel::<JobId>();
+    let deadline = Deadline::after(DEADLINE);
+    std::thread::scope(|scope| {
+        // Test-owned: on a panic this sender drops while the closure
+        // unwinds, before the scope joins the worker parked on it, so
+        // the join cannot hang behind a live sender.
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let worker = std::sync::Arc::clone(&registry);
+        let worker_stops = std::sync::Arc::clone(&stops);
+        scope.spawn(move || {
+            let admitted = worker.admit(false, || {
+                entered_tx
+                    .send(())
+                    .expect("the crossing waits for the start");
+                release_rx.recv().expect("the crossing fires first");
+                let id = super::mint_job_id();
+                let stop = Stop(Box::new(move || {
+                    worker_stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }));
+                let (_started, _finish) = worker.open_started(
+                    id.clone(),
+                    "delegate_spawn".into(),
+                    "scan".into(),
+                    "/sessions/s_x/events.jsonl".into(),
+                    stop,
+                    delegate_started(&id.0),
+                );
+                id_tx.send(id).expect("the test reads the committed id");
+                Ok::<(), String>(())
+            });
+            admitted.expect("the gated start commits");
+        });
+        // The crossing fires while the start sits inside the gate: nothing
+        // is registered, so the scan stops nothing but latches the stop.
+        deadline
+            .recv(&entered_rx)
+            .expect("the start entered the gate");
+        assert_eq!(
+            registry.stop_delegates(),
+            0,
+            "nothing is registered at the crossing"
+        );
+        release_tx.send(()).expect("the start commits after");
+    });
+    assert_eq!(
+        stops.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the starting delegate stops exactly once"
+    );
+    let id = deadline.recv(&id_rx).expect("the start committed");
+    {
+        let inner = super::lock(&registry.inner);
+        let job = inner
+            .jobs
+            .iter()
+            .find(|job| job.started.job_id == id)
+            .expect("the start committed");
+        assert!(job.stop_sent, "the commit observed the latched stop");
+    }
+    assert_eq!(
+        registry.stop_delegates(),
+        0,
+        "a sent stop is not sent again"
     );
 }
 

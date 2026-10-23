@@ -10,7 +10,7 @@ base64.workspace = true
 contract = { path = "../contract" }
 libc = "0.2"
 log = { path = "../log" }
-# SHA-1 for the websocket handshake and SHA-256 for device-token hashes.
+# SHA-1 for the websocket handshake and random for pairing.
 ring.workspace = true
 rustix.workspace = true
 serde.workspace = true

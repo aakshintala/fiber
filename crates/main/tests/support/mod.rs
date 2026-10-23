@@ -313,6 +313,44 @@ impl Setup {
         );
     }
 
+    /// As [`Setup::provider`], with the model's data setting
+    /// `deferred_tools` as `deferred` says: the deferral tests run the
+    /// provider with deferral on, and the no-deferral case with it off.
+    /// Existing callers of [`Setup::provider`] are unchanged.
+    pub(crate) fn provider_with_deferral(&self, server: &ProviderServer, deferred: bool) {
+        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+        if deferred {
+            model["deferred_tools"] = json!(true);
+        }
+        let source = self.root.path().join("src");
+        write_json(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+        );
+        write_json(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [model]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m"}),
+        );
+    }
+
     /// One `fiber` invocation with `args`: the environment every test
     /// runs under. Stdio is piped; the caller decides how to wait.
     pub(crate) fn fiber(&self, args: &[&str]) -> Command {
