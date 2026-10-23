@@ -13,21 +13,21 @@ expression: "grid_text(&opened.rows, opened.cursor, opened.hide_cursor, &ids)"
      beta-2                                                            switch ~10 tokens
          fixed thinking
 
+     anthropic · not installed
+     bedrock · not installed
+     codex · not installed
+     databricks · not installed
+⋮    gemini · not installed                                                               ⋮
+⋮    muse · not installed                                                                 ⋮
+⋮    openai · not installed                                                               ⋮
+     opencode-go · not installed
+     opencode-zen · not installed
+     openrouter · not installed
+     vertex · not installed
+
    ↑↓ move · ←→ levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc
 
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-⋮                                                                                         ⋮
-⋮                                                                                         ⋮
-⋮                                                                                         ⋮
-
-
-
-
-
-
-
-
 
 
 

@@ -2,7 +2,7 @@
 //! in order but not necessarily next to each other and ignoring case, the
 //! model's provider, id or display name.
 
-use super::{id_hits, matches};
+use super::{id_hits, matches, matches_name};
 use crate::catalogue::ModelEntry;
 
 fn entry(provider: &str, id: &str, name: Option<&str>) -> ModelEntry {
@@ -149,4 +149,15 @@ fn expanding_lowercase_keeps_hits_on_the_ids_chars() {
     // 'İ' lowercases to two chars: the flags still align to the id's
     // three chars.
     assert_eq!(id_hits("aİb", "a b"), vec![true, false, true]);
+}
+
+#[test]
+fn a_name_matches_by_the_same_word_rule() {
+    assert!(matches_name("openai", ""));
+    assert!(matches_name("openai", "   "));
+    assert!(matches_name("openai", "OAI"));
+    assert!(matches_name("openai", "op ai"));
+    assert!(!matches_name("openai", "ia"), "out of order");
+    assert!(!matches_name("openai", "op zz"), "every word must match");
+    assert!(!matches_name("openai", "x"));
 }

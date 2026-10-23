@@ -36,6 +36,7 @@ mod home;
 mod image;
 mod import_report;
 mod input;
+mod install_worker;
 mod jigs;
 mod keymap;
 mod keys;
@@ -203,6 +204,15 @@ pub(crate) enum Input {
         ticket: login_worker::LoginTicket,
         /// The login's progress or its end.
         step: login_worker::LoginStep,
+    },
+    /// A provider install from the model picker finished: the provider's
+    /// name as the catalogue listed it, and the install's outcome or its
+    /// error. A result for a provider not installing changes nothing.
+    Install {
+        /// The provider chosen.
+        provider: String,
+        /// What the install put in place, or why it failed.
+        result: Result<ProviderInstall, ConfigureError>,
     },
     /// The working line's timer passed: the frame the tick armed drew,
     /// and the next moving frame arms it again (`docs/tui.md`, "The
