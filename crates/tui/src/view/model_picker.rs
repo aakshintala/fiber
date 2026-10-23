@@ -467,11 +467,18 @@ fn window(view: &PickerView, fit: usize) -> (usize, usize) {
         .unwrap_or(0)
         .min(total.saturating_sub(1));
     let (mut start, mut end) = (pos, pos.saturating_add(1));
-    while start > 0 && rows_for(view, &flats, start.saturating_sub(1), end) <= fit {
-        start = start.saturating_sub(1);
+    // Iterators bound each walk by `total`, so no comparison mutant can spin.
+    for s in (0..pos).rev() {
+        if rows_for(view, &flats, s, end) > fit {
+            break;
+        }
+        start = s;
     }
-    while end < total && rows_for(view, &flats, start, end.saturating_add(1)) <= fit {
-        end = end.saturating_add(1);
+    for e in pos.saturating_add(2)..=total {
+        if rows_for(view, &flats, start, e) > fit {
+            break;
+        }
+        end = e;
     }
     (start, end)
 }
