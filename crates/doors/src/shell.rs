@@ -7,17 +7,16 @@
 //! The loop never runs it.
 
 use contract::ErrorCode;
-use contract::clock::Wake;
 use contract::commands::Shell;
 use contract::emit::Emit;
 use contract::events::{CommandResult, Event, ShellCommand};
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::ContentPart;
-use contract::tool::{Bound, Cancel, Output, Tool};
+use contract::tool::{Bound, Output, Tool};
 use log::{cut_joined, cut_notice};
 use serde_json::{Map, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::Arc;
+use support::cancel::Token;
 
 use crate::mint;
 use crate::session::Gate;
@@ -30,45 +29,10 @@ pub(crate) const CANCELLED_BEFORE_START: &str = "Cancelled before it started.";
 /// A driver shell that passed its checks, with its cancel registered.
 pub(crate) struct Running {
     tool: Arc<dyn Tool>,
-    cancel: Arc<ShellCancel>,
+    cancel: Arc<Token>,
     arguments: Map<String, Value>,
     command: String,
     send: bool,
-}
-
-/// The cancel signal one driver shell sees.
-pub(crate) struct ShellCancel {
-    cancelled: AtomicBool,
-    wakers: Mutex<Vec<Weak<dyn Wake>>>,
-}
-
-impl ShellCancel {
-    pub(crate) fn new() -> Self {
-        Self {
-            cancelled: AtomicBool::new(false),
-            wakers: Mutex::new(Vec::new()),
-        }
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        let wakers = lock(&self.wakers).clone();
-        for waker in wakers {
-            if let Some(waker) = waker.upgrade() {
-                waker.wake();
-            }
-        }
-    }
-}
-
-impl Cancel for ShellCancel {
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-
-    fn subscribe(&self, waker: Weak<dyn Wake>) {
-        lock(&self.wakers).push(waker);
-    }
 }
 
 struct Silent;
@@ -81,7 +45,7 @@ impl Emit for Silent {
 /// read after this returns reaches it. Called on the reader thread.
 pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Option<Running> {
     let tool = gate.driver_shell()?;
-    let cancel = Arc::new(ShellCancel::new());
+    let cancel = Arc::new(Token::new());
     gate.shells.track(Arc::clone(&cancel));
     let mut arguments = Map::new();
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
@@ -282,8 +246,4 @@ fn cut(gate: &Gate, full: &str, bound: Bound) -> (String, Option<String>) {
     };
     let name = format!("{}.txt", mint("o_"));
     log.cut_output(full, bound, &name)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

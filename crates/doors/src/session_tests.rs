@@ -1976,7 +1976,7 @@ impl Tool for HeldShell {
         // The wait's guard is dropped before waiting for the test's
         // release below: the cancel path wakes through this same mutex,
         // so holding it across the release deadlocks the test inside
-        // `ShellCancel::cancel` while this shell waits for the release.
+        // `Token::cancel` while this shell waits for the release.
         let (guard, _waited) = flag
             .cv
             .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled())
@@ -3361,7 +3361,7 @@ fn the_state_setter_does_nothing_once_close_begins() {
     let gate = Arc::clone(&opened.session.gate);
     // Held registered so `close` parks in its first shells wait: the shells
     // are sealed (close began) while the connections are not yet stopped.
-    let held = Arc::new(crate::shell::ShellCancel::new());
+    let held = Arc::new(::support::cancel::Token::new());
     gate.shells.track(Arc::clone(&held));
     let (waiting_tx, waiting) = mpsc::channel();
     *super::lock(&gate.probe) = Some(Arc::new(move |point| {

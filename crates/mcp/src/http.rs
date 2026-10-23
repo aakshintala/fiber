@@ -24,7 +24,7 @@ use serde_json::Value;
 use ureq::unversioned::resolver::DefaultResolver;
 
 use crate::pipes::MAX_LINE;
-use crate::registry::{Stopping, lock};
+use crate::registry::{STOPPING, lock};
 use crate::rpc::Outcome;
 use crate::server::{OpenServer, StartError, shutting_down};
 use crate::start::redacted_url;
@@ -78,7 +78,7 @@ pub(crate) fn start_observed(
     connection: &mut Option<Box<dyn Send>>,
 ) -> Result<OpenServer, StartError> {
     // Sticky: a start after the stop spawns nothing.
-    if Stopping.is_cancelled() {
+    if STOPPING.is_cancelled() {
         return Err(shutting_down());
     }
     check_url(url)?;
