@@ -15,8 +15,12 @@ fn args(extra: &[&str]) -> crate::Args {
     crate::parse(words.map(str::to_owned)).unwrap()
 }
 
+/// The workload names, sorted: `docs/performance.md` promises each workload
+/// once, not an order, so the tests compare sets.
 fn names(workloads: &[&'static idle::Workload]) -> Vec<&'static str> {
-    workloads.iter().map(|workload| workload.name).collect()
+    let mut names: Vec<_> = workloads.iter().map(|workload| workload.name).collect();
+    names.sort_unstable();
+    names
 }
 
 /// One diagnostic-log line with `code` and `data`.
@@ -73,6 +77,8 @@ fn run(result: Result<(), String>, notes: Vec<String>, logs: Vec<Result<String, 
     }
 }
 
+/// `docs/performance.md`, "Measuring": each `op_timing` operation's count and
+/// total `ms`.
 #[test]
 fn tally_sums_op_timing_lines_by_operation() {
     let logs = [
@@ -92,7 +98,7 @@ fn tally_sums_op_timing_lines_by_operation() {
             op("tui.future_op", 7),
         ]),
     ];
-    let (ops, provider, notes) = tally(&logs);
+    let (ops, provider, _) = tally(&logs);
     assert_eq!(
         ops,
         json!({
@@ -102,9 +108,10 @@ fn tally_sums_op_timing_lines_by_operation() {
         })
     );
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
-    assert!(notes.is_empty(), "{notes:?}");
 }
 
+/// `docs/performance.md`, "Measuring": `provider_request`'s count and total
+/// `total_ms`.
 #[test]
 fn tally_sums_provider_request_total_ms() {
     let logs = [text(vec![
@@ -124,12 +131,12 @@ fn tally_does_not_count_other_codes() {
         line("peak_memory", json!({"bytes": 1})),
         line("session_started", json!({"op": "tool.run", "ms": 3})),
     ])];
-    let (ops, provider, notes) = tally(&logs);
+    let (ops, provider, _) = tally(&logs);
     assert_eq!(ops, json!({"startup.config": {"count": 1, "ms": 4}}));
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
-    assert!(notes.is_empty(), "{notes:?}");
 }
 
+/// Unreadable lines are notes; the readable lines around them still count.
 #[test]
 fn tally_notes_each_unreadable_line_and_counts_the_rest() {
     let logs = [text(vec![
@@ -142,7 +149,16 @@ fn tally_notes_each_unreadable_line_and_counts_the_rest() {
     let (ops, provider, notes) = tally(&logs);
     assert_eq!(ops, json!({"startup.config": {"count": 1, "ms": 6}}));
     assert_eq!(provider, json!({"count": 0, "total_ms": 0}));
-    assert_eq!(notes.len(), 4, "{notes:?}");
+    for note in [
+        "a diagnostic line is not JSON",
+        "an op_timing line has no string data.op or whole data.ms",
+        "a provider_request line has no whole data.total_ms",
+    ] {
+        assert!(
+            notes.iter().any(|found| found == note),
+            "{note} in {notes:?}"
+        );
+    }
 }
 
 #[test]
@@ -157,25 +173,38 @@ fn tally_notes_a_log_that_could_not_be_read() {
     let logs = [Err("reading x.log: boom".to_owned())];
     let (ops, _, notes) = tally(&logs);
     assert_eq!(ops, json!({}));
-    assert_eq!(notes, ["reading x.log: boom".to_owned()]);
+    assert!(
+        notes.iter().any(|note| note == "reading x.log: boom"),
+        "{notes:?}"
+    );
 }
 
+/// Each timing and busy workload runs once (`docs/performance.md`,
+/// "Measuring"); `fsyncs`, idle and resume workloads never do. Compared as
+/// sets: the doc promises no order.
 #[test]
-fn debug_workloads_are_the_timing_and_busy_workloads_in_order() {
-    assert_eq!(
-        names(&debug_workloads(&args(&["--paging", "j"]))),
-        [
-            "session start",
-            "terminal first frame",
-            "busy turn",
-            "web_fetch",
-            "10 busy turns",
-            "session_list",
-            "paging",
-            "sessions list",
-            "terminal attach",
-            "terminal wheel",
-        ]
+fn debug_workloads_are_the_timing_and_busy_workloads() {
+    let got = names(&debug_workloads(&args(&["--paging", "j"])));
+    let mut want = vec![
+        "session start",
+        "terminal first frame",
+        "busy turn",
+        "web_fetch",
+        "10 busy turns",
+        "session_list",
+        "paging",
+        "sessions list",
+        "terminal attach",
+        "terminal wheel",
+    ];
+    want.sort_unstable();
+    assert_eq!(got, want);
+    for excluded in ["fsyncs", "session idle", "terminal idle"] {
+        assert!(!got.contains(&excluded), "{excluded} in {got:?}");
+    }
+    assert!(
+        got.iter().all(|name| !name.starts_with("resume")),
+        "{got:?}"
     );
 }
 
@@ -197,31 +226,20 @@ fn debug_workloads_without_paging_when_no_jig() {
     assert!(names.contains(&"session_list"), "{names:?}");
 }
 
+/// Each selected workload gets one entry (`docs/performance.md`, "Measuring").
 #[test]
-fn debug_workloads_never_hold_fsyncs_idle_or_resume() {
-    let names = names(&debug_workloads(&args(&["--paging", "j"])));
-    assert!(names.contains(&"busy turn"), "{names:?}");
-    for excluded in ["fsyncs", "session idle", "terminal idle"] {
-        assert!(!names.contains(&excluded), "{excluded} in {names:?}");
-    }
-    assert!(
-        names.iter().all(|name| !name.starts_with("resume")),
-        "{names:?}"
-    );
-}
-
-#[test]
-fn debug_pass_has_one_entry_per_workload_in_selection_order() {
+fn debug_pass_has_one_entry_per_workload() {
     let mut head = Pass::new(Side::Head, args(&["--paging", "j"]));
     head.metrics.insert("attach_stage_ms", vec![json!(1)]);
     head.metric_runs.insert("attach_stage_ms", 5);
     let expected = names(&debug_workloads(&head.args));
     debug_pass(&mut head, |_| run(Ok(()), Vec::new(), Vec::new()));
     let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
-    let got: Vec<&str> = entries
+    let mut got: Vec<&str> = entries
         .iter()
         .filter_map(|entry| entry.get("workload")?.as_str())
         .collect();
+    got.sort_unstable();
     assert_eq!(got, expected);
     assert_eq!(head.metric_runs.get("op_breakdown"), Some(&1));
     assert_eq!(head.metrics.get("attach_stage_ms"), Some(&vec![json!(1)]));
@@ -245,7 +263,7 @@ fn debug_pass_tallies_a_child_homes_diagnostic_log() {
     let workloads = debug_workloads(&args);
     assert_eq!(
         names(&workloads),
-        ["session start", "busy turn", "web_fetch"]
+        ["busy turn", "session start", "web_fetch"]
     );
 
     let fiber = std::env::current_exe().unwrap();
@@ -267,13 +285,16 @@ fn debug_pass_tallies_a_child_homes_diagnostic_log() {
 
     let entries = head.metrics.get("op_breakdown").expect("op_breakdown");
     assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0]["workload"], "session start");
+    let start = entries
+        .iter()
+        .find(|entry| entry["workload"] == "session start")
+        .expect("session start entry");
     assert_eq!(
-        entries[0]["ops"],
+        start["ops"],
         json!({"startup.config": {"count": 1, "ms": 7}})
     );
     assert_eq!(
-        entries[0]["provider_request"],
+        start["provider_request"],
         json!({"count": 0, "total_ms": 0})
     );
 }

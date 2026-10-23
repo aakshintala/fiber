@@ -4148,6 +4148,22 @@ fn breakdown() -> Value {
     ])
 }
 
+/// The table rows, sorted: the report promises each operation's row, not an
+/// order of rows (`docs/performance.md`, "Measuring").
+fn debug_rows(comment: &str) -> Vec<&str> {
+    let section = comment
+        .split("### Debug run")
+        .nth(1)
+        .expect("Debug run section");
+    let section = section.split("### Not measured").next().unwrap_or_default();
+    let mut rows: Vec<&str> = section
+        .lines()
+        .filter(|line| line.starts_with("| ") && !line.starts_with("| Workload"))
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
 #[test]
 fn the_debug_run_section_lists_each_operation_next_to_its_workload() {
     let out = judge(
@@ -4155,8 +4171,22 @@ fn the_debug_run_section_lists_each_operation_next_to_its_workload() {
         Some(&base()),
         Event::PullRequest,
     );
-    let section = "### Debug run\n\nEach timing and busy workload ran once more at `diagnostics.level: \"debug\"`; never a sample, never gated (`docs/performance.md`, \"Measuring\").\n\n| Workload | Run ms | Operation | Count | Total ms |\n|---|---|---|---|---|\n| busy turn | 81234.5 | log.append | 862 | 40 |\n| busy turn | 81234.5 | tool.run | 429 | 512 |\n| busy turn | 81234.5 | provider_request total_ms | 430 | 2210 |\n| paging | 1234.0 | none recorded | — | — |\n\n### Not measured";
-    assert!(out.comment.contains(section), "{}", out.comment);
+    assert!(out.comment.contains("### Debug run\n\nEach timing and busy workload ran once more at `diagnostics.level: \"debug\"`; never a sample, never gated (`docs/performance.md`, \"Measuring\").\n"), "{}", out.comment);
+    assert!(
+        out.comment.contains(
+            "| Workload | Run ms | Operation | Count | Total ms |\n|---|---|---|---|---|\n"
+        ),
+        "{}",
+        out.comment
+    );
+    let mut want = vec![
+        "| busy turn | 81234.5 | log.append | 862 | 40 |",
+        "| busy turn | 81234.5 | tool.run | 429 | 512 |",
+        "| busy turn | 81234.5 | provider_request total_ms | 430 | 2210 |",
+        "| paging | 1234.0 | none recorded | — | — |",
+    ];
+    want.sort_unstable();
+    assert_eq!(debug_rows(&out.comment), want, "{}", out.comment);
 }
 
 #[test]
@@ -4174,8 +4204,12 @@ fn a_failed_or_noted_workload_adds_bullets_and_no_failure() {
     let without = judge(&head(), Some(&base()), Event::PullRequest);
     assert_eq!(with.failures, without.failures);
     assert!(
+        with.comment.contains("- busy turn: failed: boom\n"),
+        "{}",
         with.comment
-            .contains("- busy turn: failed: boom\n- busy turn: n1\n"),
+    );
+    assert!(
+        with.comment.contains("- busy turn: n1\n"),
         "{}",
         with.comment
     );

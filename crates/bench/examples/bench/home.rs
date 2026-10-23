@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use fakes::{ProviderServer, Response, TempDir, Watchdog};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::run::{STOP, System};
 
@@ -201,17 +201,15 @@ impl Drop for Home {
 /// The `config.json` a home installs. `diagnostics.level` is `debug` only
 /// when the harness reads the home's log lines back.
 fn config(debug: bool) -> Value {
-    let mut config = Map::new();
-    config.insert("model".to_owned(), json!("fake/m"));
-    config.insert(
-        "session".to_owned(),
-        json!({"idle_exit_ms": SESSION_IDLE_EXIT_MS}),
-    );
-    config.insert("hub".to_owned(), json!({"idle_exit_ms": HUB_IDLE_EXIT_MS}));
-    if debug {
-        config.insert("diagnostics".to_owned(), json!({"level": "debug"}));
+    let mut config = json!({
+        "model": "fake/m",
+        "session": {"idle_exit_ms": SESSION_IDLE_EXIT_MS},
+        "hub": {"idle_exit_ms": HUB_IDLE_EXIT_MS}
+    });
+    if let Some(fields) = config.as_object_mut().filter(|_| debug) {
+        fields.insert("diagnostics".to_owned(), json!({"level": "debug"}));
     }
-    Value::Object(config)
+    config
 }
 
 /// The text of every direct `*.log` file in `dir`, in file-name order. A

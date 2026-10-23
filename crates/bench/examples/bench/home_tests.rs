@@ -30,15 +30,19 @@ fn config_with_debug_adds_the_debug_level() {
     );
 }
 
+/// Every direct `*.log` file is read, and only those; the order is not
+/// promised, so the test compares sorted lists.
 #[test]
-fn read_logs_returns_each_log_file_in_file_name_order() {
+fn read_logs_returns_each_direct_log_file() {
     let dir = TempDir::new("logs");
     fs::write(dir.path().join("session-s_a.log"), "session\n").unwrap();
     fs::write(dir.path().join("hub.log"), "hub\n").unwrap();
     fs::write(dir.path().join("notes.txt"), "not a log\n").unwrap();
     fs::create_dir(dir.path().join("sub")).unwrap();
+    let mut logs = read_logs(dir.path());
+    logs.sort();
     assert_eq!(
-        read_logs(dir.path()),
+        logs,
         vec![Ok("hub\n".to_owned()), Ok("session\n".to_owned())]
     );
 }

@@ -116,16 +116,17 @@ fn entry(workload: &str, run: Run) -> Value {
     let (ops, provider_request, tallied) = tally(&run.logs);
     let mut notes = run.notes;
     notes.extend(tallied);
-    let mut entry = Map::new();
-    entry.insert("workload".to_owned(), json!(workload));
-    entry.insert("ms".to_owned(), json!(run.ms));
-    entry.insert("ops".to_owned(), ops);
-    entry.insert("provider_request".to_owned(), provider_request);
-    entry.insert("notes".to_owned(), json!(notes));
-    if let Err(err) = run.result {
-        entry.insert("error".to_owned(), json!(err));
+    let mut entry = json!({
+        "workload": workload,
+        "ms": run.ms,
+        "ops": ops,
+        "provider_request": provider_request,
+        "notes": notes
+    });
+    if let (Err(err), Some(fields)) = (run.result, entry.as_object_mut()) {
+        fields.insert("error".to_owned(), json!(err));
     }
-    Value::Object(entry)
+    entry
 }
 
 /// Runs each debug workload once through `run` and records them as
