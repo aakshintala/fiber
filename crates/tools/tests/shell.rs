@@ -2801,6 +2801,66 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
 }
 
 #[test]
+fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-cd");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub").join("n.md"), "The note.\n").unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let sub = workspace.join("sub").to_str().unwrap().to_owned();
+    // A `cd` is a read-only step: later paths resolve past the join, and
+    // an operand-less command declares each directory it may run in.
+    for (command, paths) in [
+        (
+            "cd sub && cat n.md 2>/dev/null",
+            vec![sub.clone(), format!("{sub}/n.md")],
+        ),
+        (
+            "cd sub ; ls",
+            vec![
+                sub.clone(),
+                workspace.to_str().unwrap().to_owned(),
+                sub.clone(),
+            ],
+        ),
+        (
+            "cd sub | cat f",
+            vec![
+                sub.clone(),
+                workspace.join("f").to_str().unwrap().to_owned(),
+            ],
+        ),
+        ("git status && cd sub", vec![sub.clone()]),
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert_eq!(effects.declared.paths, Some(paths), "{command}");
+    }
+    // A `git` after any `cd`, and a `cd` outside the allow-list, execute.
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd",
+        "cd -",
+        "cd a b",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
 fn one_shells_list_does_not_leak_into_another() {
     let dir = fakes::TempDir::new("fiber-shell-read-only-isolation");
     let workspace = dir.path().join("ws");

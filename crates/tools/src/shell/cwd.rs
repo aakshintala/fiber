@@ -97,7 +97,7 @@ impl Cwd {
 /// Append `target` to `dir` and normalise `.` and `..` lexically: an
 /// absolute target replaces the directory, `.` stays, `..` pops one
 /// component, and a `..` with an empty stack stays literal.
-fn join_dir(dir: &str, target: &str) -> String {
+pub(super) fn join_dir(dir: &str, target: &str) -> String {
     let mut absolute = dir.starts_with('/');
     let mut parts: Vec<&str> = dir.split('/').filter(|piece| !piece.is_empty()).collect();
     if target.starts_with('/') {

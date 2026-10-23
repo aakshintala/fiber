@@ -1197,3 +1197,163 @@ fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
     assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
     assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
 }
+
+#[test]
+fn cd_forms_outside_the_allow_list_execute() {
+    for command in [
+        "cd",
+        "cd -",
+        "cd \"\"",
+        "cd -P x",
+        "cd -L x",
+        "cd a b",
+        "cd ~",
+        "cd \"~\"",
+        "cd \"~/x\"",
+        "cd a*b",
+        "cd \"a*b\"",
+        "cd \"a?b\"",
+        "cd \"a[b]\"",
+        "cd \"a{b}\"",
+        "cd $(x)",
+        "cd `x`",
+        "cd $HOME",
+        "cd --",
+        "cd -- -",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn cd_dash_dash_names_one_directory() {
+    assert_reads("cd -- x");
+    assert_eq!(
+        classified("cd -- x").declared.paths,
+        Some(vec!["/work/x".to_owned()]),
+        "cd -- x"
+    );
+}
+
+#[test]
+fn cd_declares_its_directory() {
+    assert_reads("cd sub");
+    assert_eq!(
+        classified("cd sub").declared.paths,
+        Some(vec!["/work/sub".to_owned()]),
+        "cd sub"
+    );
+    // A lexical join still resolves against the workdir.
+    assert_reads("cd sub/../proc");
+    assert_eq!(
+        classified("cd sub/../proc").declared.paths,
+        Some(vec!["/work/proc".to_owned()]),
+        "cd sub/../proc"
+    );
+    // Under /proc the call is reviewed.
+    for command in ["cd /proc", "cd /proc/self", "cd /proc/1/fd"] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn operand_less_commands_declare_each_running_directory() {
+    // Each element declares the directories it runs in: the `cd` its own
+    // join, then the operand-less `ls` each running directory.
+    assert_reads("cd sub && ls");
+    assert_eq!(
+        classified("cd sub && ls").declared.paths,
+        Some(vec!["/work/sub".to_owned(), "/work/sub".to_owned()]),
+        "cd sub && ls"
+    );
+    for command in ["cd sub ; ls", "cd sub || ls"] {
+        assert_reads(command);
+        assert_eq!(
+            classified(command).declared.paths,
+            Some(vec![
+                "/work/sub".to_owned(),
+                "/work".to_owned(),
+                "/work/sub".to_owned(),
+            ]),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn git_after_any_cd_executes() {
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd sub || git status",
+        "cd sub && git stash list",
+        "cd sub && git log",
+    ] {
+        assert_closed(command);
+    }
+    // Git before the cd still reads, declaring the joined directory.
+    assert_reads("git status && cd sub");
+    assert_eq!(
+        classified("git status && cd sub").declared.paths,
+        Some(vec!["/work/sub".to_owned()]),
+        "git status && cd sub"
+    );
+}
+
+#[test]
+fn cd_before_an_input_redirect_checks_each_running_directory() {
+    assert_reads("cd sub && cat <f");
+    assert_eq!(
+        classified("cd sub && cat <f").declared.paths,
+        Some(vec![
+            "/work/sub".to_owned(),
+            "/work/sub".to_owned(),
+            "/work/sub/f".to_owned(),
+        ]),
+        "cd sub && cat <f"
+    );
+    for command in ["cd sub ; cat <f", "cd sub || cat <f"] {
+        assert_reads(command);
+        assert_eq!(
+            classified(command).declared.paths,
+            Some(vec![
+                "/work/sub".to_owned(),
+                "/work".to_owned(),
+                "/work/sub".to_owned(),
+                "/work/f".to_owned(),
+                "/work/sub/f".to_owned(),
+            ]),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn cd_in_a_pipeline_moves_nothing() {
+    assert_reads("cd sub | cat f");
+    assert_eq!(
+        classified("cd sub | cat f").declared.paths,
+        Some(vec!["/work/sub".to_owned(), "/work/f".to_owned()]),
+        "cd sub | cat f"
+    );
+}
+
+#[test]
+fn losing_the_path_executes_every_later_element() {
+    assert_reads(&cd_chain(30));
+    assert_reads(&cd_chain(31));
+    assert_closed(&cd_chain(32));
+}
+
+fn cd_chain(count: usize) -> String {
+    let mut command = String::new();
+    for n in 1..=count {
+        if n > 1 {
+            command.push_str(" ; ");
+        }
+        command.push_str(&format!("cd /d{n}"));
+    }
+    command.push_str(" ; ls");
+    command
+}
