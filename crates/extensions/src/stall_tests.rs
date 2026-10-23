@@ -186,6 +186,16 @@ fn wrong_park_with_an_answer_returns_the_answer() {
     assert_eq!(outcome, Some("answer"));
 }
 
+/// Releases a parked thread when a `should_panic` test unwinds past it, so
+/// the thread never waits out its bound.
+struct ReleaseOnDrop(mpsc::Sender<()>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        let _sent = self.0.send(());
+    }
+}
+
 #[test]
 #[should_panic(expected = "watched park")]
 fn wrong_park_without_an_answer_panics() {
@@ -196,15 +206,7 @@ fn wrong_park_without_an_answer_panics() {
     let (release_tx, _exited_rx) = park(&clock, elsewhere);
     // The panic unwinds past this test: release the parked thread on
     // the way out so it never waits out its bound.
-    struct ReleaseOnDrop(Option<mpsc::Sender<()>>);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            if let Some(release) = self.0.take() {
-                let _sent = release.send(());
-            }
-        }
-    }
-    let _release = ReleaseOnDrop(Some(release_tx));
+    let _release = ReleaseOnDrop(release_tx);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
     advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
@@ -287,13 +289,16 @@ fn run_that_reparks(
     (go_tx, answer_rx, waker)
 }
 
-#[test]
-fn a_run_that_reparks_past_the_grace_is_followed_to_its_park() {
+/// A run that leaves the grace park and re-parks at `kill_at + offset` is
+/// followed there: the advance moves the clock to the re-park, not past
+/// the grace, and the run's answer still arrives.
+#[track_caller]
+fn assert_followed_at(offset: Duration) {
     let clock = Arc::new(FakeClock::new());
     let kill_at = clock.now() + Duration::from_secs(30);
-    let drain = kill_at + Duration::from_secs(1);
+    let repark = kill_at + offset;
     let advance = Duration::from_secs(5);
-    let (go_tx, answer_rx, _waker) = run_that_reparks(&clock, kill_at, drain);
+    let (go_tx, answer_rx, _waker) = run_that_reparks(&clock, kill_at, repark);
 
     // The sighting sees the held grace park and no answer yet.
     assert_eq!(await_grace_or_answer(&clock, &answer_rx, kill_at), None);
@@ -301,14 +306,14 @@ fn a_run_that_reparks_past_the_grace_is_followed_to_its_park() {
         .send(())
         .expect("the run is parked waiting for release");
     assert!(
-        clock.await_parked(drain, Deadline::after(MUST_SUCCEED_WITHIN)),
-        "waited {MUST_SUCCEED_WITHIN:?} for the run to park at the drain"
+        clock.await_parked(repark, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the run to park at the re-park"
     );
     let outcome = advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
     assert_eq!(outcome, None);
     assert_eq!(
         clock.now(),
-        drain,
+        repark,
         "the clock moved to the watched instant, not kill_at"
     );
     let answer = Deadline::after(MUST_SUCCEED_WITHIN)
@@ -318,32 +323,13 @@ fn a_run_that_reparks_past_the_grace_is_followed_to_its_park() {
 }
 
 #[test]
-fn a_run_that_reparks_at_the_drain_bound_is_followed() {
-    let clock = Arc::new(FakeClock::new());
-    let kill_at = clock.now() + Duration::from_secs(30);
-    let bound = kill_at + support::group::DRAIN;
-    let advance = Duration::from_secs(5);
-    let (go_tx, answer_rx, _waker) = run_that_reparks(&clock, kill_at, bound);
+fn a_run_that_reparks_past_the_grace_is_followed_to_its_park() {
+    assert_followed_at(Duration::from_secs(1));
+}
 
-    assert_eq!(await_grace_or_answer(&clock, &answer_rx, kill_at), None);
-    go_tx
-        .send(())
-        .expect("the run is parked waiting for release");
-    assert!(
-        clock.await_parked(bound, Deadline::after(MUST_SUCCEED_WITHIN)),
-        "waited {MUST_SUCCEED_WITHIN:?} for the run to park at the drain bound"
-    );
-    let outcome = advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
-    assert_eq!(outcome, None);
-    assert_eq!(
-        clock.now(),
-        bound,
-        "the clock moved to the watched instant, not kill_at"
-    );
-    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&answer_rx)
-        .expect("waited for the run to answer after the follow");
-    assert_eq!(answer, "answer");
+#[test]
+fn a_run_that_reparks_at_the_drain_bound_is_followed() {
+    assert_followed_at(support::group::DRAIN);
 }
 
 #[test]
@@ -356,15 +342,7 @@ fn a_park_past_the_drain_bound_still_panics() {
     let (release_tx, _exited_rx) = park(&clock, past);
     // The panic unwinds past this test: release the parked thread on
     // the way out so it never waits out its bound.
-    struct ReleaseOnDrop(Option<mpsc::Sender<()>>);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            if let Some(release) = self.0.take() {
-                let _sent = release.send(());
-            }
-        }
-    }
-    let _release = ReleaseOnDrop(Some(release_tx));
+    let _release = ReleaseOnDrop(release_tx);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
     advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
@@ -391,15 +369,7 @@ fn a_park_without_an_instant_still_panics() {
     );
     // The panic unwinds past this test: release the parked thread on
     // the way out so it never waits out its bound.
-    struct ReleaseOnDrop(Option<mpsc::Sender<()>>);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            if let Some(release) = self.0.take() {
-                let _sent = release.send(());
-            }
-        }
-    }
-    let _release = ReleaseOnDrop(Some(release_tx));
+    let _release = ReleaseOnDrop(release_tx);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
     advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);

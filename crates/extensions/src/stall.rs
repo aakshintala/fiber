@@ -45,8 +45,11 @@ pub(crate) fn advance_past_grace_or_answer<T>(
     }
     let mut waited = kill_at;
     let mut step = advance;
-    let mut followed = false;
-    for _ in 0..ROUNDS {
+    // Rounds of waiting with no park to show for them: the follow below
+    // retries at once and takes no round of its own, so a mismatch on the
+    // final round still follows instead of falling out to the hang guard.
+    let mut rounds = 0;
+    while rounds < ROUNDS {
         match clock.try_advance_when_parked(Some(waited), None, step, SIGHT) {
             Ok(_) => return None,
             Err(miss) => match done.try_recv() {
@@ -57,21 +60,26 @@ pub(crate) fn advance_past_grace_or_answer<T>(
                 Err(mpsc::TryRecvError::Empty) => match miss {
                     // The run left the grace park and re-parked later, at
                     // the drain bound it parks at after the stop: follow
-                    // the later park in this round instead of failing the
-                    // look for a park that never comes back. A park beyond
+                    // the later park at once instead of failing the look
+                    // for a park that never comes back. A park beyond
                     // that bound is a grace regression and still panics.
+                    // `waited` only moves on a follow, so it still
+                    // naming `kill_at` means no follow has happened yet:
+                    // the follow stays once-only.
                     fakes::clock::Miss::Mismatch {
                         watched: (_, Some(w)),
                         ..
-                    } if !followed && w > waited && w <= kill_at + DRAIN => {
-                        followed = true;
+                    } if waited == kill_at && w > waited && w <= kill_at + DRAIN => {
                         waited = w;
                         step = w.saturating_duration_since(clock.now());
+                        continue;
                     }
                     fakes::clock::Miss::Mismatch { .. } => {
                         panic!("{miss}")
                     }
-                    fakes::clock::Miss::NoPark => {}
+                    fakes::clock::Miss::NoPark => {
+                        rounds += 1;
+                    }
                 },
                 Err(mpsc::TryRecvError::Disconnected) => {
                     panic!("the stalled run returns")
