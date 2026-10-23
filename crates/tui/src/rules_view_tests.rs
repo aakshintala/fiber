@@ -364,23 +364,31 @@ fn ctrl_g_opens_the_selected_sections_file() {
     }
 }
 
+/// The text of the selected row.
+fn selected_text(rules: &Rules) -> String {
+    lines(rules)[rules.list.selected()].clone()
+}
+
 #[test]
 fn up_and_down_move_only_between_rules_and_notes() {
-    // Global heading, two rules, a blank row, the project heading and a
-    // note.
+    // Two global rules and the project's note: headings and blank rows
+    // between them are skipped.
     let fake = fake(vec![full(), hand()], Ok(Vec::new()));
     let mut rules = open(&fake);
-    assert_eq!(rules.list.selected(), 1);
+    let first = "allow shell:npm test · added 2026-10-07 00:00 UTC in s_01 · ✕";
+    let second = "deny shell:(any) · ✕";
+    let note = "No rules.";
+    assert_eq!(selected_text(&rules), first);
     for (key, to) in [
-        (Key::Down, 2),
-        (Key::Down, 5),
-        (Key::Down, 5),
-        (Key::Up, 2),
-        (Key::Up, 1),
-        (Key::Up, 1),
+        (Key::Down, second),
+        (Key::Down, note),
+        (Key::Down, note),
+        (Key::Up, second),
+        (Key::Up, first),
+        (Key::Up, first),
     ] {
         rules.key(&key, &ctx(&fake));
-        assert_eq!(rules.list.selected(), to, "{key:?}");
+        assert_eq!(selected_text(&rules), to, "{key:?}");
     }
 }
 
@@ -388,12 +396,26 @@ fn up_and_down_move_only_between_rules_and_notes() {
 fn a_click_on_a_heading_or_blank_row_selects_nothing() {
     let fake = fake(vec![full(), hand()], Ok(Vec::new()));
     let mut rules = open(&fake);
-    for row in [0, 3, 4] {
+    let on = rules.list.selected();
+    // Every row that is not a rule or a note: the headings and the blank
+    // row.
+    let others: Vec<usize> = lines(&rules)
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| !line.ends_with('✕') && line.as_str() != "No rules.")
+        .map(|(at, _)| at)
+        .collect();
+    assert!(others.len() >= 2);
+    for row in others {
         rules.click(Spot::Row(row), &ctx(&fake));
-        assert_eq!(rules.list.selected(), 1, "row {row}");
+        assert_eq!(rules.list.selected(), on, "row {row}");
     }
-    rules.click(Spot::Row(5), &ctx(&fake));
-    assert_eq!(rules.list.selected(), 5);
+    let note = lines(&rules)
+        .iter()
+        .position(|line| line == "No rules.")
+        .expect("the project's note");
+    rules.click(Spot::Row(note), &ctx(&fake));
+    assert_eq!(rules.list.selected(), note);
 }
 
 #[test]

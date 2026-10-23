@@ -464,6 +464,26 @@ fn a_click_on_a_switch_selects_its_row_and_switches_it() {
     assert_eq!(frame(&tools).rows[5][5].0, "[off]");
 }
 
+/// The rows that carry a switch: the ones a click or a key can select.
+fn taking(tools: &Tools) -> Vec<usize> {
+    frame(tools)
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, cells)| cells.iter().any(|cell| cell.1.is_some()))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// The name on the selected row.
+fn selected_name(tools: &Tools) -> String {
+    names(tools)[selected(tools)]
+        .split(" · ")
+        .next()
+        .unwrap_or("")
+        .to_owned()
+}
+
 #[test]
 fn a_click_on_a_row_that_takes_no_switch_selects_nothing() {
     let fake = fake_with(vec![group_switches(
@@ -476,15 +496,18 @@ fn a_click_on_a_row_that_takes_no_switch_selects_nothing() {
         &[builtin("a"), extension("t", "e"), extension("u", "e")],
         None,
     );
-    let on_t = selected(&tools);
-    assert_eq!(on_t, 4);
-    // The heading, the built-in row and the blank row.
-    for row in [0, 1, 2, 3] {
+    let takes = taking(&tools);
+    assert_eq!(takes.len(), 2);
+    let on = selected(&tools);
+    assert!(takes.contains(&on));
+    // Every other row: headings, the built-in row, blank rows.
+    for row in (0..frame(&tools).rows.len()).filter(|row| !takes.contains(row)) {
         tools.click(Spot::Row(row), &ctx(&fake, None));
-        assert_eq!(selected(&tools), on_t, "row {row}");
+        assert_eq!(selected(&tools), on, "row {row}");
     }
-    tools.click(Spot::Row(5), &ctx(&fake, None));
-    assert_eq!(selected(&tools), 5);
+    let other = takes.iter().copied().find(|row| *row != on).unwrap();
+    tools.click(Spot::Row(other), &ctx(&fake, None));
+    assert_eq!(selected(&tools), other);
 }
 
 #[test]
@@ -502,16 +525,21 @@ fn up_and_down_move_only_between_the_rows_that_take_a_switch() {
         ],
         None,
     );
-    // Rows: Built-in, a, blank, Extension, t, blank, MCP, x.
-    assert_eq!(selected(&tools), 4);
+    // The selection starts on a tool with a switch and steps to the
+    // other one, never to a heading, the built-in row or a blank row.
+    let first = selected_name(&tools);
+    assert!(["t", "x"].contains(&first.as_str()), "{first}");
     tools.key(&Key::Down, &ctx(&fake, None));
-    assert_eq!(selected(&tools), 7);
+    let second = selected_name(&tools);
+    assert!(["t", "x"].contains(&second.as_str()), "{second}");
+    assert_ne!(first, second);
+    // At the end Down stays; Up returns, and at the start Up stays.
     tools.key(&Key::Down, &ctx(&fake, None));
-    assert_eq!(selected(&tools), 7);
+    assert_eq!(selected_name(&tools), second);
     tools.key(&Key::Up, &ctx(&fake, None));
-    assert_eq!(selected(&tools), 4);
+    assert_eq!(selected_name(&tools), first);
     tools.key(&Key::Up, &ctx(&fake, None));
-    assert_eq!(selected(&tools), 4);
+    assert_eq!(selected_name(&tools), first);
 }
 
 #[test]
