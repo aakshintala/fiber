@@ -2,10 +2,11 @@
 
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
+use support::lock;
 
 const WALL_EPOCH: Duration = Duration::from_secs(1_700_000_000);
 
@@ -86,10 +87,7 @@ impl CaseClock {
     #[cfg(test)]
     pub(crate) fn install_sleep_pause(&self) -> mpsc::Receiver<()> {
         let (tx, rx) = mpsc::channel();
-        *self
-            .sleep_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        *support::lock(&self.sleep_pause) = Some(tx);
         rx
     }
 
@@ -159,13 +157,7 @@ impl Clock for CaseClock {
                 .wait_while(state, |state| {
                     let pending = now_in(state, self.origin) < until;
                     #[cfg(test)]
-                    if pending
-                        && let Some(tx) = self
-                            .sleep_pause
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .take()
-                    {
+                    if pending && let Some(tx) = support::lock(&self.sleep_pause).take() {
                         let _sent = tx.send(());
                     }
                     pending
@@ -224,10 +216,6 @@ fn move_by(state: &mut State, d: Duration) -> Vec<Arc<dyn Wake>> {
 
 fn now_in(state: &State, origin: Instant) -> Instant {
     origin.checked_add(state.offset).unwrap_or(origin)
-}
-
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Leave<'a> {

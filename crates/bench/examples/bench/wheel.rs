@@ -808,7 +808,7 @@ fn measure(
 /// Samples the wheel workload: both sessions' logs written straight to the
 /// log, then a live, idle session each under one hub.
 fn terminal_wheel(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let home = Home::new(ctx.home.fiber())?;
+    let home = ctx.home.child([])?;
     let paging = doors::mint("s_");
     let read = doors::mint("s_");
     write_paging_log(&home, &paging)?;

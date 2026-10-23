@@ -23,6 +23,7 @@
 
 mod attach;
 mod busy;
+mod debug;
 mod home;
 mod idle;
 mod linux;
@@ -695,6 +696,17 @@ fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
                     run_once(&ctx, workload, notes)
                 },
             );
+            let head_fiber = head.args.fiber.clone();
+            debug::debug_pass(&mut head, |workload| {
+                debug::run_debug(
+                    &head_fiber,
+                    &clock,
+                    path.clone(),
+                    Duration::from_secs(head_idle),
+                    head_paging.as_deref(),
+                    workload,
+                )
+            });
             if let Err(err) = head_home.finish() {
                 head.failures.push(format!("cleanup: {err}"));
             }

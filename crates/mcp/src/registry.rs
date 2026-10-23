@@ -3,44 +3,20 @@
 //! list instead, signalled as groups;
 //! [`stop_every_start`] is what stays here.
 
-use std::sync::{Mutex, Weak};
+use std::sync::LazyLock;
 
-use contract::clock::Wake;
-use contract::tool::Cancel;
+use support::cancel::Token;
 
 /// Stops every server still starting, and every start after it: the flag is
 /// sticky for the life of the process. It sets the flag and wakes the parked
 /// handshakes; the stop and reap run on each start's own thread. Idempotent.
 pub fn stop_every_start() {
-    *lock(&STOPPED) = true;
-    // Dropped before any wake: a wake takes the shared lock.
-    let waiting = std::mem::take(&mut *lock(&WAITING));
-    for waker in waiting {
-        if let Some(waker) = waker.upgrade() {
-            waker.wake();
-        }
-    }
+    STOPPING.cancel();
 }
 
-static STOPPED: Mutex<bool> = Mutex::new(false);
-static WAITING: Mutex<Vec<Weak<dyn Wake>>> = Mutex::new(Vec::new());
-
-/// The handshake's cancel, fired by [`stop_every_start`].
-pub(crate) struct Stopping;
-
-impl Cancel for Stopping {
-    fn is_cancelled(&self) -> bool {
-        *lock(&STOPPED)
-    }
-
-    fn subscribe(&self, waker: Weak<dyn Wake>) {
-        let mut waiting = lock(&WAITING);
-        // A finished start drops its bridge and leaves a dead entry: pruned
-        // here, so the list holds only the starts still running.
-        waiting.retain(|listed| listed.upgrade().is_some());
-        waiting.push(waker);
-    }
-}
+/// The handshake's cancel, fired by [`stop_every_start`]: sticky for the
+/// life of the process, so a start after the stop sees it cancelled.
+pub(crate) static STOPPING: LazyLock<Token> = LazyLock::new(Token::new);
 
 /// Runs while a signaller holds the child that keeps its group unreaped,
 /// just before the SIGTERM: the test pauses there to force a reap against

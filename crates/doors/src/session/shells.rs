@@ -16,10 +16,10 @@ pub(crate) struct Shells {
 /// after `close` cannot miss the snapshot.
 struct RunningShells {
     stopped: bool,
-    running: Vec<Arc<crate::shell::ShellCancel>>,
+    running: Vec<Arc<support::cancel::Token>>,
 }
 
-fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
+fn cancel_each(shells: &[Arc<support::cancel::Token>]) {
     for shell in shells {
         shell.cancel();
     }
@@ -44,7 +44,7 @@ impl Shells {
 
     /// Registers a driver shell's cancel. After `close` or the stopper it
     /// is registered too, so they wait for its thread, and cancelled at once.
-    pub(crate) fn track(&self, cancel: Arc<crate::shell::ShellCancel>) {
+    pub(crate) fn track(&self, cancel: Arc<support::cancel::Token>) {
         let stopped = {
             let mut running = lock(&self.running);
             running.running.push(Arc::clone(&cancel));
@@ -58,7 +58,7 @@ impl Shells {
 
     /// Unregisters a driver shell's cancel and wakes whoever waits for none
     /// to be registered.
-    pub(crate) fn untrack(&self, cancel: &Arc<crate::shell::ShellCancel>) {
+    pub(crate) fn untrack(&self, cancel: &Arc<support::cancel::Token>) {
         lock(&self.running)
             .running
             .retain(|tracked| !Arc::ptr_eq(tracked, cancel));

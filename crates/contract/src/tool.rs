@@ -3,13 +3,12 @@
 //! alike; the loop looks a call's name up among them and never learns whose
 //! it is.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::{Map, Value};
 
 use crate::ActionId;
-use crate::clock::Wake;
 use crate::emit::Emit;
 use crate::events::{Answer, Control, FileChange, Interaction, McpServerFailed, McpServerReady};
 use crate::jobs::JobRecord;
@@ -43,17 +42,10 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
 ];
 
 /// What a tool may ask of the signal that cancels its call
-/// (`docs/tools.md`, "Cancellation"). The signal itself lives outside
-/// `contract`, which holds no behaviour.
-pub trait Cancel: Send + Sync {
-    /// Whether the call has been cancelled.
-    fn is_cancelled(&self) -> bool;
-
-    /// Wakes `waker` when the call is cancelled from then on. A cancel
-    /// before the subscription is not replayed: the caller checks
-    /// [`Cancel::is_cancelled`] after subscribing.
-    fn subscribe(&self, waker: Weak<dyn Wake>);
-}
+/// (`docs/tools.md`, "Cancellation"). The trait lives in
+/// [`support::cancel`](support::cancel) and is re-exported here
+/// (`docs/architecture.md`, "The modules").
+pub use support::cancel::Cancel;
 
 /// Runs the inner calls of the call it belongs to (`docs/extensions.md`,
 /// "Running a tool").

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use config::ProjectKey;
 use contract::ErrorCode;
@@ -297,10 +297,7 @@ impl Later {
     ) -> r#loop::LoadApproved {
         let waiting = Mutex::new(Some(self));
         Arc::new(move |outcome: &r#loop::OfferOutcome| {
-            let later = waiting
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
+            let later = support::lock(&waiting).take();
             match later {
                 None => Ok(r#loop::Approved::default()),
                 Some(later) => later.load(outcome, &declare, &caps),

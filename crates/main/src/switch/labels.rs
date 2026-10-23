@@ -2,7 +2,7 @@
 
 use super::Switching;
 use contract::events::CredentialLabels;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 pub(crate) struct CredentialReaders {
     pub(crate) prepare: r#loop::Prepare,
@@ -22,12 +22,11 @@ impl Switching {
         let switched = Arc::clone(&model);
         let prepare: r#loop::Prepare = Arc::new(move |args, label, chosen| {
             let prepared = prepare(args, label, chosen)?;
-            *switched.lock().unwrap_or_else(PoisonError::into_inner) =
-                prepared.model.reference.clone();
+            *support::lock(&switched) = prepared.model.reference.clone();
             Ok(prepared)
         });
         let admitted: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
-            let model = model.lock().unwrap_or_else(PoisonError::into_inner);
+            let model = support::lock(&model);
             model.split('/').next().unwrap_or_default().to_owned()
         });
         let provider = Arc::clone(&admitted);
@@ -43,12 +42,7 @@ impl Switching {
                 || (Vec::new(), None),
                 |data| {
                     let credentials = switching.startup_config.credentials().labels(data);
-                    let credential = switching
-                        .current
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .get(&provider)
-                        .cloned();
+                    let credential = support::lock(&switching.current).get(&provider).cloned();
                     (credentials, credential)
                 },
             );
