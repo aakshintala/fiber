@@ -26,3 +26,11 @@ docs/prompt-cache.md	box-3016	grant	2026-10-22T00:21:37Z	HOST:/home/aakshintala/
 crates/cli/src/model_lists.rs	fiber-3092	grant	2026-10-22T07:46:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/cli/3092-setup-login-hang-and-notices	
 crates/main/src/configure_tests.rs	1723	grant	2026-10-22T22:00:05Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/main/src/resume_tests.rs	1723	grant	2026-10-22T22:48:04Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/jobs/src/delegate/run.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/loop/src/usage.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/loop/src/history.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/loop/src/resume.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/loop/src/jobs.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/jobs/src/delegate/run_tests.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/loop/tests/resume.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
+crates/main/tests/delegates.rs	542	plan	2026-10-23T03:50:14Z	Amoghs-MacBook-Pro.local:/Users/aakshintala/work/fiber-worktrees/delegates/542-lifetime-resume	
