@@ -98,10 +98,20 @@ impl Write for CaptureWriter {
     }
 }
 
+/// A `SystemBrowser` writing to `writer` instead of stderr: only a test
+/// swaps the sink, since production always reports to the person's
+/// terminal.
+fn with_writer(program: impl Into<PathBuf>, writer: impl Write + Send + 'static) -> SystemBrowser {
+    SystemBrowser {
+        program: program.into(),
+        stderr: Mutex::new(Box::new(writer)),
+    }
+}
+
 #[test]
 fn the_system_browser_shows_device_instructions_to_its_sink() {
     let output = Arc::new(Mutex::new(Vec::new()));
-    let browser = SystemBrowser::with_writer("unused", CaptureWriter(Arc::clone(&output)));
+    let browser = with_writer("unused", CaptureWriter(Arc::clone(&output)));
 
     browser.show("https://auth.example/device", "ABCD-1234");
 

@@ -2263,6 +2263,7 @@ dependencies = [
  "contract",
  "fakes",
  "net",
+ "provider",
  "ring",
  "serde_json",
  "support",
