@@ -9,6 +9,7 @@ publish.workspace = true
 # `contract` (docs/architecture.md, "The call rules"), and on `support`,
 # which holds no domain knowledge and sits outside the call rules.
 [dependencies]
+base64.workspace = true
 contract = { path = "../contract" }
 log = { path = "../log" }
 rustix.workspace = true

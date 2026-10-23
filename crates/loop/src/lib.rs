@@ -56,6 +56,7 @@ mod jobs;
 mod known_hosts;
 mod late_cost;
 mod lifecycle;
+mod media;
 mod naming;
 mod notes;
 mod offer;
@@ -101,6 +102,7 @@ pub use commands::{Commands, commands, skills};
 pub use error::Error;
 pub use handoff::HandoffSettings;
 pub use history::forked;
+pub use media::resolve_media;
 pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{
