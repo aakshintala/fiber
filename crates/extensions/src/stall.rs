@@ -110,8 +110,22 @@ pub(crate) fn await_grace_or_answer<T>(
     done: &mpsc::Receiver<T>,
     kill_at: Instant,
 ) -> Option<T> {
-    for _ in 0..ROUNDS {
-        if clock.await_parked(kill_at, fakes::Deadline::after(SIGHT)) {
+    await_grace_or_answer_within(clock, done, kill_at, ROUNDS, SIGHT)
+}
+
+/// Waits for the grace park or the run's answer with the given bound:
+/// `rounds` rounds of one bounded `sight` wait each. Panics when the run
+/// neither parks nor answers.
+#[track_caller]
+fn await_grace_or_answer_within<T>(
+    clock: &fakes::clock::FakeClock,
+    done: &mpsc::Receiver<T>,
+    kill_at: Instant,
+    rounds: u32,
+    sight: Duration,
+) -> Option<T> {
+    for _ in 0..rounds {
+        if clock.await_parked(kill_at, fakes::Deadline::after(sight)) {
             return match done.try_recv() {
                 Ok(done) => Some(done),
                 Err(mpsc::TryRecvError::Empty) => None,
