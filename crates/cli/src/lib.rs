@@ -194,11 +194,10 @@ pub const LOGOUT_SHAPE: &str =
 pub fn project_of(
     home: &Path,
     workspace: &Path,
-) -> Result<(PathBuf, ::config::ProjectKey), Failure> {
+) -> Result<(PathBuf, ::config::ProjectKey), CliError> {
     let project = doors::project(workspace);
     let sessions = log::sessions_dir(home, &project);
-    let key =
-        ::config::ProjectKey::new(log::project_key(&project)).map_err(|e| failed(e.code(), e))?;
+    let key = ::config::ProjectKey::new(log::project_key(&project))?;
     Ok((sessions, key))
 }
 

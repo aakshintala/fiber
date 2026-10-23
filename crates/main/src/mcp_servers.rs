@@ -809,8 +809,8 @@ fn reconnect_server(
     Arc::new(move |server: &str| {
         let (_, project) =
             cli::project_of(&sources.home, &sources.workspace).map_err(|failure| Rejection {
-                code: failure.code,
-                message: failure.message,
+                code: failure.code(),
+                message: failure.to_string(),
             })?;
         let config = config::Config::load(config::Sources {
             home: sources.home.clone(),

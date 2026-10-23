@@ -82,9 +82,10 @@ pub(crate) fn startup(
     }
     let (_, project) = match project_of(home, workspace) {
         Ok(found) => found,
-        Err(failure) => {
-            let line = configuration_line(&failure.message, failure.code.clone());
-            return Startup::blocked(line, failure.code);
+        Err(error) => {
+            let code = error.code();
+            let line = configuration_line(&error.to_string(), code.clone());
+            return Startup::blocked(line, code);
         }
     };
     let config = match Config::load(Sources {

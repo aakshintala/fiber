@@ -1012,15 +1012,17 @@ fn terminal(
         }
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
-    let config = match ::cli::project_of(&home, &workspace).and_then(|(_, project)| {
-        Config::load(Sources {
-            home: home.clone(),
-            workspace: workspace.clone(),
-            project,
-            overrides: Vec::new(),
-        })
-        .map_err(|e| failed(e.code(), e))
-    }) {
+    let config = match ::cli::project_of(&home, &workspace)
+        .map_err(Failure::from)
+        .and_then(|(_, project)| {
+            Config::load(Sources {
+                home: home.clone(),
+                workspace: workspace.clone(),
+                project,
+                overrides: Vec::new(),
+            })
+            .map_err(|e| failed(e.code(), e))
+        }) {
         Ok(config) => config,
         Err(e) => return fail(e),
     };

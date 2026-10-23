@@ -35,8 +35,8 @@ impl Dirs {
 
     /// The project's `config.json` for `workspace`.
     pub(in crate::configure) fn project_file(&self, workspace: &Path) -> PathBuf {
-        let (_, project) = ::cli::project_of(&self.home(), workspace)
-            .unwrap_or_else(|e| panic!("project: {}", e.message));
+        let (_, project) =
+            ::cli::project_of(&self.home(), workspace).unwrap_or_else(|e| panic!("project: {e}"));
         self.home()
             .join("projects")
             .join(project.as_str())
@@ -372,8 +372,8 @@ fn allow_line(prefix: &str) -> String {
 
 /// The project's rules file for `workspace`.
 fn rules_file(dirs: &Dirs, workspace: &Path) -> PathBuf {
-    let (_, project) = ::cli::project_of(&dirs.home(), workspace)
-        .unwrap_or_else(|e| panic!("project: {}", e.message));
+    let (_, project) =
+        ::cli::project_of(&dirs.home(), workspace).unwrap_or_else(|e| panic!("project: {e}"));
     dirs.home()
         .join("projects")
         .join(project.as_str())
