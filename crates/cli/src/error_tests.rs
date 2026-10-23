@@ -1082,6 +1082,275 @@ fn session_not_found_on_hub_with_an_empty_selector() {
     );
 }
 
+fn usage_cause() -> CliError {
+    CliError::Forwarded(Failure {
+        code: ErrorCode::Usage,
+        message: "it failed.".to_owned(),
+        retry_after_ms: None,
+        provider: None,
+    })
+}
+
+fn unit_lost() -> CliError {
+    CliError::UnitDeleteFailed {
+        unit: "/u/x.service".into(),
+        source: io::Error::other("denied"),
+    }
+}
+
+#[test]
+fn current_exe_names_the_binary_path() {
+    check(
+        &CliError::CurrentExe(io_error()),
+        ErrorCode::IoFailed,
+        "the running binary's path: boom",
+    );
+}
+
+#[test]
+fn launchd_still_loaded_names_the_service() {
+    check(
+        &CliError::LaunchdStillLoaded {
+            name: "fiber-hub-x".to_owned(),
+        },
+        ErrorCode::IoFailed,
+        "launchd still had fiber-hub-x loaded 10 s after `launchctl bootout`.",
+    );
+}
+
+fn manager_not_found(program: &str) -> CliError {
+    CliError::ManagerNotFound {
+        program: program.to_owned(),
+    }
+}
+
+fn manager_failed(program: &str, args: &[&str], exit: Option<i32>, said: Option<&str>) -> CliError {
+    CliError::ManagerFailed {
+        program: program.to_owned(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        exit,
+        said: said.map(str::to_owned),
+    }
+}
+
+#[test]
+fn manager_errors_name_the_manager_and_each_failure_branch() {
+    let restart = ["--user", "restart", "x.service"];
+    let rows = [
+        (
+            manager_not_found("launchctl"),
+            "`launchctl` was not found; an installed hub needs launchd.",
+        ),
+        (
+            manager_not_found("systemctl"),
+            "`systemctl` was not found; an installed hub needs systemd's user instance.",
+        ),
+        (
+            manager_failed("systemctl", &restart, Some(5), None),
+            "`systemctl --user restart x.service` failed with exit code 5.",
+        ),
+        (
+            manager_failed("systemctl", &restart, Some(5), Some("boom")),
+            "`systemctl --user restart x.service` failed with exit code 5: boom.",
+        ),
+        (
+            manager_failed("systemctl", &restart, None, None),
+            "`systemctl --user restart x.service` failed with no exit code.",
+        ),
+        (
+            manager_failed("systemctl", &restart, None, Some("boom")),
+            "`systemctl --user restart x.service` failed with no exit code: boom.",
+        ),
+        (
+            manager_failed("launchctl", &[], Some(1), None),
+            "`launchctl ` failed with exit code 1.",
+        ),
+    ];
+    for (error, message) in &rows {
+        check(error, ErrorCode::IoFailed, message);
+    }
+}
+
+#[test]
+fn manager_run_names_the_program_and_the_cause() {
+    check(
+        &CliError::ManagerRun {
+            program: "systemctl".to_owned(),
+            source: io::Error::other("denied"),
+        },
+        ErrorCode::IoFailed,
+        "running `systemctl`: denied",
+    );
+}
+
+#[test]
+fn unit_read_failed_names_the_unit() {
+    check(
+        &CliError::UnitReadFailed {
+            unit: "/u/x.service".into(),
+            source: io::Error::other("denied"),
+        },
+        ErrorCode::IoFailed,
+        "reading /u/x.service: denied",
+    );
+}
+
+#[test]
+fn unit_write_failed_is_io_failed_not_the_config_code() {
+    let source = ConfigError::FiberHome("fiber-home");
+    assert_eq!(source.code(), ErrorCode::Usage);
+    let message = source.to_string();
+    check(
+        &CliError::UnitWriteFailed(source),
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
+fn unit_delete_failed_names_the_unit() {
+    check(
+        &unit_lost(),
+        ErrorCode::IoFailed,
+        "deleting /u/x.service: denied",
+    );
+}
+
+#[test]
+fn unit_not_restored_keeps_the_cause_text_and_code() {
+    check(
+        &CliError::UnitNotRestored {
+            cause: Box::new(usage_cause()),
+            unit: "/u/x.service".into(),
+            lost: Box::new(unit_lost()),
+        },
+        ErrorCode::Usage,
+        "it failed. The unit file /u/x.service could not be put back (deleting /u/x.service: denied); run fiber hub uninstall.",
+    );
+}
+
+#[test]
+fn unit_not_restored_over_an_io_cause_is_io_failed() {
+    check(
+        &CliError::UnitNotRestored {
+            cause: Box::new(CliError::CurrentExe(io_error())),
+            unit: "/u/x.service".into(),
+            lost: Box::new(unit_lost()),
+        },
+        ErrorCode::IoFailed,
+        "the running binary's path: boom The unit file /u/x.service could not be put back (deleting /u/x.service: denied); run fiber hub uninstall.",
+    );
+}
+
+#[test]
+fn rerun_install_keeps_the_cause_text_and_code() {
+    check(
+        &CliError::RerunInstall {
+            cause: Box::new(usage_cause()),
+        },
+        ErrorCode::Usage,
+        "it failed. Run fiber hub install again, or fiber hub uninstall to remove what was written.",
+    );
+}
+
+#[test]
+fn rerun_install_over_an_io_cause_is_io_failed() {
+    check(
+        &CliError::RerunInstall {
+            cause: Box::new(CliError::CurrentExe(io_error())),
+        },
+        ErrorCode::IoFailed,
+        "the running binary's path: boom Run fiber hub install again, or fiber hub uninstall to remove what was written.",
+    );
+}
+
+#[test]
+fn a_rewrap_takes_the_cause_code_at_every_depth() {
+    let inner = CliError::RerunInstall {
+        cause: Box::new(usage_cause()),
+    };
+    let outer = CliError::UnitNotRestored {
+        cause: Box::new(inner),
+        unit: "/u/x.service".into(),
+        lost: Box::new(unit_lost()),
+    };
+    assert_eq!(outer.code(), ErrorCode::Usage);
+}
+
+#[test]
+fn hub_request_encode_names_the_hub() {
+    let source = json_error();
+    let message = format!("the hub: {source}");
+    check(
+        &CliError::HubRequestEncode(source),
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
+fn hub_closed_before_answer_has_no_backticks() {
+    check(
+        &CliError::HubClosedBeforeAnswer,
+        ErrorCode::IoFailed,
+        "the hub closed the connection before answering stop",
+    );
+}
+
+#[test]
+fn hub_stop_late_names_the_seconds() {
+    check(
+        &CliError::HubStopLate { secs: 15 },
+        ErrorCode::IoFailed,
+        "the hub did not stop in 15 s",
+    );
+}
+
+#[test]
+fn stop_count_missing_says_the_count_is_missing() {
+    check(
+        &CliError::StopCountMissing,
+        ErrorCode::IoFailed,
+        "the hub answered stop without a session count",
+    );
+}
+
+#[test]
+fn pairing_answer_missing_says_the_code_is_missing() {
+    check(
+        &CliError::PairingAnswerMissing,
+        ErrorCode::IoFailed,
+        "the hub's pairing answer has no code",
+    );
+}
+
+#[test]
+fn qr_too_long_is_usage() {
+    check(
+        &CliError::QrTooLong,
+        ErrorCode::Usage,
+        "The address is too long to draw as a QR code.",
+    );
+}
+
+#[test]
+fn status_no_variables_names_status() {
+    check(
+        &CliError::StatusNoVariables,
+        ErrorCode::IoFailed,
+        "the hub's answer to `status` has no variables",
+    );
+}
+
+#[test]
+fn devices_malformed_names_devices() {
+    check(
+        &CliError::DevicesMalformed,
+        ErrorCode::IoFailed,
+        "the hub's answer to `devices` is not a device list",
+    );
+}
+
 #[test]
 fn finish_maps_a_cli_error_to_its_exit_code() {
     assert_eq!(finish(Err(CliError::LogoutNeedsProvider)), 2);
