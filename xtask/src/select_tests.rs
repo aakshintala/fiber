@@ -1877,3 +1877,331 @@ pub(super) fn package_members() -> Members {
     );
     members
 }
+
+#[test]
+fn an_escaping_research_join_reports_once_with_the_builds_message() {
+    // A helper joining the research directory without reading it is a
+    // run-time read the old arms miss: no read takes the path.
+    let files = [runtime_src(
+        "provider",
+        "crates/provider/tests/anthropic.rs",
+        "tests/anthropic.rs",
+        "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/anthropic.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_parameter_threaded_through_a_manifest_base_reports_the_bound_name() {
+    // The ask probe threads its parameter through a manifest-bound root:
+    // the report names the bound identifier.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn probe(path: &str) -> PathBuf {\nlet root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");\nroot.join(path)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: threads root into a path at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_parameter_on_the_bare_manifest_base_reports_the_manifest_literal() {
+    // A bare manifest base reports whatever member it sits in: this one
+    // sits in a member directory, but the base carries no containment.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "fn load(path: &str) -> String {\nstd::fs::read_to_string(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(path)).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: threads CARGO_MANIFEST_DIR into a path at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_bare_root_returned_from_a_helper_reports_the_builds_message() {
+    // A helper returning the bare repository root names the tree, but a
+    // bare-root return is the confirm-settled helper gap, so the gate
+    // reports it at the definition site.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/hooks_entries.rs",
+        "tests/hooks_entries.rs",
+        "fn repo_root() -> PathBuf {\nPathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\")\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/hooks_entries.rs: builds ../.. at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_join_consumed_by_a_read_reports_once_with_the_reads_message() {
+    // The new escaping arm sees the bound research directory, but the
+    // read already reports the same file through the old arm, so the
+    // post-pass drops the new entry and the old message stands alone.
+    let files = [runtime_src(
+        "provider",
+        "crates/provider/tests/responses.rs",
+        "tests/responses.rs",
+        "fn load() -> String {\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\");\nstd::fs::read_to_string(base.join(\"probe.json\")).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/responses.rs: reads probe.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_two_level_chain_reaching_a_read_reports_once_with_the_reads_message() {
+    // The deeper chain reaches the read through two lets: the old arm
+    // reports the final literals, so the new arm's bound-directory entry
+    // drops and the old message stands alone.
+    let files = [runtime_src(
+        "provider",
+        "crates/provider/tests/responses.rs",
+        "tests/responses.rs",
+        "fn load() -> String {\nlet a = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs\");\nlet b = a.join(\"page.md\");\nstd::fs::read_to_string(&b).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/responses.rs: reads page.md at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_same_named_write_in_another_function_leaves_a_read_reported() {
+    // The write-consumed mute is scoped to its enclosing function: the
+    // read in the other function still reports.
+    let files = [runtime_src(
+        "provider",
+        "crates/provider/tests/anthropic.rs",
+        "tests/anthropic.rs",
+        "fn a() -> String {\nlet p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research/x.json\");\nstd::fs::read_to_string(&p).unwrap()\n}\nfn b() {\nlet p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research/y.json\");\nstd::fs::write(&p, \"x\").unwrap();\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/anthropic.rs: reads ../../research/x.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_written_manifest_base_mentioned_elsewhere_stays_reported() {
+    // The mute needs no other mention: a manifest base written and then
+    // read in the same function keeps its read report.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn f() {\nlet root = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nstd::fs::write(root.join(\"out.txt\"), \"x\").unwrap();\nlet text = std::fs::read_to_string(root.join(\"../../research/x.json\")).unwrap();\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: reads ../../research/x.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_rooted_format_outside_a_read_reports_the_builds_message() {
+    // The picture child stages its input through a manifest-rooted
+    // format outside any read: the old format arm only fires in read
+    // arguments, so the new arm reports the suffix.
+    let files = [runtime_src(
+        "picture",
+        "crates/picture/tests/image_child.rs",
+        "tests/image_child.rs",
+        "fn stage(dir: &Path) {\nlet input = dir.join(\"in.pdf\");\nstd::fs::copy(format!(\"{}/../../research/pdf-tool-results/text.pdf\", env!(\"CARGO_MANIFEST_DIR\")), &input).unwrap();\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/picture/tests/image_child.rs: builds /../../research/pdf-tool-results/text.pdf at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn an_in_crate_join_chain_with_a_parameter_stays_unreported() {
+    // Threading through a join-chain-bound base reports only outside
+    // every member: this chain stays in its own crate.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn helper(name: &str) -> PathBuf {\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests\");\nbase.join(name)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_packages_variable_join_stays_with_the_package_reader_check() {
+    // A variable join onto a packages base yields to the package-reader
+    // check, like the inline allowance joins already do.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/models.rs",
+        "tests/models.rs",
+        "fn package_file(name: &str) -> PathBuf {\nlet packages = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers\");\npackages.join(name)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_inline_package_chain_with_a_parameter_stays_exempt() {
+    // The full inline chain, receivers included, yields to packages, so
+    // the models-dev committed join stays with the package-reader check.
+    let files = [runtime_src(
+        "xtask",
+        "xtask/tests/models_dev.rs",
+        "tests/models_dev.rs",
+        "fn committed(path: &str) -> String {\nlet manifest = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet file = manifest.join(\"../providers\").join(path);\nstd::fs::read_to_string(&file).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_scripts_join_stays_an_executable_fixture() {
+    // A manifest-rooted chain resolving under scripts names a legitimate
+    // executable fixture, so the gate leaves it alone.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/install_script.rs",
+        "tests/install_script.rs",
+        "fn script() -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../scripts/install.sh\")\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_include_macro_interior_is_built_outside_any_include() {
+    // A manifest-rooted join inside an include macro is built outside an
+    // include macro in name only: the gate never reports include
+    // interiors.
+    let files = [runtime_src(
+        "tui",
+        "crates/tui/src/theme_tests.rs",
+        "src/theme_tests.rs",
+        "fn doc() -> &'static str {\ninclude_str!(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/x.md\").as_str())\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_write_only_bless_path_stays_unreported() {
+    // The command-reference bless write produces its committed file, so
+    // the write-consumed path is muted: no read can compile in an output.
+    let files = [runtime_src(
+        "main",
+        "crates/main/src/command_reference_tests.rs",
+        "src/command_reference_tests.rs",
+        "fn save(actual: &str) {\nlet path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/user/commands.md\");\nstd::fs::write(&path, actual).unwrap();\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_manifest_literal_without_a_join_is_not_a_path() {
+    // The manifest literal on its own names no file: only a join, concat
+    // or format onto it builds a path.
+    let files = [runtime_src(
+        "contract",
+        "crates/contract/src/lib.rs",
+        "src/lib.rs",
+        "fn tag() -> bool {\nlet dir: &str = env!(\"CARGO_MANIFEST_DIR\");\ndir.contains(\"crates\")\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_exact_root_passed_to_a_pack_stays_a_tree_name() {
+    // A manifest-rooted chain resolving exactly to the repository root
+    // names the tree a pack call walks, not a file, so it stays
+    // unreported unless a helper returns it.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "fn pack() -> PathBuf {\nlet root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\");\nrun_pack(&root)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_two_level_in_crate_chain_stays_unreported() {
+    // A two-level bound chain resolving inside its own crate is no
+    // run-time read of a shared file.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/install_script.rs",
+        "tests/install_script.rs",
+        "fn f() -> PathBuf {\nlet a = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"tests\");\nlet b = a.join(\"install_fixture\");\nb\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_helper_joining_a_parameter_base_stays_unreported() {
+    // The gate cannot see through a parameter base: a helper joining onto
+    // a base it never binds is outside the check.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn helper(base: &Path, name: &str) -> PathBuf {\nbase.join(name)\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
