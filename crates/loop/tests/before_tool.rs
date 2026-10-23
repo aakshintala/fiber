@@ -819,25 +819,25 @@ impl History {
     /// lines in order, one per change. The finishing turn defers the
     /// close, and the next idle wait takes it and ends the run.
     #[track_caller]
-    fn run_closed(&mut self, looped: r#loop::Loop) -> Vec<contract::Envelope> {
+    fn run_closed(&mut self, looped: r#loop::Loop) -> (r#loop::Ran, Vec<contract::Envelope>) {
         self.inbox_tx.send(Delivery::Close(ignore())).unwrap();
         let mut watcher = self.log.watch();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
-            let outcome = looped.run();
-            done.send(outcome).unwrap();
+            let ran = looped.run();
+            done.send(ran).unwrap();
         });
-        Deadline::after(DEADLINE)
+        let ran = Deadline::after(DEADLINE)
             .recv(&finished)
-            .expect("the run ended in time")
-            .unwrap();
+            .expect("the run ended in time");
+        ran.result.as_ref().unwrap();
         let mut statuses = Vec::new();
         while let Ok(Some(line)) = watcher.try_recv() {
             if line.kind == "session_status" {
                 statuses.push(line);
             }
         }
-        statuses
+        (ran, statuses)
     }
 
     #[track_caller]
@@ -980,8 +980,8 @@ fn assert_status_resolved(statuses: &[contract::Envelope]) {
 /// Writes the resumed process's exit as a shutdown would, and asserts the
 /// `fiber_exited` line suspends on nothing: the settled request is answered.
 #[track_caller]
-fn assert_exited_settled(history: &History) {
-    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, Some(143)).unwrap();
+fn assert_exited_settled(history: &History, summary: &r#loop::Summary) {
+    r#loop::fiber_exited(&history.log, summary, Ok(()), false, Some(143)).unwrap();
     let exited = history
         .lines()
         .into_iter()
@@ -1081,7 +1081,8 @@ fn a_resumed_refusal_answers_its_request_by_hook_and_runs_the_rest() {
         }));
     let hooks = Arc::new(hooks);
     let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
-    assert_status_resolved(&history.run_closed(looped));
+    let (run, statuses) = history.run_closed(looped);
+    assert_status_resolved(&statuses);
 
     let new = history.new_lines();
     assert!(
@@ -1113,7 +1114,7 @@ fn a_resumed_refusal_answers_its_request_by_hook_and_runs_the_rest() {
     );
     assert_eq!(completed[1].payload["status"], "completed");
     assert_eq!(tool.runs().len(), 1);
-    assert_exited_settled(&history);
+    assert_exited_settled(&history, &run.summary);
 }
 
 #[test]
@@ -1131,7 +1132,8 @@ fn a_resumed_hook_failure_answers_its_request_by_hook_and_fails_the_call() {
         }));
     let hooks = Arc::new(hooks);
     let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
-    assert_status_resolved(&history.run_closed(looped));
+    let (run, statuses) = history.run_closed(looped);
+    assert_status_resolved(&statuses);
 
     let new = history.new_lines();
     assert!(
@@ -1155,7 +1157,7 @@ fn a_resumed_hook_failure_answers_its_request_by_hook_and_fails_the_call() {
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "hook_failed");
     assert!(tool.runs().is_empty(), "the call never runs");
-    assert_exited_settled(&history);
+    assert_exited_settled(&history, &run.summary);
 }
 
 #[test]
@@ -1164,7 +1166,8 @@ fn a_resumed_rewrite_the_schema_rejects_answers_its_request_by_hook() {
     let tool = Arc::new(PathTool::plain());
     let hooks = Arc::new(FakeHooks::rewriting(json!({"path": 5})));
     let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
-    assert_status_resolved(&history.run_closed(looped));
+    let (run, statuses) = history.run_closed(looped);
+    assert_status_resolved(&statuses);
 
     let new = history.new_lines();
     assert!(
@@ -1187,7 +1190,7 @@ fn a_resumed_rewrite_the_schema_rejects_answers_its_request_by_hook() {
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "invalid_arguments");
     assert!(tool.runs().is_empty(), "the call never runs");
-    assert_exited_settled(&history);
+    assert_exited_settled(&history, &run.summary);
 }
 
 #[test]
@@ -1196,7 +1199,8 @@ fn a_resumed_rewrite_its_effects_reject_answers_its_request_by_hook() {
     let tool = Arc::new(PathTool::plain());
     let hooks = Arc::new(FakeHooks::rewriting(json!({"path": "bad/effects"})));
     let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
-    assert_status_resolved(&history.run_closed(looped));
+    let (run, statuses) = history.run_closed(looped);
+    assert_status_resolved(&statuses);
 
     let new = history.new_lines();
     assert!(
@@ -1219,7 +1223,7 @@ fn a_resumed_rewrite_its_effects_reject_answers_its_request_by_hook() {
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "tool_error");
     assert!(tool.runs().is_empty(), "the call never runs");
-    assert_exited_settled(&history);
+    assert_exited_settled(&history, &run.summary);
 }
 
 #[test]
@@ -1633,7 +1637,14 @@ fn suspended_form() -> (Session, Arc<AskTool>, Arc<FakeHooks>, String) {
     session.cancel.shutdown(143);
     gate.open();
     assert_eq!(finish_turn(&mut session, &finished), None);
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, Some(143)).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        Some(143),
+    )
+    .unwrap();
     let lines = session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
     assert_eq!(
         of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],

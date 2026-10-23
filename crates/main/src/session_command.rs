@@ -648,7 +648,7 @@ pub(crate) fn run_new(
         cancel,
         &diag,
         &current,
-        |inbox, cancel| {
+        |inbox, cancel, slot| {
             // The commit writes the session's first lines together, so a
             // signal recorded before them writes nothing: `Loop::start`
             // writes `session_started`, which `fiber_started` follows
@@ -750,6 +750,7 @@ pub(crate) fn run_new(
                 limits,
                 retry,
                 cancel,
+                slot,
             )
             .map(|()| None)
         },

@@ -946,7 +946,7 @@ fn close_while_idle_ends_run() {
     session.inbox.send(steer_with("later", steer_ack)).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    thread::spawn(move || done.send(looped.run().result).unwrap());
     Deadline::after(support::DEADLINE)
         .recv(&finished)
         .expect("close ended the loop")
@@ -1095,8 +1095,14 @@ fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pen
     assert!(!kinds.contains(&"turn_completed"));
     assert!(tool.ran().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
-    let written =
-        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    let written = r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        Some(143),
+    )
+    .unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);

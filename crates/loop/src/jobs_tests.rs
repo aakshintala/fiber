@@ -885,7 +885,14 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
     if send_start {
         jobs.set(&[DELEGATE]);
     }
-    crate::fiber_exited(&world.log, &world.dir, Ok(()), false, None).unwrap();
+    crate::fiber_exited(
+        &world.log,
+        world.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     drop(world.looped.take());
     let resumed = crate::resumed(&world.dir).expect("the exit suspends a batch");
     let (tx, inbox_rx) = mpsc::channel();
@@ -1984,7 +1991,7 @@ impl World {
         let looped = self.looped.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
-            let _sent = done.send(looped.run());
+            let _sent = done.send(looped.run().result);
         });
         finished
     }
@@ -2031,6 +2038,8 @@ fn resumed_with_parent(parent: Option<Value>) -> (Loop, Arc<FakeJobs>, fakes::Te
         ..
     } = world;
     drop(log);
+    // No turn ran, so nothing was folded: the exit reports the empty
+    // summary.
     crate::fiber_exited(
         &Log::open(
             home.path(),
@@ -2038,7 +2047,7 @@ fn resumed_with_parent(parent: Option<Value>) -> (Loop, Arc<FakeJobs>, fakes::Te
             Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
         )
         .unwrap(),
-        &dir,
+        &crate::Summary::default(),
         Ok(()),
         false,
         None,

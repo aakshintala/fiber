@@ -1,6 +1,6 @@
 //! The session's usage ledger (`docs/events.md`, `usage` and
-//! `usage_recorded`). One implementation folds `fiber_exited` and the
-//! spending budget, so the two cannot drift.
+//! `usage_recorded`). One implementation folds the process `Summary` and
+//! the spending budget, so the two cannot drift.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError};
@@ -301,7 +301,7 @@ impl crate::Loop {
 /// any sequence of records the usage equals [`log::usage`] over the held
 /// lines exactly: a new call takes one step, and a correction folds the
 /// whole ledger again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Ledger {
     calls: Vec<UsageRecorded>,
     index: BTreeMap<GenerationId, usize>,

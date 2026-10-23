@@ -12,20 +12,25 @@ use crate::{Error, Loop};
 
 impl Loop {
     /// Appends an extension's `host.ask` question, with no turn and no action.
-    pub(crate) fn record_interaction(&self, requested: InteractionRequested) -> Result<(), Error> {
-        self.log
-            .append(&Event::InteractionRequested(requested), None, None)?;
+    pub(crate) fn record_interaction(
+        &mut self,
+        requested: InteractionRequested,
+    ) -> Result<(), Error> {
+        let event = Event::InteractionRequested(requested);
+        self.log.append(&event, None, None)?;
+        self.summary.observe(&event, None);
         Ok(())
     }
 
     /// Appends an extension ask's answer, then accepts its ack.
     pub(crate) fn record_resolved(
-        &self,
+        &mut self,
         resolved: InteractionResolved,
         ack: Ack,
     ) -> Result<(), Error> {
-        self.log
-            .append(&Event::InteractionResolved(resolved), None, None)?;
+        let event = Event::InteractionResolved(resolved);
+        self.log.append(&event, None, None)?;
+        self.summary.observe(&event, None);
         accept(ack);
         Ok(())
     }

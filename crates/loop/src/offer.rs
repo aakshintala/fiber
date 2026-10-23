@@ -324,8 +324,9 @@ impl Loop {
         offer: &RepositoryCodeOffered,
         suspended: Option<&RequestId>,
     ) -> Result<Waited, Error> {
-        self.log
-            .append(&Event::RepositoryCodeOffered(offer.clone()), None, None)?;
+        let offered = Event::RepositoryCodeOffered(offer.clone());
+        self.log.append(&offered, None, None)?;
+        self.summary.observe(&offered, None);
         let deadline = self.idle_deadline();
         loop {
             let delivery = match self.take_held_answer(&offer.request_id) {
@@ -437,14 +438,12 @@ impl Loop {
             .filter(|(_, decision)| **decision == OfferDecision::Skip)
             .map(|(item, _)| key(item))
             .collect();
-        self.log.append(
-            &Event::RepositoryCodeResolved(RepositoryCodeResolved {
-                request_id: offer.request_id.clone(),
-                decisions,
-            }),
-            None,
-            None,
-        )?;
+        let resolved = Event::RepositoryCodeResolved(RepositoryCodeResolved {
+            request_id: offer.request_id.clone(),
+            decisions,
+        });
+        self.log.append(&resolved, None, None)?;
+        self.summary.observe(&resolved, None);
         self.repository.decided.extend(offer.items.iter().map(key));
         self.repository.skipped_now.extend(skipped);
         inbox::accept(ack);
