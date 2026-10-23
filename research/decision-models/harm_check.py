@@ -48,8 +48,13 @@ REQUEST_TIMEOUT_S = 180
 
 
 def clean(word):
-    """One word as the verdict reader sees it (read_first's rule)."""
-    return word.strip().lower().strip("`\"'.")
+    """One word as the verdict reader sees it (reviewer.rs clean's rule)."""
+    cleaned = word.strip().lower()
+    while True:
+        stripped = cleaned.strip("`\"'").rstrip(".").strip()
+        if stripped == cleaned:
+            return stripped
+        cleaned = stripped
 
 
 def read_first(text):
