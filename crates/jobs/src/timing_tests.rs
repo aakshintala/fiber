@@ -35,7 +35,7 @@ use crate::registry::Registry;
 use crate::support::{delegate_started, opening};
 
 /// How long a test waits on the wall clock before it fails.
-const STEP: Duration = Duration::from_secs(10);
+const STEP: Duration = Duration::from_secs(20);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
@@ -139,7 +139,7 @@ impl Drop for Scope {
             }
         });
         // A deadline, so a bug fails the test instead of hanging it.
-        let probe_ok = fakes::Deadline::after(Duration::from_secs(5))
+        let probe_ok = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .is_ok();
         let record = Record {

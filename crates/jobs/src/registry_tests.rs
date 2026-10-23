@@ -22,8 +22,6 @@ use super::Registry;
 use crate::support::{delegate_finished, delegate_started, ended_ok, opening, world};
 use support::clock::Parker;
 
-const DEADLINE: Duration = Duration::from_secs(5);
-
 fn is_job_id(id: &str) -> bool {
     let Some(hex) = id.strip_prefix("j_") else {
         return false;
@@ -123,7 +121,7 @@ fn delegate_message_refuses_an_extensions_running_and_ended_job_without_contacti
         registry,
         parent: contract::SessionId("s_parent".into()),
         clock: FakeClock::new(),
-        bound: DEADLINE,
+        bound: fakes::MUST_SUCCEED_WITHIN,
         cap: 1024,
         launch: Arc::new(|_| panic!("an extension delegate must not resume")),
         watch: Arc::new(|_, _, _| panic!("an extension delegate must not be watched")),
@@ -404,7 +402,7 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
         let answer = waiting.wait(&id, 60_000, &CancelToken::new()).unwrap();
         let _sent = tx.send(answer);
     });
-    let answer = Deadline::after(Duration::from_secs(5))
+    let answer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the wait returned after a wake that landed before it parked");
     let records = settled(&answer);
@@ -785,7 +783,7 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
     assert!(
-        clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked(deadline, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the write did not park at its wait"
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
@@ -793,9 +791,9 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
         Some(deadline),
         None,
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let answer = Deadline::after(DEADLINE)
+    let answer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned")
         .ok()
@@ -814,9 +812,9 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     let (id, opened, _typed) = open_tty(&registry, b"got:hi\n");
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
-    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)));
     (opened.end.0)(ended_ok(&id));
-    let answer = Deadline::after(DEADLINE)
+    let answer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned")
         .ok()
@@ -843,9 +841,9 @@ fn a_cancel_returns_the_write_at_once_with_what_arrived() {
     let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
     let cancel = CancelToken::new();
     let rx = writing(&registry, &id, "x", 250, cancel.clone());
-    assert!(clock.await_parked(deadline, fakes::Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(deadline, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)));
     cancel.cancel();
-    let answer = Deadline::after(DEADLINE)
+    let answer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the cancelled write returned")
         .ok()
@@ -1043,7 +1041,7 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
     let (_dir, clock, registry) = clocked_world();
     let (id, opened, entered) = open_stuck(&registry);
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&entered)
         .expect("the write reached the terminal");
     // Parked inside the clock wait, past the writer's own check.
@@ -1051,12 +1049,16 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
         None,
         None,
         Duration::from_millis(999),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     // The writer processes the pre-deadline advance and parks again
     // before the test asserts it is still waiting.
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_since(
+            &mark,
+            None,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the write did not park again after the pre-deadline advance"
     );
     assert!(
@@ -1068,9 +1070,9 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
         None,
         None,
         Duration::from_millis(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(DEADLINE)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
@@ -1111,7 +1113,7 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
         .unwrap();
     let id = opened.started.job_id.0.clone();
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&entry_rx)
         .expect("the write reached the terminal");
     // The other writer releases, long after, on the wall clock: the
@@ -1123,9 +1125,9 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
         None,
         None,
         Duration::from_millis(1001),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(DEADLINE)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
@@ -1183,7 +1185,7 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
         .unwrap();
     let id = opened.started.job_id.0.clone();
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&entry_rx)
         .expect("the write reached the terminal");
     // Parked inside the clock wait, past the writer's own check, before
@@ -1195,9 +1197,9 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
         Some(due),
         None,
         Duration::from_secs(2),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(DEADLINE)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
@@ -1623,7 +1625,7 @@ fn a_stop_racing_a_gated_start_stops_the_starting_delegate() {
     let stops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (entered_tx, entered_rx) = mpsc::channel::<()>();
     let (id_tx, id_rx) = mpsc::channel::<JobId>();
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     std::thread::scope(|scope| {
         // Test-owned: on a panic this sender drops while the closure
         // unwinds, before the scope joins the worker parked on it, so
@@ -1792,7 +1794,7 @@ fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
         });
         started_tx.send(answer).unwrap();
     });
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     wait.recv(&entered_rx).expect("the start holds the gate");
     // `retain` takes the same gate, so it cannot return yet.
     let (retained_tx, retained_rx) = mpsc::channel();
