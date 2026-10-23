@@ -1082,6 +1082,9 @@ fn a_command_case_runs_the_extension_command_with_no_turn() {
     let setup = setup(
         r#"fiber.command("greet", {timeout = 5000, run = function(text) host.status("saw " .. text) end})"#,
     );
+    // The whole ordered stream a command case observes: no turn runs, so
+    // nothing falls between `extensions_loaded` and `fiber_exited`
+    // (docs/extensions.md:753-759; order pinned per docs/testing.md:110-16).
     let value = command_session(
         json!({"name": "greet", "text": "hi"}),
         json!({"kind": "extension_ui"}),

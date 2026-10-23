@@ -763,11 +763,7 @@ fn parse_command(value: &Value) -> Result<CaseCommand, String> {
     let map = value.as_object().ok_or("command: expected an object")?;
     only(map, &["name", "text"], "command")?;
     let name = string(map, "name", "command")?;
-    let text = map
-        .get("text")
-        .map(|_| string(map, "text", "command"))
-        .transpose()?
-        .unwrap_or_default();
+    let text = optional_string(map, "text", "command")?.unwrap_or_default();
     Ok(CaseCommand { name, text })
 }
 

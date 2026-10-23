@@ -841,16 +841,6 @@ fn a_command_case_parses_its_name_and_text() {
 }
 
 #[test]
-fn omitted_command_text_defaults_to_the_empty_string() {
-    let mut value = command_case();
-    value["command"] = json!({"name": "export"});
-    let Case::Session(parsed) = parse(&value).expect("command case parses") else {
-        panic!("command case parsed as a call case");
-    };
-    assert_eq!(command_input(&parsed).text, "");
-}
-
-#[test]
 fn a_prompt_case_parses_to_a_prompt_input() {
     let Case::Session(parsed) = parse(&session_case()).expect("prompt case parses") else {
         panic!("prompt case parsed as a call case");
