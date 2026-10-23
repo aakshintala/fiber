@@ -18,12 +18,16 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
-use contract::events::{Event, FiberExited, TextDelta, TurnCompleted, TurnOutcome};
+use contract::events::{
+    Event, ExtensionUi, ExtensionsLoaded, FiberExited, TextDelta, TurnCompleted, TurnOutcome, Ui,
+};
+use contract::inbox::Rejection;
 use contract::shapes::{Tokens, Usage};
 use log::Log;
 use serde_json::{Value, json};
 
-use super::super::format::{ClockAdvance, Host, Selector, SessionCase};
+use super::super::clock::CaseClock;
+use super::super::format::{CaseCommand, ClockAdvance, Host, Input, Selector, SessionCase};
 use super::{CaseRun, WaitBounds, session_verdict, write_config};
 use fakes::Deadline;
 
@@ -126,7 +130,7 @@ fn session_case(
     SessionCase {
         name,
         script: json!({}),
-        prompt: String::new(),
+        input: Input::Prompt(String::new()),
         config: None,
         settings: None,
         host,
@@ -135,6 +139,43 @@ fn session_case(
         expect: expected,
         attended,
     }
+}
+
+fn command_session_case(
+    expected: Vec<Value>,
+    advances: Vec<ClockAdvance>,
+    until: Option<Selector>,
+    name: &str,
+    text: &str,
+) -> Arc<CaseRun> {
+    let mut case = session_case(
+        Some("command-loop".to_owned()),
+        expected,
+        Host::default(),
+        advances,
+        until,
+        true,
+    );
+    case.input = Input::Command(CaseCommand {
+        name: name.to_owned(),
+        text: text.to_owned(),
+    });
+    CaseRun::with_waits(case, fakes::clock::FakeClock::new(), TEST_WAITS)
+}
+
+fn extensions_loaded() -> Event {
+    Event::ExtensionsLoaded(ExtensionsLoaded {
+        extensions: Vec::new(),
+    })
+}
+
+fn extension_ui() -> Event {
+    Event::ExtensionUi(ExtensionUi {
+        extension: "export".to_owned(),
+        ui: Ui::Status {
+            status: "wrote out.md".to_owned(),
+        },
+    })
 }
 
 fn case_run(
@@ -385,6 +426,11 @@ fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -440,6 +486,11 @@ fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -484,6 +535,11 @@ fn a_stuck_hang_past_all_advances_skips_the_event_wait() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -532,6 +588,11 @@ fn close_names_each_stuck_hang_and_releases_in_deadline_order() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
     let mut failures = Vec::new();
     let drive = Arc::clone(&driver) as Arc<dyn contract::extension::Drive>;
@@ -618,6 +679,11 @@ struct FakeDrive {
     log: Arc<Log>,
     close_calls: AtomicUsize,
     exit_on_close: bool,
+    commands: Mutex<Vec<(String, serde_json::Map<String, Value>)>>,
+    reject: Option<Rejection>,
+    drop_acks: bool,
+    clock: Option<Arc<CaseClock>>,
+    command_offsets: Mutex<Vec<Duration>>,
 }
 
 impl contract::extension::Drive for FakeDrive {
@@ -625,7 +691,7 @@ impl contract::extension::Drive for FakeDrive {
         &self,
         _extension: &str,
         command: &str,
-        _args: serde_json::Map<String, Value>,
+        args: serde_json::Map<String, Value>,
         answer: contract::inbox::Ack,
     ) {
         if command == "close" {
@@ -635,8 +701,28 @@ impl contract::extension::Drive for FakeDrive {
                     .append(&fiber_exited(), None, None)
                     .expect("append close event");
             }
+            if !self.drop_acks {
+                answer.0(Ok(None));
+            }
+            return;
         }
-        answer.0(Ok(None));
+        self.commands
+            .lock()
+            .unwrap()
+            .push((command.to_owned(), args));
+        if let Some(clock) = &self.clock {
+            self.command_offsets
+                .lock()
+                .unwrap()
+                .push(clock.parked_offsets().0);
+        }
+        if self.drop_acks {
+            return;
+        }
+        match &self.reject {
+            Some(rejection) => answer.0(Err(rejection.clone())),
+            None => answer.0(Ok(None)),
+        }
     }
 }
 
@@ -658,6 +744,11 @@ fn successful_initial_advances_do_not_close_before_the_until_event() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
     let case = case_run(
         vec![
@@ -688,6 +779,11 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
@@ -741,6 +837,11 @@ fn exiting_before_the_next_advance_names_that_advance() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -779,6 +880,11 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -824,6 +930,11 @@ fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -887,6 +998,11 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -956,6 +1072,11 @@ fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: false,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
 
     let failures = case.drive(
@@ -1051,6 +1172,11 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         log: Arc::clone(&log),
         close_calls: AtomicUsize::new(0),
         exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
     });
     let case = CaseRun::with_waits(
         session_case(
@@ -1163,4 +1289,376 @@ fn each_settings_entry_is_written_as_that_extensions_global_file() {
     );
     let text = fs::read_to_string(home.join("config").join("other.json")).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
+}
+
+/// A command case sends its command once, with the name and text as args:
+/// a second send, or a missing one, breaks the recorded call.
+#[test]
+fn a_command_case_sends_its_command_once_after_extensions_loaded() {
+    let (_root, log) = session_log(&[extensions_loaded(), turn_completed()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "out.md",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].0, "command");
+    assert_eq!(
+        commands[0].1,
+        serde_json::Map::from_iter([
+            ("name".to_owned(), json!("export")),
+            ("text".to_owned(), json!("out.md")),
+        ])
+    );
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A session reload writes a second `extensions_loaded`: the command is
+/// already taken, so no second send follows it.
+#[test]
+fn a_second_extensions_loaded_sends_no_further_command() {
+    let (_root, log) = session_log(&[extensions_loaded(), extensions_loaded(), turn_completed()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "out.md",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The command goes out on the `extensions_loaded` line even when the
+/// case ends there: the send runs before the `until` check for that line.
+#[test]
+fn a_command_case_sends_before_its_extensions_loaded_until() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "extensions_loaded".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].0, "command");
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A rejected command fails the case with the wire code and the message,
+/// then closes the session once: without that close the count is 0.
+#[test]
+fn a_rejected_command_fails_the_case_and_closes_once() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![json!({"kind": "extensions_loaded"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: Some(Rejection {
+            code: contract::ErrorCode::UnknownCommand,
+            message: "export names no extension command".to_owned(),
+        }),
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("command export")
+                && failure.contains("unknown_command")
+                && failure.contains("export names no extension command")),
+        "{failures:?}"
+    );
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// An ack that never arrives fails the case with the no-answer reason,
+/// then closes the session once.
+#[test]
+fn an_unanswered_command_ack_fails_and_closes_once() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![json!({"kind": "extensions_loaded"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: true,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("command export")
+                && failure.contains("no answer within")),
+        "{failures:?}"
+    );
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A clock entry after `extensions_loaded` applies after the send: the
+/// offset at the command call is still zero, while the run ends advanced.
+#[test]
+fn the_command_is_sent_before_the_extensions_loaded_advance() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        vec![ClockAdvance {
+            hang: None,
+            after: Some(Selector {
+                kind: "extensions_loaded".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let deadline = case.session_clock().now() + Duration::from_millis(50);
+    let (release, waiter) = park_waiter(&case, deadline);
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: Some(Arc::clone(&case.clock)),
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    // An ephemeral line appended after the watcher registers still reaches
+    // the driver, while one appended before would be lost: only durable
+    // lines replay.
+    let watcher = log.watch_all();
+    log.append(&extension_ui(), None, None)
+        .expect("append the ephemeral ui line");
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        driver.command_offsets.lock().unwrap().as_slice(),
+        &[Duration::ZERO]
+    );
+    let (offset, _) = case.clock.parked_offsets();
+    assert_eq!(offset, Duration::from_millis(50));
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A prompt case never sends a command: always sending one would add a
+/// call here. The log carries the `extensions_loaded` every real session
+/// writes, so a runner that arms a command for a prompt would fire.
+#[test]
+fn a_prompt_case_sends_no_command() {
+    let (_root, log) = session_log(&[extensions_loaded(), turn_completed()]);
+    let case = case_run(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(driver.commands.lock().unwrap().is_empty());
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// An omitted `text` parses to the empty string and is sent as one: the
+/// driver line carries `"text": ""`, not a missing key.
+#[test]
+fn omitted_command_text_sends_the_empty_string() {
+    let (_root, log) = session_log(&[extensions_loaded(), turn_completed()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        log: Arc::clone(&log),
+        close_calls: AtomicUsize::new(0),
+        exit_on_close: true,
+        commands: Mutex::new(Vec::new()),
+        reject: None,
+        drop_acks: false,
+        clock: None,
+        command_offsets: Mutex::new(Vec::new()),
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].1.get("text"), Some(&json!("")));
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
 }

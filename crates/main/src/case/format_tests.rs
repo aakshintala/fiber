@@ -241,7 +241,10 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
         panic!("session case parsed as a call case");
     };
     assert_eq!(parsed.name.as_deref(), Some("field coverage"));
-    assert_eq!(parsed.prompt, "hi");
+    let super::Input::Prompt(prompt) = &parsed.input else {
+        panic!("session case parsed without a prompt");
+    };
+    assert_eq!(prompt, "hi");
     assert_eq!(
         parsed.config,
         Some(json!({"permissions": {"mode": "auto"}}))
@@ -807,4 +810,147 @@ fn a_call_case_with_settings_is_rejected() {
     value["settings"] = json!({"hooks": {}});
     let error = case_error(&value);
     assert!(error.contains("call cases take"), "{error}");
+}
+
+fn command_case() -> Value {
+    let mut value = session_case();
+    value
+        .as_object_mut()
+        .expect("session case is an object")
+        .remove("prompt");
+    value["command"] = json!({"name": "export", "text": "out.md"});
+    value["until"] = json!({"kind": "extension_ui"});
+    value
+}
+
+fn command_input(case: &super::SessionCase) -> &super::CaseCommand {
+    let super::Input::Command(command) = &case.input else {
+        panic!("expected a command input");
+    };
+    command
+}
+
+#[test]
+fn a_command_case_parses_its_name_and_text() {
+    let Case::Session(parsed) = parse(&command_case()).expect("command case parses") else {
+        panic!("command case parsed as a call case");
+    };
+    let command = command_input(&parsed);
+    assert_eq!(command.name, "export");
+    assert_eq!(command.text, "out.md");
+}
+
+#[test]
+fn omitted_command_text_defaults_to_the_empty_string() {
+    let mut value = command_case();
+    value["command"] = json!({"name": "export"});
+    let Case::Session(parsed) = parse(&value).expect("command case parses") else {
+        panic!("command case parsed as a call case");
+    };
+    assert_eq!(command_input(&parsed).text, "");
+}
+
+#[test]
+fn a_prompt_case_parses_to_a_prompt_input() {
+    let Case::Session(parsed) = parse(&session_case()).expect("prompt case parses") else {
+        panic!("prompt case parsed as a call case");
+    };
+    let super::Input::Prompt(prompt) = &parsed.input else {
+        panic!("expected a prompt input");
+    };
+    assert_eq!(prompt, "hi");
+}
+
+#[test]
+fn a_case_cannot_mix_a_prompt_and_a_command() {
+    let mut value = session_case();
+    value["command"] = json!({"name": "export"});
+    value["until"] = json!({"kind": "extension_ui"});
+    let error = case_error(&value);
+    assert!(
+        error.contains("prompt") && error.contains("command"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_session_case_needs_a_prompt_or_a_command() {
+    let mut value = session_case();
+    value
+        .as_object_mut()
+        .expect("session case is an object")
+        .remove("prompt");
+    let error = case_error(&value);
+    assert!(
+        error.contains("prompt") && error.contains("command"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_command_case_requires_until() {
+    let mut value = command_case();
+    value
+        .as_object_mut()
+        .expect("command case is an object")
+        .remove("until");
+    let error = case_error(&value);
+    assert!(error.contains("until"), "{error}");
+
+    let Case::Session(parsed) = parse(&command_case()).expect("extension_ui until parses") else {
+        panic!("command case parsed as a call case");
+    };
+    assert_eq!(
+        parsed.until.as_ref().map(|until| until.kind.as_str()),
+        Some("extension_ui")
+    );
+
+    let mut value = command_case();
+    value["until"] = json!({"kind": "notice", "nth": 2});
+    let Case::Session(parsed) = parse(&value).expect("notice until parses") else {
+        panic!("command case parsed as a call case");
+    };
+    assert_eq!(
+        parsed
+            .until
+            .as_ref()
+            .map(|until| (until.kind.as_str(), until.nth)),
+        Some(("notice", 2))
+    );
+}
+
+#[test]
+fn a_prompt_case_keeps_its_default_until() {
+    let Case::Session(parsed) = parse(&session_case()).expect("prompt case parses") else {
+        panic!("prompt case parsed as a call case");
+    };
+    assert!(parsed.until.is_none());
+}
+
+#[test]
+fn malformed_command_fields_name_command() {
+    for (command, reason) in [
+        (json!(false), "command"),
+        (json!({"text": "out.md"}), "command.name"),
+        (json!({"name": 7}), "command.name"),
+        (json!({"name": "export", "text": 7}), "command.text"),
+        (json!({"name": "export", "surprise": true}), "command"),
+    ] {
+        let mut value = command_case();
+        value["command"] = command.clone();
+        let error = case_error(&value);
+        assert!(error.contains(reason), "{command}: {error}");
+    }
+}
+
+#[test]
+fn a_case_cannot_mix_a_command_and_a_call() {
+    let mut value = command_case();
+    value["call"] = json!({"provider": "p", "function": "cost", "arg": {}});
+    value["returns"] = json!(0);
+    let error = case_error(&value);
+    assert!(
+        error.contains("command") && error.contains("call"),
+        "{error}"
+    );
 }

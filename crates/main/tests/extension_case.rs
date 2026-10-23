@@ -1067,3 +1067,73 @@ end }})"#,
     );
     assert_eq!(server.requests().len(), 1, "fiber ask uses real host.http");
 }
+
+fn command_session(command: Value, until: Value, expect: Vec<Value>) -> Value {
+    json!({
+        "script": {"steps": [{"text": "unused"}]},
+        "command": command,
+        "until": until,
+        "expect": expect,
+    })
+}
+
+#[test]
+fn a_command_case_runs_the_extension_command_with_no_turn() {
+    let setup = setup(
+        r#"fiber.command("greet", {timeout = 5000, run = function(text) host.status("saw " .. text) end})"#,
+    );
+    let value = command_session(
+        json!({"name": "greet", "text": "hi"}),
+        json!({"kind": "extension_ui"}),
+        expected(&[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]),
+    );
+    assert_success(&run_case(&setup, "command-status", &value));
+}
+
+#[test]
+fn a_command_case_with_an_unregistered_name_fails() {
+    let setup = setup(
+        r#"fiber.command("greet", {timeout = 5000, run = function(text) host.status("saw " .. text) end})"#,
+    );
+    let value = command_session(
+        json!({"name": "nope"}),
+        json!({"kind": "extension_ui"}),
+        expected(&["session_started"]),
+    );
+    assert_failure(
+        &run_case(&setup, "unknown-command", &value),
+        "unknown_command",
+    );
+}
+
+#[test]
+fn malformed_command_cases_exit_2_with_no_fiber_line_on_stderr() {
+    let setup = setup("");
+    let script = json!({"steps": [{"text": "unused"}]});
+    let expect = expected(&["session_started"]);
+    let mut both = json!({"script": script.clone(), "expect": expect.clone()});
+    both["prompt"] = json!("hi");
+    both["command"] = json!({"name": "greet"});
+    both["until"] = json!({"kind": "extension_ui"});
+    let neither = json!({"script": script.clone(), "expect": expect.clone()});
+    let mut no_until = json!({"script": script, "expect": expect});
+    no_until["command"] = json!({"name": "greet"});
+    for (name, value, reason) in [
+        ("both-fields", both, "prompt and command"),
+        ("neither-field", neither, "prompt or command"),
+        ("command-without-until", no_until, "until"),
+    ] {
+        let output = run_case(&setup, name, &value);
+        assert_malformed(&output, reason);
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("fiber: "),
+            "malformed {name} wrote a fiber line: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
