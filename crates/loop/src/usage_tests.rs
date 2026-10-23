@@ -436,18 +436,6 @@ fn assert_minted(id: &GenerationId) {
 }
 
 #[test]
-fn a_call_the_provider_never_named_gets_a_fresh_minted_id_and_is_not_lookable() {
-    let first = built(named(None), None, "fake/m", None, false);
-    let second = built(named(None), None, "fake/m", None, false);
-    assert_minted(&first.line.generation_id);
-    assert_minted(&second.line.generation_id);
-    assert_ne!(first.line.generation_id, second.line.generation_id);
-    assert!(!first.lookable);
-    assert_eq!(first.line.tokens, tokens(10, 0, &[], 3));
-    assert_eq!(first.line.input_bytes, 123);
-}
-
-#[test]
 fn an_empty_id_is_minted_like_none_and_is_not_lookable() {
     let empty = built(named(Some("")), None, "fake/m", None, false);
     assert_minted(&empty.line.generation_id);

@@ -11,7 +11,9 @@
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+#[cfg(test)]
+use std::sync::PoisonError;
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -19,10 +21,11 @@ use base64::engine::general_purpose::STANDARD;
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
+use rustix::process::Signal;
 use support::group::GROUP_POLL;
 
 use crate::Input;
+use crate::helper::{PipeWake, drain, wait_for_exit};
 
 /// How long a clipboard read may take, on the injected clock.
 pub(crate) const READ_LIMIT: Duration = Duration::from_secs(10);
@@ -203,53 +206,6 @@ pub(crate) fn read(
     run(&mut child, reader.decode, clock, deadline, cap)
 }
 
-/// No signal ever names an id of 1 or less: signalling group -1 reaches
-/// every process its owner holds, and 0 this process's own group.
-fn refused(id: u32) -> bool {
-    id <= 1
-}
-
-/// `id` as a [`Pid`]: refused ids and ids past `i32` never reach a call.
-fn pid_of(id: u32) -> Option<Pid> {
-    if refused(id) {
-        return None;
-    }
-    Pid::from_raw(i32::try_from(id).ok()?)
-}
-
-/// SIGKILL to the command's process group, so a member left behind dies.
-/// A refused id sends nothing.
-fn signal_group(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    match rustix::process::kill_process_group(pid, Signal::KILL) {
-        Ok(_) | Err(_) => {}
-    }
-}
-
-/// Whether a group probe leaves no member behind: only SRCH, no such
-/// group, empties it. An accepted probe, PERM and every other errno keep
-/// the group pending for the next pass. A successful send proves delivery
-/// was accepted, never that the group is empty.
-fn probe_means_empty(outcome: rustix::io::Result<()>) -> bool {
-    match outcome {
-        Ok(()) => false,
-        Err(Errno::SRCH) => true,
-        Err(_) => false,
-    }
-}
-
-/// Whether the command's group still holds a process, through
-/// `kill(-pgid, 0)`. A refused id, or one past what a pid holds, reads
-/// empty: the probe sends nothing for it.
-fn group_alive(id: u32) -> bool {
-    let Some(pid) = pid_of(id) else {
-        return false;
-    };
-    !probe_means_empty(rustix::process::test_kill_process_group(pid))
-}
-
 /// SIGKILL to the command's group until it probes empty, within the
 /// cleanup bound on the injected clock: a member forked past the first
 /// kill is caught by the next pass instead of left behind. Each pass but
@@ -259,29 +215,15 @@ fn group_alive(id: u32) -> bool {
 /// it ended.
 fn settle_group(id: u32, clock: &Arc<dyn Clock>, end: Instant) -> bool {
     loop {
-        if !group_alive(id) {
+        if !support::group::alive(id) {
             return true;
         }
         if clock.now() >= end {
             return false;
         }
         clock.sleep(GROUP_POLL);
-        signal_group(id);
+        drop(support::group::signal(id, Signal::KILL));
     }
-}
-
-/// SIGKILL to the child itself. A refused id sends nothing.
-fn signal_pid(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    // Best-effort SIGKILL: the child may have exited already (ESRCH),
-    // so the result is discarded.
-    #[allow(
-        clippy::let_underscore_must_use,
-        reason = "SIGKILL to a child that may have exited races: ESRCH is expected"
-    )]
-    let _ = rustix::process::kill_process(pid, Signal::KILL);
 }
 
 /// How the worker's wait ended.
@@ -293,39 +235,6 @@ enum End {
     TimedOut,
     /// Past the standard-output cap.
     TooLarge,
-}
-
-/// The wake pipe's writer: every clock move writes one byte to it, so the
-/// worker's poll wakes. A write that fails, on a full pipe or once the
-/// worker has gone, is ignored: a byte already waiting wakes as well.
-struct PipeWake {
-    write: Mutex<std::io::PipeWriter>,
-}
-
-impl Wake for PipeWake {
-    fn wake(&self) {
-        use std::os::unix::io::AsFd as _;
-        let write = self.write.lock().unwrap_or_else(PoisonError::into_inner);
-        match rustix::io::write(write.as_fd(), b"x") {
-            Ok(_) | Err(_) => {}
-        }
-    }
-}
-
-/// Drains the wake pipe after each wake, until it would block: the pipe
-/// holds at most its capacity, so the drain ends.
-fn drain(read: &std::io::PipeReader) {
-    use std::os::unix::io::AsFd as _;
-    let mut buf = [0u8; 64];
-    loop {
-        match rustix::io::read(read.as_fd(), &mut buf) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(Errno::AGAIN) => return,
-            Err(Errno::INTR) => {}
-            Err(_) => return,
-        }
-    }
 }
 
 /// Reads standard output while it has bytes: end-of-file, or any read
@@ -348,24 +257,6 @@ fn read_stdout(stdout: &mut impl std::io::Read, out: &mut Vec<u8>, eof: &mut boo
                 *eof = true;
                 return;
             }
-        }
-    }
-}
-
-/// Blocks in `waitid` for the child `id`, seeing its exit without reaping
-/// it. An interrupted wait retries; any other error counts as exited.
-fn wait_for_exit(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    loop {
-        match rustix::process::waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED.union(WaitIdOptions::NOWAIT),
-        ) {
-            Ok(_) => return,
-            Err(Errno::INTR) => {}
-            Err(_) => return,
         }
     }
 }
@@ -463,8 +354,8 @@ fn run(
     let (wake_read, wake_write) = match std::io::pipe() {
         Ok((read, write)) => (read, write),
         Err(error) => {
-            signal_group(id);
-            signal_pid(id);
+            drop(support::group::signal(id, Signal::KILL));
+            drop(support::group::signal_process(id, Signal::KILL));
             let _ = stdout;
             match child.wait() {
                 Ok(_) | Err(_) => {}
@@ -502,8 +393,8 @@ fn run(
         Err(error) => {
             // No thread is left and the child is never left unreaped: the
             // signals go out at once, then the reap.
-            signal_group(id);
-            signal_pid(id);
+            drop(support::group::signal(id, Signal::KILL));
+            drop(support::group::signal_process(id, Signal::KILL));
             let _ = stdout;
             match child.wait() {
                 Ok(_) | Err(_) => {}
@@ -551,7 +442,13 @@ fn run(
             }
         });
     };
-    signal_after_group(id, exited, &exited_rx, signal_group, signal_pid);
+    signal_after_group(
+        id,
+        exited,
+        &exited_rx,
+        |id| drop(support::group::signal(id, Signal::KILL)),
+        |id| drop(support::group::signal_process(id, Signal::KILL)),
+    );
     cleanup_pause(id);
     let _ = stdout;
     match exited_rx.recv() {
