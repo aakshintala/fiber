@@ -80,6 +80,7 @@ pub(crate) fn launch(
         hover,
         reduced_motion,
         version: env!("CARGO_PKG_VERSION").to_owned(),
+        commit: option_env!("FIBER_COMMIT").map(str::to_owned),
         model,
         overrides: layer,
         thinking,

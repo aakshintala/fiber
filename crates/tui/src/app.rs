@@ -57,6 +57,7 @@ mod form;
 #[path = "history.rs"]
 mod history;
 mod home;
+mod hub_version;
 mod images;
 pub(crate) mod items;
 mod keyboard;
@@ -1450,12 +1451,14 @@ impl App {
         let command_id = hub_string(&hub.payload, "command_id");
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
+                self.hub_hello_version(&hub.payload);
                 let mut lines = std::mem::take(&mut self.outbox.held);
                 lines.extend(self.reconnected());
                 self.outbox.link = Link::Up;
                 lines
             }
             "hub_hello" => {
+                self.hub_hello_version(&hub.payload);
                 // The hub was reached, so the refusal always says why.
                 self.hub_reached();
                 self.connect_failed(format!(

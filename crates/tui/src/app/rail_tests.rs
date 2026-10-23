@@ -572,15 +572,35 @@ fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
     assert_eq!(click(&mut app, C), Effect::None);
     assert_eq!(
         app.notice(),
-        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+        Some("Cannot attach: its status did not parse.")
     );
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
         if code == "session_held"
-            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+            && text == "Cannot attach: its status did not parse."
     )));
     assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn an_unreadable_card_after_a_differing_hello_names_the_hubs_build() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"fiber_version": "9.9.9", "fiber_commit": "2121f38d1e4f0a9b"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    app.on_line(live(C, json!({"state": 7})));
+    assert_eq!(click(&mut app, C), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: this session runs Fiber 9.9.9 (2121f38).")
+    );
 }
 
 #[test]
