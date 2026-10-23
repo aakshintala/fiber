@@ -15,9 +15,9 @@ use fakes::clock::{FakeClock, Mark};
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
-    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, apple_script_png, arm_cleanup_pause, command,
-    drain, group_alive, png_size, probe_means_empty, read, read_stdout, refused, settle_group,
-    signal_after_group, signal_pid, start,
+    Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, Signal, apple_script_png, arm_cleanup_pause,
+    command, drain, group_alive, png_size, probe_means_empty, read, read_stdout, settle_group,
+    signal_after_group, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -300,13 +300,6 @@ fn failures_name_what_went_wrong() {
 }
 
 #[test]
-fn refused_never_names_one_or_none() {
-    assert!(refused(0));
-    assert!(refused(1));
-    assert!(!refused(2));
-}
-
-#[test]
 fn only_a_missing_group_probes_empty() {
     // An accepted probe holds a member; only SRCH retires the group, and
     // any other errno keeps it pending for the next pass.
@@ -351,7 +344,7 @@ fn settle_group_rekills_until_the_bound() {
         let pgid = keeper.id();
         let watchdog = Watchdog::group(pgid);
         assert!(group_alive(pgid));
-        signal_pid(pgid);
+        drop(support::group::signal_process(pgid, Signal::KILL));
         let start = clock.now();
         let end = start + Duration::from_millis(bound_ms);
         assert!(!settle_group(pgid, &clock, end));
@@ -1170,33 +1163,6 @@ fn start_posts_the_pixel_refusal_as_its_notice() {
 fn image_cap_is_256_mib() {
     // IMAGE_CAP as a product: `*` -> `+` or `/` must fail here.
     assert_eq!(IMAGE_CAP, 268_435_456);
-}
-
-#[test]
-fn signal_pid_kills_the_child() {
-    use std::os::unix::process::CommandExt as _;
-    let mut child = std::process::Command::new("sleep")
-        .arg("30")
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let watchdog = Watchdog::group(pid);
-    signal_pid(pid);
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || done.send(child.wait()).unwrap());
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(status) => assert!(
-            !status.unwrap().success(),
-            "sleep must not exit zero after SIGKILL"
-        ),
-        Err(_) => panic!("waited {DEADLINE:?} for signal_pid to kill the child"),
-    }
-    assert!(group_empties(pid, fakes::Deadline::after(DEADLINE)));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
 }
 
 #[test]

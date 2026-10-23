@@ -203,29 +203,12 @@ pub(crate) fn read(
     run(&mut child, reader.decode, clock, deadline, cap)
 }
 
-/// No signal ever names an id of 1 or less: signalling group -1 reaches
-/// every process its owner holds, and 0 this process's own group.
-fn refused(id: u32) -> bool {
-    id <= 1
-}
-
 /// `id` as a [`Pid`]: refused ids and ids past `i32` never reach a call.
 fn pid_of(id: u32) -> Option<Pid> {
-    if refused(id) {
+    if support::group::refused(id) {
         return None;
     }
     Pid::from_raw(i32::try_from(id).ok()?)
-}
-
-/// SIGKILL to the command's process group, so a member left behind dies.
-/// A refused id sends nothing.
-fn signal_group(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    match rustix::process::kill_process_group(pid, Signal::KILL) {
-        Ok(_) | Err(_) => {}
-    }
 }
 
 /// Whether a group probe leaves no member behind: only SRCH, no such
@@ -266,22 +249,8 @@ fn settle_group(id: u32, clock: &Arc<dyn Clock>, end: Instant) -> bool {
             return false;
         }
         clock.sleep(GROUP_POLL);
-        signal_group(id);
+        drop(support::group::signal(id, Signal::KILL));
     }
-}
-
-/// SIGKILL to the child itself. A refused id sends nothing.
-fn signal_pid(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    // Best-effort SIGKILL: the child may have exited already (ESRCH),
-    // so the result is discarded.
-    #[allow(
-        clippy::let_underscore_must_use,
-        reason = "SIGKILL to a child that may have exited races: ESRCH is expected"
-    )]
-    let _ = rustix::process::kill_process(pid, Signal::KILL);
 }
 
 /// How the worker's wait ended.
@@ -463,8 +432,8 @@ fn run(
     let (wake_read, wake_write) = match std::io::pipe() {
         Ok((read, write)) => (read, write),
         Err(error) => {
-            signal_group(id);
-            signal_pid(id);
+            drop(support::group::signal(id, Signal::KILL));
+            drop(support::group::signal_process(id, Signal::KILL));
             let _ = stdout;
             match child.wait() {
                 Ok(_) | Err(_) => {}
@@ -502,8 +471,8 @@ fn run(
         Err(error) => {
             // No thread is left and the child is never left unreaped: the
             // signals go out at once, then the reap.
-            signal_group(id);
-            signal_pid(id);
+            drop(support::group::signal(id, Signal::KILL));
+            drop(support::group::signal_process(id, Signal::KILL));
             let _ = stdout;
             match child.wait() {
                 Ok(_) | Err(_) => {}
@@ -551,7 +520,13 @@ fn run(
             }
         });
     };
-    signal_after_group(id, exited, &exited_rx, signal_group, signal_pid);
+    signal_after_group(
+        id,
+        exited,
+        &exited_rx,
+        |id| drop(support::group::signal(id, Signal::KILL)),
+        |id| drop(support::group::signal_process(id, Signal::KILL)),
+    );
     cleanup_pause(id);
     let _ = stdout;
     match exited_rx.recv() {
