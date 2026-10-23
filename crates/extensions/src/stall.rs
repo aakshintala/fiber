@@ -40,29 +40,24 @@ pub(crate) fn advance_past_grace_or_answer<T>(
     if answered.is_some() {
         return answered;
     }
-    advance_past_grace_or_answer_within(clock, done, kill_at, advance, None, ROUNDS, SIGHT)
+    advance_past_grace_or_answer_within(clock, done, kill_at, advance, ROUNDS, SIGHT)
 }
 
 /// Advances past the grace park with the given bound: `rounds` rounds of
-/// one bounded `sight` wait each. `answered` is always `None` here; the
-/// caller above returns a sighted answer before delegating. Panics when
-/// the run neither parks nor answers.
+/// one bounded `sight` wait each. Panics when the run neither parks nor
+/// answers.
 #[track_caller]
 fn advance_past_grace_or_answer_within<T>(
     clock: &fakes::clock::FakeClock,
     done: &mpsc::Receiver<T>,
     kill_at: Instant,
     advance: Duration,
-    answered: Option<T>,
     rounds: u32,
     sight: Duration,
 ) -> Option<T> {
     use contract::clock::Clock as _;
     use support::group::DRAIN;
 
-    if answered.is_some() {
-        return answered;
-    }
     let mut waited = kill_at;
     let mut step = advance;
     // Rounds of waiting with no park to show for them: the follow below

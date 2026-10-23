@@ -218,12 +218,8 @@ fn wrong_park_without_an_answer_panics() {
 #[test]
 #[should_panic(expected = "the stalled run neither parks for the grace nor answers")]
 fn post_park_neither_park_nor_answer_hits_the_hang_guard() {
-    // The negative proves the guard fires on exhausting the bound it is
-    // given: no park and no answer ever arrive, so no signal can
-    // release the wait early, and the panic below fires after the
-    // 2 x 10 ms it passes. The shared ROUNDS x SIGHT bound stays
-    // covered by the positive callers, which delegate with the
-    // production values.
+    // Proves the guard fires on the bound it is given; the callers that
+    // delegate with ROUNDS x SIGHT cover that bound.
     let clock = FakeClock::new();
     let kill_at = clock.origin() + Duration::from_secs(30);
     let advance = Duration::from_secs(5);
@@ -234,7 +230,6 @@ fn post_park_neither_park_nor_answer_hits_the_hang_guard() {
         &answer_rx,
         kill_at,
         advance,
-        None,
         2,
         Duration::from_millis(10),
     );
