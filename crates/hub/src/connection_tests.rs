@@ -273,11 +273,7 @@ fn stop_from_a_local_client_is_accepted_and_records_the_stop() {
     // The store landed: the idle wait ends the hub as a SIGTERM does,
     // with no clock advance.
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -313,11 +309,7 @@ fn stop_with_false_sessions_is_accepted_with_no_result_and_exits_at_once() {
     assert_eq!(result, Value::Null);
     // A false `sessions` is the base path: the store lands with no loop.
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -333,11 +325,7 @@ fn stop_with_sessions_and_none_running_answers_zero() {
     assert_eq!(id, "c_stop");
     assert_eq!(result, json!({"sessions_stopped": 0}));
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -357,11 +345,7 @@ fn stop_with_sessions_and_an_unreadable_list_answers_io_failed() {
     assert_eq!(id, Some("c_stop".to_owned()));
     assert_eq!(message, "The session list could not be read.");
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -398,11 +382,7 @@ fn stop_with_sessions_stops_the_running_session() {
     assert_eq!(id, "c_stop");
     assert_eq!(result, json!({"sessions_stopped": 1}));
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -741,6 +721,29 @@ fn an_unwritten_answer_with_a_drained_web_still_waits() {
     );
 }
 
+/// Idle-wait passes until one is not `Woken`, as the hub's own loop does:
+/// a stop is acknowledged before its store lands, so a pass that runs
+/// between the two parks and returns `Woken` once the store wakes it. The
+/// passes run on a thread and the result is received under one deadline.
+fn idle_until_signal(hub: &Arc<Hub>) -> Idle {
+    let (done_tx, done) = mpsc::channel();
+    let hub = Arc::clone(hub);
+    thread::spawn(move || {
+        let outcome = loop {
+            match hub.idle_wait(
+                Duration::from_secs(60),
+                &AtomicBool::new(false),
+                &AtomicI32::new(0),
+            ) {
+                Idle::Woken => {}
+                other @ (Idle::Signal(_) | Idle::Expired) => break other,
+            }
+        };
+        done_tx.send(outcome).unwrap_or(());
+    });
+    Deadline::after(DEADLINE).recv_or_fail(&done, "the idle wait to see the stop")
+}
+
 /// A hub on `clock`, held by the test for advances: the stop loop parks
 /// on the injected clock, so bound-expiry tests drive it from here.
 fn hub_with_clock(
@@ -807,11 +810,7 @@ fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
     );
     // The hub still exits after the partial answer.
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -909,11 +908,7 @@ fn a_start_paused_between_admit_steps_is_refused_after_the_store() {
     assert_eq!(result, json!({"sessions_stopped": 0}));
     assert!(!temp.dir.join("run").exists(), "no session socket accepts");
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
@@ -1008,11 +1003,7 @@ fn a_bare_stop_leaves_a_running_session_alone() {
     assert_eq!(id, "c_stop");
     assert_eq!(result, Value::Null, "a bare stop carries no result");
     assert!(matches!(
-        hub.idle_wait(
-            Duration::from_secs(60),
-            &AtomicBool::new(false),
-            &AtomicI32::new(0)
-        ),
+        idle_until_signal(&hub),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
     // The session outlives the hub: its socket still accepts.
@@ -1020,6 +1011,55 @@ fn a_bare_stop_leaves_a_running_session_alone() {
         UnixStream::connect(temp.dir.join("run").join(&session)).is_ok(),
         "the session socket still accepts"
     );
+}
+
+#[test]
+fn a_waiter_parked_before_the_bare_stop_store_wakes_and_then_sees_the_stop() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
+    // The stop pauses after its acknowledgement, before the store.
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *hub.bare_stop_pause.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({})));
+    let (id, _) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    Deadline::after(DEADLINE).recv_or_fail(&entered, "the stop to pause before its store");
+    // One pass, on a thread: it parks on the clock with no stop stored.
+    let (pass_tx, pass) = mpsc::channel();
+    let waiter = {
+        let hub = Arc::clone(&hub);
+        thread::spawn(move || {
+            let first = hub.idle_wait(
+                Duration::from_secs(60),
+                &AtomicBool::new(false),
+                &AtomicI32::new(0),
+            );
+            pass_tx.send(first).unwrap_or(());
+        })
+    };
+    assert!(
+        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
+        "the idle wait parks before the store"
+    );
+    drop(release_tx);
+    // The store wakes the parked pass: it returns `Woken`, not the stop.
+    let first = Deadline::after(DEADLINE).recv_or_fail(&pass, "the parked pass to wake");
+    assert!(
+        matches!(first, Idle::Woken),
+        "a pass that parked before the store returns Woken"
+    );
+    waiter.join().unwrap();
+    assert!(matches!(
+        idle_until_signal(&hub),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
 }
 /// The import answer the driver answers with, scripted through the
 /// machine: names and reasons only, never secret values.

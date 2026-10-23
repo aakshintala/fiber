@@ -128,6 +128,10 @@ pub(crate) struct Hub {
     /// before the flag load.
     #[cfg(test)]
     pub(crate) between_admit_steps: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot pause in a bare `stop` after the
+    /// acknowledgement is written and before the store.
+    #[cfg(test)]
+    pub(crate) bare_stop_pause: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Tests only: fired when a sessions-stop zero-wait first finds a
     /// nonzero bind count.
     #[cfg(test)]
@@ -250,6 +254,8 @@ impl Hub {
             before_disconnect_cleanup: Mutex::new(None),
             #[cfg(test)]
             between_admit_steps: Mutex::new(None),
+            #[cfg(test)]
+            bare_stop_pause: Mutex::new(None),
             #[cfg(test)]
             on_inflight_wait: Mutex::new(None),
             #[cfg(test)]
@@ -1073,6 +1079,10 @@ fn on_stop(
         match web {
             Some(web) => drain_web(hub, writer, web, "command_accepted", payload),
             None => send(writer, hub, "command_accepted", payload),
+        }
+        #[cfg(test)]
+        if let Some(pause) = lock(&hub.bare_stop_pause).take() {
+            pause();
         }
         hub.request_stop();
         hub.tick.wake();
