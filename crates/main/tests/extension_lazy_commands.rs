@@ -16,6 +16,8 @@ mod support;
 
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 
 use extension_harness::*;
 use fakes::ProviderServer;
@@ -157,22 +159,49 @@ fn a_declared_command_is_listed_with_no_vm_and_starts_on_its_first_run() {
 
 #[test]
 fn the_first_run_is_accepted_only_after_the_start() {
-    let (setup, server) = lazy_setup(|_| format!("host.status('init')\n{EXPORT}"), declared());
-    let session = Session::start(setup, server);
-    let lines = session.ask(
-        "c_run",
-        "command",
-        &json!({ "name": "export", "text": "a.md" }),
+    let (setup, server) = lazy_setup(
+        |setup| {
+            let fifo = setup.workspace().join("hold.fifo");
+            fakes::fifo(&fifo);
+            let fifo = serde_json::to_string(&fifo.to_string_lossy()).unwrap();
+            // The status comes last, so it is in the stream only once the
+            // whole entry script has run.
+            format!("host.fs.read({fifo})\n{EXPORT}host.status('init done')\n")
+        },
+        declared(),
     );
-    // docs/extensions.md:1375-79: the start comes first, so the status the
-    // entry script reports is in the stream before `command_accepted`.
-    let init = lines
-        .iter()
-        .position(|line| line["kind"] == "extension_ui" && line["payload"]["status"] == "init");
-    let accepted = lines.iter().position(|line| {
+    let fifo = setup.workspace().join("hold.fifo");
+    let deadline = setup.deadline;
+    let session = Session::start(setup, server);
+    // The entry script blocks reading the fifo until `release` fires; the
+    // writer opening it is the proof that the start is under way.
+    let (held, opened) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let holder = thread::spawn(move || {
+        let writer = fs::OpenOptions::new().write(true).open(fifo).unwrap();
+        held.send(()).unwrap();
+        let _ = released.recv();
+        drop(writer);
+    });
+    send(
+        &session.client,
+        r#"{"id":"c_run","command":"command","args":{"name":"export","text":"a.md"}}"#,
+    );
+    deadline.recv_or_fail(&opened, "the entry script to open the fifo");
+    release.send(()).unwrap();
+    let lines = until_session(&session.client, "c_run", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_run"
     });
-    assert!(init.is_some() && init < accepted, "{lines:?}");
+    // docs/extensions.md:1375-79: the start comes first. The entry script
+    // cannot finish before the release, so `command_accepted` before its
+    // closing status would mean the command was answered while it was held.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["kind"] == "extension_ui" && line["payload"]["status"] == "init done"),
+        "{lines:?}"
+    );
+    holder.join().unwrap();
     session.finish();
 }
 
