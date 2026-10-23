@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
@@ -337,18 +338,19 @@ fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
         // Set on the sending thread: the hook runs inside `send_by`.
         set_send_by_before_reset(Some(Box::new(move || {
             written_tx.send(()).unwrap();
-            match Deadline::after(Duration::from_secs(5)).recv(&go_rx) {
+            // The test owns `go_tx`: it sends to release, or drops it on exit.
+            match go_rx.recv() {
                 Ok(()) | Err(_) => {}
             }
         })));
         let result = client.send_by("{}", &|| MUST);
         result_tx.send(result).unwrap();
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&written_rx, "send_by to write the line and reach the pause");
     drop(server);
     go_tx.send(()).unwrap();
-    let result = Deadline::after(Duration::from_secs(5))
+    let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&result_rx, "send_by to return after the reset");
     result.expect("a full write stays written when the peer closes before the reset");
 }

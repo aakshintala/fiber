@@ -1,3 +1,4 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -303,9 +304,6 @@ fn the_connector_hands_the_keep_its_socket() {
     );
 }
 
-/// One test's wall-clock bound. Every wait names it.
-const EACH_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// The short idle the stall tests inject.
 const IDLE_200MS: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -324,14 +322,14 @@ fn silent_pair(idle: std::time::Duration) -> (Socket, TcpStream) {
     let addr = listener.local_addr().unwrap();
     let (stream, peer) = fakes::within(
         "the stall pair to connect",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let stream = TcpStream::connect(addr).unwrap();
             let (peer, _) = listener.accept().unwrap();
             (stream, peer)
         },
     );
-    peer.set_read_timeout(Some(EACH_WITHIN)).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     (
         Socket {
             stream,
@@ -371,7 +369,7 @@ fn a_silent_peer_times_out_as_a_stall_and_shuts_the_socket() {
     let (mut socket, mut peer) = silent_pair(IDLE_200MS);
     let (socket, error) = fakes::within(
         "a silent read to stall",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let error = socket.await_input(wait()).unwrap_err();
             (socket, error)
@@ -405,7 +403,7 @@ fn a_shorter_ureq_deadline_keeps_its_reason() {
     );
     let error = fakes::within(
         "a ureq-bound read to time out",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || socket.await_input(timeout).unwrap_err(),
     );
     assert!(
@@ -423,7 +421,7 @@ fn an_idle_equal_to_ureq_is_a_stall_not_a_timeout() {
     let timeout = ureq_after(Duration::Exact(IDLE_200MS), Timeout::Global);
     let error = fakes::within(
         "an equal-bound read to stall",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || socket.await_input(timeout).unwrap_err(),
     );
     assert!(
@@ -441,7 +439,7 @@ fn an_expired_ureq_deadline_uses_its_one_second_substitute() {
     );
     let error = fakes::within(
         "an expired deadline to time out",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || socket.await_input(timeout).unwrap_err(),
     );
     assert!(
@@ -459,7 +457,7 @@ fn a_reset_peer_is_not_a_stall() {
     let addr = listener.local_addr().unwrap();
     let (mut socket, peer) = fakes::within(
         "the reset pair to connect",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let stream = TcpStream::connect(addr).unwrap();
             let (peer, _) = listener.accept().unwrap();
@@ -477,7 +475,7 @@ fn a_reset_peer_is_not_a_stall() {
     // Unread bytes in the peer's queue turn its close into a reset on Linux.
     let error = fakes::within(
         "a reset read to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             socket.stream.write_all(&[7u8; 65536]).unwrap();
             drop(peer);
@@ -503,7 +501,7 @@ fn a_write_to_a_peer_that_never_reads_stalls() {
     let addr = listener.local_addr().unwrap();
     let (stream, peer) = fakes::within(
         "the write pair to connect",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let stream = TcpStream::connect(addr).unwrap();
             let (peer, _) = listener.accept().unwrap();
@@ -513,7 +511,7 @@ fn a_write_to_a_peer_that_never_reads_stalls() {
     // The peer never reads; dropping it at the end releases its queue.
     let error = fakes::within(
         "a stalled write to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let mut socket = Socket {
                 stream,
@@ -551,7 +549,7 @@ fn a_held_server_fails_timed_out() {
     let limits = short_limits();
     let error = fakes::within(
         "a held GET to time out",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let agent = crate::agent(
                 crate::config().proxy(None).build(),
@@ -573,7 +571,9 @@ fn a_tls_handshake_that_never_answers_fails_timed_out() {
         let Ok((mut stream, _)) = listener.accept() else {
             return;
         };
-        stream.set_read_timeout(Some(EACH_WITHIN)).unwrap_or(());
+        stream
+            .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+            .unwrap_or(());
         let mut hello = [0u8; 1];
         // The ClientHello's first byte; then silence until the client
         // shuts the stalled socket down.
@@ -592,7 +592,7 @@ fn a_tls_handshake_that_never_answers_fails_timed_out() {
     let limits = short_limits();
     let error = fakes::within(
         "a silent TLS handshake to time out",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let agent = crate::agent(
                 crate::config().proxy(None).build(),

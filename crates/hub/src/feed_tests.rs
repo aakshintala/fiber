@@ -10,6 +10,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -209,7 +210,7 @@ fn the_summary_subscribe_is_the_documented_line() {
     });
     feed.follow(id(1));
     feed.follow(id(1));
-    let texts = Deadline::after(Duration::from_secs(5))
+    let texts = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the hub to send two subscribes");
     assert_eq!(texts.len(), 2);
@@ -1754,8 +1755,6 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
         subscribed: usize,
     }
 
-    const WAIT: Duration = Duration::from_secs(5);
-
     let temp = Temp::new();
     let id = temp.session(1, "p", "turn_completed");
     let socket = temp.dir.join("run").join(&id);
@@ -1855,7 +1854,9 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     let await_subscribed = |count: usize| {
         let (state, grew) = &*shared;
         let (state, _) = grew
-            .wait_timeout_while(lock(state), WAIT, |state| state.subscribed < count)
+            .wait_timeout_while(lock(state), MUST_SUCCEED_WITHIN, |state| {
+                state.subscribed < count
+            })
             .unwrap();
         assert!(
             state.subscribed >= count,
@@ -1865,7 +1866,9 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     let await_received = |count: usize| {
         let (state, grew) = &*shared;
         let (state, _) = grew
-            .wait_timeout_while(lock(state), WAIT, |state| state.received.len() < count)
+            .wait_timeout_while(lock(state), MUST_SUCCEED_WITHIN, |state| {
+                state.received.len() < count
+            })
             .unwrap();
         assert!(
             state.received.len() >= count,
@@ -1902,7 +1905,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
             tx.send(()).unwrap_or(());
         });
         assert!(
-            Deadline::after(WAIT).recv(&rx).is_ok(),
+            Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx).is_ok(),
             "the second hub lists the session"
         );
     }

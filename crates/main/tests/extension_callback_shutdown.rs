@@ -16,6 +16,7 @@
 mod extension_harness;
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::io::{BufRead, BufReader, Read as _};
 use std::os::unix::process::CommandExt;
@@ -23,7 +24,6 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
@@ -350,7 +350,7 @@ fn is_stopped(deadline: Deadline, pid: u32) -> bool {
     let ps_group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let wait = deadline.left().min(Duration::from_secs(3));
+    let wait = deadline.left().min(MUST_SUCCEED_WITHIN);
     let output = match Deadline::after(wait).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => {

@@ -5,6 +5,7 @@
 //! case calls `shutdown`, which proves the end does not depend on its
 //! wakeup: each passes with `shutdown` removed from the stop path.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
@@ -13,8 +14,6 @@ use std::time::Duration;
 
 use fakes::Deadline;
 
-/// A stopped or ended read answers before this.
-const DEADLINE: Duration = Duration::from_secs(5);
 /// A blocked read is still blocked after this: long enough that a read that
 /// would answer at once has answered, short enough to keep the suite fast.
 const STILL_BLOCKED: Duration = Duration::from_millis(50);
@@ -48,7 +47,7 @@ fn a_stop_ends_a_read_on_a_silent_open_peer() {
         "the read blocks on a silent peer"
     );
     stop.stop();
-    let got = Deadline::after(DEADLINE)
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the stop ends the read");
     assert_stopped(got);
@@ -70,7 +69,7 @@ fn bytes_before_a_stop_are_delivered() {
         let got = read.read_until(b'\n', &mut buf);
         tx.send((got, buf)).unwrap_or(());
     });
-    let (got, buf) = Deadline::after(DEADLINE)
+    let (got, buf) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the read delivers what the peer wrote");
     let got = got.unwrap();
@@ -90,7 +89,7 @@ fn a_stop_before_the_first_read_answers_at_once() {
         let mut buf = [0_u8; 8];
         tx.send(reader.read(&mut buf)).unwrap_or(());
     });
-    let got = Deadline::after(DEADLINE)
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("a stop before the first read answers");
     assert_stopped(got);
@@ -108,7 +107,7 @@ fn a_stop_wins_over_pending_data() {
         let mut buf = [0_u8; 8];
         tx.send(reader.read(&mut buf)).unwrap_or(());
     });
-    let got = Deadline::after(DEADLINE)
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the stop answers before the pending data");
     assert_stopped(got);
@@ -135,7 +134,7 @@ fn a_stop_keeps_bytes_already_read() {
             }
         }
     });
-    let first = Deadline::after(DEADLINE)
+    let first = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the first read answers");
     match first {
@@ -151,7 +150,7 @@ fn a_stop_keeps_bytes_already_read() {
         "the second read blocks"
     );
     stop.stop();
-    let second = Deadline::after(DEADLINE)
+    let second = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the stop ends the second read");
     match second {
@@ -173,7 +172,7 @@ fn a_second_stop_does_nothing() {
         let mut buf = [0_u8; 8];
         tx.send(reader.read(&mut buf)).unwrap_or(());
     });
-    let got = Deadline::after(DEADLINE)
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the read answers after two stops");
     assert_stopped(got);
@@ -199,7 +198,7 @@ fn dropping_the_stop_ends_a_blocked_read() {
         "the read blocks on a silent peer"
     );
     drop(stop);
-    let got = Deadline::after(DEADLINE)
+    let got = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("dropping the stop ends the read");
     match got {
@@ -222,7 +221,7 @@ fn the_peer_closing_ends_the_read_with_no_stop() {
         let got = read.read_until(b'\n', &mut buf);
         tx.send((got, buf)).unwrap_or(());
     });
-    let (got, buf) = Deadline::after(DEADLINE)
+    let (got, buf) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the peer closing ends the read");
     let got = got.unwrap();
@@ -244,7 +243,7 @@ fn get_ref_returns_the_wrapped_stream() {
         let got = peer.read_exact(&mut buf);
         tx.send(got.map(|()| buf)).unwrap_or(());
     });
-    let buf = Deadline::after(DEADLINE)
+    let buf = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the write through the wrapped stream arrives")
         .unwrap();

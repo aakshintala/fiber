@@ -13,6 +13,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -378,10 +379,6 @@ fn a_replaced_manifests_obsolete_dependency_is_pruned_before_deferred_errors() {
 /// it: far below the full operation bound, so firing proves the stall
 /// bound (not a total wait) ended the test.
 const STALL: Duration = Duration::from_millis(500);
-/// How long the test waits for the stall bound to fire: far above it, far
-/// below the nextest kill, so a bound that never fires fails the test
-/// instead of hanging it.
-const OUTER: Duration = Duration::from_secs(5);
 #[test]
 fn a_stalled_approval_fails_within_the_stall_bound() {
     let setup = Setup::new();
@@ -426,7 +423,8 @@ fn a_stalled_approval_fails_within_the_stall_bound() {
         }));
         failed.send(outcome).unwrap();
     });
-    let outcome = fakes::Deadline::after(OUTER).recv_or_fail(&panicked, "the stalled approval");
+    let outcome =
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&panicked, "the stalled approval");
     let message = outcome.expect_err("a stalled approval fails");
     let text = message
         .downcast_ref::<String>()

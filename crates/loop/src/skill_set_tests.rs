@@ -8,9 +8,9 @@
     reason = "test code; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::{
@@ -663,7 +663,7 @@ fn a_reader_that_calls_back_into_the_set_does_not_deadlock() {
             }
             done.send(()).unwrap();
         });
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&finished)
             .unwrap();
     }

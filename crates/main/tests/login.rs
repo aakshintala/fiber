@@ -31,7 +31,7 @@ use std::thread;
 use support::repo_provider::{declare_repo_provider, git_init};
 use support::write_record;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{MUST_SUCCEED_WITHIN, ProviderServer, Response, Watchdog};
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
@@ -1719,7 +1719,7 @@ fn screen_wait_for_keeps_trailing_text_for_the_next_wait() {
         typed: fs::File::from(terminal.main.try_clone().unwrap()),
         seen: String::new(),
         consumed: 0,
-        deadline: Deadline::after(std::time::Duration::from_secs(5)),
+        deadline: Deadline::after(MUST_SUCCEED_WITHIN),
     };
     let first = screen.wait_for("fiber: stored credentials/acme/default");
     assert!(

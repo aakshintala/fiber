@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -382,7 +383,7 @@ fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
     };
     let world = fakes::within(
         "settle command request",
-        Deadline::after(Duration::from_secs(3)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             world
                 .looped
@@ -395,7 +396,7 @@ fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
     assert_eq!(taken.load(Ordering::SeqCst), 0);
     assert_eq!(answered.load(Ordering::SeqCst), 0);
     assert_eq!(world.held.kinds(), ["session_started"]);
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(3)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 impl Held {

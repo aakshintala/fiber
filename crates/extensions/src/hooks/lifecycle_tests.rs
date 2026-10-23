@@ -11,12 +11,12 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
@@ -83,7 +83,7 @@ impl Home {
         .unwrap()
     }
 
-    /// The session's extensions, loaded on a thread under [`WAIT`]: the
+    /// The session's extensions, loaded on a thread under [`MUST_SUCCEED_WITHIN`]: the
     /// fake clock never ends a wait the runtime does not end itself.
     #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
@@ -125,10 +125,7 @@ fn phased_hook(point: &str, phase: &str, on_failure: &str, body: &str) -> String
     )
 }
 
-/// How long a test waits for a load or a chain before failing.
-const WAIT: Duration = Duration::from_secs(5);
-
-/// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
+/// Runs `f` on its own thread and waits for it under [`MUST_SUCCEED_WITHIN`], so a runtime
 /// that never answers fails the test instead of hanging it.
 #[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -136,7 +133,7 @@ fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the extensions")
 }

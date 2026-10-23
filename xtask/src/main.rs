@@ -32,6 +32,7 @@
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
+//! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -49,6 +50,7 @@ mod docs;
 mod logo;
 mod models_dev;
 mod models_dev_table;
+mod must_succeed;
 mod rules;
 mod select;
 mod site;
@@ -261,6 +263,14 @@ fn run(args: &[String]) -> Result<bool, String> {
         "loop-tool-names" => report(
             "loop-tool-names",
             &rules::loop_tool_names(&rust_files(&workspace_members()?)?),
+            "ok",
+        ),
+        "must-succeed" => report(
+            "must-succeed",
+            &must_succeed::must_succeed(
+                &rust_files(&workspace_members()?)?,
+                must_succeed::ALLOWANCES,
+            ),
             "ok",
         ),
         "site" => site::run(rest),

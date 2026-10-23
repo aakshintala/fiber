@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -101,9 +102,6 @@ const PROXY_CHILD: &str = "FIBER_TEST_PREPARE_PROXY_CHILD";
 /// The download URL, passed to the child on its environment.
 const PROXY_CHILD_URL: &str = "FIBER_TEST_PREPARE_URL";
 
-/// How long the parent waits for the proxy to record a CONNECT.
-const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Downloads the scripted bytes in a child whose environment holds
 /// `extra`, on top of the proxy URL and the marker. The child re-runs
 /// this same test, which downloads and fails the child when the bytes do
@@ -149,7 +147,7 @@ fn download_tunnels_through_the_proxy_environment() {
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let target = format!("127.0.0.1:{port}");
     assert!(
-        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
+        proxy.await_connects(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);

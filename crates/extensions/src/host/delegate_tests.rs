@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -20,9 +21,6 @@ use mlua::{Lua, Value as LuaValue};
 use serde_json::{Map, Value};
 
 use crate::LuaExtension;
-
-/// Wall-clock bound on every wait for the extension or a fake `start`.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// What a fake `start` answers.
 type Answer = Result<JobId, Failure>;
@@ -115,7 +113,7 @@ impl contract::extension::HostDelegate for Fake {
         });
         if held {
             let release = self.release.lock().unwrap().take().expect("one held start");
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&release)
                 .expect("the test releases the held start");
             let answer = self.held_answer.lock().unwrap().clone();
@@ -427,13 +425,13 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let (extension, _arguments) = fakes::Deadline::after(WAIT)
+    let (extension, _arguments) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the held start arrives");
     assert_eq!(extension, "ext");
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, fakes::Deadline::after(WAIT))
+        .mark_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");
@@ -442,11 +440,11 @@ fn a_timer_cannot_change_what_the_held_start_sends() {
         Some(due),
         Some(timer),
         Duration::from_millis(100),
-        &fakes::Deadline::after(WAIT),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     release.send(()).expect("the held start is released");
     assert_eq!(
-        fakes::Deadline::after(WAIT)
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),
@@ -500,7 +498,7 @@ fn a_hook_and_a_timer_can_each_call_it() {
         .hook("before_message", 0, serde_json::json!({ "content": [] }))
         .unwrap();
     assert_eq!(returned, serde_json::json!({ "content": [] }));
-    let (extension, arguments) = fakes::Deadline::after(WAIT)
+    let (extension, arguments) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the hook's start arrives");
     assert_eq!(extension, "ext");
@@ -510,9 +508,9 @@ fn a_hook_and_a_timer_can_each_call_it() {
         Some(due),
         None,
         Duration::from_millis(100),
-        &fakes::Deadline::after(WAIT),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let (_, arguments) = fakes::Deadline::after(WAIT)
+    let (_, arguments) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the timer's start arrives");
     assert_eq!(arguments.get("description"), Some(&Value::from("ticked")));
@@ -559,13 +557,13 @@ fn a_second_timer_fires_while_one_start_is_held() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let (_, first) = fakes::Deadline::after(WAIT)
+    let (_, first) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the first start arrives");
     assert_eq!(first.get("description"), Some(&Value::from("first")));
     let due = clock.origin() + Duration::from_millis(100);
     let timer = clock
-        .mark_parked(due, fakes::Deadline::after(WAIT))
+        .mark_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("the timer waits for its due time")
         .threads();
     assert_eq!(timer.len(), 1, "only the timer parks at its due time");
@@ -574,15 +572,15 @@ fn a_second_timer_fires_while_one_start_is_held() {
         Some(due),
         Some(timer),
         Duration::from_millis(100),
-        &fakes::Deadline::after(WAIT),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let (_, second) = fakes::Deadline::after(WAIT)
+    let (_, second) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the timer's start arrives");
     assert_eq!(second.get("description"), Some(&Value::from("second")));
     release.send(()).expect("the held start is released");
     assert_eq!(
-        fakes::Deadline::after(WAIT)
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),

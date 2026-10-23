@@ -4,6 +4,7 @@
 //! while the plain agent, an empty address list, a stop before the first
 //! attempt and an already-built tunnel start none.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,9 +21,6 @@ use ureq::unversioned::transport::{
 
 use super::{KeepSocket, io_bound, open, open_timed};
 use crate::{Keep, LIMITS};
-
-/// One test's wall-clock bound. Every wait names it.
-const EACH_WITHIN: Duration = Duration::from_secs(5);
 
 /// One invocation's arguments: the operation, the tool and whether an
 /// explicit start stamp was supplied, with the start the spy read itself.
@@ -109,12 +107,12 @@ fn observed_agent(keep: Arc<dyn Keep>, capture: &Arc<Capture>) -> ureq::Agent {
     )
 }
 
-/// GETs `url` on its own thread under [`EACH_WITHIN`], reading the body
+/// GETs `url` on its own thread under [`MUST_SUCCEED_WITHIN`], reading the body
 /// to a string on success.
 fn get(agent: ureq::Agent, url: String) -> Result<String, ureq::Error> {
     fakes::within(
         "the observed GET to answer",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let mut body = agent.get(url).call()?.into_body().into_reader();
             let mut text = String::new();
@@ -275,7 +273,7 @@ fn open_timed_over_two_refused_addresses_fails_once_with_the_last_refusal() {
     let timing = capture.timing();
     let error = fakes::within(
         "an observed open past two refusals to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), Some(&timing))
                 .map(|_| ())
@@ -300,7 +298,7 @@ fn open_timed_with_no_addresses_times_nothing() {
     let timing = capture.timing();
     let timed = fakes::within(
         "an observed empty open to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(&[], &(), LIMITS, wait(), Some(&timing))
                 .map(|_| ())
@@ -309,7 +307,7 @@ fn open_timed_with_no_addresses_times_nothing() {
     );
     let plain = fakes::within(
         "a plain empty open to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || open(&[], &(), LIMITS, wait()).map(|_| ()).unwrap_err(),
     );
     assert_eq!(
@@ -343,7 +341,7 @@ fn open_timed_that_starts_stopped_times_nothing() {
     let timing = capture.timing();
     let error = fakes::within(
         "a stopped observed open to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(&[addr], &AlreadyStopped, LIMITS, wait(), Some(&timing))
                 .map(|_| ())
@@ -390,7 +388,7 @@ fn open_timed_stops_before_its_remaining_addresses_and_emits_once() {
     let timing = capture.timing();
     let error = fakes::within(
         "an observed open stopped mid-walk to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(
                 &[refused, addr],
@@ -478,11 +476,11 @@ fn a_keep_refusal_emits_once_and_closes_the_socket() {
     );
     assert_eq!(capture.ends(), 1, "the refusal drops that scope once");
     drop(keep);
-    let deadline = Deadline::after(EACH_WITHIN);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let peer = deadline
         .recv(&peer_rx)
         .expect("the listener saw the refused socket");
-    peer.set_read_timeout(Some(EACH_WITHIN)).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let (drained_tx, drained_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut peer = peer;
@@ -528,7 +526,7 @@ impl Keep for CancelOnKeep {
             Ok(()) | Err(_) => {}
         }
         let release = self.release.lock().unwrap();
-        Deadline::after(EACH_WITHIN)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&release)
             .expect("the test releases the keep");
         drop(release);
@@ -614,12 +612,12 @@ fn cancelling_during_keep_refuses_after_release_and_emits_once() {
             Ok(()) | Err(_) => {}
         }
     });
-    Deadline::after(EACH_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered_rx)
         .expect("the keep saw the connected socket");
     keep.cancelled.store(true, Ordering::SeqCst);
     release_tx.send(()).unwrap();
-    let failed = Deadline::after(EACH_WITHIN)
+    let failed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the cancelled call returns");
     assert!(
@@ -632,11 +630,11 @@ fn cancelling_during_keep_refuses_after_release_and_emits_once() {
         "the cancel drops one scope"
     );
     drop(keep);
-    let deadline = Deadline::after(EACH_WITHIN);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let peer = deadline
         .recv(&peer_rx)
         .expect("the listener saw the cancelled socket");
-    peer.set_read_timeout(Some(EACH_WITHIN)).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let (drained_tx, drained_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut peer = peer;
@@ -816,7 +814,7 @@ fn an_observed_proxy_call_times_its_one_socket() {
     let through = proxy_through(&proxy);
     let text = fakes::within(
         "the observed proxy GET to answer",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let agent = crate::agent_observed(
                 crate::config().proxy(Some(through)).build(),
@@ -833,7 +831,7 @@ fn an_observed_proxy_call_times_its_one_socket() {
     );
     assert_eq!(text, "{}", "the proxy call reached the origin");
     assert!(
-        proxy.await_connects(1, Deadline::after(EACH_WITHIN)),
+        proxy.await_connects(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
@@ -859,7 +857,7 @@ fn a_proxy_refusing_connect_still_times_the_one_socket() {
     let through = proxy_through(&proxy);
     let timed = fakes::within(
         "the refused proxy call to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let capture = Capture::new();
             let error = crate::agent_observed(
@@ -877,7 +875,7 @@ fn a_proxy_refusing_connect_still_times_the_one_socket() {
     );
     let plain = fakes::within(
         "the plain refused proxy call to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             crate::agent(
                 crate::config().proxy(Some(proxy_through(&proxy))).build(),
@@ -915,7 +913,7 @@ fn a_no_proxy_bypass_times_the_direct_socket() {
     let timing = capture.timing();
     let text = fakes::within(
         "the bypassed GET to answer",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let agent = crate::agent_observed(
                 crate::config().proxy(Some(bypass)).build(),
@@ -983,7 +981,7 @@ impl GatedKeep {
                 match ack.send(()) {
                     Ok(()) | Err(_) => {}
                 }
-                Deadline::after(EACH_WITHIN)
+                Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv(&release.lock().unwrap())
                     .expect("the test advances the clock wait");
             });
@@ -1008,7 +1006,7 @@ impl Keep for GatedKeep {
 }
 
 /// The channels both gated waits run through: each acknowledgement the
-/// worker sends and each release the test returns, all under [`EACH_WITHIN`].
+/// worker sends and each release the test returns, all under [`MUST_SUCCEED_WITHIN`].
 struct Gates {
     stop_ack_rx: mpsc::Receiver<()>,
     stop_release_tx: mpsc::Sender<()>,
@@ -1091,7 +1089,7 @@ fn the_scope_covers_the_attempts_and_the_keep() {
             Ok(()) | Err(_) => {}
         }
     });
-    Deadline::after(EACH_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
     let park = clock.now() + PARK_AFTER;
@@ -1099,10 +1097,10 @@ fn the_scope_covers_the_attempts_and_the_keep() {
         Some(park),
         None,
         Duration::from_millis(3),
-        &Deadline::after(EACH_WITHIN),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     gates.stop_release_tx.send(()).unwrap();
-    Deadline::after(EACH_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
     let park = clock.now() + PARK_AFTER;
@@ -1110,10 +1108,11 @@ fn the_scope_covers_the_attempts_and_the_keep() {
         Some(park),
         None,
         Duration::from_millis(4),
-        &Deadline::after(EACH_WITHIN),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     gates.keep_release_tx.send(()).unwrap();
-    let outcome = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the gated open to return");
+    let outcome =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the gated open to return");
     outcome.expect("the gated group connects");
     assert_eq!(capture.calls(), 1, "two addresses are one scope");
     let (start, ends) = capture.scope(0);
@@ -1151,7 +1150,7 @@ fn a_refused_keep_keeps_the_same_scope() {
             Ok(()) | Err(_) => {}
         }
     });
-    Deadline::after(EACH_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&gates.stop_ack_rx)
         .expect("the second stop check parks");
     let park = clock.now() + PARK_AFTER;
@@ -1159,10 +1158,10 @@ fn a_refused_keep_keeps_the_same_scope() {
         Some(park),
         None,
         Duration::from_millis(3),
-        &Deadline::after(EACH_WITHIN),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     gates.stop_release_tx.send(()).unwrap();
-    Deadline::after(EACH_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&gates.keep_ack_rx)
         .expect("the keep parks");
     let park = clock.now() + PARK_AFTER;
@@ -1170,10 +1169,11 @@ fn a_refused_keep_keeps_the_same_scope() {
         Some(park),
         None,
         Duration::from_millis(4),
-        &Deadline::after(EACH_WITHIN),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     gates.keep_release_tx.send(()).unwrap();
-    let failed = Deadline::after(EACH_WITHIN).recv_or_fail(&done_rx, "the refused call to return");
+    let failed =
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the refused call to return");
     assert!(
         failed.contains("a gated keep that refuses for the test"),
         "the keep's refusal is the error: {failed}"
@@ -1205,7 +1205,7 @@ fn a_none_answer_is_final_for_the_group() {
     let refused = SocketAddr::from(fakes::refused::ADDR);
     let timed = fakes::within(
         "a none-timed open past two refusals to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), Some(&none))
                 .map(|_| ())
@@ -1214,7 +1214,7 @@ fn a_none_answer_is_final_for_the_group() {
     );
     let plain = fakes::within(
         "a plain open past two refusals to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open(&[refused, refused], &(), LIMITS, wait())
                 .map(|_| ())
@@ -1233,7 +1233,7 @@ fn a_none_answer_is_final_for_the_group() {
     );
     let missing = fakes::within(
         "an untimed open past two refusals to fail",
-        Deadline::after(EACH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             open_timed(&[refused, refused], &(), LIMITS, wait(), None)
                 .map(|_| ())

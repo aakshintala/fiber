@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,9 +22,6 @@ use contract::{ErrorCode, PreSessionExit, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Deadline, Recorder, TempDir, Watchdog};
 use jobs::{DelegateSpawn, JobsTool, Registry, Resolve};
-
-/// How long the test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 fn args(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::Value;
@@ -134,7 +132,7 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
 
     // The runner's report, under one wall-clock deadline that only guards
     // against a hang: every wake the runner needs comes from the drain.
-    let notice = match Deadline::after(DEADLINE).recv(&rx) {
+    let notice = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx) {
         Ok(Delivery::Job(notice)) => notice,
         Ok(other) => panic!("expected the runner's report, got {other:?}"),
         Err(_) => panic!("the runner did not report"),
@@ -192,5 +190,5 @@ fn a_delegate_failing_before_its_session_reports_that_failure_and_no_log() {
             text_of(&listed)
         );
     }
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }

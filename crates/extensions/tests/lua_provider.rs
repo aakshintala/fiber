@@ -12,6 +12,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -27,16 +28,13 @@ use fakes::{Deadline, NoLock};
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
 
-/// How long a test waits for one call, or for a background refresh.
-const WAIT: Duration = Duration::from_secs(5);
-
 // debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
 /// The thread parked at `at`: exactly one thread waits there.
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, fakes::Deadline::after(WAIT))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
     let threads = mark.threads();
     assert_eq!(
         threads.len(),
@@ -427,7 +425,7 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
         "t1"
     );
     assert!(
-        server.await_requests(2, Deadline::after(WAIT)),
+        server.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the refresh request"
     );
     let (tx, rx) = mpsc::channel();
@@ -444,7 +442,7 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
             }
         }
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the refreshed token");
     assert_eq!(server.requests().len(), 2);
@@ -693,7 +691,7 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh(None, ModelsArg::default()).unwrap();
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for models() to reach the server"
     );
     let signer = Arc::clone(&provider);
@@ -856,7 +854,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(call.command("get", "")));
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for get to reach the server"
     );
     // The caller waits out the grace. The extension thread fails a parked
@@ -864,7 +862,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(30000) + Duration::from_secs(1),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "waited for get to park at its grace"
     );
@@ -873,9 +871,9 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
         Some(asked + Duration::from_millis(30000)),
         Some(scheduler),
         Duration::from_millis(30000),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for get")
         .unwrap_err();

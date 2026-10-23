@@ -572,7 +572,7 @@ impl Providers {
             let dropped: Vec<String> = self
                 .extension_of
                 .iter()
-                .filter(|(_, owner)| *owner == name)
+                .filter(|(_, owner)| **owner == name)
                 .map(|(provider, _)| provider.clone())
                 .collect();
             for provider in dropped {
@@ -581,7 +581,7 @@ impl Providers {
                 self.addenda.remove(&provider);
                 self.unconfigured.remove(&provider);
             }
-            self.declared.remove(name);
+            self.declared.remove(&name);
         }
         let mut notices = Vec::new();
         for (extension, provider) in extensions.lua_providers() {

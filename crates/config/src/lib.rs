@@ -53,6 +53,7 @@ pub use credential_file::{CredentialFile, CredentialLock};
 pub use credential_origin::{Origin, Presence};
 pub use editable::is_editable_config_path;
 pub use error::ConfigError;
+pub use extension::ManifestCommand;
 pub use extension::{
     Binary, CredentialFrom, CredentialLabelSources, CredentialPath, DeclaredSettings, Login,
     Manifest, ModelData, Opening, Placeholder, Process, Protocol, ProviderData,
