@@ -70,7 +70,7 @@ impl Reply {
     /// rendered at that width.
     pub(crate) fn rendered(&self, width: u16) -> Arc<Rendered> {
         crate::work::add(|work| work.reply_renders += 1);
-        let mut cached = self.cache.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cached = support::lock(&self.cache);
         if let Some((at, rendered)) = &*cached
             && *at == width
         {
@@ -90,7 +90,7 @@ impl Reply {
     /// keeps its matches across one. Table-looking fenced code and
     /// escaped pipes are no table, as the parser knows blocks.
     pub(crate) fn has_table(&self) -> bool {
-        let mut cached = self.table.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cached = support::lock(&self.table);
         if let Some(table) = *cached {
             return table;
         }
@@ -105,7 +105,7 @@ impl Reply {
     /// reads the slot without parsing.
     #[cfg(test)]
     pub(crate) fn table_cached(&self) -> Option<bool> {
-        let cached = self.table.lock().unwrap_or_else(|error| error.into_inner());
+        let cached = support::lock(&self.table);
         *cached
     }
 
@@ -113,7 +113,7 @@ impl Reply {
     /// reads the slot without filling it.
     #[cfg(test)]
     pub(crate) fn cached_at(&self) -> Option<u16> {
-        let cached = self.cache.lock().unwrap_or_else(|error| error.into_inner());
+        let cached = support::lock(&self.cache);
         cached.as_ref().map(|(width, _)| *width)
     }
 
