@@ -3435,9 +3435,31 @@ fn focus_cross(app: &mut App, session: &str) {
 }
 
 #[test]
-fn the_walk_reaches_an_unreadable_cards_cross_after_its_card() {
+fn the_walk_reaches_an_unreadable_cards_cross() {
+    // The walk visits the card and its ✕. The doc leaves the stop order
+    // open, so the test asserts the visited stops as a set
+    // (`docs/testing.md`, "A test asserts an order or a count only where
+    // a doc promises it"; `docs/tui.md`, "The rail" draws each card with
+    // its ✕).
     let mut app = cannot_attach();
-    focus_cross(&mut app, B);
+    stroke_press(&mut app, plain(Code::Left));
+    let mut seen = vec![rail_focus(&app).expect("the rail takes focus")];
+    for _ in 0..32 {
+        stroke_press(&mut app, plain(Code::Down));
+        let focus = rail_focus(&app).expect("focus holds at the last stop");
+        if *seen.last().expect("a first stop") == focus {
+            break;
+        }
+        seen.push(focus);
+    }
+    assert!(
+        seen.contains(&Spot::Card(key(&app, B))),
+        "the walk reaches the card: {seen:?}"
+    );
+    assert!(
+        seen.contains(&Spot::Dismiss(key(&app, B))),
+        "the walk reaches its ✕: {seen:?}"
+    );
 }
 
 #[test]
@@ -3464,22 +3486,23 @@ fn a_later_unreadable_status_keeps_the_card_hidden() {
 }
 
 #[test]
-fn a_readable_status_brings_the_card_back_with_a_free_number() {
+fn a_readable_status_brings_the_card_back_with_its_number_kept() {
+    // A card keeps its number for its whole life, hidden or not
+    // (`docs/tui.md`, "The rail"): the hidden card holds 2, so a new
+    // card takes 4, and the card comes back as 2.
     let mut app = cannot_attach();
     assert_eq!(number(&app, B), Some(2));
     cross_effect(&mut app, B);
     app.on_line(live(D, json!({})));
-    assert_eq!(
-        number(&app, D),
-        Some(2),
-        "the hidden card gave its number up"
-    );
+    assert_eq!(number(&app, D), Some(4), "the hidden card kept its number");
     app.on_line(live(B, json!({})));
-    assert_eq!(number(&app, B), Some(4));
+    assert_eq!(number(&app, B), Some(2));
 }
 
 #[test]
 fn a_hidden_card_that_crashes_comes_back_and_its_cross_sends_dismiss() {
+    // A crashed card's ✕ dismisses through the hub (`docs/tui.md`, "The
+    // rail"): exactly one `dismiss` line goes out.
     let mut app = cannot_attach();
     cross_effect(&mut app, B);
     app.on_line(left(B, "crashed"));

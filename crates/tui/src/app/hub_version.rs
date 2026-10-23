@@ -33,17 +33,13 @@ fn differs(ours: (&str, Option<&str>), hub: (&str, Option<&str>)) -> bool {
         || matches!((present(ours.1), present(hub.1)), (Some(ours), Some(hub)) if ours != hub)
 }
 
-/// The notice naming both builds. A listed hub is stopped by name and not
-/// restarted on the next launch, since `fiber stop` stops the local hub.
-fn notice_text(hub: &str, ours: &str, remote: Option<&str>) -> String {
-    match remote {
-        Some(name) => format!(
-            "The hub runs Fiber {hub} (this terminal: {ours}); `fiber stop --hub {name}` stops it."
-        ),
-        None => format!(
-            "The hub runs Fiber {hub} (this terminal: {ours}). `fiber stop` restarts it on the next launch."
-        ),
-    }
+/// The notice naming both builds. The same text shows for a remote
+/// (listed) hub: ruling 4 on #2964 gives no remote form, so none is
+/// invented (`docs/tui.md`, "Notices").
+fn notice_text(hub: &str, ours: &str) -> String {
+    format!(
+        "The hub runs Fiber {hub} (this terminal: {ours}). `fiber stop` restarts it on the next launch."
+    )
 }
 
 impl App {
@@ -69,11 +65,7 @@ impl App {
             return;
         };
         let hub = build_text(version, commit.as_deref());
-        let text = notice_text(
-            &hub,
-            &build_text(&launch.version, launch.commit.as_deref()),
-            launch.location.hub(),
-        );
+        let text = notice_text(&hub, &build_text(&launch.version, launch.commit.as_deref()));
         home.hub_other = Some(hub);
         self.push_notice("hub_version", text);
     }

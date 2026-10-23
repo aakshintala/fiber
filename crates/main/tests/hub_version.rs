@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde_json::{Value, json};
-use support::pty::{Grid, Run};
+use support::pty::{Colour, Grid, Run};
 use support::*;
 
 /// The fake hub's build: a version and a full commit this terminal was not
@@ -64,9 +64,15 @@ fn row_with(grid: &Grid, needle: &str) -> u16 {
     .unwrap_or(u16::MAX)
 }
 
-/// A press and release at one cell, as the look tests click.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+const SELECTION: Colour = Colour::Rgb(0x26, 0x4f, 0x78);
+
+/// Whether `needle` is on home's selection bar.
+fn selected(grid: &Grid, needle: &str) -> bool {
+    let Some(y) = grid.rows.iter().position(|row| row.contains(needle)) else {
+        return false;
+    };
+    let x = column_at(&grid.rows[y], needle);
+    grid.cell(x, u16::try_from(y).unwrap()).bg == SELECTION
 }
 
 /// The column of `needle` in `row`, counting terminal cells.
@@ -243,12 +249,25 @@ fn a_hub_on_another_build_names_it_and_its_rows() {
         home.contents
     );
 
-    // Opening the readable row attaches: a click opens, after the frame
-    // showing the row is final.
-    let frame = run.screen();
-    let row = row_with(&frame, "alpha readable session");
-    let column = column_at(&frame.rows[usize::from(row)], "alpha readable session");
-    click(&mut run, column, row);
+    // Opening the readable row attaches through the keyboard: a grid match
+    // alone is no readiness signal for pointer input
+    // (`docs/testing/screens.md`), so Up walks from the entry bar into the
+    // list and Enter opens the focused row, after the frame showing the row
+    // is final.
+    run.write(b"\x1b[A");
+    let frame = run.wait_screen("a home row focused", |screen| {
+        selected(screen, "alpha readable session") || selected(screen, "Cannot attach")
+    });
+    if !selected(&frame, "alpha readable session") {
+        // The last row (the unreadable one) took focus; one step up
+        // reaches the readable row, and only that step's redraw draws
+        // the selection bar there, so no stale frame satisfies the wait.
+        run.write(b"\x1b[A");
+        run.wait_screen("the readable row focused", |screen| {
+            selected(screen, "alpha readable session")
+        });
+    }
+    run.write(b"\r");
     let rail = run.wait_screen("the rail's CANNOT ATTACH card", |screen| {
         !shows(screen, "Enter starts a session")
             && shows(screen, "CANNOT ATTACH")

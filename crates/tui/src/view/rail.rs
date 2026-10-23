@@ -337,6 +337,12 @@ pub(crate) fn has_x(row: &Row) -> bool {
     row.left == Some(Left::Crashed) || row.state == State::Unreadable
 }
 
+/// Whether a card hides through its ✕ instead of dismissing: its status
+/// cannot be read and it has not crashed (`docs/tui.md`, "The rail").
+pub(crate) fn cannot_attach(row: &Row) -> bool {
+    row.state == State::Unreadable && row.left != Some(Left::Crashed)
+}
+
 /// A card's first row: its number dim, the glyph and word in its state's
 /// colour, and at the right how long it has been in that state, dim; a
 /// crashed or CANNOT ATTACH card's ✕ takes the time's place.

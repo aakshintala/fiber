@@ -1177,7 +1177,7 @@ the fold would reach the same line. The composer is unchanged, so a send is
 rejected `not_subscribed` and the draft comes back with that notice.
 Reopening the session subscribes again through the normal open path.
 
-When the hub runs another Fiber version or commit than this terminal, one notice says so on each connection: code `hub_version`, "The hub runs Fiber <hub> (this terminal: <terminal>). `fiber stop` restarts it on the next launch." (on a listed hub the notice reads "...(this terminal: <terminal>); `fiber stop --hub <name>` stops it.") (`docs/invocation.md`, "What the hub speaks").
+When the hub runs another Fiber version or commit than this terminal, one notice says so on each connection: code `hub_version`, "The hub runs Fiber <hub> (this terminal: <terminal>). `fiber stop` restarts it on the next launch." The same text shows for a remote (listed) hub. (`docs/invocation.md`, "What the hub speaks").
 
 A notice is an event or a condition. An event reports a failure once and
 then fades: it clears 10 seconds after it shows, or when dismissed with

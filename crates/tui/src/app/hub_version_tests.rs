@@ -97,6 +97,9 @@ fn notices(app: &App) -> Vec<String> {
         .collect()
 }
 
+/// The expected notice text. Each `assert_eq!` against it pins one notice,
+/// which `docs/tui.md`, "Notices" promises: one `hub_version` notice on
+/// each connection.
 const NOTICE: &str = "The hub runs Fiber 9.9.9 (2121f38) (this terminal: 0.0.0 (d13fc45)). `fiber stop` restarts it on the next launch.";
 
 #[test]
@@ -187,6 +190,7 @@ fn a_refused_schema_shows_both_notices_and_stays_refused() {
 
 #[test]
 fn each_connection_pushes_once() {
+    // One `hub_version` notice on each connection (`docs/tui.md`, "Notices").
     let mut app = app();
     let hello = || readable(json!({"fiber_version": "9.9.9", "fiber_commit": SHA}));
     app.on_line(hello());
@@ -215,7 +219,10 @@ fn each_connection_pushes_once() {
 }
 
 #[test]
-fn a_listed_hub_names_its_stop_command_and_no_restart() {
+fn a_listed_hub_shows_the_same_text() {
+    // Plan ruling 4 on #2964: the same text shows for a remote (listed)
+    // hub; the rulings give no remote form, so none is invented
+    // (`docs/tui.md`, "Notices").
     let mut app = app_for(
         LaunchLocation::Remote {
             hub: "work".to_owned(),
@@ -225,12 +232,7 @@ fn a_listed_hub_names_its_stop_command_and_no_restart() {
     app.on_line(readable(
         json!({"fiber_version": "9.9.9", "fiber_commit": SHA}),
     ));
-    assert_eq!(
-        notices(&app),
-        [
-            "The hub runs Fiber 9.9.9 (2121f38) (this terminal: 0.0.0 (d13fc45)); `fiber stop --hub work` stops it."
-        ]
-    );
+    assert_eq!(notices(&app), [NOTICE]);
 }
 
 #[test]
@@ -319,11 +321,22 @@ fn waits(app: &App) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// The waits in id order: the doc pins each row's reason but leaves the
+/// relative order of rows with no documented tie-break open, so the test
+/// asserts the rows as a set (`docs/testing.md`, "A test asserts an order
+/// or a count only where a doc promises it").
+fn waits_by_id(app: &App) -> Vec<(String, Option<String>)> {
+    let mut waits = waits(app);
+    waits.sort();
+    waits
+}
+
 const GOOD: &str = "s_aaaaaaaaaaaaaaaa";
 const BAD: &str = "s_bbbbbbbbbbbbbbbb";
 
 #[test]
 fn an_unreadable_row_carries_the_reason_and_a_readable_row_none() {
+    // The reason follows `docs/tui.md`, "The session list".
     let mut app = app();
     app.on_line(readable(
         json!({"fiber_version": "9.9.9", "fiber_commit": SHA}),
@@ -331,13 +344,13 @@ fn an_unreadable_row_carries_the_reason_and_a_readable_row_none() {
     app.on_line(status(GOOD, readable_status()));
     app.on_line(status(BAD, json!({})));
     assert_eq!(
-        waits(&app),
+        waits_by_id(&app),
         [
             (GOOD.to_owned(), None),
             (
                 BAD.to_owned(),
                 Some("Cannot attach: this session runs Fiber 9.9.9 (2121f38)".to_owned())
-            )
+            ),
         ]
     );
 }
@@ -360,6 +373,8 @@ fn an_unreadable_row_says_it_did_not_parse_after_a_same_build_hello() {
 
 #[test]
 fn opening_an_unreadable_row_names_the_hubs_build() {
+    // Opening the row shows the reason as a `session_held` notice
+    // (`docs/tui.md`, "The session list").
     let mut app = app();
     app.on_line(readable(
         json!({"fiber_version": "9.9.9", "fiber_commit": SHA}),

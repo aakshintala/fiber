@@ -148,11 +148,7 @@ fn visible_cards<'a>(home: &'a super::home::Home, hidden: &[SessionId]) -> Vec<&
     home.sessions
         .cards()
         .into_iter()
-        .filter(|row| {
-            !(row.state == State::Unreadable
-                && row.left != Some(Left::Crashed)
-                && hidden.contains(&row.id))
-        })
+        .filter(|row| !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id)))
         .collect()
 }
 
@@ -222,8 +218,11 @@ impl App {
         let Some(home) = self.home.as_ref() else {
             return;
         };
-        self.rail_state
-            .sync(&visible_cards(home, &self.rail_state.hidden));
+        // Numbers cover every card, hidden ones included, so a hidden
+        // card keeps its number for its whole life and a new card takes
+        // the smallest free one (`docs/tui.md`, "The rail"). Only the
+        // drawn cards show.
+        self.rail_state.sync(&home.sessions.cards());
         let Some(key) = self.rail_state.reveal else {
             return;
         };
@@ -770,11 +769,14 @@ impl App {
         else {
             return Effect::None;
         };
-        if row.left != Some(Left::Crashed) {
-            if row.state == State::Unreadable && !self.rail_state.hidden.contains(&row.id) {
+        if crate::view::rail::cannot_attach(row) {
+            if !self.rail_state.hidden.contains(&row.id) {
                 let id = row.id.clone();
                 self.rail_state.hidden.push(id);
             }
+            return Effect::None;
+        }
+        if row.left != Some(Left::Crashed) {
             return Effect::None;
         }
         let session = row.id.clone();
