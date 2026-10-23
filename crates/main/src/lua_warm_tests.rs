@@ -225,7 +225,7 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     let start = clock.now();
     inbox.send(prompt("hi")).unwrap();
     let (done, finished) = mpsc::channel();
-    let looping = thread::spawn(move || done.send(looped.run()).unwrap());
+    let looping = thread::spawn(move || done.send(looped.run().result).unwrap());
     let loop_thread = looping.thread().id();
     // On the default 1-hour lifetime the refresh is due 30 s before it ends.
     let due = start + Duration::from_secs(3570);

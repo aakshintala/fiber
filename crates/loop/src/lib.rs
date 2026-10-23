@@ -103,7 +103,9 @@ pub use handoff::HandoffSettings;
 pub use history::forked;
 pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
-pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
+pub use process::{
+    Exited, Ran, Summary, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started,
+};
 pub use prompt::{Deferrals, DisabledReader, DocsPlace, PromptInputs};
 pub use quota_notice::QuotaRead;
 pub use reload::{
@@ -321,6 +323,10 @@ pub struct Loop {
     changes: changes::State,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
+    /// This process's lines, folded as they are written: what
+    /// `fiber_exited` reports, without reading the log back
+    /// (`docs/events.md`, `fiber_exited`).
+    summary: Summary,
     /// Usage lines this loop has written, latest per generation.
     ledger: usage::Ledger,
     /// The spend the delegate-socket reader shares: per-generation billed
@@ -462,6 +468,7 @@ struct Seed {
     fired: quota_notice::Fired,
     context: Option<Vec<contract::Envelope>>,
     ledger: usage::Ledger,
+    summary: Summary,
     carry: handoff::Carry,
     chosen: Option<contract::ThinkingLevel>,
     tools: BTreeMap<String, calls::Registered>,
@@ -546,6 +553,7 @@ impl Loop {
                 fired: quota_notice::Fired::default(),
                 context: None,
                 ledger: usage::Ledger::default(),
+                summary: Summary::default(),
                 carry: handoff::Carry::default(),
                 chosen: None,
                 tools,
@@ -587,6 +595,7 @@ impl Loop {
             fired,
             context,
             ledger,
+            summary,
             carry,
             chosen,
             tools,
@@ -674,6 +683,7 @@ impl Loop {
             opened: context.is_some(),
             changes,
             cut_off: false,
+            summary,
             ledger,
             spend_trip,
             late_cost: late_cost::LateCost::default(),

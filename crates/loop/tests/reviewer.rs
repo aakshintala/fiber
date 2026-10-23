@@ -2266,8 +2266,14 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     assert!(!kinds.contains(&"turn_completed"));
     assert!(tool.ran().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
-    let written =
-        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    let written = r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        Some(143),
+    )
+    .unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);

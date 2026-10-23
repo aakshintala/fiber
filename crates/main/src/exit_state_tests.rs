@@ -91,7 +91,7 @@ fn exit_state_closes_drains_once_and_precedes_fiber_exited() {
     let log = make_log(&root);
     let dir = root.path().join("s_state");
     super::write_state_at_exit(&log, &dir, &session).unwrap();
-    r#loop::fiber_exited(&log, &dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(&log, &r#loop::Summary::default(), Ok(()), false, None).unwrap();
     super::write_state_at_exit(&log, &dir, &session).unwrap();
     let lines = log::read(&dir).unwrap();
     assert_eq!(
@@ -194,7 +194,7 @@ fn exit_state_timer_write_uses_an_injected_clock_and_survives_clean_exit() {
     let log = make_log(&root);
     let dir = root.path().join("s_state");
     super::write_state_at_exit(&log, &dir, &session).unwrap();
-    r#loop::fiber_exited(&log, &dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(&log, &r#loop::Summary::default(), Ok(()), false, None).unwrap();
     let lines = log::read(&dir).unwrap();
     assert_eq!(
         lines

@@ -56,7 +56,7 @@ fn idle_named(name: &'static str) -> impl Fn(&Envelope) -> bool {
 /// Runs `looped` on its own thread; the channel reports its end.
 fn run(looped: Loop) -> Receiver<Result<(), r#loop::Error>> {
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    thread::spawn(move || done.send(looped.run().result).unwrap());
     finished
 }
 
@@ -365,16 +365,18 @@ fn no_status_follows_the_line_written_after_run_returns() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
     let watcher = session.log.watch();
     session.inbox.send(delivery("go")).unwrap();
-    let finished = run(session.looped.take().unwrap());
+    let looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(looped.run()).unwrap());
     let (watcher, seen) = statuses_until(watcher, idle_named("go"));
     assert_eq!(seen.last().unwrap().payload["state"], "idle");
     session.inbox.send(Delivery::Close(ignore())).unwrap();
-    Deadline::after(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
         .recv(&finished)
-        .expect("close ended the loop")
-        .unwrap();
+        .expect("close ended the loop");
+    ran.result.unwrap();
     // As `fiber ask` does: `fiber_exited` after `run` returns.
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
+    r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), true, None).unwrap();
     let (mut watcher, lines) = support::read_until(watcher, "a fiber_exited line", |line| {
         line.kind == "fiber_exited"
     });

@@ -50,9 +50,7 @@ impl Cache {
     /// thread poisons it, and a panic aborts the process, so no
     /// poisoned lock is ever observed here.
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        support::lock(&self.inner)
     }
 
     /// The renderer's lines for `input` at `width`: a hit returns the
