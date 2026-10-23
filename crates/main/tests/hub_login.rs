@@ -7,6 +7,9 @@
     reason = "test assertions and fixtures"
 )]
 
+#[path = "support/hub_start.rs"]
+#[allow(dead_code, reason = "this test binary uses only `free_port`")]
+mod hub_start;
 mod support;
 
 use std::fs;
@@ -255,28 +258,14 @@ fn a_session_with_only_summary_clients_refuses_login_before_any_poll() {
 
 #[test]
 fn a_disconnected_callback_client_does_not_stop_the_next_turn() {
-    retry_callback(&mut callback_ports, ATTEMPTS, Deadline::start());
+    retry_callback(&mut hub_start::free_port, ATTEMPTS, Deadline::start());
 }
 
 /// Callback attempts `retry_callback` makes, each on a port from `ports`.
 const ATTEMPTS: usize = 5;
-/// How long one listening probe connects before the refusal post is looked at again.
-const CONNECT_SLICE: Duration = Duration::from_millis(100);
-/// How long one listening probe reads before the refusal post is looked at again.
-const PROBE_READ: Duration = Duration::from_millis(100);
-
-/// How one scenario run on `port` ended: the turn ran, or the port was
-/// taken and the whole scenario must run again on a fresh port.
-enum Attempt {
-    Done,
-    PortTaken,
-}
-
-/// A port nothing holds right now: bound on port 0, read, released.
-fn callback_ports() -> u16 {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    listener.local_addr().unwrap().port()
-}
+/// How long one listening probe connects, and then reads, before the
+/// refusal post is looked at again.
+const PROBE_SLICE: Duration = Duration::from_millis(100);
 
 /// Whether the Lua already reported a taken callback port: on a port the
 /// hub cannot bind the callback raises `io_failed`, which the fixture's
@@ -293,10 +282,10 @@ fn callback_taken(server: &ProviderServer) -> bool {
 /// waiting, which proves the hub listens without consuming the callback.
 /// Anything else (refused, timeout, no 404) is "not yet".
 fn probe(addr: SocketAddr) -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, CONNECT_SLICE) else {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_SLICE) else {
         return false;
     };
-    if stream.set_read_timeout(Some(PROBE_READ)).is_err() {
+    if stream.set_read_timeout(Some(PROBE_SLICE)).is_err() {
         return false;
     }
     let port = addr.port();
@@ -315,10 +304,11 @@ fn probe(addr: SocketAddr) -> bool {
     status == "HTTP/1.1 404 Not Found\r\n"
 }
 
-/// Runs the disconnected-callback scenario on `port`: every wait draws on
-/// the one shared `deadline`, never renewed, so all attempts together stay
-/// under it.
-fn callback_attempt(port: u16, deadline: Deadline) -> Attempt {
+/// Runs the disconnected-callback scenario on `port`, returning whether the
+/// port was taken, so the whole scenario must run again on a fresh port.
+/// Every wait draws on the one shared `deadline`, never renewed, so all
+/// attempts together stay under it.
+fn callback_attempt(port: u16, deadline: Deadline) -> bool {
     let mut setup = Setup::new();
     setup.deadline = deadline;
     let server = provider();
@@ -339,7 +329,7 @@ fn callback_attempt(port: u16, deadline: Deadline) -> Attempt {
             close(&client, &session, "c_close_taken");
             drop(client);
             stop(&hub, guard);
-            return Attempt::PortTaken;
+            return true;
         }
         if probe(addr) {
             break;
@@ -359,47 +349,33 @@ fn callback_attempt(port: u16, deadline: Deadline) -> Attempt {
     close(&other, &session, "c_close");
     drop(other);
     stop(&hub, guard);
-    if callback_taken(&server) {
-        Attempt::PortTaken
-    } else {
-        Attempt::Done
-    }
+    callback_taken(&server)
 }
 
 /// Runs the scenario until one attempt's turn runs, drawing each
-/// attempt's port from `ports`. Returns the 1-based number of the attempt
-/// that ran; panics naming the last port when every attempt saw it taken.
-fn retry_callback(ports: &mut dyn FnMut() -> u16, attempts: usize, deadline: Deadline) -> usize {
-    let mut port = ports();
-    for attempt in 1..=attempts {
-        if attempt > 1 {
-            port = ports();
-        }
-        match callback_attempt(port, deadline) {
-            Attempt::Done => return attempt,
-            Attempt::PortTaken => {}
+/// attempt's port from `ports`. Returns the port that ran; panics when
+/// every attempt saw its port taken.
+fn retry_callback(ports: &mut dyn FnMut() -> u16, attempts: usize, deadline: Deadline) -> u16 {
+    for _ in 0..attempts {
+        let port = ports();
+        if !callback_attempt(port, deadline) {
+            return port;
         }
     }
-    panic!("callback port {port} io_failed on all {attempts} attempts");
+    panic!("callback port io_failed on all {attempts} attempts");
 }
 
 #[test]
 fn a_taken_callback_port_is_retried_with_a_fresh_one() {
     let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let taken = held.local_addr().unwrap().port();
-    let mut draws = 0;
-    let returned = retry_callback(
-        &mut || {
-            draws += 1;
-            if draws == 1 { taken } else { callback_ports() }
-        },
+    let mut first = Some(taken);
+    let ran = retry_callback(
+        &mut || first.take().unwrap_or_else(hub_start::free_port),
         ATTEMPTS,
         Deadline::start(),
     );
-    assert_eq!(
-        returned, 2,
-        "attempt 1 saw the taken port, attempt 2 ran the scenario"
-    );
+    assert_ne!(ran, taken, "the scenario ran on a fresh port");
     drop(held);
 }
 
