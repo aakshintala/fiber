@@ -5,7 +5,6 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -310,11 +309,10 @@ const DROPPED: u64 = u64::MAX;
 /// its root; or why there are none: the first line git wrote to stderr, or
 /// the error running it.
 pub fn list(workspace: &Path) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = support::git::command("git")
         .arg("-C")
         .arg(workspace)
         .args(["ls-files", "-z", "--full-name", ":/"])
-        .stdin(Stdio::null())
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
