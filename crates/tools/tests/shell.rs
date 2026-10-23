@@ -2761,6 +2761,46 @@ fn a_plain_shell_executes_what_a_configured_shell_reads() {
 }
 
 #[test]
+fn a_shell_reads_the_new_git_forms_with_no_paths() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-git");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let shell = Shell::new(workspace, FakeClock::new());
+    for command in ["git status", "git stash list", "git branch --show-current"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A writing form executes: `git init` creates or updates `.git` state,
+    // `git push --dry-run` reaches the remote, and a leading assignment
+    // executes whatever its name (#1497 task 1.3).
+    for command in [
+        "git init",
+        "git push --dry-run",
+        "LC_ALL=C git status",
+        "FOO=1 ls",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A discard redirect or an input file reads.
+    let effects = effects_of(&shell, "ls 2>/dev/null");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+}
+
+#[test]
 fn one_shells_list_does_not_leak_into_another() {
     let dir = fakes::TempDir::new("fiber-shell-read-only-isolation");
     let workspace = dir.path().join("ws");

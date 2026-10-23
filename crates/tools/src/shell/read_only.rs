@@ -226,7 +226,11 @@ const GIT_BLAME: &[Flag] = &[
 /// Parts whose cooked words, redirects removed, equal one row exactly read
 /// with no paths. `git branch` has no row: bare `git branch` lists and
 /// `git branch <name>` creates, so only `--show-current` reads.
-pub(super) const EXACT: &[&[&str]] = &[&["git", "branch", "--show-current"]];
+pub(super) const EXACT: &[&[&str]] = &[
+    &["git", "branch", "--show-current"],
+    &["git", "status"],
+    &["git", "stash", "list"],
+];
 
 /// Fiber's own read-only commands. The person's `shell.read_only` entries
 /// reach the classifier beside this slice, never under a name above: a
@@ -364,10 +368,24 @@ pub(super) const COMMANDS: &[Command] = &[
     Command {
         name: "git status",
         flags: GIT_STATUS,
-        paths: true,
+        // The bare call matches EXACT; any other form prints repository
+        // state, which names no path the call reads.
+        paths: false,
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    // `git branch` has no row on its own: bare `git branch` lists and
+    // `git branch <name>` creates, so only this form reads, with no paths.
+    Command {
+        name: "git branch --show-current",
+        flags: &[],
+        paths: false,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
         prints: false,
         counts: false,
     },
