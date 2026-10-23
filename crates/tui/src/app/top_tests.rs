@@ -345,8 +345,9 @@ fn two_surfaces_list_in_the_declared_order_whichever_opened_first() {
 
 /// The pairs `docs/tui.md` lets co-occur, from the ticket's pair table;
 /// the table's pairs with the draft are single surfaces and the panel
-/// hides a tty job, so neither is a pair here.
-const PLAN_PAIRS: [(Surface, Surface); 34] = [
+/// hides a tty job, so neither is a pair here. Opening the import
+/// report closes the completion panels, so the report pairs with none.
+const PLAN_PAIRS: [(Surface, Surface); 33] = [
     (Surface::Quit, Surface::Report),
     (Surface::Quit, Surface::Notice),
     (Surface::Quit, Surface::Keymap),
@@ -365,7 +366,6 @@ const PLAN_PAIRS: [(Surface, Surface); 34] = [
     (Surface::Report, Surface::Search),
     (Surface::Report, Surface::Results),
     (Surface::Report, Surface::Find),
-    (Surface::Report, Surface::Completion),
     (Surface::Keymap, Surface::Notice),
     (Surface::Keymap, Surface::Picker),
     (Surface::KeysScreen, Surface::Notice),

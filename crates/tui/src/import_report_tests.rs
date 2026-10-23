@@ -11,7 +11,7 @@ use ratatui::style::{Modifier, Style};
 
 use contract::events::{ImportedNames, LeftBehindEntry};
 
-use super::{ImportReport, PREFER, title_for};
+use super::{ImportReport, ImportSource, PREFER, title_for};
 
 use crate::app::commands::commands_testkit::{attached, enter, now, painted, sent, session_line};
 use crate::app::{App, Effect};
@@ -710,4 +710,20 @@ fn text_of(row: &Row) -> String {
         .map(|span| span.content.as_ref())
         .collect::<Vec<_>>()
         .join("")
+}
+
+#[test]
+fn import_source_parses_the_named_sources() {
+    assert_eq!(ImportSource::parse(""), Some(ImportSource::Both));
+    assert_eq!(
+        ImportSource::parse("claude-code"),
+        Some(ImportSource::ClaudeCode)
+    );
+    assert_eq!(ImportSource::parse("codex"), Some(ImportSource::Codex));
+    for arg in ["vim", "Codex", "both", "codex "] {
+        assert_eq!(ImportSource::parse(arg), None, "{arg}");
+    }
+    assert_eq!(ImportSource::ClaudeCode.arg(), Some("claude-code"));
+    assert_eq!(ImportSource::Codex.arg(), Some("codex"));
+    assert_eq!(ImportSource::Both.arg(), None);
 }

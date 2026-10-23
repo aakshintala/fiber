@@ -791,11 +791,11 @@ fn a_closing_attached_session_gets_no_line() {
 }
 
 #[test]
-fn an_attached_busy_session_with_an_idle_row_is_not_counted_twice() {
+fn an_attached_busy_session_with_an_idle_row_counts_once() {
     let mut app = home();
     linked(&mut app);
-    // The attached session's feed row is idle, with no jobs: nothing
-    // works, so quitting asks nothing.
+    // The attached session's feed row still reads idle, with no jobs:
+    // its turn still runs, so quitting asks.
     app.on_line(live(
         "s_aaaaaaaaaaaaaaaa",
         json!({"state": "idle"}),
@@ -810,7 +810,8 @@ fn an_attached_busy_session_with_an_idle_row_is_not_counted_twice() {
     };
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
-    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::Quit);
+    assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
+    assert_eq!(app.quit_question(), Some((1, 0)));
 }
 
 /// The quit question takes every key while the import report is open:

@@ -5383,3 +5383,79 @@ fn a_receipt_landing_mid_run_neither_retracts_nor_blocks_the_offer() {
     assert!(app.notices().is_empty());
     assert!(!app.home_screen().unwrap().question_import);
 }
+
+#[test]
+fn an_accept_arriving_while_its_session_reopens_falls_through_the_gate() {
+    let mut app = home();
+    linked(&mut app);
+    let started = start_session(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let full = started[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("full id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &full))
+            .is_empty()
+    );
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "old work",
+        "/w",
+        "-w",
+        json!({"state": "streaming"}),
+    ));
+    // The import goes out while attached.
+    let Effect::Send(import) = enter_text(&mut app, "/import codex") else {
+        panic!("the import sends");
+    };
+    assert_eq!(import.len(), 1);
+    let import: Value = serde_json::from_str(&import[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = import["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("import id"))
+        .to_owned();
+    // Leaving lowers the connection; accepting the lowering, then
+    // reopening, leaves the raise in flight, so the session is gated.
+    let Effect::Send(lowering) = enter_text(&mut app, "/home") else {
+        panic!("leaving lowers");
+    };
+    assert_eq!(lowering.len(), 1);
+    let lowering: Value = serde_json::from_str(&lowering[0]).unwrap_or_else(|err| panic!("{err}"));
+    let ack = lowering["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("lowering id"))
+        .to_owned();
+    assert!(
+        app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &ack))
+            .is_empty()
+    );
+    let lines = open_first(&mut app);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "commands");
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(raise["args"]["level"], "full");
+    // The import's accept arrives while gated: it still opens the
+    // report, with no notices, closing the pending entry.
+    let accepted = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": id, "result": import_result()})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    assert!(app.on_line(accepted).is_empty());
+    let report = app
+        .import_report()
+        .expect("the gated accept opens the report");
+    assert_eq!(report.title(), "Imported from Codex");
+    assert_eq!((report.copied_count(), report.left_count()), (4, 1));
+    assert!(app.notices().is_empty());
+    assert!(!app.outbox.pending.contains_key(&id));
+}

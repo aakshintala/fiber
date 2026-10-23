@@ -17,9 +17,7 @@ use support::hello;
 use support::pty::Grid;
 
 /// Installs the fake provider and spawns the terminal at 120 by 32.
-/// The working half hides the layout panel, so the rail fits: rail
-/// (22) + the 84-column conversation minimum (120-22=98>=84), and the
-/// rail draws. The hub exits a second after its last client leaves, so
+/// The hub exits a second after its last client leaves, so
 /// `wait` never outlasts the test's deadline.
 fn terminal(setup: &support::Setup, server: &ProviderServer) -> support::pty::Run {
     setup.provider(server);
@@ -97,19 +95,10 @@ fn working_overlay(command: &str) -> Vec<String> {
         "the first request to reach the server"
     );
     run.wait_screen("the running turn", |grid| working_elapsed(&grid.contents));
-    // The panel starts shown: `/panel` (TABLE row `panel`, `run_panel`
-    // -> `toggle_panel`) hides it, leaving room for the rail at 120.
-    run.write(b"/panel\r");
-    // The Working Ns line fires on turn_started (session stream) while
-    // quit() reads the feed row's State (session_status{streaming}); the
-    // rail WORKING word (view/rail.rs word maps Working|Jobs, both of
-    // which make quit ask) proves the feed row caught up, so the command
-    // takes the ask branch instead of the idle-quit branch. Hiding the
-    // layout panel above makes 120 rail-capable; if the hide failed the
-    // WORKING wait would expire, so the gate passing proves the layout.
-    run.wait_screen("the rail working card", |grid| {
-        grid.contents.contains("WORKING")
-    });
+    // The Working Ns line fires on turn_started, before the feed row's
+    // State catches up: sending the command here exercises the window
+    // where the row still reads idle, and the quit question still opens
+    // with 1 session working.
     run.write(format!("{command}\r").as_bytes());
     let grid: Grid = run.wait_screen("the quit question", |grid| {
         grid.contents.contains("Quit") && grid.contents.contains("1 session working")
