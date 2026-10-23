@@ -219,10 +219,17 @@ pub(crate) fn draw_top_row(
 /// Draws the open swapped view into `area`, pushing its click targets:
 /// the model picker while it is open, else the open configuration view.
 /// The picker keeps the view's top row with its title and command, and
-/// draws in the overlay frame under it.
-pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+/// draws in the overlay frame under it. Returns the framed slab for the
+/// model picker and the `/login` and `/logout` views, `None` for every
+/// other view, which draws full-area with no frame of its own.
+pub(crate) fn draw(
+    app: &App,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Option<Rect> {
     if area.is_empty() {
-        return;
+        return None;
     }
     if let Some(view) = app.model_picker_view() {
         draw_top_row(
@@ -239,22 +246,29 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
             area.width,
             area.height.saturating_sub(1),
         );
-        if !below.is_empty() {
-            super::view::model_picker::draw(&view, below, buf, targets);
-        }
-        return;
+        let slab = if below.is_empty() {
+            Rect::default()
+        } else {
+            super::view::model_picker::draw(&view, below, buf, targets)
+        };
+        return Some(slab);
     }
     let height = usize::from(area.height);
     if let Some(frame) = app.keys_frame(height) {
         render(&frame, area, buf, targets);
+        None
     } else if let Some(login) = app.login_view() {
-        login.draw(area, buf, targets);
+        Some(login.draw(area, buf, targets))
     } else if let Some(logout) = app.logout_view() {
-        logout.draw(area, buf, targets);
+        Some(logout.draw(area, buf, targets))
     } else if let Some(frame) = app.config_view_screen() {
         render(&frame, area, buf, targets);
+        None
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);
+        None
+    } else {
+        None
     }
 }
 
