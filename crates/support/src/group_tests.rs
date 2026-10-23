@@ -273,6 +273,24 @@ fn kill_every_group_kills_a_listed_live_group() {
     );
 
     // Reaped, the group is empty: the next kill drops it unsignalled.
+    // The probe can lag the reap: a reaped group answers EPERM, which
+    // reads alive, until the kernel retires it. Poll the same condition
+    // the next kill prunes on, so the kill always finds it not alive.
+    let (emptied, empty) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        while alive(pgid) {
+            if Deadline::after(GROUP_POLL).recv(&stopped).is_ok() {
+                return;
+            }
+        }
+        let _sent = emptied.send(());
+    });
+    Deadline::after(DEADLINE).recv_or_fail(
+        &empty,
+        &format!("waited {DEADLINE:?} for group {pgid} to read not alive"),
+    );
+    drop(stop);
     kill_every_group();
     assert!(!live().contains(pgid), "an empty group leaves the list");
     live().unlist(listing);
