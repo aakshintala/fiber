@@ -6,10 +6,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Writes a feedback report for `description` and returns its path with
-/// the issue link: the injected writer `main` supplies, so the TUI names
-/// this seam and never `cli`.
-pub type WriteFeedback = Arc<dyn Fn(&str) -> Result<FeedbackDone, String> + Send + Sync>;
+use crate::SessionId;
+
+/// Writes a feedback report for `description` and the session on screen,
+/// when there is one, and returns its path with the issue link: the
+/// injected writer `main` supplies, so the TUI names this seam and never
+/// `cli`.
+pub type WriteFeedback =
+    Arc<dyn Fn(&str, Option<&SessionId>) -> Result<FeedbackDone, String> + Send + Sync>;
 
 /// What a feedback write returns: the report's path and its issue link.
 #[derive(Debug, Clone, PartialEq, Eq)]

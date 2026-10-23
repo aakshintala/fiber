@@ -136,7 +136,8 @@ pub use extension::{
     extension_remove, extension_update, install_first_party,
 };
 pub use extension_test::extension_test;
-pub use feedback::{FeedbackError, ReportContext, build_report, write};
+pub use feedback::diagnostics;
+pub use feedback::{FeedbackError, ReportContext, build_report, select_session, write};
 pub use hub_env::{declared_names, hub_env, lookup, placeholder_lookup};
 pub use hub_list::{hub_add, hub_remove};
 pub use hub_pair::{Address, hub_pair};
