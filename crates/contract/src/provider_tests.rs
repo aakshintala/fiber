@@ -401,3 +401,94 @@ fn default_warms_is_true() {
 fn a_provider_without_an_override_has_no_cost_lookup() {
     assert!(Fake.cost_lookup().is_none());
 }
+
+fn image_at(path: &str) -> ImageRef {
+    ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 1,
+        height: 1,
+    }
+}
+
+#[test]
+fn media_paths_of_a_user_message_are_its_images_in_order() {
+    let input = Input::User {
+        text: "t".into(),
+        images: vec![image_at("artifacts/a.png"), image_at("artifacts/b.png")],
+    };
+    assert_eq!(
+        input.media_paths(),
+        vec!["artifacts/a.png", "artifacts/b.png"]
+    );
+}
+
+#[test]
+fn media_paths_of_a_tool_result_are_its_images_then_each_pdf_and_its_pages() {
+    let input = Input::ToolResult {
+        action_id: ActionId("a".into()),
+        text: "t".into(),
+        is_error: false,
+        images: vec![image_at("artifacts/i.png")],
+        pdfs: vec![
+            PdfRef {
+                path: "artifacts/p.pdf".into(),
+                page_count: 2,
+                pages: Some(vec![
+                    image_at("artifacts/p1.png"),
+                    image_at("artifacts/p2.png"),
+                ]),
+            },
+            PdfRef {
+                path: "artifacts/q.pdf".into(),
+                page_count: 1,
+                pages: None,
+            },
+        ],
+    };
+    assert_eq!(
+        input.media_paths(),
+        vec![
+            "artifacts/i.png",
+            "artifacts/p.pdf",
+            "artifacts/p1.png",
+            "artifacts/p2.png",
+            "artifacts/q.pdf",
+        ]
+    );
+}
+
+#[test]
+fn media_paths_of_an_input_that_cannot_carry_media_are_empty() {
+    let inputs = [
+        Input::Assistant {
+            model: "m".into(),
+            text: "t".into(),
+            provider_item: None,
+        },
+        Input::Reasoning {
+            model: "m".into(),
+            text: "t".into(),
+            provider_item: None,
+        },
+        Input::ToolCall {
+            action_id: ActionId("a".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "artifacts/i.png"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "m".into(),
+        },
+        Input::ToolSearchResult {
+            action_id: ActionId("a".into()),
+            loaded: vec!["x".into()],
+        },
+    ];
+    for input in &inputs {
+        assert!(input.media_paths().is_empty(), "{input:?}");
+    }
+}

@@ -32,6 +32,12 @@ pub fn loaded_text(names: &[String]) -> String {
         .replace("{names}", &names.join(", "))
 }
 
+/// The stored images and PDFs a request sends, as the loop resolved them:
+/// each path a conversation names, exactly as the conversation holds it,
+/// mapped to the stored file's bytes as standard base64. A path the loop
+/// could not read, or must not read, has no entry.
+pub type Media = BTreeMap<String, Arc<str>>;
+
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
 pub trait Provider: Send + Sync {
@@ -275,6 +281,29 @@ pub enum Input {
         /// The tools the search loaded, by name, in the logged order.
         loaded: Vec<String>,
     },
+}
+
+impl Input {
+    /// The path of every image and PDF the input names, in order: a message's
+    /// images; a tool result's images, then each PDF's path followed by its
+    /// page images' paths. Every other input names none.
+    pub fn media_paths(&self) -> Vec<&str> {
+        match self {
+            Self::User { images, .. } => images.iter().map(|image| image.path.as_str()).collect(),
+            Self::ToolResult { images, pdfs, .. } => images
+                .iter()
+                .map(|image| image.path.as_str())
+                .chain(pdfs.iter().flat_map(|pdf| {
+                    std::iter::once(pdf.path.as_str())
+                        .chain(pdf.pages.iter().flatten().map(|page| page.path.as_str()))
+                }))
+                .collect(),
+            Self::Assistant { .. }
+            | Self::Reasoning { .. }
+            | Self::ToolCall { .. }
+            | Self::ToolSearchResult { .. } => Vec::new(),
+        }
+    }
 }
 
 /// A fragment of a reply, emitted as an ephemeral event as it arrives.
