@@ -223,6 +223,110 @@ const GIT_BLAME: &[Flag] = &[
     flag("--line-porcelain"),
 ];
 
+const GH_PR_VIEW: &[Flag] = &[
+    value("--json"),
+    flag("--comments"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_LIST: &[Flag] = &[
+    value("--state"),
+    value("-s"),
+    value("--author"),
+    value("--assignee"),
+    value("--label"),
+    value("--limit"),
+    value("-L"),
+    value("--base"),
+    value("--head"),
+    value("--search"),
+    value("--json"),
+    flag("--draft"),
+    value("--app"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_DIFF: &[Flag] = &[
+    value("--color"),
+    flag("--name-only"),
+    flag("--patch"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_CHECKS: &[Flag] = &[
+    flag("--watch"),
+    flag("--required"),
+    flag("--fail-fast"),
+    value("--json"),
+    value("--interval"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_ISSUE_VIEW: &[Flag] = &[
+    value("--json"),
+    flag("--comments"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_ISSUE_LIST: &[Flag] = &[
+    value("--state"),
+    value("-s"),
+    value("--assignee"),
+    value("--author"),
+    value("--label"),
+    value("--limit"),
+    value("-L"),
+    value("--milestone"),
+    value("--search"),
+    value("--json"),
+    value("--app"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_REPO_VIEW: &[Flag] = &[value("--json")];
+
+const GH_RUN_LIST: &[Flag] = &[
+    value("--branch"),
+    value("-b"),
+    value("--status"),
+    value("-s"),
+    value("--workflow"),
+    value("-w"),
+    value("--limit"),
+    value("-L"),
+    value("--json"),
+    value("--repo"),
+    value("-R"),
+    value("--event"),
+    value("-e"),
+    value("--user"),
+    value("-u"),
+    value("--created"),
+    value("--commit"),
+    value("-c"),
+];
+
+const GH_RUN_VIEW: &[Flag] = &[
+    flag("--log"),
+    flag("--log-failed"),
+    flag("--exit-status"),
+    flag("--verbose"),
+    flag("-v"),
+    value("--json"),
+    value("--repo"),
+    value("-R"),
+    value("--job"),
+    value("-j"),
+    value("--attempt"),
+    value("-a"),
+];
+
 /// `printf` under `xargs` only: a direct `printf` stays `executes`, so
 /// this row never reaches `COMMANDS`. It takes no flag of its own and
 /// names no path: every operand after it is a format or an argument.
@@ -460,6 +564,96 @@ pub(super) const COMMANDS: &[Command] = &[
         pattern: false,
         pattern_flags: &[],
         ends_flags: true,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh pr view",
+        flags: GH_PR_VIEW,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh pr list",
+        flags: GH_PR_LIST,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh pr diff",
+        flags: GH_PR_DIFF,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh pr checks",
+        flags: GH_PR_CHECKS,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh issue view",
+        flags: GH_ISSUE_VIEW,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh issue list",
+        flags: GH_ISSUE_LIST,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh repo view",
+        flags: GH_REPO_VIEW,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh run list",
+        flags: GH_RUN_LIST,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    },
+    Command {
+        name: "gh run view",
+        flags: GH_RUN_VIEW,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
         prints: false,
         counts: false,
     },

@@ -429,6 +429,62 @@ fn hostile_git_forms_execute() {
 }
 
 #[test]
+fn gh_read_only_forms_read() {
+    for command in [
+        "gh pr view 123",
+        "gh pr view 123 --json number,title --comments --repo owner/name -R owner/name",
+        "gh pr list --state open -s open --author me --assignee me --label bug --limit 30 -L 30 --base main --head feature --search term --json number --draft --app mine --repo owner/name -R owner/name",
+        "gh pr diff 123 --color always --name-only --patch --repo owner/name -R owner/name",
+        "gh pr checks 123 --watch --required --fail-fast --json state --interval 10 --repo owner/name -R owner/name",
+        "gh issue view 123 --json title --comments --repo owner/name -R owner/name",
+        "gh issue list --state open -s open --assignee me --author me --label bug --limit 30 -L 30 --milestone v1 --search term --json number --app mine --repo owner/name -R owner/name",
+        "gh repo view owner/name --json name",
+        "gh run list --branch main -b main --status success -s success --workflow ci -w ci --limit 30 -L 30 --json databaseId --repo owner/name -R owner/name --event push -e push --user me -u me --created 2024-01-01 --commit abc -c abc",
+        "gh run view 123 --log --log-failed --exit-status --verbose -v --json conclusion --repo owner/name -R owner/name --job build -j build --attempt 2 -a 2",
+    ] {
+        assert_reads(command);
+    }
+    assert_eq!(
+        classified("gh pr view 123").declared.paths,
+        Some(vec!["/work/123".to_owned()])
+    );
+}
+
+#[test]
+fn other_gh_forms_execute() {
+    for command in [
+        "gh",
+        "gh api repos/owner/name",
+        "gh pr merge 123",
+        "gh pr create --title x",
+        "gh pr view 123 --web",
+        "gh pr view -- x",
+        "gh -R owner/name pr view 123",
+        "gh issue close 123",
+        "gh repo clone owner/name",
+        "gh auth status",
+        "gh run watch 123",
+        "curl https://example.com",
+    ] {
+        assert_closed(command);
+    }
+    // A configured `gh pr view` adds nothing: the built-in path owns the
+    // name. A configured `gh pr status` is honoured: no built-in owns it.
+    let view = [configured("gh pr view", &["--web"])];
+    assert_closed("gh pr view 123 --web");
+    assert_configured_closed("gh pr view 123 --web", &view);
+    let status = [configured("gh pr status", &["--json="])];
+    assert_configured_reads("gh pr status 123", &status, &["/work/123"]);
+    assert_configured_reads("gh pr status 123 --json number", &status, &["/work/123"]);
+    assert_eq!(
+        classified_with("gh pr status 123 --web", &status)
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
+}
+
+#[test]
 fn find_selection_operators_read() {
     for command in [
         "find . -name \"*.py\" -not -path \"./.git/*\"",
@@ -796,6 +852,15 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git rev-parse", true),
         ("git ls-files", true),
         ("git blame", true),
+        ("gh pr view", false),
+        ("gh pr list", false),
+        ("gh pr diff", false),
+        ("gh pr checks", false),
+        ("gh issue view", false),
+        ("gh issue list", false),
+        ("gh repo view", false),
+        ("gh run list", false),
+        ("gh run view", false),
     ];
     assert_eq!(COMMANDS.len(), stated.len());
     for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {
