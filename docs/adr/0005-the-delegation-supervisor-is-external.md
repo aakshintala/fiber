@@ -51,10 +51,12 @@ Fiber ships no MCP server for delegating to Fiber. The supervisor that spawns de
 several at once, waits on them, cancels them and runs verification gates lives
 outside Fiber, in a tool that wraps both `fiber` and `cursor-agent`.
 
-Fiber's entire obligation to the delegation slot is being cleanly wrappable:
-no tty required, no terminal escape codes on stdout, the session id on the
-first line, a documented and versioned event stream, stable exit codes, and a
-workspace path it runs in rather than creates.
+Fiber's entire obligation to the delegation slot is a hub the supervisor
+drives as a client, as the terminal does: a session started with no tty in a
+workspace path it is given rather than creates, the session id in the answer,
+prompts, steering and replies as driver commands, a documented and versioned
+event stream, and `close` to end it
+([Door A](https://github.com/aakshintala/fiber/issues/2852)).
 
 Fiber is an MCP client, consuming tool servers, and that client is built in
 ([ADR 0008](0008-the-mcp-client-is-built-in.md)). This decision is only about

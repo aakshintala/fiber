@@ -28,6 +28,12 @@ nothing installed, not because it has a power another client lacks. The hub
 serves no UI, and which other clients are first-party is decided by the
 application that needs them, not by the hub.
 
+A program that drives sessions, such as a delegation supervisor ("The
+delegation supervisor is external"), is a client of the hub too, and does not
+use `fiber ask`. It starts a session with the hub's `start` command, drives it
+with the commands in "Driver commands", and leaves the way every client does
+("Lifecycle").
+
 A session started by the hub and a session started by `fiber ask` are the same
 program. Both run the internal session command; `ask` runs it with its prompt
 already supplied and no more coming. There is no second execution path, as
@@ -352,7 +358,7 @@ answer an interaction or steer mid-run. That costs nothing, because
 attached and no answer possible, escalation is a block and the run continues
 under the rule above until it exhausts the block budget" — and cancelling is a
 signal, not a command. A program that wants to talk back is a client of the
-hub, as the terminal is.
+hub, as the terminal is ("Two doors").
 
 ## Driver commands
 
@@ -1420,15 +1426,16 @@ delegates are `docs/delegates.md`. The rationale is
 [ADR 0005](adr/0005-the-delegation-supervisor-is-external.md). Fiber is an
 MCP client, consuming MCP servers, and that is `docs/mcp.md`.
 
-What Fiber owes the delegation slot instead is being cleanly wrappable, and
-that is the whole of it:
+What Fiber owes the delegation slot instead is a hub a supervisor can drive
+as a client ("Two doors"), and that is the whole of it:
 
-- start non-interactively with a prompt, with no tty,
-- put no escape codes on stdout,
-- announce the session id on the first line,
-- emit a documented, versioned event stream,
-- exit with a stable code,
-- run in a workspace path it is given rather than one it makes.
+- start a session with no tty, through the hub's `start`, in a workspace path
+  it is given rather than one it makes, and answer with the session id,
+- take its prompts, steering, cancelling and replies as driver commands
+  ("Driver commands"),
+- serve a documented, versioned event stream to a client that subscribes
+  (`docs/events.md`),
+- end the session on `close` ("Lifecycle").
 
 Everything a supervisor does beyond that — tracking several jobs, waiting on
 any or all of them, running a verification gate afterwards, reporting a git
