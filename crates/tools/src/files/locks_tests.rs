@@ -8,21 +8,6 @@ use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-#[track_caller]
-fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        while !pred() {
-            thread::yield_now();
-        }
-        done.send(()).unwrap();
-    });
-    assert!(
-        Deadline::after(DEADLINE).recv(&finished).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 /// No path is held and nobody is waiting, read under one lock of the state.
 fn nothing_held_or_waiting(locks: &PathLocks) -> bool {
     let state = super::guard(&locks.state);
@@ -110,7 +95,11 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
         drop(guard);
     });
     let probe = Arc::clone(&locks);
-    wait_until("a second lock to be waiting", move || probe.waiting() == 1);
+    fakes::wait_until(
+        "a second lock to be waiting",
+        Deadline::after(DEADLINE),
+        move || probe.waiting() == 1,
+    );
     assert!(
         entered_rx.try_recv().is_err(),
         "the second lock acquired the path while it was held"
@@ -173,7 +162,11 @@ fn a_dyn_hold_blocks_a_second_hold_on_the_same_path() {
         });
     });
     let probe = Arc::clone(&locks);
-    wait_until("a second hold to be waiting", move || probe.waiting() == 1);
+    fakes::wait_until(
+        "a second hold to be waiting",
+        Deadline::after(DEADLINE),
+        move || probe.waiting() == 1,
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the second hold ran while the first held the path"
@@ -277,9 +270,11 @@ fn an_alias_contends_with_the_built_in_key() {
             });
         });
         let probe = Arc::clone(&locks);
-        wait_until("a hold through an alias to be waiting", move || {
-            probe.waiting() == 1
-        });
+        fakes::wait_until(
+            "a hold through an alias to be waiting",
+            Deadline::after(DEADLINE),
+            move || probe.waiting() == 1,
+        );
         assert!(
             done_rx.try_recv().is_err(),
             "the hold through the alias ran while the built-in key was held"

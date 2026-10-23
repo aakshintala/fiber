@@ -391,7 +391,7 @@ fn a_switch_to_a_scripted_model_from_another_session_is_rejected_with_one_line()
         Err(rejection) => rejection,
     };
     assert_eq!(rejection.code, contract::ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, crate::scripted::START_ONLY);
+    assert_eq!(rejection.message, extensions::START_ONLY);
     assert_eq!(switch_lines(&root.path().join("home")).len(), 1);
 }
 

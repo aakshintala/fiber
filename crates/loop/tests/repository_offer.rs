@@ -22,11 +22,11 @@ use std::time::Duration;
 use contract::clock::Clock;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
-    Clients, Decision, Event, ExtensionExec, OfferDecision, OfferedItem, OfferedKind,
+    Clients, Decision, Event, ExtensionExec, FiberExited, OfferDecision, OfferedItem, OfferedKind,
 };
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
-use contract::shapes::{Failure, Process};
+use contract::shapes::{Failure, Process, Usage};
 use contract::{Envelope, ErrorCode, RequestId};
 use fakes::Deadline;
 use fakes::Scripted;
@@ -157,6 +157,13 @@ fn session(code: &Arc<Fake>, clients: Option<u32>, script: Vec<Scripted>) -> Ses
 
 #[track_caller]
 fn ended(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) -> Result<(), r#loop::Error> {
+    Deadline::after(DEADLINE)
+        .recv(finished)
+        .expect("run ended in time")
+}
+
+/// The run `finished` reports, with its summary: what `fiber_exited` reads.
+fn ran(finished: &mpsc::Receiver<r#loop::Ran>) -> r#loop::Ran {
     Deadline::after(DEADLINE)
         .recv(finished)
         .expect("run ended in time")
@@ -760,7 +767,10 @@ fn waiting_on_an_offer_is_idle() {
     session.looped = Some(session.looped.take().unwrap().idle_exit(Some(delay)));
     let clock = Arc::clone(&session.clock);
     let watcher = session.log.watch();
-    let finished = spawn_run(&mut session);
+    // The run's summary, not the log, feeds the exit below.
+    let looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(looped.run()).unwrap());
     // The offer's idle clock starts when it is raised, not when the idle
     // wait before the prompt began.
     clock.advance_when_parked(
@@ -797,7 +807,10 @@ fn waiting_on_an_offer_is_idle() {
         &Deadline::after(DEADLINE),
     );
     session.inbox.send(Delivery::Cancelled).unwrap();
-    ended(&finished).unwrap();
+    let run = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run ended in time");
+    run.result.unwrap();
     let kinds = durable_kinds(&session);
     assert!(!kinds.iter().any(|k| k == "repository_code_resolved"));
     assert!(!kinds.iter().any(|k| k == "preamble_built"));
@@ -808,7 +821,7 @@ fn waiting_on_an_offer_is_idle() {
         ),
         "the prompt's ack is dropped uncalled"
     );
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(&session.log, &run.summary, Ok(()), false, None).unwrap();
     let exited = durable(&session, "fiber_exited");
     assert_eq!(exited[0].payload["suspended_on"], request.0.as_str());
     // The complete, ordered durable kinds: the offer waits, then the idle
@@ -921,10 +934,33 @@ impl support::History {
         r#loop::fiber_started(&self.log, "0.0.0", resumed).unwrap();
     }
 
-    /// The process exits as `main` ends one, after `ran`.
-    fn exit_process(&self, ran: Result<(), Failure>) -> Value {
-        r#loop::fiber_exited(&self.log, &self.dir, ran, false, None).unwrap();
-        let exited = log::read(&self.dir)
+    /// The process exits as `main` ends one, after the run `summary`
+    /// folds: the exit over the live loop's own lines.
+    fn exit_process(&self, summary: &r#loop::Summary, ran: Result<(), Failure>) -> Value {
+        r#loop::fiber_exited(&self.log, summary, ran, false, None).unwrap();
+        Self::exited_payload(&self.dir)
+    }
+
+    /// A hand-built process's exit line, suspending on `suspended`: the
+    /// fixture an earlier process left behind for the next resume to read.
+    /// The exit's computation over live lines is covered beside the
+    /// summary (`crates/loop/src/process_tests.rs`), with the same event
+    /// patterns these fixtures build; here only the fixture line matters.
+    fn exit_fixture(&self, suspended: Option<&str>) -> Value {
+        let exited = Event::FiberExited(FiberExited {
+            exit_code: 0,
+            usage: Usage::default(),
+            final_message: None,
+            error: None,
+            suspended_on: suspended.map(|suspended| RequestId(suspended.into())),
+            questions: None,
+        });
+        self.log.append(&exited, None, None).unwrap();
+        Self::exited_payload(&self.dir)
+    }
+
+    fn exited_payload(dir: &std::path::Path) -> Value {
+        let exited = log::read(dir)
             .unwrap()
             .into_iter()
             .rfind(|line| line.kind == "fiber_exited")
@@ -989,7 +1025,7 @@ impl support::History {
     fn exited_on_offer(&self, request: &str, items: &[Unapproved]) {
         self.start_process(false);
         self.write(&offered_event(request, items), None, None);
-        let exited = self.exit_process(Ok(()));
+        let exited = self.exit_fixture(Some(request));
         assert_eq!(exited["suspended_on"], request);
     }
 
@@ -1038,7 +1074,7 @@ impl support::History {
             Some("a_1"),
         );
         self.write(&standing_ask(), Some("t_1"), Some("a_1"));
-        let exited = self.exit_process(Ok(()));
+        let exited = self.exit_fixture(Some("r_9"));
         assert_eq!(exited["suspended_on"], "r_9");
     }
 }
@@ -1075,11 +1111,11 @@ fn standing_ask() -> Event {
     })
 }
 
-fn run_on(looped: Loop) -> mpsc::Receiver<Result<(), r#loop::Error>> {
+fn run_on(looped: Loop) -> mpsc::Receiver<r#loop::Ran> {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        let result = looped.run();
-        done.send(result).unwrap();
+        let ran = looped.run();
+        done.send(ran).unwrap();
     });
     finished
 }
@@ -1102,8 +1138,12 @@ fn reply_on(
     rx
 }
 
-fn finished_ok(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) {
-    ended(finished).unwrap();
+/// The run `finished` reports, asserting it ended well: what
+/// `fiber_exited` reads.
+fn finished_ok(finished: &mpsc::Receiver<r#loop::Ran>) -> r#loop::Ran {
+    let run = ran(finished);
+    run.result.as_ref().unwrap();
+    run
 }
 
 #[test]
@@ -1125,14 +1165,15 @@ fn a_pending_offer_is_raised_again_before_any_prompt_when_a_client_is_attached()
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "repository_code_resolved");
     inbox.send(Delivery::Close(ignore())).unwrap();
-    finished_ok(&finished);
+    let run = finished_ok(&finished);
     // No suspended turn: nothing was raised or run but the offer.
     assert!(history.of("permission_requested").is_empty());
     assert!(history.of("turn_started").is_empty());
     assert_eq!(history.of("repository_code_offered").len(), 2);
 
     // Resolved after a re-raise, it is not raised by a later resume.
-    history.exit_process(Ok(()));
+    let exited = history.exit_process(&run.summary, Ok(()));
+    assert!(exited.get("suspended_on").is_none());
     code.list.lock().unwrap().clear();
     let watcher = history.log.watch();
     let (looped, inbox) = history.resume(&code, true);
@@ -1194,7 +1235,7 @@ fn a_skip_from_an_earlier_process_holds_for_the_same_content_only() {
         history.start_process(false);
         history.write(&offered_event("r_1", &[server("a")]), None, None);
         history.write(&resolved_event("r_1", &[Skip]), None, None);
-        history.exit_process(Ok(()));
+        history.exit_fixture(None);
         history.clients(1);
         let watcher = history.log.watch();
         let (looped, inbox) = history.resume(&code, true);
@@ -1288,7 +1329,7 @@ fn an_offer_already_resolved_is_not_raised_again() {
     history.start_process(false);
     history.write(&offered_event("r_1", &[server("a")]), None, None);
     history.write(&resolved_event("r_1", &[Approve]), None, None);
-    history.exit_process(Ok(()));
+    history.exit_fixture(None);
     history.clients(1);
     let watcher = history.log.watch();
     let (looped, inbox) = history.resume(&code, true);
@@ -1401,13 +1442,13 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
         .clock
         .advance_when_parked(Some(deadline), None, delay, &Deadline::after(DEADLINE));
     inbox.send(Delivery::Cancelled).unwrap();
-    finished_ok(&finished);
+    let run = finished_ok(&finished);
     let raised = history.of("permission_requested");
     assert_eq!(raised.len(), 2, "the approval is written again");
     assert_eq!(raised[1].payload["request_id"], "r_9");
     assert_eq!(raised[1].turn_id, Some(TurnId("t_1".into())));
     assert_eq!(raised[1].action_id, Some(ActionId("a_1".into())));
-    let exited = history.exit_process(Ok(()));
+    let exited = history.exit_process(&run.summary, Ok(()));
     assert_eq!(exited["suspended_on"], "r_9");
 
     // The next resume raises the offer again, then the approval.
@@ -1456,7 +1497,8 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
         history.exited_on_approval();
         history.clients(1);
         let (looped, inbox) = history.resume(&code, answerable);
-        let error = ended(&run_on(looped)).expect_err("the step fails the run");
+        let run = ran(&run_on(looped));
+        let error = run.result.expect_err("the step fails the run");
         let expected = if answerable {
             ErrorCode::ConfigInvalid
         } else {
@@ -1466,7 +1508,8 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
         drop(inbox);
         let raised = history.of("permission_requested");
         assert_eq!(raised.len(), 2, "the approval is written again");
-        let exited = history.exit_process(Err(failure(error.code(), &error.to_string())));
+        let exited =
+            history.exit_process(&run.summary, Err(failure(error.code(), &error.to_string())));
         assert_eq!(exited["suspended_on"], "r_9");
 
         // Repaired: nothing is left to offer.
@@ -1519,10 +1562,10 @@ fn a_pending_offer_waits_for_a_client_at_the_prompt() {
     assert_eq!(code_of, ErrorCode::StaleRequest);
     inbox.send(delivery("go")).unwrap();
     inbox.send(Delivery::Close(ignore())).unwrap();
-    finished_ok(&finished);
+    let run = finished_ok(&finished);
     assert_eq!(history.of("repository_code_offered").len(), 1);
     assert_eq!(notices(&drain(&mut all)), [skipped("a", "MCP server")]);
-    history.exit_process(Ok(()));
+    history.exit_process(&run.summary, Ok(()));
 
     // A client attached after the loop started and before the prompt sees
     // the same offer raised again at the prompt.
@@ -1578,9 +1621,9 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
             .clock
             .advance_when_parked(Some(deadline), None, delay, &Deadline::after(DEADLINE));
         inbox.send(Delivery::Cancelled).unwrap();
-        finished_ok(&finished);
+        let run = finished_ok(&finished);
         assert!(history.of("repository_code_resolved").is_empty());
-        let exited = history.exit_process(Ok(()));
+        let exited = history.exit_process(&run.summary, Ok(()));
         assert_eq!(exited["suspended_on"], "r_old");
         // The complete, ordered durable kinds: each idle exit leaves the
         // offer for the next resume.

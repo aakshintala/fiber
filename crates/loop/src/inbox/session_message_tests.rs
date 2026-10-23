@@ -709,7 +709,7 @@ impl World {
         let looped = self.looped.take().unwrap();
         let (done, finished) = mpsc::channel();
         let handle = thread::spawn(move || {
-            let _sent = done.send(looped.run());
+            let _sent = done.send(looped.run().result);
         });
         self.runner = Some(handle.thread().id());
         finished

@@ -1657,9 +1657,9 @@ dependencies = [
  "log 0.0.0",
  "loop",
  "mcp",
- "net",
  "picture",
  "provider",
+ "routing",
  "rustix",
  "serde_json",
  "signal-hook",
@@ -2572,6 +2572,18 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "routing"
+version = "0.0.0"
+dependencies = [
+ "config",
+ "contract",
+ "extensions",
+ "fakes",
+ "provider",
+ "serde_json",
 ]
 
 [[package]]
@@ -3842,6 +3854,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "support",
  "thiserror 2.0.21",
 ]
 

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 contract = { path = "../contract" }
+support = { path = "../support" }
 thiserror.workspace = true
 
 [dev-dependencies]

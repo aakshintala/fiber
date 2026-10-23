@@ -472,13 +472,9 @@ fn resolve_reference(
     reference: &str,
 ) -> Result<String, String> {
     let unknown = || format!("Unknown delegate model {reference:?}.");
-    let Some(rest) = reference.strip_prefix("fiber:") else {
+    let Some(resolved) = providers.delegate_model(reference) else {
         return Err(unknown());
     };
-    if !rest.contains('/') {
-        return Err(unknown());
-    }
-    let resolved = providers.resolve(rest).map_err(|_| unknown())?;
     if let Some(level) = resolved.thinking {
         let reference = resolved.reference();
         let mut notices = Vec::new();
