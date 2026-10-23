@@ -3140,3 +3140,219 @@ fn down_leaves_a_focused_rail_alone_with_the_approval_panel_open() {
     press(&mut app, Key::Down);
     assert_eq!(rail_focus(&app), before);
 }
+
+/// `ch` typed as a stroke with no modifier.
+fn char_stroke(ch: char) -> Stroke {
+    plain(Code::Char(ch))
+}
+
+/// Rebinds `delete_session` to `keys` on `app`.
+fn rebind_delete_session(app: &mut App, keys: Value) {
+    let mut user = serde_json::Map::new();
+    user.insert("delete_session".to_owned(), keys);
+    app.set_keys(crate::KeysSetup { user });
+}
+
+/// `A` and `B` live with `A` on screen, the rail focused on `A`'s card.
+fn rail_on_a() -> App {
+    let mut app = opened_in_conversation();
+    framed(&mut app);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    app
+}
+
+/// The frame at the rail tests' size.
+fn shown(app: &App) -> String {
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+#[test]
+fn delete_on_a_focused_live_card_asks_to_stop_it_over_the_conversation() {
+    let mut app = rail_on_a();
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert!(app.quit_open());
+    assert_eq!(
+        app.stop_question(),
+        Some(("fix the parser".to_owned(), false, false))
+    );
+    // The same frame draws the question: nothing else was pressed.
+    let frame = shown(&app);
+    assert!(frame.contains("Stop fix the parser?"), "{frame}");
+    assert!(frame.contains("click a choice"), "{frame}");
+    assert_eq!(app.session().map(|id| id.0.as_str()), Some(A));
+}
+
+#[test]
+fn delete_on_a_focused_card_asks_with_a_draft_and_leaves_it_alone() {
+    let mut app = rail_on_a();
+    for ch in "hi".chars() {
+        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+    }
+    assert_eq!(app.draft(), "hi");
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert!(app.stop_question().is_some());
+    assert_eq!(app.draft(), "hi");
+    // Esc cancels, keeping the draft and the rail's focus.
+    assert_eq!(press(&mut app, Key::Esc), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.draft(), "hi");
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+}
+
+#[test]
+fn enter_on_the_on_screen_card_stops_it_and_goes_home() {
+    let mut app = rail_on_a();
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    let out = sent(press(&mut app, Key::Enter));
+    let closes: Vec<&Value> = out
+        .iter()
+        .filter(|line| line["command"] == "close")
+        .collect();
+    assert_eq!(closes.len(), 1, "{out:?}");
+    assert_eq!(closes[0]["session_id"], A);
+    assert_eq!(closes[0]["args"]["now"], json!(true));
+    assert!(app.session().is_none(), "home");
+    assert!(!app.quit_open());
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn enter_on_another_card_stops_it_and_stays_on_the_screen() {
+    let mut app = rail_on_a();
+    app.set_rail_focus(Spot::Card(key(&app, B)));
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    let out = sent(press(&mut app, Key::Enter));
+    let closes: Vec<&Value> = out
+        .iter()
+        .filter(|line| line["command"] == "close")
+        .collect();
+    assert_eq!(closes.len(), 1, "{out:?}");
+    assert_eq!(closes[0]["session_id"], B);
+    assert_eq!(closes[0]["args"]["now"], json!(true));
+    assert_eq!(on_screen(&app), Some(A));
+    assert_eq!(rail_focus(&app), None);
+    assert!(!app.quit_open());
+}
+
+#[test]
+fn delete_on_a_crashed_card_a_plus_or_a_done_count_opens_nothing() {
+    let mut app = rail_on_a();
+    app.on_line(left(B, "crashed"));
+    framed(&mut app);
+    let b = key(&app, B);
+    for spot in [
+        Spot::Card(b),
+        Spot::Dismiss(b),
+        Spot::Start(key(&app, A)),
+        Spot::Done(key(&app, A)),
+    ] {
+        app.set_rail_focus(spot);
+        assert_eq!(stroke_press(&mut app, plain(Code::Char('h'))), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Backspace)), Effect::None);
+        let draft = app.draft().to_owned();
+        assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+        assert!(!app.quit_open(), "{spot:?}");
+        assert_eq!(app.draft(), draft, "{spot:?}");
+        assert_eq!(rail_focus(&app), Some(spot));
+    }
+}
+
+#[test]
+fn backspace_on_a_focused_rail_edits_the_draft_and_stops_nothing() {
+    let mut app = rail_on_a();
+    for ch in "ab".chars() {
+        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+    }
+    assert_eq!(stroke_press(&mut app, plain(Code::Backspace)), Effect::None);
+    assert_eq!(app.draft(), "a");
+    assert!(!app.quit_open());
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+}
+
+#[test]
+fn delete_with_the_box_focused_edits_the_draft_and_stops_nothing() {
+    let mut app = opened_in_conversation();
+    framed(&mut app);
+    for ch in "abc".chars() {
+        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+    }
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert_eq!(app.draft(), "ac");
+    assert!(!app.quit_open());
+}
+
+#[test]
+fn every_rebound_delete_session_key_stops_the_card_and_the_old_one_does_not() {
+    for bound in ["f7", "f8"] {
+        let mut app = rail_on_a();
+        rebind_delete_session(&mut app, json!(["f7", "f8"]));
+        let stroke = Stroke::parse(bound).unwrap_or_else(|err| panic!("{bound}: {err:?}"));
+        assert_eq!(stroke_press(&mut app, stroke), Effect::None);
+        assert!(app.quit_open(), "{bound} stops");
+        assert_eq!(press(&mut app, Key::Esc), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+        assert!(!app.quit_open(), "physical Delete is no longer bound");
+    }
+}
+
+#[test]
+fn a_rebound_backspace_never_stops_the_card() {
+    let mut app = rail_on_a();
+    rebind_delete_session(&mut app, json!(["backspace"]));
+    for ch in "ab".chars() {
+        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+    }
+    assert_eq!(stroke_press(&mut app, plain(Code::Backspace)), Effect::None);
+    assert_eq!(app.draft(), "a");
+    assert!(!app.quit_open());
+}
+
+#[test]
+fn a_rebound_character_types_on_the_rail_and_stops_on_a_home_row() {
+    let mut app = rail_on_a();
+    rebind_delete_session(&mut app, json!(["x"]));
+    assert_eq!(stroke_press(&mut app, char_stroke('x')), Effect::None);
+    assert_eq!(app.draft(), "x");
+    assert!(!app.quit_open());
+    // On home's list the same key stops the row.
+    let mut app = with(&[A]);
+    rebind_delete_session(&mut app, json!(["x"]));
+    let row = row_key(&app, A);
+    app.focus = Some(TargetId::Home(HomeSpot::Entry(row)));
+    assert_eq!(stroke_press(&mut app, char_stroke('x')), Effect::None);
+    assert!(app.quit_open());
+}
+
+#[test]
+fn unbinding_delete_session_stops_nothing_on_the_rail() {
+    let mut app = rail_on_a();
+    rebind_delete_session(&mut app, json!([]));
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert!(!app.quit_open());
+}
+
+#[test]
+fn the_rail_hint_names_delete() {
+    use crate::app::rail::RAIL_HINT;
+    let app = rail_on_a();
+    assert!(RAIL_HINT.contains("Delete stop"), "{RAIL_HINT}");
+    assert!(shown(&app).contains(RAIL_HINT));
+}
+
+#[test]
+fn a_rebound_shifted_letter_or_space_types_on_the_rail() {
+    for (bound, typed) in [("X", "X"), ("space", " ")] {
+        let mut app = rail_on_a();
+        rebind_delete_session(&mut app, json!([bound]));
+        let stroke = Stroke::parse(bound).unwrap_or_else(|err| panic!("{bound}: {err:?}"));
+        assert_eq!(stroke_press(&mut app, stroke), Effect::None);
+        assert!(!app.quit_open(), "{bound} types");
+        assert_eq!(app.draft(), typed, "{bound}");
+    }
+}
