@@ -2637,31 +2637,49 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
 /// Takes the runner's Job notice and `want` streamed usages in either
 /// order (see #3005): stopping at the first Job would drop the lines
 /// when the reap beats the watcher, and stopping at the lines would
-/// drop the Job when the watcher wins. Both sends are program-ordered
-/// before the caller's assertions; the bound is liveness only.
+/// drop the Job when the watcher wins. One scoped clock driver serves
+/// the take, as [`reported_with_usage_before`]'s does; the bound is
+/// liveness only, the plan's MUST_SUCCEED_WITHIN. The failure names
+/// which half never arrived.
 #[track_caller]
 fn take_report_with_usages(
     rig: &Rig,
     want: usize,
 ) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let clock = Arc::clone(&rig.clock);
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
-    let mut usages = Vec::new();
-    let mut notice = None;
-    while notice.is_none() || usages.len() < want {
-        match deadline.recv(&rig.inbox) {
-            Ok(Delivery::Job(got)) => {
-                if notice.is_none() {
-                    notice = Some(got);
+    thread::scope(|scope| {
+        scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, None));
+        let mut usages = Vec::new();
+        let mut notice = None;
+        while notice.is_none() || usages.len() < want {
+            match deadline.recv(&rig.inbox) {
+                Ok(Delivery::Job(got)) => {
+                    if notice.is_none() {
+                        notice = Some(got);
+                    }
+                }
+                Ok(Delivery::DelegateUsage { session, line }) => {
+                    usages.push((session, line.generation_id.0.clone()));
+                }
+                Ok(other) => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("expected the report or the streamed usage, got {other:?}");
+                }
+                Err(_) => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!(
+                        "the report and the streamed usage never arrived; job={} usages={want} got={}",
+                        notice.is_some(),
+                        usages.len(),
+                    );
                 }
             }
-            Ok(Delivery::DelegateUsage { session, line }) => {
-                usages.push((session, line.generation_id.0.clone()));
-            }
-            Ok(other) => panic!("expected the report or the streamed usage, got {other:?}"),
-            Err(_) => panic!("the report and the streamed usage never arrived"),
         }
-    }
-    (notice.unwrap(), usages)
+        stop.store(true, Ordering::Relaxed);
+        (notice.unwrap(), usages)
+    })
 }
 
 /// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
