@@ -38,9 +38,13 @@ fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/install_fixture")
 }
 
+/// The checked-in stub binary each fixture archive holds, compiled in so
+/// the test reads no repository file at run time.
+static STUB: &[u8] = include_bytes!("install_fixture/fiber");
+
 /// The checked-in stub binary each fixture archive holds.
 fn stub() -> Vec<u8> {
-    fs::read(fixture().join("fiber")).unwrap()
+    STUB.to_vec()
 }
 
 /// Whether `haystack` holds `needle` as bytes.

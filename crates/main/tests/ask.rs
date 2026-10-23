@@ -1876,10 +1876,10 @@ fn the_providers_reviewer_model_decides_a_reviewed_call() {
 }
 
 /// One recorded probe exchange as a fake-server response: the stream's
-/// bytes, or the recorded error status with its body.
-fn probe(path: &str, label: &str) -> Response {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let exchanges = probes::read(&root.join(path)).unwrap();
+/// bytes, or the recorded error status with its body. `bytes` is the
+/// compiled-in probe file named `name`, whose extension picks the decoding.
+fn probe(name: &str, bytes: &[u8], label: &str) -> Response {
+    let exchanges = probes::parse(name, bytes).unwrap();
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains(label))
@@ -1895,11 +1895,13 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
-            "research/anthropic-messages-probe/raw/stream.json",
+            "stream.json",
+            include_bytes!("../../../research/anthropic-messages-probe/raw/stream.json"),
             "stream tool use",
         ),
         probe(
-            "research/anthropic-messages-probe/raw/stream.json",
+            "stream.json",
+            include_bytes!("../../../research/anthropic-messages-probe/raw/stream.json"),
             "stream plain text",
         ),
     ])
@@ -1962,11 +1964,13 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
-            "research/openai-responses-probe/raw/probe.json",
+            "probe.json",
+            include_bytes!("../../../research/openai-responses-probe/raw/probe.json"),
             "tool no strict",
         ),
         probe(
-            "research/openai-responses-probe/raw/probe.json",
+            "probe.json",
+            include_bytes!("../../../research/openai-responses-probe/raw/probe.json"),
             "instructions #1",
         ),
     ])
@@ -2076,11 +2080,17 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
-            "research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json",
+            "id-emitted-gemini-3.1-flash-lite.json",
+            include_bytes!(
+                "../../../research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json"
+            ),
             "id-emitted",
         ),
         probe(
-            "research/google-generative-ai-probe/raw/sse2-stream-ok.json",
+            "sse2-stream-ok.json",
+            include_bytes!(
+                "../../../research/google-generative-ai-probe/raw/sse2-stream-ok.json"
+            ),
             "sse2-stream-ok",
         ),
     ])

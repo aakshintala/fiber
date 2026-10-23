@@ -4,7 +4,8 @@
 
 #![allow(
     clippy::unwrap_used,
-    reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
+    clippy::panic,
+    reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a panic fails the drift test, which is the test's failure"
 )]
 
 use std::os::unix::process::CommandExt as _;
@@ -146,15 +147,64 @@ fn models_dev(dir: &TempDir, args: &[&str]) -> (i32, String) {
     (output.status.code().unwrap(), text)
 }
 
-/// The committed file `path` (from the repository root): through the
-/// first-party packages directory, so this file reads one.
+/// The committed contents of every `GENERATED` file, compiled in so
+/// the drift test reads no repository file at run time: the ten
+/// first-party package rows, then the in-crate snapshot row.
+static COMMITTED: &[(&str, &[u8])] = &[
+    (
+        "providers/anthropic/providers/anthropic.json",
+        include_bytes!("../../providers/anthropic/providers/anthropic.json"),
+    ),
+    (
+        "providers/bedrock/providers/bedrock.json",
+        include_bytes!("../../providers/bedrock/providers/bedrock.json"),
+    ),
+    (
+        "providers/codex/providers/codex.json",
+        include_bytes!("../../providers/codex/providers/codex.json"),
+    ),
+    (
+        "providers/databricks/thinking.lua",
+        include_bytes!("../../providers/databricks/thinking.lua"),
+    ),
+    (
+        "providers/gemini/providers/gemini.json",
+        include_bytes!("../../providers/gemini/providers/gemini.json"),
+    ),
+    (
+        "providers/muse/providers/muse.json",
+        include_bytes!("../../providers/muse/providers/muse.json"),
+    ),
+    (
+        "providers/openai/providers/openai.json",
+        include_bytes!("../../providers/openai/providers/openai.json"),
+    ),
+    (
+        "providers/opencode/providers/opencode-go.json",
+        include_bytes!("../../providers/opencode/providers/opencode-go.json"),
+    ),
+    (
+        "providers/opencode/providers/opencode-zen.json",
+        include_bytes!("../../providers/opencode/providers/opencode-zen.json"),
+    ),
+    (
+        "providers/vertex/providers/vertex.json",
+        include_bytes!("../../providers/vertex/providers/vertex.json"),
+    ),
+    (
+        "xtask/tests/models-dev.json",
+        include_bytes!("models-dev.json"),
+    ),
+];
+
+/// The committed contents of `path` (a `GENERATED` entry).
 fn committed(path: &str) -> String {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let file = match path.strip_prefix("providers/") {
-        Some(rest) => manifest.join("../providers").join(rest),
-        None => manifest.join(path.strip_prefix("xtask/").unwrap_or(path)),
-    };
-    std::fs::read_to_string(&file).unwrap()
+    let bytes = COMMITTED
+        .iter()
+        .find(|(entry, _)| *entry == path)
+        .unwrap_or_else(|| panic!("unknown generated file {path}"))
+        .1;
+    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 #[test]

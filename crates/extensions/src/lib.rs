@@ -79,6 +79,9 @@ mod startable;
 mod test_support;
 #[cfg(test)]
 mod timing_tests;
+mod tui_vm;
+#[cfg(test)]
+mod tui_vm_tests;
 mod update;
 
 use std::io;
@@ -123,6 +126,7 @@ pub use repository::{
 };
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
+pub use tui_vm::{Span, TuiVm};
 pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks
@@ -523,6 +527,26 @@ pub enum Error {
     /// A `credential()` call failed. Only from [`LuaProvider::fetch_token`].
     #[error(transparent)]
     Credential(Box<Error>),
+    /// A TUI extension's renderer raised a Lua error
+    /// (`docs/tui.md`, "When an extension fails"). A Lua error while the
+    /// extension loads is [`Error::Lua`].
+    #[error("{0}")]
+    TuiLua(String),
+    /// A TUI extension's callback passed its declared timeout.
+    #[error("the callback passed its timeout")]
+    TuiTimeout,
+    /// An earlier timeout switched a TUI extension's VM off.
+    #[error("the extension is switched off until /reload")]
+    TuiOff,
+    /// A TUI extension registered no such slot.
+    #[error("the extension registers no slot `{0}`")]
+    TuiNoSlot(String),
+    /// A TUI renderer returned the wrong shape, or was given one.
+    #[error("wrong shape: {0}")]
+    TuiShape(String),
+    /// `fiber.slot` refused a registration.
+    #[error("{0}")]
+    TuiRegistration(String),
     /// A `repository_extensions` path that is not a package directory inside
     /// the repository.
     #[error("`repository_extensions` path `{path}` {why}.")]
@@ -588,7 +612,14 @@ impl Error {
             | Self::Abandoned { .. }
             | Self::UnknownCallback { .. }
             | Self::BadReturn { .. }
-            | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
+            | Self::Stopped { .. }
+            | Self::TuiTimeout
+            | Self::TuiOff
+            | Self::TuiNoSlot(_)
+            | Self::TuiRegistration(_) => ErrorCode::ExtensionFailed,
+            // A renderer that errored or returned the wrong shape
+            // (`docs/errors.md`, `hook_failed`).
+            Self::TuiLua(_) | Self::TuiShape(_) => ErrorCode::HookFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. }
             | Self::ModelMissing { .. }
