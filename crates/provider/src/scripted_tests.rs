@@ -111,10 +111,11 @@ fn request(text: &str) -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: vec![contract::provider::Input::User {
+        conversation: (vec![contract::provider::Input::User {
             text: text.into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,

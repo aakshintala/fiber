@@ -2422,7 +2422,7 @@ fn probe() -> ModelRequest {
         tool_choice: "none".to_owned(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "probe".to_owned(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,

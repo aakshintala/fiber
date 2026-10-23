@@ -375,7 +375,7 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
         "the next turn sent a request"
     );
     for request in provider.requests().iter().skip(1) {
-        for input in &request.conversation {
+        for input in request.conversation.iter() {
             if let Input::User { text, .. } = input {
                 assert!(!text.contains("j_win"), "a stopped job is named: {text}");
             }
@@ -500,13 +500,13 @@ fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
     let after = session.provider.requests();
     assert_eq!(after.len(), requests.len() + 1);
     let request = after.last().unwrap();
-    let mut expected = last.conversation.clone();
+    let mut expected = last.conversation.to_vec();
     expected.push(Input::Assistant {
         model: MODEL.into(),
         text: "two-done".into(),
         provider_item: None,
     });
-    assert_eq!(&request.conversation[..expected.len()], expected.as_slice());
+    assert_eq!(&request.conversation[..expected.len()], &expected[..]);
     assert_eq!(request.conversation.len(), expected.len() + 1);
     assert!(
         matches!(request.conversation.last().unwrap(), Input::User { text, .. } if text.contains("two"))
@@ -588,7 +588,7 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
     let _b = run_turn(b, &tx, "four");
     assert_eq!(
         &resumed_provider.requests()[0].conversation[..request.conversation.len()],
-        request.conversation.as_slice()
+        &request.conversation[..]
     );
 }
 
@@ -1778,7 +1778,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         assert_eq!(kinds(&lines[before..=summary_end]), expected);
         assert_eq!(lines[summary_end].payload["outcome"], outcome);
         assert!(lines.iter().all(|line| line.kind != "rewound"));
-        let mut conversation = last.conversation.clone();
+        let mut conversation = last.conversation.to_vec();
         conversation.push(Input::Assistant {
             model: MODEL.into(),
             text: "two-done".into(),
@@ -1789,8 +1789,8 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
             images: vec![],
         });
         assert_eq!(
-            session.provider.requests().last().unwrap().conversation,
-            conversation
+            &session.provider.requests().last().unwrap().conversation[..],
+            &conversation[..]
         );
         assert_eq!(
             session.provider.requests().last().unwrap().previous_end,
@@ -1845,7 +1845,7 @@ fn failed_summary_tool_calls_are_absent_on_resume_too() {
     let request = &provider.requests()[0];
     assert_eq!(
         &request.conversation[..live.conversation.len()],
-        live.conversation.as_slice()
+        &live.conversation[..]
     );
     assert_eq!(request.previous_end, Some(live.conversation.len()));
 }
@@ -1863,7 +1863,7 @@ fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
     drop(run_turn(looped, &tx, "next"));
     let request = &provider.requests()[0];
     assert_eq!(request.previous_end, Some(last.conversation.len()));
-    let mut expected = last.conversation;
+    let mut expected = last.conversation.to_vec();
     expected.push(Input::Assistant {
         model: MODEL.into(),
         text: "two-done".into(),
@@ -1873,7 +1873,7 @@ fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
         text: "next".into(),
         images: vec![],
     });
-    assert_eq!(request.conversation, expected);
+    assert_eq!(&request.conversation[..], &expected[..]);
 }
 
 #[test]
@@ -1971,7 +1971,7 @@ fn the_reviewer_sees_no_failed_summary_live_or_resumed() {
         .unwrap();
         assert_eq!(replay.requests.len(), 2);
         assert_eq!(replay.requests[0].1.conversation, requests[0].conversation);
-        let mut conversation = requests[0].conversation.clone();
+        let mut conversation = requests[0].conversation.to_vec();
         for input in &mut conversation {
             if let Input::User { text, .. } = input {
                 *text = text.replace(session.workspace.to_str().unwrap(), "<workspace>");
@@ -2023,7 +2023,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let reviewer = session.reviewer(vec![Scripted::text("allow")]);
     session.inbox.send(delivery("after crash")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let mut live = reviewer.requests()[0].conversation.clone();
+    let mut live = reviewer.requests()[0].conversation.to_vec();
     // The last two messages describe only the current call and review stage.
     live.truncate(live.len() - 2);
     assert!(
@@ -2036,7 +2036,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let request = &session.provider.requests()[3];
     assert_eq!(
         &request.conversation[..last.conversation.len()],
-        last.conversation.as_slice()
+        &last.conversation[..]
     );
     assert!(request.conversation.iter().all(
         |input| !matches!(input, Input::Assistant { text, .. } if text == "incomplete summary")
@@ -2055,7 +2055,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     session.inbox.send(delivery("later prompt")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let rebuilt = reviewer.requests()[0].conversation.clone();
-    assert_eq!(&rebuilt[..live.len()], live.as_slice());
+    assert_eq!(&rebuilt[..live.len()], &live[..]);
     assert!(
         rebuilt
             .iter()

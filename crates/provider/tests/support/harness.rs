@@ -33,10 +33,11 @@ pub(crate) fn request() -> ModelRequest {
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "hi".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         session_dir: std::path::PathBuf::new(),
     }
 }

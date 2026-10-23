@@ -195,7 +195,7 @@ impl Loop {
             tool_choice: built.tool_choice.clone(),
             cache_lifetime: built.cache_lifetime,
             cache_key: self.cache_key.clone(),
-            conversation,
+            conversation: conversation.into(),
             previous_end: self.sent,
             max_output_tokens: None,
             session_dir: self.log.dir().to_path_buf(),
