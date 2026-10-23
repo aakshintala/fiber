@@ -5481,9 +5481,8 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
 
     // The resume reports exactly the appended lines: the orphan marking
     // and the delegate's full final log in order.
-    finished
-        .recv()
-        .expect("the resume reports within the deadline")
+    deadline
+        .recv_or_fail(&finished, "the resume to report")
         .unwrap();
     assert_eq!(
         history.new_kinds(),
@@ -5525,9 +5524,8 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
     drop(delegate);
     advance_retry(&history, &deadline);
 
-    finished
-        .recv()
-        .expect("the resume reports within the deadline")
+    deadline
+        .recv_or_fail(&finished, "the resume to report")
         .unwrap();
     assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
     let found = copies_of(&history.new_lines(), "g_1");

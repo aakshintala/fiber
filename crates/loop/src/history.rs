@@ -259,10 +259,10 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         ledger.record(recorded);
     } else if let Event::DelegateStarted(started) = &event {
         // The job-to-session map the orphan backfill resolves through:
-        // every Fiber-harness start in the chain, whatever segment holds
-        // it. Another harness names its own id, and a missing line means
-        // no mapping: both resolve to skip-and-continue at backfill.
-        if started.harness == "fiber" {
+        // the own segment's Fiber-harness starts. Another harness names
+        // its own id, and a missing line means no mapping: both resolve to
+        // skip-and-continue at backfill.
+        if pass.own_segment && started.harness == "fiber" {
             pass.delegate_sessions
                 .insert(started.job_id.clone(), started.delegate_session_id.clone());
         }
