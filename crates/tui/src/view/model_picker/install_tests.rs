@@ -9,36 +9,13 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
 use super::super::{body, draw, model_fit, page_step};
-use crate::catalogue::{Catalogue, ModelEntry};
 use crate::configure::{Configure, ConfigureError, LoginNeed, ProviderInstall};
 use crate::configure_fake::Fake;
+use crate::model_picker::fixtures::catalogue;
 use crate::model_picker::{InstallStart, Mode, ModelPicker, PickerCtx, PickerView};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
 use crate::theme::Role;
-
-fn entry(reference: &str) -> ModelEntry {
-    let (provider, id) = reference.split_once('/').unwrap();
-    ModelEntry {
-        reference: reference.to_owned(),
-        provider: provider.to_owned(),
-        id: id.to_owned(),
-        levels: Vec::new(),
-        default_level: None,
-        configured: None,
-        roles: Vec::new(),
-        name: None,
-        price: None,
-    }
-}
-
-fn catalogue(models: &[&str], installable: &[&str]) -> Catalogue {
-    Catalogue {
-        models: models.iter().map(|model| entry(model)).collect(),
-        installable: installable.iter().map(|name| (*name).to_owned()).collect(),
-        ..Catalogue::default()
-    }
-}
 
 /// An open choosing picker over `models` with `installable` not installed.
 fn picker(models: &[&str], installable: &[&str]) -> ModelPicker {
@@ -361,13 +338,17 @@ fn a_blank_row_sets_the_first_row_off_from_the_sections_and_none_from_the_second
 }
 
 #[test]
-fn rows_keep_the_catalogues_order() {
+fn each_provider_gets_one_row_below_the_models() {
     let picker = picker(&["acme/m1"], &["anthropic", "openai", "zeta"]);
     let text = screen(&picker, 100, 30);
-    let at = |name: &str| find_row(&text, name).0;
-    assert!(at("anthropic") < at("openai"));
-    assert!(at("openai") < at("zeta"));
-    assert!(at("m1") < at("anthropic"));
+    for name in ["anthropic", "openai", "zeta"] {
+        let rows = text
+            .lines()
+            .filter(|line| line.contains(&format!("{name} · not installed")))
+            .count();
+        assert_eq!(rows, 1, "{name}: {text}");
+        assert!(find_row(&text, "m1").0 < find_row(&text, name).0, "{text}");
+    }
 }
 
 #[test]

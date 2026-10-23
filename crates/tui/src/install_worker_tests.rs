@@ -86,22 +86,14 @@ fn a_failed_install_posts_its_error() {
 #[test]
 fn a_gated_install_posts_nothing_until_released() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let gate = fake.gate_install();
+    let (gate, waiting) = fake.gate_install();
     let (tx, rx) = mpsc::channel();
     start(job(&fake, "openai"), clock(), tx);
     // The install is on its thread and waits on the gate: the loop's
     // channel stays empty.
-    fakes::within("the install to reach the gate", Deadline::after(WAIT), {
-        let fake = Arc::clone(&fake);
-        move || {
-            let (_pace_tx, pace) = mpsc::channel::<()>();
-            while fake.installs().is_empty() {
-                Deadline::after(Duration::from_millis(1))
-                    .recv(&pace)
-                    .unwrap_or(());
-            }
-        }
-    });
+    Deadline::after(WAIT)
+        .recv(&waiting)
+        .unwrap_or_else(|err| panic!("waited {WAIT:?} for the install to reach the gate: {err}"));
     assert!(rx.try_recv().is_err());
     gate.send(Ok(answered("released"))).unwrap();
     assert_eq!(next(&rx), ("openai".to_owned(), Ok(answered("released"))));

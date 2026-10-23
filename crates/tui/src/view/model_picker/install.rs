@@ -9,7 +9,7 @@ use ratatui::text::Span;
 use super::overlay::Row;
 use super::{gutter, id_spans};
 use crate::format::width as cells;
-use crate::model_picker::{InstallRow, Outcome, Progress};
+use crate::model_picker::{InstallRow, Outcome, Progress, credential_text};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::text::{cut, to_u16};
@@ -102,32 +102,13 @@ pub(super) fn outcome_rows(outcomes: &[Outcome]) -> Vec<Row> {
             rows.push(plain(cut(line, TEXT_MAX, "…")));
         }
         for need in &outcome.login {
+            let text = cut(&credential_text(need), TEXT_MAX, "…");
             rows.push(match &need.error {
-                None => plain(cut(
-                    &format!(
-                        "{0} needs a credential: run `fiber login {0}`",
-                        need.provider
-                    ),
-                    TEXT_MAX,
-                    "…",
-                )),
-                Some(error) => Row {
+                None => plain(text),
+                Some(_) => Row {
                     spans: vec![
                         Span::raw(INDENT.to_owned()),
-                        Span::styled(
-                            format!(
-                                "✗ {}",
-                                cut(
-                                    &format!(
-                                        "{}'s credential could not be read: {error}",
-                                        need.provider
-                                    ),
-                                    TEXT_MAX,
-                                    "…"
-                                )
-                            ),
-                            Style::new().fg(Role::Error.color()),
-                        ),
+                        Span::styled(format!("✗ {text}"), Style::new().fg(Role::Error.color())),
                     ],
                     right: Vec::new(),
                     targets: Vec::new(),

@@ -112,6 +112,13 @@ pub(crate) type Switched = (ToolGroup, String, SwitchScope, bool);
 /// whether on.
 pub(crate) type SkillSwitched = (PathBuf, String, SwitchScope, bool);
 
+/// One install held at a gate: it signals on `entered` once its call is
+/// recorded and waits on `answer`.
+pub(crate) struct InstallGate {
+    answer: std::sync::mpsc::Receiver<Result<crate::ProviderInstall, ConfigureError>>,
+    entered: std::sync::mpsc::Sender<()>,
+}
+
 /// A seam over rows in memory.
 pub(crate) struct Fake {
     /// What `settings` answers.
@@ -182,11 +189,11 @@ pub(crate) struct Fake {
     pub(crate) install_threads: Mutex<Vec<std::thread::ThreadId>>,
     /// What an ungated install answers.
     pub(crate) install_answer: Mutex<Result<crate::ProviderInstall, ConfigureError>>,
-    /// Gates queued for the next installs: each install takes one and waits
-    /// on it. A test ending drops its sender and releases the install, as
-    /// `FakeLogin` does, so a failed test cannot retain a worker forever.
-    pub(crate) install_gates:
-        Mutex<Vec<std::sync::mpsc::Receiver<Result<crate::ProviderInstall, ConfigureError>>>>,
+    /// Gates queued for the next installs: each install takes one, signals
+    /// it has reached it, and waits on it. A test ending drops its sender
+    /// and releases the install, as `FakeLogin` does, so a failed test
+    /// cannot retain a worker forever.
+    pub(crate) install_gates: Mutex<Vec<InstallGate>>,
     /// Every reviewer read asked for, in order: the provider name.
     pub(crate) reviewer_reads: Mutex<Vec<String>>,
     /// The threads reviewer reads ran on, in order: discovery never runs
@@ -371,16 +378,24 @@ impl Fake {
             .unwrap_or_default()
     }
 
-    /// Queues a gate for the next install, returning its answer sender:
-    /// the install waits until the test answers or drops it.
+    /// Queues a gate for the next install, returning its answer sender and
+    /// the signal that the install is waiting: the install waits until the
+    /// test answers or drops the sender.
     pub(crate) fn gate_install(
         &self,
-    ) -> std::sync::mpsc::Sender<Result<crate::ProviderInstall, ConfigureError>> {
+    ) -> (
+        std::sync::mpsc::Sender<Result<crate::ProviderInstall, ConfigureError>>,
+        std::sync::mpsc::Receiver<()>,
+    ) {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (entered, waiting) = std::sync::mpsc::channel();
         if let Ok(mut gates) = self.install_gates.lock() {
-            gates.push(rx);
+            gates.push(InstallGate {
+                answer: rx,
+                entered,
+            });
         }
-        tx
+        (tx, waiting)
     }
 
     /// Queues a gate for the next reviewer read, returning its answer
@@ -514,8 +529,10 @@ impl Configure for Fake {
             .lock()
             .ok()
             .and_then(|mut gates| gates.pop());
-        if let Some(rx) = gate {
-            return rx
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap_or(());
+            return gate
+                .answer
                 .recv()
                 .unwrap_or_else(|_| panic!("the install was never answered"));
         }

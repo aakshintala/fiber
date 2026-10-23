@@ -863,7 +863,7 @@ impl App {
                 }
             }
             Landed::Notice(text) => self.push_notice(&code, text),
-            Landed::Shown | Landed::Ignored => {}
+            Landed::Nothing => {}
         }
     }
 

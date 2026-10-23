@@ -52,13 +52,12 @@ pub(crate) enum Landed {
         /// Each notice's code and text.
         notices: Vec<(&'static str, String)>,
     },
-    /// The install failed and the open picker shows it on the row.
-    Shown,
     /// The install failed with the picker not showing the rows: the
     /// notice text.
     Notice(String),
-    /// No install of that provider was running: nothing changed.
-    Ignored,
+    /// Nothing to tell the loop: no install of that provider was running,
+    /// or the open picker shows the failure on the row.
+    Nothing,
 }
 
 /// One place the focus can sit: a model by catalogue index, or a
@@ -157,7 +156,7 @@ impl Installs {
             .iter()
             .position(|(name, progress)| *name == provider && *progress == Progress::Installing)
         else {
-            return Landed::Ignored;
+            return Landed::Nothing;
         };
         let clean = controls_to_space(&provider);
         match result {
@@ -196,7 +195,7 @@ impl Installs {
                     if let Some(entry) = self.entries.get_mut(at) {
                         entry.1 = Progress::Failed(message);
                     }
-                    Landed::Shown
+                    Landed::Nothing
                 } else {
                     self.entries.remove(at);
                     Landed::Notice(format!("Installing {clean} failed: {message}"))
@@ -211,21 +210,26 @@ fn first_line(text: &str) -> String {
     controls_to_space(text.lines().next().unwrap_or(""))
 }
 
+/// What a provider's missing or unreadable key reads as, in a notice and
+/// under the picker's list.
+pub(crate) fn credential_text(need: &LoginNeed) -> String {
+    match &need.error {
+        None => format!(
+            "{0} needs a credential: run `fiber login {0}`",
+            need.provider
+        ),
+        Some(error) => format!("{}'s credential could not be read: {error}", need.provider),
+    }
+}
+
 /// The notice for a provider needing a key: its code and text.
 fn credential_notice(need: &LoginNeed) -> (&'static str, String) {
-    match &need.error {
-        None => (
-            "credential_missing",
-            format!(
-                "{0} needs a credential: run `fiber login {0}`",
-                need.provider
-            ),
-        ),
-        Some(error) => (
-            "credential_failed",
-            format!("{}'s credential could not be read: {error}", need.provider),
-        ),
-    }
+    let code = if need.error.is_none() {
+        "credential_missing"
+    } else {
+        "credential_failed"
+    };
+    (code, credential_text(need))
 }
 
 impl ModelPicker {
@@ -321,7 +325,7 @@ impl ModelPicker {
         let succeeded = result.is_ok();
         let clean = controls_to_space(&provider);
         let landed = self.installs.land(provider, result, visible);
-        if succeeded && landed != Landed::Ignored {
+        if succeeded && landed != Landed::Nothing {
             self.catalogue
                 .installable
                 .retain(|name| controls_to_space(name) != clean);

@@ -11,36 +11,14 @@ use ratatui::layout::Rect;
 use serde_json::json;
 
 use super::super::{App, ConfigView, Effect, Link, NoticeLine};
-use crate::catalogue::{Catalogue, ModelEntry, Refresh};
+use crate::catalogue::Refresh;
 use crate::configure::{Configure, ConfigureError, LoginNeed, ProviderInstall};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
+use crate::model_picker::fixtures::catalogue;
 use crate::model_picker::{InstallStart, Mode};
 use crate::swapped::Spot;
-
-fn entry(reference: &str) -> ModelEntry {
-    let (provider, id) = reference.split_once('/').unwrap();
-    ModelEntry {
-        reference: reference.to_owned(),
-        provider: provider.to_owned(),
-        id: id.to_owned(),
-        levels: Vec::new(),
-        default_level: None,
-        configured: None,
-        roles: Vec::new(),
-        name: None,
-        price: None,
-    }
-}
-
-fn catalogue(models: &[&str], installable: &[&str]) -> Catalogue {
-    Catalogue {
-        models: models.iter().map(|model| entry(model)).collect(),
-        installable: installable.iter().map(|name| (*name).to_owned()).collect(),
-        ..Catalogue::default()
-    }
-}
 
 fn now() -> std::time::Instant {
     use contract::clock::Clock;
@@ -311,16 +289,19 @@ fn a_result_that_lands_with_the_picker_closed_is_a_notice_and_still_asks_the_ref
     );
 
     assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    // `docs/tui.md` promises each notice, not their order: compare sorted.
+    let mut shown = notices(&app);
+    shown.sort();
     assert_eq!(
-        notices(&app),
+        shown,
         [
-            (
-                "credential_missing".to_owned(),
-                "openai needs a credential: run `fiber login openai`".to_owned()
-            ),
             (
                 "credential_failed".to_owned(),
                 "zeta's credential could not be read: no keyring".to_owned()
+            ),
+            (
+                "credential_missing".to_owned(),
+                "openai needs a credential: run `fiber login openai`".to_owned()
             ),
         ]
     );

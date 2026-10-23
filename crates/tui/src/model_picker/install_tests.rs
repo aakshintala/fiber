@@ -6,35 +6,17 @@ use std::sync::Arc;
 use contract::ErrorCode;
 
 use super::{InstallStart, Installs, Landed, Progress, Stop};
-use crate::catalogue::{Catalogue, ModelEntry, Refresh};
+use crate::catalogue::{Catalogue, Refresh};
 use crate::configure::{Configure, ConfigureError, LoginNeed, ProviderInstall};
 use crate::configure_fake::Fake;
 use crate::keys::Key;
+use crate::model_picker::fixtures::{catalogue, entry};
 use crate::model_picker::{Mode, ModelPicker, PickerCtx, PickerView, RowAt};
-
-fn entry(reference: &str, levels: &[&str]) -> ModelEntry {
-    let (provider, id) = reference.split_once('/').unwrap();
-    ModelEntry {
-        reference: reference.to_owned(),
-        provider: provider.to_owned(),
-        id: id.to_owned(),
-        levels: levels.iter().map(|level| (*level).to_owned()).collect(),
-        default_level: None,
-        configured: None,
-        roles: Vec::new(),
-        name: None,
-        price: None,
-    }
-}
 
 /// An open picker over `models` with `installable` not installed.
 fn picker(mode: Mode, models: &[&str], installable: &[&str]) -> ModelPicker {
     let mut picker = ModelPicker {
-        catalogue: Catalogue {
-            models: models.iter().map(|model| entry(model, &[])).collect(),
-            installable: installable.iter().map(|name| (*name).to_owned()).collect(),
-            ..Catalogue::default()
-        },
+        catalogue: catalogue(models, installable),
         ..ModelPicker::default()
     };
     picker.open(mode, None);
@@ -153,7 +135,7 @@ fn a_result_for_a_provider_not_installing_is_ignored() {
     let mut installs = Installs::default();
     assert_eq!(
         installs.land("openai".to_owned(), done(&[], Vec::new()), true),
-        Landed::Ignored
+        Landed::Nothing
     );
     assert!(installs.outcomes().is_empty());
 
@@ -164,7 +146,7 @@ fn a_result_for_a_provider_not_installing_is_ignored() {
     ));
     assert_eq!(
         installs.land("openai".to_owned(), done(&[], Vec::new()), true),
-        Landed::Ignored
+        Landed::Nothing
     );
     assert_eq!(installs.outcomes().len(), 1);
 
@@ -172,7 +154,7 @@ fn a_result_for_a_provider_not_installing_is_ignored() {
     installs.fail("zeta", "boom".to_owned());
     assert_eq!(
         installs.land("zeta".to_owned(), done(&[], Vec::new()), true),
-        Landed::Ignored
+        Landed::Nothing
     );
     assert_eq!(
         installs.progress("zeta"),
@@ -222,20 +204,23 @@ fn a_hidden_success_stores_no_outcome_and_returns_the_credential_notices() {
         ),
         false,
     );
+    // `docs/tui.md` promises each notice, not their order: compare sorted.
+    let Landed::Installed { mut notices } = landed else {
+        panic!("a success lands as Installed: {landed:?}");
+    };
+    notices.sort();
     assert_eq!(
-        landed,
-        Landed::Installed {
-            notices: vec![
-                (
-                    "credential_missing",
-                    "openai needs a credential: run `fiber login openai`".to_owned()
-                ),
-                (
-                    "credential_failed",
-                    "zeta's credential could not be read: no keyring".to_owned()
-                ),
-            ]
-        }
+        notices,
+        [
+            (
+                "credential_failed",
+                "zeta's credential could not be read: no keyring".to_owned()
+            ),
+            (
+                "credential_missing",
+                "openai needs a credential: run `fiber login openai`".to_owned()
+            ),
+        ]
     );
     assert!(installs.outcomes().is_empty());
     assert!(!installs.busy());
@@ -256,7 +241,7 @@ fn a_visible_failure_keeps_the_row_with_its_error_and_a_retry_starts() {
     let _ = installs.take_start();
     assert_eq!(
         installs.land("openai".to_owned(), failed("no network"), true),
-        Landed::Shown
+        Landed::Nothing
     );
     assert_eq!(
         installs.progress("openai"),
@@ -398,14 +383,14 @@ fn a_failed_result_leaves_the_row_listed_and_asks_nothing() {
     assert!(picker.installs.start(start("openai")));
     assert_eq!(
         picker.land_install("openai".to_owned(), failed("boom")),
-        Landed::Shown
+        Landed::Nothing
     );
     assert_eq!(picker.shown_installs(), names(&["openai"]));
     assert_eq!(picker.want, None);
     // A result for a provider not installing changes nothing either.
     assert_eq!(
         picker.land_install("openai".to_owned(), done(&[], Vec::new())),
-        Landed::Ignored
+        Landed::Nothing
     );
     assert_eq!(picker.shown_installs(), names(&["openai"]));
     assert_eq!(picker.want, None);

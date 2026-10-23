@@ -14,10 +14,12 @@ use crate::swapped::List;
 use crate::text::controls_to_space;
 
 mod filter;
+#[cfg(test)]
+pub(crate) mod fixtures;
 mod install;
 
 use install::Stop;
-pub(crate) use install::{InstallStart, Installs, Landed, Outcome, Progress};
+pub(crate) use install::{InstallStart, Installs, Landed, Outcome, Progress, credential_text};
 
 /// What the picker was opened for: choosing a model and its level,
 /// choosing a level for the current model, or marking the models a

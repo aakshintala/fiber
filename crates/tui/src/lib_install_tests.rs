@@ -10,11 +10,10 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use contract::ErrorCode;
 use ratatui::backend::TestBackend;
 
 use super::tests::{feed, new_loop};
-use crate::configure::{ConfigureError, ProviderInstall};
+use crate::configure::ProviderInstall;
 use crate::configure_fake::Fake;
 use crate::{Catalogue, Configure, Input, ModelEntry};
 use fakes::Deadline;
@@ -107,34 +106,4 @@ fn enter_on_the_row_starts_the_worker_and_the_result_fed_back_draws_the_outcome(
     assert!(!text.contains("not installed"), "{text}");
     assert!(text.contains("✓ installed openai"), "{text}");
     assert!(text.contains("Install openai from x"), "{text}");
-}
-
-#[test]
-fn a_failed_answer_fed_back_draws_the_error_row() {
-    let seam = Arc::new(Fake::new(Vec::new()));
-    if let Ok(mut answer) = seam.install_answer.lock() {
-        *answer = Err(ConfigureError {
-            code: ErrorCode::ExtensionFailed,
-            message: "no network".to_owned(),
-        });
-    }
-    let (mut lp, rx) = loop_on_row(&seam);
-    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
-    feed(&mut lp, vec![next(&rx)]);
-    let text = screen(&lp);
-    assert!(text.contains("openai · not installed"), "{text}");
-    assert!(text.contains("✗ no network"), "{text}");
-}
-
-#[test]
-fn the_row_reads_installing_until_the_gated_install_is_released() {
-    let seam = Arc::new(Fake::new(Vec::new()));
-    let gate = seam.gate_install();
-    let (mut lp, rx) = loop_on_row(&seam);
-    feed(&mut lp, vec![Input::Bytes(b"\r".to_vec())]);
-    assert!(screen(&lp).contains(" ⟳ installing"), "{}", screen(&lp));
-    assert!(rx.try_recv().is_err(), "the install has not answered");
-    gate.send(Ok(ProviderInstall::default())).unwrap();
-    feed(&mut lp, vec![next(&rx)]);
-    assert!(!screen(&lp).contains("installing"));
 }
