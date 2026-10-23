@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc,
 };
 use std::thread;
@@ -1068,6 +1068,236 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
     .clone();
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
+}
+
+#[test]
+fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // Two delegates from two prompt turns: the first receipt's reply
+    // spawns the second, and the second receipt's reply ends the prompt.
+    // Reviewer verdicts answer "allow", as the answering helper does. A
+    // request carrying the steered text below spawns a third delegate.
+    let session_calls = Arc::new(AtomicUsize::new(0));
+    let spawned_third = Arc::new(AtomicBool::new(false));
+    let parent = ProviderServer::start_responding({
+        let session_calls = Arc::clone(&session_calls);
+        let spawned_third = Arc::clone(&spawned_third);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            if body["tools"]
+                .as_array()
+                .is_none_or(|tools| tools.is_empty())
+            {
+                return text_reply("allow");
+            }
+            if text.contains("scan again") && !spawned_third.swap(true, Ordering::SeqCst) {
+                return support::stream(&[spawn_call("fiber:pb/m")]);
+            }
+            if session_calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                return support::stream(&[spawn_call("fiber:pb/m")]);
+            }
+            support::hello()
+        }
+    })
+    .unwrap();
+    // Both children stall on their first model call; a third reply serves
+    // the late delegate the steer below spawns.
+    let child =
+        ProviderServer::start([support::hello(), support::hello(), support::hello()]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let id = doors::mint("s_");
+    let mut running = Running::start(
+        &setup,
+        &id,
+        &["--model", "pa/m", "--prompt", "scan the tree"],
+    );
+    // Both delegates run their turns: each stalled its model call.
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "both children stalled their model calls"
+    );
+    let mut child_ids = Vec::new();
+    running.wait_line("both delegates start", |line| {
+        if line["kind"] == "delegate_started" {
+            child_ids.push(
+                line["payload"]["delegate_session_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            );
+        }
+        child_ids.len() == 2
+    });
+    // Crash the first delegate as an outside kill does: SIGKILL to its
+    // group, which it leads. Its sibling keeps stalling until the release.
+    support::kill_matching(setup.deadline, &child_ids[0]).unwrap();
+    child.release();
+    // Both ends arrive, each exactly once.
+    let mut ends = Vec::new();
+    while ends.len() < 2 {
+        let more = running.wait_line("both delegate ends", |line| line["kind"] == "job_completed");
+        ends.extend(
+            more.into_iter()
+                .filter(|line| line["kind"] == "job_completed"),
+        );
+    }
+    assert_eq!(ends.len(), 2, "each delegate ends once: {ends:?}");
+    // The registry still answers commands: steer the parent, which spawns
+    // a third delegate that completes on its released provider.
+    let client = running.connect(&setup);
+    subscribe(&client);
+    client.send(
+        r#"{"id":"c_again","command":"steer","args":{"content":[{"type":"text","text":"scan again"}]}}"#,
+    );
+    while ends.len() < 3 {
+        let more = running.wait_line("the third delegate end", |line| {
+            line["kind"] == "job_completed"
+        });
+        ends.extend(
+            more.into_iter()
+                .filter(|line| line["kind"] == "job_completed"),
+        );
+    }
+    assert_eq!(ends.len(), 3, "each delegate ends once: {ends:?}");
+    // The late delegate's end wakes one more turn: let it complete
+    // before closing, so the close lands idle and interrupts nothing.
+    let woken = running.wait_line("the late delegate's wake turn", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(
+        woken.last().unwrap()["payload"]["outcome"],
+        "completed",
+        "{woken:?}"
+    );
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // The crash is contained to the dead delegate: it ends failed with
+    // the signal named, never a `failed signal` status; its sibling and
+    // the late delegate complete, and every parent turn completes.
+    let starts: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "delegate_started")
+        .cloned()
+        .collect();
+    assert_eq!(starts.len(), 3, "two delegates, then the steered one");
+    let job_of = |session: &str| {
+        starts
+            .iter()
+            .find(|line| line["payload"]["delegate_session_id"] == session)
+            .unwrap()["payload"]["job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let done_of = |job: &str| {
+        lines
+            .iter()
+            .find(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job)
+            .unwrap()
+            .clone()
+    };
+    let crashed_done = done_of(&job_of(&child_ids[0]));
+    assert_eq!(crashed_done["payload"]["status"], "failed");
+    assert_eq!(crashed_done["payload"]["error"]["code"], "signal");
+    let sibling_done = done_of(&job_of(&child_ids[1]));
+    assert_eq!(sibling_done["payload"]["status"], "completed");
+    let finished: Vec<Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "delegate_finished")
+        .cloned()
+        .collect();
+    assert_eq!(finished.len(), 3, "one finish per delegate: {finished:?}");
+    for line in lines.iter().filter(|line| line["kind"] == "turn_completed") {
+        assert_eq!(line["payload"]["outcome"], "completed", "{line}");
+    }
+}
+
+#[test]
+fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // The delegate tries to spawn again, which its reviewer blocks: with
+    // nobody to answer, the block denies the call and the delegate
+    // carries on. The parent's own verdict answers "allow".
+    let session_calls = Arc::new(AtomicUsize::new(0));
+    let reviewer_calls = Arc::new(AtomicUsize::new(0));
+    let parent = ProviderServer::start_responding({
+        let session_calls = Arc::clone(&session_calls);
+        let reviewer_calls = Arc::clone(&reviewer_calls);
+        move |request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            if body["tools"]
+                .as_array()
+                .is_none_or(|tools| tools.is_empty())
+            {
+                return if reviewer_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    text_reply("allow")
+                } else {
+                    text_reply("block no further delegates")
+                };
+            }
+            if session_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return support::stream(&[spawn_call("fiber:pb/m")]);
+            }
+            support::hello()
+        }
+    })
+    .unwrap();
+    // The delegate's first reply spawns, which the block denies; its
+    // second ends its turn, carrying on past the block.
+    let child = ProviderServer::start([
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        support::hello(),
+    ])
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+
+    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // The escalation never asked anyone: no approval line in either log.
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["kind"] != "permission_requested"),
+        "the parent log holds no approval"
+    );
+    let child_id = one(&lines, "delegate_started")["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    assert!(
+        child_lines
+            .iter()
+            .all(|line| line["kind"] != "permission_requested"),
+        "the delegate log holds no approval"
+    );
+    // The block denied the call under the reviewer, and the delegate's
+    // turn still completed: the escalation was a block, and it carried on.
+    let resolved = one(&child_lines, "permission_resolved");
+    assert_eq!(resolved["decision"], "deny");
+    assert_eq!(resolved["decided_by"], "reviewer");
+    let denied = completed_for(&child_lines, "delegate_spawn");
+    assert_eq!(denied["payload"]["status"], "denied");
+    assert_eq!(denied["payload"]["reason"], "reviewer");
+    let child_turn = child_lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(child_turn["payload"]["outcome"], "completed");
+    let done = one(&lines, "job_completed");
+    assert_eq!(done["status"], "completed");
 }
 
 /// An `openai-completions` chunk calling `name` with `arguments`.

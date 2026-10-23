@@ -30,7 +30,6 @@ use support::{
     MODEL, Session, TestTool, child_usage, delivery, kinds, message, reasoning_item,
     reasoning_reply, send_child, steer, tool_call_reply,
 };
-
 fn user(text: &str) -> Input {
     Input::User {
         text: text.into(),
@@ -1737,4 +1736,83 @@ fn a_late_cost_for_a_copy_applies_only_its_delta() {
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
     assert_eq!(exited.payload["usage"]["cost"], 0.05);
+}
+
+#[test]
+fn cancelling_the_turn_leaves_its_delegates_running() {
+    // A delegate survives cancellation of its parent's turn, as every job
+    // does: the cancel ends the turn `interrupted` with no stop reaching
+    // the registry, and the delegate's end still wakes a later turn
+    // (`docs/delegates.md`, "Lifetime").
+    use contract::events::Outcome;
+    use contract::jobs::{Jobs, Opening, Stop};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let gate = Arc::new(support::Gate::default());
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![support::Script::Wait(Arc::clone(&gate))];
+    let tool = Arc::new(tool);
+    let mut session = Session::with_tools(
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool],
+    );
+    let jobs = attach_jobs(&mut session);
+    // A running delegate, opened straight on the registry as a spawn
+    // does: its stop closure records any stop the turn sends it.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let opened = jobs
+        .open(Opening {
+            tool: "delegate_spawn".into(),
+            description: "scan".into(),
+            stop: Stop(Box::new({
+                let stopped = Arc::clone(&stopped);
+                move || stopped.store(true, Ordering::SeqCst)
+            })),
+            input: None,
+            lines: false,
+        })
+        .unwrap();
+    let job_id = opened.started.job_id.clone();
+    jobs.deliver_to(session.inbox.clone());
+    session.inbox.send(delivery("hi")).unwrap();
+    let tap = support::Tap::new(&session.log);
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| session.turn());
+        // The tool started its call, so the turn is parked in it as in
+        // `jobs wait`: the cancel lands while the delegate still runs.
+        tap.wait_for("tool_call_started");
+        assert!(cancel.cancel());
+        gate.open();
+        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
+    });
+    gate.check("tool");
+    let cut = session.lines();
+    assert_eq!(cut.last().unwrap().payload["outcome"], "interrupted");
+    // No stop reached the registry: neither the delegates nor the job.
+    assert!(!stopped.load(Ordering::SeqCst));
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    assert_eq!(jobs.running(), vec![job_id.clone()]);
+    // The delegate's end still wakes a later turn, which claims it.
+    (opened.end.0)(contract::events::JobCompleted {
+        job_id: job_id.clone(),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the later turn claims the delegate's end");
+    assert_eq!(done.payload["job_id"], job_id.0);
+    assert_eq!(done.payload["status"], "completed");
 }
