@@ -121,23 +121,29 @@ fn env_needs_allowed_assignments_and_a_command() {
 
 #[test]
 fn xargs_reads_only_into_six_commands() {
-    // A target that never opens files reads on its own; a path-reading
-    // target reads only on proven stdin (below).
+    // A target that never opens files reads on its own. A path-reading
+    // target reads only on proven static stdin: each word must resolve
+    // inside a canonical running directory. Over the fake workdir every
+    // relative word resolves lexically, so `echo f` proves (declaring
+    // the file); the symlink escape needs a real directory and lives in
+    // `xargs_with_static_stdin_words_declares_canonical_paths`.
     for command in [
         "xargs echo a",
         "xargs printf %s a",
         "echo /path/to/credentials | xargs echo",
-        "git ls-files | xargs wc -l",
-        "ls | xargs wc -l",
-        "find . -name x | xargs grep y f",
-        "ls sub | xargs head",
+        "echo f | xargs head",
+        "echo /work/f | xargs head",
     ] {
         assert_reads(command);
     }
+    assert_reads_paths("echo f | xargs head", &["/work", "/work/f"]);
     // Any other target, a path-qualified target, a flag of `xargs`'s own
     // and a bare `xargs` all execute, as does the target's unlisted flag.
-    // So does a path-reading target on unproven stdin: terminal stdin,
-    // a redirect file of its own, or a producer that does not list paths.
+    // So does a path-reading target on unproven stdin: terminal stdin, a
+    // redirect file of its own, an absolute word outside the running
+    // directories, a `printf` producer (direct `printf` still executes),
+    // or a producer that is not plain `echo` or `printf` (`ls`, `find`,
+    // `git ls-files`, `cat`).
     for command in [
         "xargs",
         "xargs git status",
@@ -154,11 +160,55 @@ fn xargs_reads_only_into_six_commands() {
         "xargs head -5 f",
         "xargs tail -3 f",
         "xargs head < f",
+        "git ls-files | xargs wc -l",
+        "ls | xargs head",
+        "ls | xargs wc -l",
+        "ls sub | xargs head",
         "ls sub | xargs head < f",
-        "echo /path/to/credentials | xargs head",
+        "find . -name x | xargs grep y f",
         "cat f | xargs head",
+        "printf %s f | xargs head",
+        "echo /path/to/credentials | xargs head",
     ] {
         assert_closed(command);
+    }
+}
+
+#[test]
+fn xargs_with_static_stdin_words_declares_canonical_paths() {
+    // Only statically-known stdin words count as proven: each is resolved
+    // exactly as the credential deny holds it, and each must land inside
+    // a canonical running directory. A symlink escaping the workspace
+    // fails the whole call, while a static in-workspace file reads with
+    // the file declared.
+    use std::os::unix::fs::symlink;
+
+    let dir = fakes::TempDir::new("fiber-shell-xargs-stdin");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("f"), "words\n").unwrap();
+    std::fs::write(dir.path().join("outside"), "elsewhere\n").unwrap();
+    symlink(dir.path().join("outside"), workspace.join("link")).unwrap();
+    let workdir = workspace.to_str().unwrap().to_owned();
+    let classified = |command: &str| classify(command, Path::new(&workdir), &[]);
+    let canonical = workspace.canonicalize().unwrap();
+    let file = canonical.join("f").to_str().unwrap().to_owned();
+
+    let effects = classified("echo f | xargs head");
+    assert_eq!(effects.declared.effects, vec![Effect::Reads], "echo f");
+    assert_eq!(
+        effects.declared.paths,
+        Some(vec![workdir.clone(), file]),
+        "echo f"
+    );
+    for command in ["echo link | xargs head", "ls | xargs head"] {
+        let effects = classified(command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
     }
 }
 

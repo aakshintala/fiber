@@ -141,9 +141,9 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
         {
             cd_target = cd_operand(simple);
         }
-        let mut fed: Vec<String> = Vec::new();
-        let mut fed_any = false;
-        let mut fed_listed = true;
+        let mut stdin_words: Vec<String> = Vec::new();
+        let mut stdin_known = false;
+        let mut stdin_static = true;
         for stage in &element.stages {
             if let Stage::Simple(simple) = stage
                 && is_cd(simple)
@@ -153,21 +153,20 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
             // Filenames earlier stages of this element fed the pipeline:
             // the only stdin-fed paths an `xargs` stage may read. They are
             // proven only when at least one earlier stage ran and every
-            // one lists paths; any other producer leaves stdin unproven
-            // and its `xargs` reader reviewed.
+            // one printed statically-known words; any other producer
+            // leaves stdin unproven and its `xargs` reader reviewed.
             match stage_outcome(
                 stage,
                 &dirs,
                 configured,
                 saw_cd,
-                &fed,
-                fed_any && fed_listed,
+                &stdin_words,
+                stdin_known && stdin_static,
             ) {
                 Outcome::Executes => saw_executes = true,
                 Outcome::Reads(more) => {
-                    fed_any = true;
-                    fed_listed = fed_listed && lists_paths(stage);
-                    fed.extend(more.iter().cloned());
+                    stdin_known = true;
+                    stdin_static = stdin_static && static_words(stage, &mut stdin_words);
                     paths.extend(more);
                 }
             }
@@ -186,7 +185,7 @@ fn stage_outcome(
     dirs: &[String],
     configured: &[(String, Vec<String>)],
     saw_cd: bool,
-    stdin_paths: &[String],
+    stdin_words: &[String],
     stdin_proven: bool,
 ) -> Outcome {
     let Stage::Simple(simple) = stage else {
@@ -225,7 +224,7 @@ fn stage_outcome(
                 if depth > wrap::MAX_WRAPPER_DEPTH {
                     return Outcome::Executes;
                 }
-                return xargs_outcome(inner, simple, dirs, stdin_paths, stdin_proven);
+                return xargs_outcome(inner, simple, dirs, stdin_words, stdin_proven);
             }
         }
     }
@@ -273,15 +272,17 @@ fn stage_outcome(
 /// commands, classified by its own flags; anything else executes. A target
 /// that never opens files (`echo`, `printf`) reads with no paths. A
 /// path-reading target (`wc`, `grep`, `head`, `tail`) opens filenames fed
-/// on stdin, so it reads only when those filenames are proven: at least
-/// one earlier stage ran, every one lists paths, and the stage reads no
-/// redirect file of its own. Proven paths join the declared operands;
-/// anything else is reviewed, declaring nothing.
+/// on stdin, so it reads only when every one is statically known: at
+/// least one earlier stage ran, every one printed its words, each word
+/// holds no `xargs` metacharacter, and each word resolves, exactly as the
+/// credential deny holds it, to a path inside a canonical running
+/// directory. Proven paths join the declared operands; anything else is
+/// reviewed, declaring nothing.
 fn xargs_outcome(
     inner: &[Word],
     simple: &Simple,
     dirs: &[String],
-    stdin_paths: &[String],
+    stdin_words: &[String],
     stdin_proven: bool,
 ) -> Outcome {
     let Some(entry) = inner
@@ -297,7 +298,26 @@ fn xargs_outcome(
         let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs) else {
             return Outcome::Executes;
         };
-        declared.extend(stdin_paths.iter().cloned());
+        let Some(canonical_dirs) = canonical_dirs(dirs) else {
+            return Outcome::Executes;
+        };
+        for word in stdin_words {
+            if !static_word(word) {
+                return Outcome::Executes;
+            }
+            for dir in dirs {
+                let Some(path) = resolve_canonical(&Path::new(dir).join(word)) else {
+                    return Outcome::Executes;
+                };
+                if !canonical_dirs.iter().any(|base| path.starts_with(base)) {
+                    return Outcome::Executes;
+                }
+                let Some(path) = path.to_str().map(str::to_owned) else {
+                    return Outcome::Executes;
+                };
+                declared.push(path);
+            }
+        }
         return with_inputs(Outcome::Reads(declared), simple, dirs);
     }
     with_inputs(builtin_outcome(inner, entry, dirs), simple, dirs)
@@ -312,24 +332,68 @@ fn has_input(simple: &Simple) -> bool {
         .any(|redirect| matches!(redirect, Redirect::Input(_)))
 }
 
-/// Whether a stage lists paths on stdout: `ls`, `find` and `git ls-files`
-/// name only paths their declared paths bound, so filenames they feed an
-/// `xargs` stage are proven. Any other stage's filenames are unproven.
-fn lists_paths(stage: &Stage) -> bool {
+/// Whether a stage prints statically-known words: a simple `echo` or
+/// `printf`, whose every operand word reaches `xargs` stdin as written.
+/// Any other stage's filenames are unproven, including a listing whose
+/// names come from command output. Appends the operand words when static.
+fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
     let Stage::Simple(simple) = stage else {
         return false;
     };
-    let mut words = simple.words.iter();
-    let Some(first) = words.next() else {
+    let Some(first) = simple.words.first() else {
         return false;
     };
-    if first.cooked == "ls" || first.cooked == "find" {
-        return true;
+    if first.cooked != "echo" && first.cooked != "printf" {
+        return false;
     }
-    if first.cooked == "git" {
-        return words.next().is_some_and(|word| word.cooked == "ls-files");
-    }
-    false
+    words.extend(simple.words.iter().skip(1).map(|word| word.cooked.clone()));
+    true
+}
+
+/// Whether a stdin word is statically known: it holds no `xargs`
+/// metacharacter, so the pipeline feeds it whole. A blank or a newline
+/// would split it, a quote would re-quote it, and a backslash would escape
+/// the next character, so any of them leaves the word unproven.
+fn static_word(word: &str) -> bool {
+    !word.is_empty()
+        && !word.chars().any(|ch| {
+            matches!(
+                ch,
+                ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C' | '\\' | '\'' | '"'
+            )
+        })
+}
+
+/// Each running directory as the credential deny holds it, or nothing
+/// when one does not resolve: stdin proof has nothing to land in.
+fn canonical_dirs(dirs: &[String]) -> Option<Vec<PathBuf>> {
+    dirs.iter()
+        .map(|dir| resolve_canonical(Path::new(dir)))
+        .collect()
+}
+
+/// `path` with symlinks resolved and `..` removed, exactly as the
+/// credential deny holds it (`docs/permissions.md`, "Credentials",
+/// `loop::calls::resolve`): the longest existing prefix canonicalised,
+/// the rest appended word for word. Anything but a plain name past the
+/// existing prefix (`.`, `..`, `/`) resolves to nothing, and a path with
+/// no existing prefix does too.
+fn resolve_canonical(path: &Path) -> Option<PathBuf> {
+    let parts: Vec<Component<'_>> = path.components().collect();
+    (0..=parts.len()).rev().find_map(|split| {
+        let (existing, rest) = parts.split_at(split);
+        let real = existing.iter().collect::<PathBuf>().canonicalize().ok()?;
+        Some(
+            rest.iter()
+                .try_fold(real, |path, component| match component {
+                    Component::Normal(name) => Some(path.join(name)),
+                    Component::Prefix(_)
+                    | Component::RootDir
+                    | Component::CurDir
+                    | Component::ParentDir => None,
+                }),
+        )
+    })?
 }
 
 /// Whether a stage runs `cd`: its first word is exactly `cd`.

@@ -2879,15 +2879,11 @@ fn a_shell_reads_wrapper_calls_with_paths_from_the_inner_command() {
     let shell = Shell::new(workspace.clone(), FakeClock::new());
     let file = workspace.join("f").to_str().unwrap().to_owned();
     // A wrapper is classified by the command it runs: an assignment for
-    // a listed name, `env` with listed assignments, `timeout` with a
-    // duration, and `xargs` into a read-only command all read, declaring
-    // the inner command's paths.
-    for command in [
-        "LC_ALL=C cat f",
-        "env LC_ALL=C cat f",
-        "timeout 5 cat f",
-        "git ls-files | xargs wc -l",
-    ] {
+    // a listed name, `env` with listed assignments, and `timeout` with a
+    // duration all read, declaring the inner command's paths. A
+    // path-reading `xargs` target reads only on proven static stdin, so
+    // names from command output stay reviewed (fail-closed).
+    for command in ["LC_ALL=C cat f", "env LC_ALL=C cat f", "timeout 5 cat f"] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -2901,7 +2897,8 @@ fn a_shell_reads_wrapper_calls_with_paths_from_the_inner_command() {
         Some(vec![file.clone()])
     );
     // Any other assignment name, a flag of `env`'s own, a refused
-    // duration, and an `xargs` target outside its six commands execute.
+    // duration, an `xargs` target outside its six commands, and an
+    // `xargs` reader fed names from command output execute.
     for command in [
         "FOO=1 cat f",
         "env PATH=/x cat f",
@@ -2911,6 +2908,7 @@ fn a_shell_reads_wrapper_calls_with_paths_from_the_inner_command() {
         "xargs rm f",
         "xargs /usr/bin/wc -l f",
         "xargs grep -R x f",
+        "git ls-files | xargs wc -l",
     ] {
         let effects = effects_of(&shell, command);
         assert_eq!(
