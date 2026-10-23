@@ -257,6 +257,7 @@ impl Running {
         args: &[&str],
         stdin: Stdio,
     ) -> (Self, Option<std::process::ChildStdin>) {
+        fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
         let mut command = setup.fiber(args);
         command.stdin(stdin);
         let mut child = command.spawn().unwrap();
