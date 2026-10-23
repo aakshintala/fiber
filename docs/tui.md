@@ -544,6 +544,9 @@ error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
 `/settings` and `/skills` in the list below describe the local editor; this
 paragraph replaces them on a remote terminal.
 
+A view whose rows take Enter or a switch marks the focused row with "› " in a
+two-column gutter, as overlay choices do, without the bar.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
@@ -754,8 +757,11 @@ a click on it returns too. The views are:
   Each source is a bold heading ("Built-in", "MCP · linear", "Extension ·
   notes"), then one row per tool: "<name> · full · ~1.2k", or "deferred",
   then " · this project " and its switch and " · everywhere " and its switch.
-  A switch reads "[on]" bold or "[off]" dim. The last row is "a change
-  rebuilds the cache (~84k tokens · $0.31) on reload", dim.
+  A switch reads "[on]" bold or "[off]" dim. On the focused row, a bold "›"
+  marks the focused switch, and ← and → move it between the two. The mark
+  takes the place of the space before the switch, so columns do not move. It
+  shows on the focused row only. The last row is "a change rebuilds the
+  cache (~84k tokens · $0.31) on reload", dim.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
   tool count. The state is `connecting` for a server never started this
@@ -789,8 +795,8 @@ a click on it returns too. The views are:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
-  Under the table, the reload line ("changing model needs a reload (~84k
-  tokens)") and "Ctrl+G opens the file", both dim.
+  Under the table, the reload line ("changing handoff.tokens needs a reload
+  (~84k tokens)") and "Ctrl+G opens the file", both dim.
 
   ```
   key                 value         layer
