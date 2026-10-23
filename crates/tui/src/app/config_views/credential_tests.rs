@@ -145,16 +145,16 @@ fn only_waiting_pickers_accept_an_answer_or_rejection() {
 
 #[test]
 fn a_wait_slot_is_taken_only_by_its_matching_id() {
-    let mut slot = Some(Save {
+    let mut waiting = Some(Save {
         id: "new".to_owned(),
         label: "work".to_owned(),
     });
-    assert!(Waits::take(&mut slot, "old", |save| &save.id).is_none());
-    assert_eq!(slot.as_ref().unwrap().label, "work");
-    let taken = Waits::take(&mut slot, "new", |save| &save.id).unwrap();
+    assert!(Waits::take(&mut waiting, "old", |save| &save.id).is_none());
+    assert_eq!(waiting.as_ref().unwrap().label, "work");
+    let taken = Waits::take(&mut waiting, "new", |save| &save.id).unwrap();
     assert_eq!(taken.label, "work");
-    assert!(slot.is_none());
-    assert!(Waits::take(&mut slot, "new", |save| &save.id).is_none());
+    assert!(waiting.is_none());
+    assert!(Waits::take(&mut waiting, "new", |save| &save.id).is_none());
 }
 
 #[test]
