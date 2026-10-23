@@ -36,10 +36,6 @@ use fakes::Deadline;
 /// before it.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long each open-race step waits: every pause and join carries it,
-/// so a stalled opener fails the test instead of hanging the suite.
-const OPEN_DEADLINE: Duration = Duration::from_secs(5);
-
 /// How long the negative wait in `race_openers` holds the second opener's
 /// pause unreached: the same 200 ms bound the fakes hold tests use for
 /// the same kind of wait.
@@ -1575,7 +1571,9 @@ impl OpenSession {
             })
             .expect("the waiter spawns");
         assert_eq!(
-            Deadline::after(OPEN_DEADLINE).recv(&done).unwrap_or(count),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&done)
+                .unwrap_or(count),
             0,
             "{what} reached the session"
         );
@@ -1603,7 +1601,9 @@ impl OpenSession {
             })
             .expect("the waiter spawns");
         assert_eq!(
-            Deadline::after(OPEN_DEADLINE).recv(&done).unwrap_or(count),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&done)
+                .unwrap_or(count),
             0,
             "{what} reached the session"
         );
@@ -1726,7 +1726,9 @@ fn race_openers(
     let (paused_first, release_first) = arm_before_open(hub);
     let done_first = spawn_opener(first, "race-first");
     assert!(
-        Deadline::after(OPEN_DEADLINE).recv(&paused_first).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&paused_first)
+            .is_ok(),
         "the first opener parked after its opening"
     );
     // Arm the gate seam now: the first opener already passed it (it is
@@ -1741,7 +1743,9 @@ fn race_openers(
     // gate: releasing it on a thread start alone could release it
     // before any contention.
     assert!(
-        Deadline::after(OPEN_DEADLINE).recv(&reached).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&reached)
+            .is_ok(),
         "the second opener reached the gate"
     );
     // The second opener queues behind the first on the gate instead of
@@ -1751,18 +1755,24 @@ fn race_openers(
     if Deadline::after(GATE_QUIET).recv(&paused_second).is_err() {
         drop(release_first);
         assert!(
-            Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&done_first)
+                .is_ok(),
             "the first opener finished"
         );
         if second_is_follow {
             assert!(
-                Deadline::after(OPEN_DEADLINE).recv(&paused_second).is_ok(),
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&paused_second)
+                    .is_ok(),
                 "the waiter parked after the first published"
             );
             drop(release_second);
         }
         assert!(
-            Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv(&done_second)
+                .is_ok(),
             "the second opener finished"
         );
     } else {
@@ -1773,23 +1783,31 @@ fn race_openers(
         if second_is_follow {
             drop(release_second);
             assert!(
-                Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_second)
+                    .is_ok(),
                 "the second opener finished"
             );
             drop(release_first);
             assert!(
-                Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_first)
+                    .is_ok(),
                 "the first opener finished"
             );
         } else {
             drop(release_first);
             assert!(
-                Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_first)
+                    .is_ok(),
                 "the first opener finished"
             );
             drop(release_second);
             assert!(
-                Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_second)
+                    .is_ok(),
                 "the second opener finished"
             );
         }
