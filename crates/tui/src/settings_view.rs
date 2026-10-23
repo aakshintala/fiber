@@ -14,7 +14,8 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
+use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::text;
 
 /// The key the theme choice edits.
 pub(crate) const THEME: &str = "tui.theme";
@@ -25,6 +26,16 @@ pub(crate) const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
 
 /// The widest key column; a longer key pushes its value right.
 const KEY_COLUMN: usize = 36;
+
+/// The widest layer word, `repository`: the room the layer column keeps
+/// at the end of a row.
+const LAYER_COLUMN: usize = 10;
+
+/// The gap between two columns.
+const GAP: usize = 2;
+
+/// The columns a view with a gutter keeps before each row's text.
+const GUTTER: usize = 2;
 
 /// When a written key takes effect (`docs/configuration.md`, "When Fiber
 /// reads configuration").
@@ -77,17 +88,17 @@ pub(crate) fn applies(key: &str) -> Applies {
     }
 }
 
-/// What a view says a `/reload` costs: its cache rebuild in tokens, or
-/// that each session pays it at its next `/reload` (`docs/tui.md`,
+/// What a view says a change to `key` costs: that it needs a reload, and
+/// the reload's cache rebuild in tokens when known (`docs/tui.md`,
 /// "Swapped views"). `usage` is the last call's prompt size on the
 /// session on screen.
-pub(crate) fn reload_text(usage: Option<u64>) -> String {
+pub(crate) fn reload_text(key: &str, usage: Option<u64>) -> String {
     match usage {
         Some(tokens) => format!(
-            "Applies on /reload, which rebuilds the cache: about {} tokens.",
-            about(tokens)
+            "changing {key} needs a reload ({})",
+            crate::model_picker::rebuild_cost(tokens, None)
         ),
-        None => "Applies on each session's next /reload.".to_owned(),
+        None => format!("changing {key} needs a reload"),
     }
 }
 
@@ -103,7 +114,7 @@ pub(crate) fn applies_text(key: &str, usage: Option<u64>) -> String {
         Applies::ProcessStart => "Applies when each Fiber process starts again.".to_owned(),
         Applies::NewSessions => "Applies to new sessions.".to_owned(),
         Applies::NextTurn => "Reaches the model at the next turn start.".to_owned(),
-        Applies::Reload => reload_text(usage),
+        Applies::Reload => reload_text(key, usage),
     }
 }
 
@@ -236,7 +247,7 @@ impl Settings {
     pub(crate) fn open(ctx: &Ctx<'_>) -> Self {
         let mut settings = Self {
             rows: Vec::new(),
-            list: List::default(),
+            list: List::gutter(),
             mode: Mode::Rows,
             entry_theme: ThemeSetting::Follow,
             said: Vec::new(),
@@ -244,6 +255,21 @@ impl Settings {
         settings.reread(ctx);
         settings.entry_theme = settings.entry_setting(ctx);
         settings
+    }
+
+    /// The lines the list holds: the header row, then one per key; none
+    /// with no keys.
+    fn list_len(&self) -> usize {
+        if self.rows.is_empty() {
+            0
+        } else {
+            self.rows.len() + 1
+        }
+    }
+
+    /// The list's rows that take a key: every key's, not the header.
+    fn takes(&self) -> Vec<usize> {
+        (1..=self.rows.len()).collect()
     }
 
     /// The view opened directly in the theme choices, as `/theme`
@@ -254,7 +280,7 @@ impl Settings {
         if let Some(at) = settings.rows.iter().position(|row| row.key == THEME) {
             settings
                 .list
-                .select(at, settings.rows.len(), settings.shown(ctx));
+                .select(at + 1, settings.list_len(), settings.shown(ctx));
             settings.edit(ctx);
         }
         settings
@@ -295,18 +321,20 @@ impl Settings {
             }
         }
         let shown = self.shown(ctx);
-        self.list
-            .select(self.list.selected(), self.rows.len(), shown);
+        // The header takes no selection: a list that holds keys rests on
+        // one.
+        let at = self.list.selected().max(1);
+        self.list.select(at, self.list_len(), shown);
     }
 
     /// The rows the view shows at `ctx`'s height.
     fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(ctx.usage), ctx.height)
+        rows_height(&self.frame(ctx.width, ctx.usage), ctx.height)
     }
 
-    /// The selected row.
+    /// The selected key's row; the header row is none.
     fn selected(&self) -> Option<&SettingRow> {
-        self.rows.get(self.list.selected())
+        self.rows.get(self.list.selected().checked_sub(1)?)
     }
 
     /// Handles one key.
@@ -392,7 +420,10 @@ impl Settings {
             self.edit(ctx);
             return Act::Stay;
         }
-        if self.list.key(key, self.rows.len(), shown) {
+        if self
+            .list
+            .key_over(key, self.list_len(), shown, &self.takes())
+        {
             self.said.clear();
         }
         Act::Stay
@@ -417,7 +448,7 @@ impl Settings {
                     .into_iter()
                     .filter(|name| !BUILT_IN_THEMES.contains(&name.as_str())),
             );
-            let mut list = List::default();
+            let mut list = List::gutter();
             let at = names
                 .iter()
                 .position(|name| Some(name) == current.as_ref())
@@ -531,8 +562,11 @@ impl Settings {
                 None => Act::Stay,
             },
             (Spot::Row(at), Mode::Rows) => {
-                self.list.select(at, self.rows.len(), shown);
-                self.said.clear();
+                // The header row is not a key.
+                if self.takes().contains(&at) {
+                    self.list.select(at, self.list_len(), shown);
+                    self.said.clear();
+                }
                 Act::Stay
             }
             (Spot::Row(_), Mode::Field(_)) => Act::Stay,
@@ -542,8 +576,8 @@ impl Settings {
         }
     }
 
-    /// The frame to draw.
-    pub(crate) fn frame(&self, usage: Option<u64>) -> Frame {
+    /// The frame to draw at `width` columns.
+    pub(crate) fn frame(&self, width: usize, usage: Option<u64>) -> Frame {
         match &self.mode {
             Mode::Choices {
                 names,
@@ -579,11 +613,11 @@ impl Settings {
                 Frame {
                     title: "Settings".to_owned(),
                     command: "/settings",
-                    rows: self.lines(),
-                    list: self.list,
+                    rows: self.lines(width),
+                    list: self.rows_list(),
                     below,
                     field: None,
-                    footer: "↑↓ move · Enter edit · Ctrl+G open the file · Esc close".to_owned(),
+                    footer: "Ctrl+G opens the file".to_owned(),
                 }
             }
             Mode::Field(field) => {
@@ -599,8 +633,8 @@ impl Settings {
                 Frame {
                     title: "Settings".to_owned(),
                     command: "/settings",
-                    rows: self.lines(),
-                    list: self.list,
+                    rows: self.lines(width),
+                    list: self.rows_list(),
                     below,
                     field: Some((field.draft.expand(), field.draft.position())),
                     footer: "Tab layer · Enter save · Esc cancel".to_owned(),
@@ -609,35 +643,76 @@ impl Settings {
         }
     }
 
-    /// One line per key: the key, its value and its layer.
-    fn lines(&self) -> Vec<Vec<(String, Option<Spot>, Ink)>> {
-        let width = self
+    /// The list the rows draw with: with no key to focus, none is marked.
+    fn rows_list(&self) -> List {
+        if self.rows.is_empty() {
+            self.list.blur()
+        } else {
+            self.list
+        }
+    }
+
+    /// The table: a dim header row, then one line per key as aligned
+    /// columns of key, value and layer. The value column is cut with `…`
+    /// to the room the key and layer columns leave, so the layer column
+    /// stays where it is; a key wider than its column pushes its value.
+    fn lines(&self, width: usize) -> Vec<Vec<(String, Option<Spot>, Ink)>> {
+        if self.rows.is_empty() {
+            return Vec::new();
+        }
+        let key_col = self
             .rows
             .iter()
-            .map(|row| row.key.chars().count())
+            .map(|row| text::width(&row.key))
+            .chain(["key".len()])
             .max()
             .unwrap_or(0)
             .min(KEY_COLUMN);
-        self.rows
+        let values: Vec<String> = self.rows.iter().map(shown_value).collect();
+        let room = width.saturating_sub(key_col + LAYER_COLUMN + 2 * GAP + GUTTER);
+        let value_col = values
             .iter()
-            .map(|row| {
-                let value = match &row.value {
-                    Shown::Unset => "unset".to_owned(),
-                    Shown::Value(value) | Shown::Redacted(value) => value.clone(),
-                    Shown::Union { names, .. } => names
-                        .iter()
-                        .map(|(name, layer)| format!("{name} ({layer})"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                };
-                vec![(
-                    format!("{:<width$}  {value}  {}", row.key, row.layer),
-                    None,
-                    Ink::Plain,
-                )]
-            })
-            .collect()
+            .map(|value| text::width(value))
+            .chain(["value".len()])
+            .max()
+            .unwrap_or(0)
+            .min(room);
+        let line = |key: &str, value: &str, layer: &str, ink: Ink| {
+            let key_pad = key_col.saturating_sub(text::width(key)) + GAP;
+            let value = text::cut(value, value_col, "…");
+            let value_pad = value_col.saturating_sub(text::width(&value)) + GAP;
+            vec![
+                (format!("{key}{}", " ".repeat(key_pad)), None, ink),
+                (format!("{value}{}", " ".repeat(value_pad)), None, ink),
+                (layer.to_owned(), None, ink),
+            ]
+        };
+        let mut lines = vec![line("key", "value", "layer", Ink::Muted)];
+        lines.extend(
+            self.rows
+                .iter()
+                .zip(&values)
+                .map(|(row, value)| line(&row.key, value, &row.layer, Ink::Plain)),
+        );
+        lines
     }
+}
+
+/// A key's effective value as the table says it: a string bare, as
+/// `fiber config set` takes it, anything else as its JSON, a union as
+/// its names and layers.
+fn shown_value(row: &SettingRow) -> String {
+    let value = match &row.value {
+        Shown::Unset => "unset".to_owned(),
+        Shown::Value(value) => as_typed(value),
+        Shown::Redacted(value) => value.clone(),
+        Shown::Union { names, .. } => names
+            .iter()
+            .map(|(name, layer)| format!("{name} ({layer})"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    text::controls_to_space(&value)
 }
 
 /// `layer`'s own list in a union, as the field takes it; `[]` when the

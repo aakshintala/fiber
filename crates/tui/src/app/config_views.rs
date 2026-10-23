@@ -759,7 +759,7 @@ impl App {
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
-            Open::Settings(settings) => settings.frame(usage),
+            Open::Settings(settings) => settings.frame(self.config_view_width(), usage),
             Open::Tools(tools) => {
                 tools.frame(self.config_view_width(), self.reload_cost().as_deref())
             }

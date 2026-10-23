@@ -124,7 +124,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with("handoff.tokens")),
+        rows.iter().any(|row| row.starts_with("› handoff.tokens")),
         "{rows:?}"
     );
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
@@ -138,7 +138,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with(" handoff.tokens")),
+        rows.iter().any(|row| row.starts_with(" › handoff.tokens")),
         "{rows:?}"
     );
 }
@@ -368,7 +368,7 @@ fn a_usage_line_sets_the_reload_cost() {
     assert_eq!(
         below,
         Some(vec![
-            "Applies on /reload, which rebuilds the cache: about 201,034 tokens.".to_owned()
+            "changing handoff.tokens needs a reload (~201k tokens)".to_owned()
         ])
     );
 }
@@ -438,7 +438,7 @@ fn the_reload_cost_is_the_session_on_screens_only() {
     app.open_config_view(ConfigView::Settings);
     assert_eq!(
         app.config_view_screen().map(|frame| frame.below),
-        Some(vec!["Applies on each session's next /reload.".to_owned()])
+        Some(vec!["changing handoff.tokens needs a reload".to_owned()])
     );
 }
 
@@ -447,9 +447,9 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
     for (on_home, said) in [
         (
             false,
-            "Applies on /reload, which rebuilds the cache: about 201,034 tokens.",
+            "changing handoff.tokens needs a reload (~201k tokens)",
         ),
-        (true, "Applies on each session's next /reload."),
+        (true, "changing handoff.tokens needs a reload"),
     ] {
         let mut app = attached(Some(fake()));
         app.on_line(session_line(

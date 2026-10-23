@@ -543,6 +543,9 @@ error just as it does after a local edit. The Ctrl+G sentences of `/rules`,
 `/settings` and `/skills` in the list below describe the local editor; this
 paragraph replaces them on a remote terminal.
 
+A view whose rows take Enter or a switch marks the focused row with "› " in a
+two-column gutter, as overlay choices do, without the bar.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
@@ -788,8 +791,8 @@ a click on it returns too. The views are:
   a dim header row, "key", "value" and "layer", then one row per key, its
   name, its effective value and its layer: `default`, `global`,
   `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
-  Under the table, the reload line ("changing model needs a reload (~84k
-  tokens)") and "Ctrl+G opens the file", both dim.
+  Under the table, the reload line ("changing handoff.tokens needs a reload
+  (~84k tokens)") and "Ctrl+G opens the file", both dim.
 
   ```
   key                 value         layer
