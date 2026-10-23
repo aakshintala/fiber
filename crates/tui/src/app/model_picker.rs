@@ -834,7 +834,7 @@ impl App {
                 return super::Effect::None;
             }
         };
-        let _ = self.model_picker.installs.start(InstallStart {
+        self.model_picker.installs.start(InstallStart {
             provider,
             workspace,
             seam,

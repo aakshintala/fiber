@@ -114,18 +114,13 @@ impl Installs {
         &self.outcomes
     }
 
-    /// Marks `start`'s provider installing and queues the job. One install
-    /// runs at a time, so `false` with no change while another does: the
-    /// install holds the extensions lock for its whole run.
-    pub(crate) fn start(&mut self, start: InstallStart) -> bool {
-        if self.busy() {
-            return false;
-        }
+    /// Marks `start`'s provider installing and queues the job. The caller
+    /// checks `busy` first: one install runs at a time.
+    pub(crate) fn start(&mut self, start: InstallStart) {
         self.entries.retain(|(name, _)| *name != start.provider);
         self.entries
             .push((start.provider.clone(), Progress::Installing));
         self.pending = Some(start);
-        true
     }
 
     /// The job a start queued, once.
@@ -233,14 +228,6 @@ fn credential_notice(need: &LoginNeed) -> (&'static str, String) {
 }
 
 impl ModelPicker {
-    /// Whether the open picker draws not-installed rows: only the
-    /// choosing picker does.
-    pub(crate) fn install_visible(&self) -> bool {
-        self.open
-            .as_ref()
-            .is_some_and(|open| open.mode == Mode::Choose)
-    }
-
     /// The not-installed providers the picker lists, in catalogue order,
     /// the query keeping those it matches by name.
     pub(crate) fn shown_installs(&self) -> Vec<String> {
@@ -321,7 +308,10 @@ impl ModelPicker {
         provider: String,
         result: Result<ProviderInstall, ConfigureError>,
     ) -> Landed {
-        let visible = self.install_visible();
+        let visible = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.mode == Mode::Choose);
         let succeeded = result.is_ok();
         let clean = controls_to_space(&provider);
         let landed = self.installs.land(provider, result, visible);

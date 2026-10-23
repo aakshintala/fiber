@@ -1057,7 +1057,7 @@ impl ModelPicker {
             }),
             buttons_at,
             sections,
-            no_match: !open.query.is_empty() && shown == 0 && total > 0 && installs.is_empty(),
+            no_match: !open.query.is_empty() && shown == 0 && installs.is_empty(),
             status: self.status(),
             spinner: ctx.spinner.to_owned(),
             // The checklist marks rows and saves the list: no model

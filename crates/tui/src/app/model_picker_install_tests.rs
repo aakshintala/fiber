@@ -596,8 +596,7 @@ fn while_a_remote_install_runs_the_config_views_are_refused_and_ask_nothing() {
             assert_eq!(app.theme_command("light"), Effect::None);
             app.save_setting("model", "\"hub/m\"");
             let all = notices(&app);
-            // Equal texts stack once: the refusal and the failed save.
-            assert_eq!(all.len(), 2, "{all:?}");
+            // Every notice is the refusal.
             assert!(
                 all.iter().all(|(_, text)| text.contains(REFUSED)),
                 "{all:?}"

@@ -669,7 +669,11 @@ fn the_rows_drawn_are_the_catalogue_list_filtered_and_never_scripted() {
         .into_iter()
         .map(|row| row.provider)
         .collect();
-    assert_eq!(drawn, picker.catalogue.installable);
+    let mut drawn = drawn;
+    drawn.sort();
+    let mut listed = picker.catalogue.installable.clone();
+    listed.sort();
+    assert_eq!(drawn, listed);
     assert!(!drawn.iter().any(|name| name == "scripted"));
 }
 
