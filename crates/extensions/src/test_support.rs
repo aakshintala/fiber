@@ -120,18 +120,16 @@ impl Home {
     }
 }
 
-/// How long a test waits for a load or a chain before failing.
-const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
-/// that never answers fails the test instead of hanging it.
+/// Runs `f` on its own thread and waits for it under
+/// [`fakes::MUST_SUCCEED_WITHIN`], so a runtime that never answers fails the
+/// test instead of hanging it.
 #[track_caller]
 pub(crate) fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    fakes::Deadline::after(WAIT)
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the extensions")
 }

@@ -475,7 +475,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is

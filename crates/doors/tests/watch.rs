@@ -10,10 +10,10 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 use support::*;
 
 use contract::emit::Emit;
@@ -23,10 +23,6 @@ use contract::{Envelope, SessionId};
 use doors::{Watched, mint};
 use fakes::Deadline;
 use log::Log;
-
-/// How long the live thread waits for the watch to attach, and then for
-/// its watcher to read the `clients` line that attach wrote.
-const ATTACH_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Appends one durable step to the session's log.
 fn step(log: &Log) {
@@ -84,9 +80,9 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     // attach, rather than in the thread. The lines go out either way, so
     // a missed attach fails the test instead of hanging the watch.
     let mut watcher = log.watch();
-    let deadline = Deadline::after(ATTACH_DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let live = thread::spawn(move || {
-        Deadline::after(ATTACH_DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&attached_rx)
             .expect("the watch attached");
         let saw_clients = loop {

@@ -7,6 +7,7 @@
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 use crate::test_support::{Rig, install_extension};
+use fakes::MUST_SUCCEED_WITHIN;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -739,9 +740,6 @@ fn an_unreadable_configuration_keeps_its_io_code() {
 
 /// The deadline of each wait in the command-source tests.
 const DEADLINE: Duration = Duration::from_secs(10);
-/// The bound of each negative receive: a read that starts no command
-/// answers at once, so silence for this long proves it is stuck.
-const SHORT: Duration = Duration::from_secs(2);
 
 /// A provider `acme` serving `m1` from its data file, with a Lua handle
 /// registering no `credential`, a cached list dated just past the epoch,
@@ -898,7 +896,7 @@ fn two_picker_reads_share_one_cancel() {
     std::thread::spawn(move || {
         done.send(read(tui::Refresh::Stale)).unwrap_or(());
     });
-    let catalogue = fakes::Deadline::after(SHORT)
+    let catalogue = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .unwrap()
         .unwrap();

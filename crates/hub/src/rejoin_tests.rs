@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -31,17 +32,9 @@ use crate::fake::FakeStarter;
 use crate::feed::RUN_SCAN;
 use crate::testkit::{await_scanner, id, start, write_log};
 
-/// One named deadline per wait: every rejoin lands before it.
-const DEADLINE: Duration = Duration::from_secs(5);
-
-/// How long, in real time, the registry wait holds a gone connection: the
-/// serving thread unregisters after its read loop sees EOF, so the test
-/// waits on the hub's tick instead of asserting immediately.
-const UNREGISTERED: Duration = Duration::from_secs(3);
-
 /// How long one read inside a multi-line wait blocks, so the reader
 /// notices the wait's end within this bound instead of one more
-/// [`DEADLINE`], as `SLICE` in `crates/doors/tests/socket.rs` does.
+/// [`MUST_SUCCEED_WITHIN`], as `SLICE` in `crates/doors/tests/socket.rs` does.
 const SLICE: Duration = Duration::from_secs(1);
 
 /// Moves the clock one scan after the scanner parks for it: every move of
@@ -53,7 +46,7 @@ fn advance_to_scan(clock: &FakeClock) {
         Some(clock.now() + RUN_SCAN),
         None,
         RUN_SCAN,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
 }
 struct Temp {
@@ -178,8 +171,8 @@ impl Client {
             .name("hub-conn".to_owned())
             .spawn(move || serve_connection(a, hub))
             .unwrap();
-        b.set_read_timeout(Some(DEADLINE)).unwrap();
-        b.set_write_timeout(Some(DEADLINE)).unwrap();
+        b.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+        b.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
         let reader = b.try_clone().unwrap();
         Self {
             write: b,
@@ -197,7 +190,7 @@ impl Client {
     fn next(&mut self, what: &str) -> Value {
         self.read
             .get_ref()
-            .set_read_timeout(Some(DEADLINE))
+            .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
             .unwrap();
         let mut text = String::new();
         self.read
@@ -212,7 +205,7 @@ impl Client {
     /// test's line, which the `thread::scope` closure below cannot.
     #[track_caller]
     fn take_waited(rx: &mpsc::Receiver<Option<Value>>, stop: &AtomicBool, what: &str) -> Value {
-        let got = Deadline::after(DEADLINE).recv(rx);
+        let got = Deadline::after(MUST_SUCCEED_WITHIN).recv(rx);
         stop.store(true, Ordering::SeqCst);
         match got {
             Ok(Some(line)) => line,
@@ -417,7 +410,7 @@ impl Fake {
             })
             .unwrap();
         assert!(
-            Deadline::after(DEADLINE).recv(&stopped).is_ok() || thread::panicking(),
+            Deadline::after(MUST_SUCCEED_WITHIN).recv(&stopped).is_ok() || thread::panicking(),
             "the fake session's listener never stopped"
         );
     }
@@ -440,7 +433,7 @@ impl Fake {
         let (state, _) = self
             .shared
             .changed
-            .wait_timeout_while(state, DEADLINE, |state| {
+            .wait_timeout_while(state, MUST_SUCCEED_WITHIN, |state| {
                 state.conns.iter().any(|conn| !conn.eof)
             })
             .unwrap();
@@ -461,7 +454,7 @@ impl Fake {
         let (state, _) = self
             .shared
             .changed
-            .wait_timeout_while(state, DEADLINE, |state| {
+            .wait_timeout_while(state, MUST_SUCCEED_WITHIN, |state| {
                 !state.conns.iter().any(|conn| pred(&conn.lines, conn.eof))
             })
             .unwrap();
@@ -530,7 +523,9 @@ fn conns_seen(state: &FakeState) -> String {
 fn serve(stream: UnixStream, shared: &Arc<FakeShared>) {
     // Every write to the relay is bounded: `say` writes under the state
     // lock on the test's thread.
-    stream.set_write_timeout(Some(DEADLINE)).unwrap_or(());
+    stream
+        .set_write_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap_or(());
     let mut writer = stream.try_clone().unwrap();
     let mut read = BufReader::new(stream);
     let at = {
@@ -602,12 +597,12 @@ fn arm_pass(hub: &Arc<Hub>) -> mpsc::Receiver<()> {
 #[track_caller]
 fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
     assert!(
-        Deadline::after(DEADLINE).recv(done).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(done).is_ok(),
         "the worker's pass never ended for {what}"
     );
 }
 
-/// Waits, at most [`UNREGISTERED`] of real time, until the registry drops
+/// Waits, at most [`MUST_SUCCEED_WITHIN`] of real time, until the registry drops
 /// every connection: a scoped thread waits on the hub's tick, which
 /// `serve_connection` wakes after it unregisters, and this takes its
 /// notice with one `Deadline` receive. The fake clock never moves during the
@@ -629,7 +624,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
             });
             tx.send(()).unwrap_or(());
         });
-        if Deadline::after(UNREGISTERED).recv(&rx).is_err() {
+        if Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx).is_err() {
             // The wake takes the tick lock, so the waiter sees the flag.
             given_up.store(true, Ordering::SeqCst);
             hub.tick.wake();
@@ -973,7 +968,7 @@ fn rejoin_writes(
     let (client, _client_peer) = UnixStream::pair().unwrap();
     let writer = Arc::new(Mutex::new(client));
     let (stream, mut session) = UnixStream::pair().unwrap();
-    session.set_read_timeout(Some(DEADLINE)).unwrap();
+    session.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     crate::relay::attach_rejoin(sid, stream, &hub, &writer, &relays, epoch);
     drop(opening);
     let mut sent = String::new();
@@ -1032,7 +1027,7 @@ fn a_rejoin_replays_a_label_bearing_subscription_without_its_credential() {
     let (client, _client_peer) = UnixStream::pair().unwrap();
     let writer = Arc::new(Mutex::new(client));
     let (stream, session) = UnixStream::pair().unwrap();
-    session.set_read_timeout(Some(DEADLINE)).unwrap();
+    session.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let mut read = BufReader::new(session.try_clone().unwrap());
     crate::relay::attach_rejoin(sid, stream, &hub, &writer, &relays, epoch);
     let mut first = String::new();
@@ -1941,7 +1936,7 @@ fn route_and_the_sweep_open_only_one_relay() {
         "args": {"content": [{"type": "text", "text": "hi"}]},
     }));
     assert!(
-        Deadline::after(DEADLINE).recv(&paused).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&paused).is_ok(),
         "route paused after its opening"
     );
     // The sweep runs while route waits: the peer rejoins, and the paused
@@ -2009,7 +2004,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
-        Deadline::after(DEADLINE).recv(&paused).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     client.send(&json!({
@@ -2072,7 +2067,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
-        Deadline::after(DEADLINE).recv(&paused).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     // While the worker waits with the summary candidate, the client moves
@@ -2187,7 +2182,7 @@ fn follow_and_the_sweep_open_only_one_relay() {
     old_fake.unlink();
     old_fake.shutdown_write();
     assert!(
-        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered).is_ok(),
         "follow reached its gated start"
     );
     // The next session binds meanwhile: the sweep skips it while the
@@ -2256,7 +2251,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
     advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
-        Deadline::after(DEADLINE).recv(&paused).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     // Further scans complete while it waits, and start no second worker:
@@ -2273,7 +2268,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
         stopped_tx.send(()).unwrap_or(());
     });
     assert!(
-        Deadline::after(DEADLINE).recv(&stopped).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&stopped).is_ok(),
         "stop never waits for the worker"
     );
     drop(release_tx);
@@ -2410,7 +2405,7 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     advance_to_scan(&clock);
     await_scanner(&clock);
     assert!(
-        Deadline::after(DEADLINE).recv(&paused).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&paused).is_ok(),
         "the worker paused mid-pass"
     );
     advance_to_scan(&clock);

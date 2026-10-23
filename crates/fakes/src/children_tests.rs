@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
@@ -16,15 +17,13 @@ use crate::watchdog::Watchdog;
 use crate::within;
 use crate::{group_alive, kill_group, kill_pid, pid_alive};
 
-const DEADLINE: Duration = Duration::from_secs(5);
-
 #[track_caller]
 fn wait_child(mut child: Child) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
     assert!(
-        Deadline::after(DEADLINE).recv(&finished).is_ok(),
-        "waited {DEADLINE:?} for the command to exit"
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished).is_ok(),
+        "waited {MUST_SUCCEED_WITHIN:?} for the command to exit"
     );
 }
 
@@ -37,7 +36,10 @@ fn a_written_line_is_its_pids() {
         .open(ready.path())
         .unwrap();
     writeln!(writer, "12 34").unwrap();
-    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![12, 34]);
+    assert_eq!(
+        ready.wait(Deadline::after(MUST_SUCCEED_WITHIN)),
+        vec![12, 34]
+    );
 }
 
 #[test]
@@ -56,7 +58,7 @@ fn a_writer_that_closes_without_a_line_does_not_drop_the_next_line() {
         .unwrap();
     writeln!(writer, "7").unwrap();
     drop(writer);
-    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![7]);
+    assert_eq!(ready.wait(Deadline::after(MUST_SUCCEED_WITHIN)), vec![7]);
 }
 
 #[test]
@@ -83,9 +85,9 @@ fn ignores_sigterm_survives_sigterm() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let pgid = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(Deadline::after(DEADLINE));
+    let _own = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN));
     kill_group(pgid, "TERM").unwrap();
     let block = super::block_of(ready.path());
     let fifo = block.clone();
@@ -96,11 +98,11 @@ fn ignores_sigterm_survives_sigterm() {
         wrote.send(()).unwrap();
     });
     assert!(
-        Deadline::after(DEADLINE).recv(&wrote_rx).is_ok(),
-        "waited {DEADLINE:?} for {} to be read after SIGTERM",
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&wrote_rx).is_ok(),
+        "waited {MUST_SUCCEED_WITHIN:?} for {} to be read after SIGTERM",
         block.display()
     );
-    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![pgid]);
+    assert_eq!(ready.wait(Deadline::after(MUST_SUCCEED_WITHIN)), vec![pgid]);
     assert!(
         child.try_wait().unwrap().is_none(),
         "SIGTERM killed a command that ignores it"
@@ -122,9 +124,9 @@ fn leaves_descendants_keeps_the_child_after_sigterm() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let pgid = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = Watchdog::group(pgid);
-    let descendant = ready.wait(Deadline::after(DEADLINE))[0];
+    let descendant = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN))[0];
     kill_group(pgid, "TERM").unwrap();
     wait_child(child);
     assert!(
@@ -148,9 +150,9 @@ fn escapes_group_leaves_and_is_not_in_the_group() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let pgid = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = Watchdog::group(pgid);
-    let escapee = ready.wait(Deadline::after(DEADLINE))[0];
+    let escapee = ready.wait(Deadline::after(MUST_SUCCEED_WITHIN))[0];
     assert_ne!(escapee, pgid);
     assert!(
         !in_group(escapee, pgid),
@@ -180,9 +182,17 @@ fn ready_at_reads_an_existing_fifo() {
     let dir = TempDir::new("fiber-ready-at");
     let fifo = dir.path().join("made.fifo");
     crate::fifo(&fifo);
+    // The fake clock never advances, so the span never ends: the closure
+    // returns the wall-clock bound only while fake time remains.
     let clock = FakeClock::new();
-    let end = clock.origin() + DEADLINE;
-    let ready = Ready::at(&fifo, &|| end.saturating_duration_since(clock.now()));
+    let end = clock.origin() + Duration::from_secs(5);
+    let ready = Ready::at(&fifo, &|| {
+        if clock.now() < end {
+            MUST_SUCCEED_WITHIN
+        } else {
+            Duration::ZERO
+        }
+    });
     assert_eq!(ready.path(), fifo);
     let child = Command::new("/bin/sh")
         .arg("-c")
@@ -193,7 +203,7 @@ fn ready_at_reads_an_existing_fifo() {
         .spawn()
         .unwrap();
     let pid = child.id();
-    assert_eq!(ready.wait(Deadline::after(DEADLINE)), vec![pid]);
+    assert_eq!(ready.wait(Deadline::after(MUST_SUCCEED_WITHIN)), vec![pid]);
     wait_child(child);
 }
 
@@ -206,7 +216,7 @@ fn ready_at_zero_fails_naming_the_fifo_without_opening_it() {
     let failed = std::panic::catch_unwind(|| {
         within(
             "Ready::at with no time left",
-            Deadline::after(DEADLINE),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || {
                 drop(Ready::at(&at, &|| Duration::ZERO));
             },

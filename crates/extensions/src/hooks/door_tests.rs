@@ -10,6 +10,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -31,9 +32,6 @@ use super::super::SessionExtensions;
 use crate::{Origin, Request, plan};
 use fakes::FakeLock;
 
-/// Wall-clock bound on a wait for a delivery.
-const WAIT: Duration = Duration::from_secs(5);
-
 struct Home {
     root: fakes::TempDir,
     watchdog: Option<fakes::Watchdog>,
@@ -44,7 +42,7 @@ impl Drop for Home {
         self.watchdog
             .take()
             .unwrap()
-            .stand_down(fakes::Deadline::after(WAIT));
+            .stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     }
 }
 
@@ -142,7 +140,7 @@ fn interaction(rx: &mpsc::Receiver<Delivery>, wait: &Deadline) -> InteractionReq
     requested
 }
 
-/// Runs `f` on its own thread and waits for it under [`WAIT`], so a load
+/// Runs `f` on its own thread and waits for it under [`MUST_SUCCEED_WITHIN`], so a load
 /// that never returns fails the test instead of hanging it.
 #[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -150,7 +148,7 @@ fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the extensions")
 }
@@ -173,7 +171,7 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
     let mut ids = std::collections::BTreeMap::new();
     // One deadline for the whole wait: both Interactions arrive on one
     // stream with nothing between them but a map insert.
-    let wait = Deadline::after(WAIT);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     for _ in 0..2 {
         let requested = interaction(&rx, &wait);
         ids.insert(
@@ -202,7 +200,7 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
             .is_none(),
         "the holding extension takes the reply"
     );
-    let Delivery::Resolved(resolved, ack) = Deadline::after(WAIT)
+    let Delivery::Resolved(resolved, ack) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the Resolved arrives")
     else {
@@ -212,13 +210,13 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
     assert_eq!(resolved.by, ResolvedBy::Person);
     (ack.0)(Ok(None));
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&accepted)
             .expect("the reply is answered"),
         "the reply is accepted once the line is in the log"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&second)
             .expect("the command returns")
             .unwrap(),
@@ -240,7 +238,7 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
             )
             .is_none()
     );
-    let Delivery::Resolved(_, ack) = Deadline::after(WAIT)
+    let Delivery::Resolved(_, ack) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the Resolved arrives")
     else {
@@ -248,7 +246,7 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
     };
     (ack.0)(Ok(None));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&first)
             .expect("the command returns")
             .unwrap(),
@@ -297,7 +295,7 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
             let _sent = send.send(queued.wait());
         });
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "admitted command inner call")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "admitted command inner call")
         else {
             panic!("expected inner call");
         };
@@ -308,7 +306,8 @@ fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
         assert!(!request.cancel.is_cancelled());
         (request.taken)();
         (request.answer)(tool_answer());
-        let returned = Deadline::after(WAIT).recv_or_fail(&result, "admitted command end");
+        let returned =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "admitted command end");
         if failing {
             assert!(returned.unwrap_err().to_string().contains("boom"));
         } else {
@@ -339,7 +338,7 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
             let _sent = send.send(queued.wait());
         });
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "parked command inner call")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "parked command inner call")
         else {
             panic!("expected inner call");
         };
@@ -348,14 +347,14 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
         assert!(clock.await_thread_parked(
             caller.thread().id(),
             Some(until),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ));
         // The VM ends a parked callback at its own deadline; the caller's
         // grace is a backstop, not extra command time.
         let parked = clock
             .mark_parked(
                 clock.origin() + Duration::from_millis(100),
-                fakes::Deadline::after(WAIT),
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN),
             )
             .expect("the scheduler parks at the command deadline");
         let parked = parked.threads();
@@ -370,7 +369,7 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
             Some(park),
             Some(vm),
             Duration::from_millis(milliseconds),
-            &Deadline::after(WAIT),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
         );
         if milliseconds < 100 {
             assert!(!request.cancel.is_cancelled());
@@ -379,17 +378,17 @@ fn a_command_deadline_ends_its_runner_at_but_not_below_the_boundary() {
             assert!(clock.await_thread_parked(
                 caller.thread().id(),
                 Some(until),
-                fakes::Deadline::after(WAIT)
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             ));
             clock.advance_when_parked(
                 Some(park),
                 Some(vm),
                 Duration::from_millis(1),
-                &Deadline::after(WAIT),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
         }
         assert!(matches!(
-            Deadline::after(WAIT).recv_or_fail(&result, "command timeout"),
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "command timeout"),
             Err(crate::Error::Timeout { .. })
         ));
         assert_eq!(session.lua[0].runners_held(), 0);
@@ -439,7 +438,7 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
             let _sent = send.send(queued.wait());
         });
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "untaken command request")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "untaken command request")
         else {
             panic!("expected inner call");
         };
@@ -452,12 +451,12 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
         assert!(clock.await_thread_parked(
             command_thread.thread().id(),
             Some(clock.origin() + Duration::from_millis(command_ms + 1000)),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ));
         assert!(clock.await_thread_parked(
             hook_thread.thread().id(),
             Some(clock.origin() + Duration::from_millis(hook_ms)),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ));
         assert!(!marker.exists());
         let (park, thread) = if command_first {
@@ -475,24 +474,25 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
             Some(park),
             Some(thread),
             park - clock.now(),
-            &Deadline::after(WAIT),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
         );
         if command_first {
             assert!(matches!(
-                Deadline::after(WAIT).recv_or_fail(&command_result, "command timeout before hook"),
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&command_result, "command timeout before hook"),
                 Err(crate::Error::Timeout { .. })
             ));
             assert!(request.cancel.is_cancelled());
-            let answer =
-                Deadline::after(WAIT).recv_or_fail(&hook_result, "hook after command timeout");
+            let answer = Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&hook_result, "hook after command timeout");
             assert!(matches!(answer.outcome, BeforeToolOutcome::Unchanged));
             assert!(answer.notices.is_empty());
             assert_eq!(fs::read_to_string(&marker).unwrap(), "x");
             (request.taken)();
             assert!(!session.lua[0].runs_own_command_call());
         } else {
-            let answer =
-                Deadline::after(WAIT).recv_or_fail(&hook_result, "hook timeout before command");
+            let answer = Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&hook_result, "hook timeout before command");
             let BeforeToolOutcome::Failed(failure) = answer.outcome else {
                 panic!("expected hook timeout");
             };
@@ -504,7 +504,7 @@ fn an_untaken_request_keeps_stream_order_under_both_timeout_orders() {
             assert!(command_result.try_recv().is_err());
             (request.answer)(tool_answer());
             assert_eq!(
-                Deadline::after(WAIT)
+                Deadline::after(MUST_SUCCEED_WITHIN)
                     .recv_or_fail(&command_result, "command after hook timeout")
                     .unwrap(),
                 json!("completed")
@@ -532,7 +532,7 @@ fn the_commands_own_tool_runs_in_a_gap_without_tool_hooks() {
         let _sent = send.send(queued.wait());
     });
     let Delivery::InnerCall(request) =
-        Deadline::after(WAIT).recv_or_fail(&rx, "own tool command request")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "own tool command request")
     else {
         panic!("expected inner call");
     };
@@ -548,7 +548,7 @@ fn the_commands_own_tool_runs_in_a_gap_without_tool_hooks() {
     answer.content = vec![contract::shapes::ContentPart::Text { text: "gap".into() }];
     (request.answer)(answer);
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result, "own tool command completion")
             .unwrap(),
         json!("gap")
@@ -582,7 +582,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
             let _sent = send.send(queued.wait());
         });
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "own-hook request")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "own-hook request")
         else {
             panic!("expected inner call");
         };
@@ -638,7 +638,7 @@ fn own_tool_hooks_fail_when_reached_and_run_normally_after_the_answer() {
         assert!(!marker.exists());
         (request.answer)(tool_answer());
         assert!(!session.lua[0].runs_own_command_call());
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result, "command before normal hook")
             .unwrap();
         let caller = session.clone();
@@ -712,7 +712,7 @@ fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
             let _sent = send.send(queued.wait());
         });
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "ordered-hook request")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "ordered-hook request")
         else {
             panic!("expected inner call");
         };
@@ -735,7 +735,7 @@ fn earlier_hooks_run_and_a_refusal_before_the_own_hook_wins() {
         assert_eq!(fs::read_to_string(earlier).unwrap(), "y");
         assert!(!own.exists());
         (request.answer)(tool_answer());
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result, "ordered command end")
             .unwrap();
     }
@@ -769,7 +769,7 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
             .command(&contract::CommandId("c_door".into()), "go", "")
             .unwrap()();
         let Delivery::InnerCall(request) =
-            Deadline::after(WAIT).recv_or_fail(&rx, "door command request")
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "door command request")
         else {
             panic!("expected inner call");
         };
@@ -783,7 +783,7 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
         let parked = clock
             .mark_parked(
                 clock.origin() + Duration::from_secs(2),
-                fakes::Deadline::after(WAIT),
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN),
             )
             .expect("the call parks at its timeout plus the grace");
         let parked = parked.threads();
@@ -798,9 +798,10 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
                 Some(clock.origin() + Duration::from_secs(2)),
                 Some(parked),
                 Duration::from_millis(2000),
-                &Deadline::after(WAIT),
+                &Deadline::after(MUST_SUCCEED_WITHIN),
             );
-            let notice = Deadline::after(WAIT).recv_or_fail(&events, "command timeout notice");
+            let notice = Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&events, "command timeout notice");
             let contract::events::Event::Notice(notice) = notice else {
                 panic!("expected timeout notice");
             };
@@ -823,8 +824,8 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
             }
             (request.answer)(answer);
             assert!(!session.lua[0].runs_own_command_call());
-            let status =
-                Deadline::after(WAIT).recv_or_fail(&events, "ordinary tool outcome status");
+            let status = Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&events, "ordinary tool outcome status");
             let contract::events::Event::ExtensionUi(ui) = status else {
                 panic!("expected ordinary outcome status");
             };
@@ -840,7 +841,7 @@ fn the_door_returns_a_tool_failure_normally_and_ends_a_running_call_at_timeout()
                 }
             );
         }
-        Deadline::after(WAIT).recv_or_fail(&ended, "command cleanup wake");
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&ended, "command cleanup wake");
         assert_eq!(session.lua[0].runners_held(), 0);
         assert!(request.cancel.is_cancelled());
         assert!(events.try_recv().is_err());

@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
@@ -21,9 +22,6 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, Value};
 
 use crate::{Error, LuaExtension};
-
-/// Wall-clock bound on a wait for the extension's thread.
-const WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -334,7 +332,7 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     let caller_handle = std::thread::spawn(move || done_tx.send(caller.command("slow", "")));
     let caller_id = caller_handle.thread().id();
     // The drive reached the door, so the callback is parked on it.
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&called)
         .expect("the drive reached the door");
     // The caller waits at the deadline plus the grace once the callback parks;
@@ -342,11 +340,15 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
     let deadline = clock.origin() + Duration::from_millis(200);
     let grace = clock.origin() + Duration::from_millis(1200);
     assert!(
-        clock.await_thread_parked(caller_id, Some(grace), fakes::Deadline::after(WAIT)),
+        clock.await_thread_parked(
+            caller_id,
+            Some(grace),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the caller parks at the slow command deadline plus the grace"
     );
     let parked = clock
-        .mark_parked(deadline, fakes::Deadline::after(WAIT))
+        .mark_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("the scheduler parks at the slow command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -359,11 +361,11 @@ fn drive_parked_past_deadline_drops_the_late_answer() {
         Some(deadline),
         Some(vm),
         Duration::from_millis(200),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
         matches!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the slow call returned"),
             Err(Error::Timeout { .. })
@@ -447,7 +449,7 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     let holder = Arc::clone(&ext);
     let (hold_tx, hold_rx) = mpsc::channel();
     std::thread::spawn(move || hold_tx.send(holder.command("hold", "")));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&called_rx)
         .expect("the drive reached the door");
     // A provider callback runs while the driven command is still held.
@@ -464,7 +466,7 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     lock(&order).push("provider_done");
     release_tx.send(()).expect("the test releases the drive");
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&hold_rx)
             .expect("the held command returned")
             .unwrap(),

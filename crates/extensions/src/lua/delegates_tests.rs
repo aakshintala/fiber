@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,8 +26,6 @@ use super::super::Target;
 use super::super::declared::CallbackTimeouts;
 use super::super::hub::{Hub, Phase, StopReason};
 use super::run_arg;
-
-const WAIT: Duration = Duration::from_secs(5);
 
 #[allow(clippy::too_many_lines, reason = "test helpers read top to bottom")]
 /// A held finish with every optional field populated, so the `run`
@@ -491,7 +490,7 @@ fn start_job(ext: &Arc<LuaExtension>, bound_rx: &mpsc::Receiver<JobId>) -> JobId
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || go.command("go", ""),
     );
-    let job_id = Deadline::after(WAIT)
+    let job_id = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(bound_rx)
         .expect("waited for the starter's bind");
     assert_eq!(started.unwrap(), job_id.0.clone());
@@ -513,7 +512,9 @@ fn end_job(ext: &LuaExtension, job_id: &JobId, status: Outcome) -> bool {
 fn wait_until_idle(ext: &LuaExtension) {
     assert!(
         ext.hub
-            .wait_for(ext.hub.lock(), WAIT, |shared| shared.queue.is_empty()
+            .wait_for(ext.hub.lock(), MUST_SUCCEED_WITHIN, |shared| shared
+                .queue
+                .is_empty()
                 && shared.calls.is_empty()),
         "the extension thread drains the delegate item"
     );
@@ -584,7 +585,7 @@ fn timed_out_run_emits_hook_failed_naming_the_extension() {
         end_job(ext, &job_id, Outcome::Completed),
         "the completion pushes the run"
     );
-    let run_started = Deadline::after(WAIT)
+    let run_started = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.event_rx)
         .expect("waited for the run to park");
     assert!(
@@ -603,7 +604,7 @@ fn timed_out_run_emits_hook_failed_naming_the_extension() {
         Some(pushed_at + timeout),
         None,
         timeout,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     wait_until_idle(ext);
     let hook_failed = hook_failed_notices(&rig.emit);
@@ -688,7 +689,7 @@ fn parked_hook_holds_the_delegate_item_until_it_finishes() {
         .name("delegates-hook-caller".to_owned())
         .spawn(move || hook_tx.send(hook.hook("turn_start", 0, serde_json::Value::Null)))
         .expect("the hook caller spawns");
-    let started = Deadline::after(WAIT)
+    let started = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.event_rx)
         .expect("waited for the hook to start");
     assert!(
@@ -703,7 +704,7 @@ fn parked_hook_holds_the_delegate_item_until_it_finishes() {
     );
     // The spawn runs after the worker parks on it, so the hook's arrival
     // at the holding fake proves the hook is parked, not just running.
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.held_arrived_rx)
         .expect("waited for the hook's start to park");
     assert!(
@@ -726,7 +727,7 @@ fn parked_hook_holds_the_delegate_item_until_it_finishes() {
     // Answering the hook's start resumes the hook, whose finish frees
     // the stream for the queued run.
     rig.held_release_tx.send(()).unwrap_or(());
-    let ran = Deadline::after(WAIT)
+    let ran = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rig.event_rx)
         .expect("waited for the released run");
     assert!(
@@ -740,7 +741,7 @@ fn parked_hook_holds_the_delegate_item_until_it_finishes() {
         "the hook's end releases the run, in {ran:?}"
     );
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&hook_rx)
             .expect("waited for the hook's answer")
             .is_ok(),

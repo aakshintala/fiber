@@ -2,17 +2,14 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use common::{Setup, write};
 use config::{Config, ProjectKey, Sources};
 use extensions::LuaExtension;
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
-
-/// How long a test waits for the command before failing it.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// Writes `init` as the entry script of `fiber.test/<short>` and returns a
 /// `LuaExtension` started in a session on the setup's workspace.
@@ -43,7 +40,7 @@ fn exec_extension(
     )
 }
 
-/// Runs `command` on its own thread under `WAIT`, so a callback the runtime
+/// Runs `command` on its own thread under `MUST_SUCCEED_WITHIN`, so a callback the runtime
 /// fails to stop fails the test instead of hanging it.
 #[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
 #[track_caller]
@@ -52,9 +49,9 @@ fn exec_call(ext: &Arc<LuaExtension>, command: &str) -> Result<String, extension
     let ext = Arc::clone(ext);
     let name = command.to_owned();
     std::thread::spawn(move || tx.send(ext.command(&name, "")));
-    match Deadline::after(WAIT).recv(&rx) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx) {
         Ok(result) => result,
-        Err(_) => panic!("`{command}` did not return within {WAIT:?}"),
+        Err(_) => panic!("`{command}` did not return within {MUST_SUCCEED_WITHIN:?}"),
     }
 }
 

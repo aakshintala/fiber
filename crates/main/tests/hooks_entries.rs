@@ -38,11 +38,6 @@ const HOOKS_NAME: &str = "github.com/aakshintala/fiber/extensions/hooks";
 /// capture file named by its first argument, then answers per its second.
 const CAPTURE_SH: &str = "#!/bin/sh\ncat >> \"$1\"\ncase \"$2\" in\n  json) printf '{\"content\":\"hook replaced\"}\\n' ;;\n  text) printf 'plain hook context\\n' ;;\n  refuse) printf 'no writes here\\n' >&2; exit 2 ;;\nesac\n";
 
-/// The repository root: the tests install the package from its source.
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn entry(point: &str, command: &str, args: Value, timeout: u64, on_failure: &str) -> Value {
     json!({
         "point": point,
@@ -58,7 +53,9 @@ impl Setup {
     fn install_hooks(&self) {
         extensions::plan(
             &self.home(),
-            &extensions::Request::Path(repo_root().join("extensions/hooks")),
+            &extensions::Request::Path(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/hooks"),
+            ),
             "0.0.0",
             &extensions::Origin::github(),
             &*fakes::clock::FakeClock::new(),

@@ -1,5 +1,6 @@
 //! Scripted host-call matching (`docs/testing.md`, "Testing an extension").
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -143,14 +144,14 @@ fn wait_hang_matched_returns_once_the_entry_matches() {
     let waiter = Arc::clone(&script);
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let outcome = waiter.wait_hang_matched(1, Duration::from_secs(5));
+        let outcome = waiter.wait_hang_matched(1, MUST_SUCCEED_WITHIN);
         let _ignored = done_tx.send(outcome);
     });
     script
-        .wait_hang_waiting(1, Duration::from_secs(5))
+        .wait_hang_waiting(1, MUST_SUCCEED_WITHIN)
         .expect("the waiter reaches the hang-match wait");
     script.hang_matched(1, &json!({"program": "sh"}), FakeClock::new().now());
-    let outcome = Deadline::after(Duration::from_secs(5))
+    let outcome = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the waiter returns once entry 1 matches");
     assert!(outcome.is_ok(), "{outcome:?}");
@@ -170,7 +171,7 @@ fn wait_hang_matched_ignores_other_entries_until_its_own_matches() {
         let _ignored = done_tx.send(outcome);
     });
     script
-        .wait_hang_waiting(1, Duration::from_secs(5))
+        .wait_hang_waiting(1, MUST_SUCCEED_WITHIN)
         .expect("the waiter reaches the hang-match wait");
     // A match on another entry must not release the waiter: only entry 1
     // ends its wait. The waiter announces itself through hang_waiters, so
@@ -184,7 +185,7 @@ fn wait_hang_matched_ignores_other_entries_until_its_own_matches() {
         "waiting for entry 1 ignores a match on entry 2"
     );
     script.hang_matched(1, &json!({"program": "sh"}), FakeClock::new().now());
-    let outcome = Deadline::after(Duration::from_secs(5))
+    let outcome = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the waiter returns once entry 1 matches");
     assert!(outcome.is_ok(), "{outcome:?}");
@@ -220,11 +221,11 @@ fn park_hang_ends_when_the_clock_reaches_the_deadline() {
         let _ignored = done_tx.send(());
     });
     assert!(
-        clock.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(5))),
+        clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at its deadline before the advance"
     );
     clock.advance(Duration::from_millis(100));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the park ends at its deadline");
     assert!(script.unmet().is_empty(), "the park records no miss");
@@ -246,11 +247,11 @@ fn a_stopped_park_pushes_no_miss() {
         let _ignored = done_tx.send(());
     });
     assert!(
-        clock.await_parked(deadline, fakes::Deadline::after(Duration::from_secs(5))),
+        clock.await_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at its deadline before the stop"
     );
     drop(stop_tx);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the park ends once the stop sender drops");
     assert!(script.unmet().is_empty(), "a stop records no miss");

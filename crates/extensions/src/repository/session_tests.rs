@@ -5,6 +5,7 @@ use config::ProjectKey;
 use contract::ErrorCode;
 use contract::events::{OfferDecision, OfferedItem, OfferedKind};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
+use fakes::MUST_SUCCEED_WITHIN;
 use serde_json::json;
 
 use super::declared_tests::Repo;
@@ -96,7 +97,6 @@ fn a_directory_is_invalid_arguments() {
 #[test]
 fn a_fifo_is_invalid_arguments_and_does_not_block() {
     use std::sync::mpsc;
-    use std::time::Duration;
     let repo = Repo::bare();
     fakes::fifo(repo.root().join("fifo"));
     let code = session(&repo);
@@ -104,7 +104,7 @@ fn a_fifo_is_invalid_arguments_and_does_not_block() {
     let _reader = std::thread::spawn(move || {
         tx.send(code.file("fifo")).unwrap();
     });
-    let deadline = fakes::Deadline::after(Duration::from_secs(5));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let failure = deadline
         .recv_or_fail(&rx, "refuse the offered FIFO without blocking")
         .unwrap_err();

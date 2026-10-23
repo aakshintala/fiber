@@ -10,6 +10,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
@@ -29,16 +30,13 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, NoLock, ProviderServer, Recorder, Response};
 use serde_json::{Map, Value, json};
 
-/// How long a test waits for a signal or an answer before failing.
-const WAIT: Duration = Duration::from_secs(5);
-
 // debt: 4 copies of this helper across the extensions test binaries, move into common/mod.rs once group 9C1 merges
 /// The thread parked at `at`: exactly one thread waits there.
 #[track_caller]
 fn thread_parked_at(clock: &FakeClock, at: Instant) -> std::thread::ThreadId {
     let mark = clock
-        .mark_parked(at, fakes::Deadline::after(WAIT))
-        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {WAIT:?}"));
+        .mark_parked(at, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
+        .unwrap_or_else(|| panic!("waited for a park at {at:?} within {MUST_SUCCEED_WITHIN:?}"));
     let threads = mark.threads();
     assert_eq!(
         threads.len(),
@@ -62,13 +60,13 @@ fn extension(dir: &Path, short: &str, init: &str, clock: Arc<FakeClock>) -> Arc<
     ))
 }
 
-/// The extension's tools, read on a thread under `WAIT`.
+/// The extension's tools, read on a thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn tools(ext: &Arc<LuaExtension>) -> Vec<LuaTool> {
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.tools()));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the tools")
         .expect("the entry script ran")
@@ -199,19 +197,21 @@ fn run(tool: &Arc<LuaTool>, arguments: Value) -> mpsc::Receiver<Output> {
     rx
 }
 
-/// The call's result, under `WAIT`.
+/// The call's result, under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn ran(rx: &mpsc::Receiver<Output>, wait: &Deadline) -> Output {
     wait.recv(rx).expect("waited for the tool call")
 }
 
-/// `tool`'s effects for `arguments`, on a thread under `WAIT`.
+/// `tool`'s effects for `arguments`, on a thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn effects(tool: &Arc<LuaTool>, arguments: Value) -> Result<Effects, EffectsError> {
     let tool = Arc::clone(tool);
-    fakes::within("the effects call", Deadline::after(WAIT), move || {
-        tool.effects(&args(arguments))
-    })
+    fakes::within(
+        "the effects call",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || tool.effects(&args(arguments)),
+    )
 }
 
 /// The result's text parts, joined.
@@ -251,14 +251,16 @@ fiber.tool("per_path", {
 fiber.command("count", { timeout = 1000, run = function() return tostring(calls) end })
 "#;
 
-/// Runs the command `name` on a thread under `WAIT`.
+/// Runs the command `name` on a thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn command(ext: &Arc<LuaExtension>, name: &str) -> String {
     let ext = Arc::clone(ext);
     let name = name.to_owned();
-    fakes::within("the command", Deadline::after(WAIT), move || {
-        ext.command(&name, "")
-    })
+    fakes::within(
+        "the command",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || ext.command(&name, ""),
+    )
     .expect("the command ran")
 }
 
@@ -284,7 +286,10 @@ fn static_effects_are_returned_without_starting_a_callback() {
     );
     assert_eq!(command(&ext, "count"), "0");
     assert_eq!(
-        text(&ran(&run(still, json!({})), &Deadline::after(WAIT))),
+        text(&ran(
+            &run(still, json!({})),
+            &Deadline::after(MUST_SUCCEED_WITHIN)
+        )),
         "ran"
     );
     assert_eq!(command(&ext, "count"), "1");
@@ -378,13 +383,13 @@ fiber.tool("slow", {
         tx.send(()).unwrap();
         result
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the effects function to start");
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(100) + GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "waited for the effects call to park at its grace"
     );
@@ -392,11 +397,11 @@ fiber.tool("slow", {
         Some(asked + Duration::from_millis(100) + GRACE),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
         {
-            Deadline::after(WAIT).recv(&rx).expect("waited for the effects call");
+            Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx).expect("waited for the effects call");
             call.join().expect("effects thread panicked")
         },
         Err(EffectsError::Tool(
@@ -435,7 +440,12 @@ fn each_return_maps_to_its_result() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let ext = extension(dir.path(), "a", RETURNS, FakeClock::new());
     let tools = by_name(&ext);
-    let call = |name: &str| ran(&run(&tools[name], json!({})), &Deadline::after(WAIT));
+    let call = |name: &str| {
+        ran(
+            &run(&tools[name], json!({})),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
+        )
+    };
     let plain = call("plain");
     assert_eq!((text(&plain), plain.error), ("3 notes".to_owned(), None));
     let part = call("part");
@@ -443,7 +453,7 @@ fn each_return_maps_to_its_result() {
     assert_eq!(
         ran(
             &run(&tools["args"], json!({ "path": "note.txt" })),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )
         .content,
         vec![ContentPart::Text {
@@ -515,13 +525,13 @@ fiber.tool("spin", {
     let tools = by_name(&ext);
     let asked = clock.now();
     let first = run(&tools["spin"], json!({}));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for spin to start");
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(100) + GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "waited for spin to park at its grace"
     );
@@ -529,10 +539,10 @@ fiber.tool("spin", {
         Some(asked + Duration::from_millis(100) + GRACE),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        failed(&ran(&first, &Deadline::after(WAIT))),
+        failed(&ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN))),
         (
             ErrorCode::Timeout,
             "`fiber.test/slow`: `spin` passed its 100 ms timeout and was stopped.".to_owned()
@@ -541,7 +551,7 @@ fiber.tool("spin", {
     assert_eq!(
         text(&ran(
             &run(&tools["spin"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "again"
     );
@@ -577,7 +587,7 @@ fiber.tool("wait", {{
     let deadline = clock.now().checked_add(Duration::from_millis(100)).unwrap();
     let first = run(&tools["wait"], json!({}));
     assert!(
-        held.await_requests(1, Deadline::after(WAIT)),
+        held.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the request to reach the server"
     );
     // The caller of a parked call waits to the deadline plus the grace,
@@ -585,7 +595,7 @@ fiber.tool("wait", {{
     assert!(
         clock.await_parked(
             deadline.checked_add(GRACE).unwrap(),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "waited for the caller to see the call parked"
     );
@@ -594,10 +604,10 @@ fiber.tool("wait", {{
         Some(deadline),
         Some(scheduler),
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        failed(&ran(&first, &Deadline::after(WAIT))),
+        failed(&ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN))),
         (
             ErrorCode::Timeout,
             "`fiber.test/slow`: `wait` passed its 100 ms timeout and was stopped.".to_owned()
@@ -606,7 +616,7 @@ fiber.tool("wait", {{
     assert_eq!(
         text(&ran(
             &run(&tools["wait"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "again"
     );
@@ -634,18 +644,24 @@ fiber.tool("fetch", {
     let tools = by_name(&ext);
     let first = run(&tools["fetch"], json!({ "url": one.url() }));
     assert!(
-        one.await_requests(1, Deadline::after(WAIT)),
+        one.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the first request"
     );
     let second = run(&tools["fetch"], json!({ "url": two.url() }));
     assert!(
-        two.await_requests(1, Deadline::after(WAIT)),
+        two.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the second request while the first is parked"
     );
     two.release();
-    assert_eq!(text(&ran(&second, &Deadline::after(WAIT))), "two");
+    assert_eq!(
+        text(&ran(&second, &Deadline::after(MUST_SUCCEED_WITHIN))),
+        "two"
+    );
     one.release();
-    assert_eq!(text(&ran(&first, &Deadline::after(WAIT))), "one");
+    assert_eq!(
+        text(&ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN))),
+        "one"
+    );
 }
 
 #[test]
@@ -669,14 +685,17 @@ fiber.tool("runs", {
     let tools = by_name(&ext);
     let runs = &tools["runs"];
     assert_eq!(
-        text(&ran(&run(runs, json!({})), &Deadline::after(WAIT))),
+        text(&ran(
+            &run(runs, json!({})),
+            &Deadline::after(MUST_SUCCEED_WITHIN)
+        )),
         "0"
     );
     // The run's `extension_exec` would be sent before its reply resumes
     // the callback, so it would be here by now.
     assert!(matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)));
     assert!(effects(runs, json!({})).is_ok());
-    match Deadline::after(WAIT).recv(&inbox) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&inbox) {
         Ok(Delivery::ExtensionExec(exec)) => {
             assert_eq!(exec.program, "sh");
             assert_eq!(exec.args, ["-c", "exit 3"]);
@@ -708,7 +727,7 @@ fiber.tool("refresh", {
     let tools = by_name(&ext);
     let said = text(&ran(
         &run(&tools["refresh"], json!({})),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     ));
     let mut lines = said.lines();
     assert_eq!(lines.next(), Some("false"));
@@ -724,7 +743,7 @@ fiber.tool("refresh", {
 // "What a package holds" and "Registering").
 
 /// The session's extensions with these config overrides, loaded on a
-/// thread under `WAIT`.
+/// thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn session_with(setup: &Setup, overrides: &[&str]) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
@@ -735,14 +754,18 @@ fn session_with(setup: &Setup, overrides: &[&str]) -> Arc<SessionExtensions> {
     })
     .unwrap();
     let home = setup.home();
-    let loaded = fakes::within("the extensions to load", Deadline::after(WAIT), move || {
-        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
-        SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
-    });
+    let loaded = fakes::within(
+        "the extensions to load",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+            SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
+        },
+    );
     Arc::new(loaded)
 }
 
-/// The session's extensions, loaded on a thread under `WAIT`.
+/// The session's extensions, loaded on a thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn session(setup: &Setup) -> Arc<SessionExtensions> {
     session_with(setup, &[])
@@ -1063,11 +1086,13 @@ fiber.tool("probe", {
     let tools = session.tools();
     let (_, probe) = tools.first().expect("the tool is declared");
     let probe = Arc::clone(probe);
-    fakes::within("the effects call", Deadline::after(WAIT), move || {
-        probe.effects(&Map::new())
-    })
+    fakes::within(
+        "the effects call",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || probe.effects(&Map::new()),
+    )
     .expect("the effects function ran");
-    match Deadline::after(WAIT).recv(&inbox) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&inbox) {
         Ok(Delivery::ExtensionExec(exec)) => assert_eq!(exec.process.exit_code, Some(4)),
         other => panic!("expected the effects function's extension_exec, got {other:?}"),
     }
@@ -1128,18 +1153,21 @@ fiber.tool("count", {
     let tools = by_name(&ext);
     let asked = clock.now();
     let spinning = run(&tools["spin"], json!({}));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for spin to start");
     // The thread spins, so this call stays queued.
     let cancel = CancelToken::new();
     let queued = run_cancellable(&tools["count"], &cancel);
     cancel.cancel();
-    assert_eq!(ran(&queued, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&queued, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(100) + GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "waited for spin to park at its grace"
     );
@@ -1147,16 +1175,16 @@ fiber.tool("count", {
         Some(asked + Duration::from_millis(100) + GRACE),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        failed(&ran(&spinning, &Deadline::after(WAIT))).0,
+        failed(&ran(&spinning, &Deadline::after(MUST_SUCCEED_WITHIN))).0,
         ErrorCode::Timeout
     );
     assert_eq!(
         text(&ran(
             &run(&tools["count"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "1"
     );
@@ -1191,15 +1219,18 @@ fiber.tool("wait", {{
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["wait"], &cancel);
     assert!(
-        held.await_requests(1, Deadline::after(WAIT)),
+        held.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the request to reach the server"
     );
     cancel.cancel();
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     assert_eq!(
         text(&ran(
             &run(&tools["wait"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "again"
     );
@@ -1229,16 +1260,19 @@ fiber.tool("spin", {
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["spin"], &cancel);
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for spin to start");
     cancel.cancel();
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     // The interrupt is cleared: the next call runs to its own result.
     assert_eq!(
         text(&ran(
             &run(&tools["spin"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "again"
     );
@@ -1277,19 +1311,22 @@ fn a_call_parked_on_exec_returns_once_its_group_is_empty() {
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
+    let group = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = fakes::Watchdog::group(group);
     cancel.cancel();
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
     );
-    watchdog.stand_down(fakes::Deadline::after(WAIT));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     assert_eq!(
         text(&ran(
             &run(&tools["exec"], json!({})),
-            &Deadline::after(WAIT)
+            &Deadline::after(MUST_SUCCEED_WITHIN)
         )),
         "again"
     );
@@ -1325,12 +1362,12 @@ fiber.tool("exec", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
+    let group = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = fakes::Watchdog::group(group);
     let cancelled_at = clock.now();
     cancel.cancel();
     // The trap's line: SIGTERM arrived and the group runs on.
-    ready.wait(fakes::Deadline::after(WAIT));
+    ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&first)
@@ -1345,9 +1382,12 @@ fiber.tool("exec", {{
         Some(kill_at),
         Some(exec_thread),
         support::group::GRACE,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
@@ -1356,7 +1396,7 @@ fiber.tool("exec", {{
     let before = len();
     pause(Duration::from_millis(100));
     assert_eq!(len(), before, "nothing writes after the call returned");
-    watchdog.stand_down(fakes::Deadline::after(WAIT));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1392,23 +1432,29 @@ fiber.tool("other", {
     let asked = clock.now();
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["find"], &cancel);
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     cancel.cancel();
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
+        clock.await_parked(abandon_at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the caller to park at the grace"
     );
     clock.advance_when_parked(
         Some(abandon_at),
         None,
         Duration::from_millis(50) + GRACE,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
-    let later = ran(&run(&tools["other"], json!({})), &Deadline::after(WAIT));
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
+    let later = ran(
+        &run(&tools["other"], json!({})),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
         failed(&later),
         (
@@ -1453,12 +1499,12 @@ fiber.tool("find", {{
     let cancel = CancelToken::new();
     let waiting = run_cancellable(&tools["wait"], &cancel);
     assert!(
-        held.await_requests(1, Deadline::after(WAIT)),
+        held.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the request to reach the server"
     );
     let asked = clock.now();
     let stuck = run(&tools["find"], json!({}));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the stuck callback to pass its clock check");
     // The thread is stuck in a C call, so it never drops the parked call.
@@ -1471,7 +1517,7 @@ fiber.tool("find", {{
     );
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
+        clock.await_parked(abandon_at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the stuck call's caller to park at the grace"
     );
     let stuck_caller = thread_parked_at(&clock, abandon_at);
@@ -1479,13 +1525,16 @@ fiber.tool("find", {{
         Some(abandon_at),
         Some(stuck_caller),
         Duration::from_millis(50) + GRACE,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        failed(&ran(&stuck, &Deadline::after(WAIT))).0,
+        failed(&ran(&stuck, &Deadline::after(MUST_SUCCEED_WITHIN))).0,
         ErrorCode::ToolError
     );
-    assert_eq!(ran(&waiting, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&waiting, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
 }
 
 #[test]
@@ -1527,12 +1576,12 @@ fiber.tool("find", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["exec"], &cancel);
-    let group = ready.wait(fakes::Deadline::after(WAIT))[0];
+    let group = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
     let watchdog = fakes::Watchdog::group(group);
     let asked = clock.now();
     let abandon_at = asked + Duration::from_millis(50) + GRACE;
     let stuck = run(&tools["find"], json!({}));
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the stuck callback to pass its clock check");
     // The stop's SIGKILL bound anchors at the cancel, so the cancel lands
@@ -1544,7 +1593,7 @@ fiber.tool("find", {{
         Some(abandon_at),
         Some(stuck_caller),
         Duration::from_millis(300),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     // The thread is stuck in a C call, so it never drops the parked call.
     let cancelled_at = clock.now();
@@ -1561,17 +1610,17 @@ fiber.tool("find", {{
     );
     let kill_at = cancelled_at + support::group::GRACE;
     assert!(
-        clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)),
+        clock.await_parked(abandon_at, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "waited for the stuck call's caller to park at the grace"
     );
     clock.advance_when_parked(
         Some(abandon_at),
         Some(stuck_caller),
         Duration::from_millis(750),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        failed(&ran(&stuck, &Deadline::after(WAIT))).0,
+        failed(&ran(&stuck, &Deadline::after(MUST_SUCCEED_WITHIN))).0,
         ErrorCode::ToolError
     );
     // Abandoned with the VM: the call is still going while its group runs.
@@ -1581,7 +1630,7 @@ fiber.tool("find", {{
     );
     // The stop reached the run without the Lua thread: SIGTERM arrived,
     // and the group runs on past it.
-    ready.wait(fakes::Deadline::after(WAIT));
+    ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&first)
@@ -1594,9 +1643,12 @@ fiber.tool("find", {{
         Some(kill_at),
         Some(exec_thread),
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
+    assert_eq!(
+        ran(&first, &Deadline::after(MUST_SUCCEED_WITHIN)),
+        cancelled()
+    );
     assert!(
         !fakes::kill_group(group, "0").unwrap(),
         "the group is empty when the call returns"
@@ -1605,7 +1657,7 @@ fiber.tool("find", {{
     let before = len();
     pause(Duration::from_millis(100));
     assert_eq!(len(), before, "nothing writes after the call returned");
-    watchdog.stand_down(fakes::Deadline::after(WAIT));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// `host.tool` through the public API (`docs/extensions.md`, "Running a
@@ -1718,7 +1770,7 @@ fn run_asking_runs_the_script_and_hands_the_runner_to_the_hub() {
     };
     let output = ran(
         &run_asking(&tools["fetch"], ask, json!({})),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(text(&output), "file text");
     // The runner saw the extension's name, the tool and the arguments.
@@ -1739,7 +1791,7 @@ fn run_without_a_runner_fails_naming_the_missing_anchor() {
     let tools = by_name(&ext);
     let (code, message) = failed(&ran(
         &run(&tools["fetch"], json!({})),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     ));
     assert_eq!(code, ErrorCode::ToolError);
     assert!(
@@ -1755,7 +1807,7 @@ fn run_asking_without_a_runner_fails_the_same_way() {
     let tools = by_name(&ext);
     let output = ran(
         &run_asking(&tools["fetch"], FakeAsk { runner: None }, json!({})),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     let (code, message) = failed(&output);
     assert_eq!(code, ErrorCode::ToolError);
@@ -1886,7 +1938,10 @@ fn a_run_result_carries_hosts_surfaced() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let ext = extension(dir.path(), "hosts", HOSTS, FakeClock::new());
     let tools = by_name(&ext);
-    let output = ran(&run(&tools["surfaced"], json!({})), &Deadline::after(WAIT));
+    let output = ran(
+        &run(&tools["surfaced"], json!({})),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(text(&output), "found");
     assert_eq!(output.error, None);
     assert_eq!(output.hosts_surfaced, vec!["https://x.test/a".to_owned()]);

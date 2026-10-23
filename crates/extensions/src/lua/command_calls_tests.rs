@@ -3,10 +3,8 @@
 use super::*;
 use contract::tool::{Cancel, InnerCalls};
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::mpsc;
-use std::time::Duration;
-
-const WAIT: Duration = Duration::from_secs(3);
 
 fn completion() -> Box<ToolCallCompleted> {
     Box::new(ToolCallCompleted {
@@ -58,7 +56,7 @@ fn received_request(
     rx: &mpsc::Receiver<contract::inbox::Delivery>,
 ) -> contract::inbox::InnerCallRequest {
     let contract::inbox::Delivery::InnerCall(request) =
-        Deadline::after(WAIT).recv_or_fail(rx, "command inner request")
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(rx, "command inner request")
     else {
         panic!("expected an inner request");
     };
@@ -83,7 +81,7 @@ fn the_runner_sends_the_command_anchor_and_returns_the_answer() {
     (request.answer)(completion());
     assert_eq!(hub.lock().serving, None);
     assert_eq!(
-        Deadline::after(WAIT).recv_or_fail(&result, "command tool answer"),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "command tool answer"),
         completion()
     );
 }
@@ -104,7 +102,7 @@ fn unanswered_drop_end_and_seal_release_the_runner_as_cancelled() {
             if edge == "end" {
                 runner.ended.end();
                 assert_eq!(
-                    Deadline::after(WAIT)
+                    Deadline::after(MUST_SUCCEED_WITHIN)
                         .recv_or_fail(&result, "ended command runner")
                         .status,
                     CallStatus::Cancelled
@@ -120,7 +118,7 @@ fn unanswered_drop_end_and_seal_release_the_runner_as_cancelled() {
             assert_eq!(hub.lock().serving, None);
         }
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&result, "cancelled command runner")
                 .status,
             CallStatus::Cancelled
@@ -139,13 +137,13 @@ fn a_buffered_request_releases_at_command_end_even_when_sealed() {
     }));
     let runner = runner(&hub, 1);
     let result = start(&runner);
-    Deadline::after(WAIT).recv_or_fail(&selected, "buffered command request");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&selected, "buffered command request");
     assert_eq!(hub.lock().router.buffer().len(), 1);
     hub.seal();
     assert!(result.try_recv().is_err());
     runner.ended.end();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result, "sealed buffered command end")
             .status,
         CallStatus::Cancelled
@@ -162,7 +160,7 @@ fn a_runner_whose_hub_is_gone_returns_cancelled() {
     let runner = runner(&hub, 1);
     drop(hub);
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&start(&runner), "disposed command hub")
             .status,
         CallStatus::Cancelled
@@ -177,7 +175,7 @@ fn an_already_ended_runner_sends_nothing() {
     let runner = runner(&hub, 1);
     runner.ended.end();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&start(&runner), "already ended runner")
             .status,
         CallStatus::Cancelled
@@ -205,14 +203,16 @@ fn answer_and_drop_clear_synchronously_and_a_late_backstop_keeps_the_next_comman
             drop(request.answer);
         }
         assert_eq!(hub.lock().serving, None);
-        Deadline::after(WAIT).recv_or_fail(&paused, "first runner paused before backstop");
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&paused, "first runner paused before backstop");
         let second = runner(&hub, 2);
         let second_result = start(&second);
         let request = received_request(&rx);
         (request.taken)();
         assert_eq!(hub.lock().serving, Some(2));
         release.send(()).unwrap();
-        let completed = Deadline::after(WAIT).recv_or_fail(&result, "first backstop complete");
+        let completed =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "first backstop complete");
         assert_eq!(
             completed.status,
             if answered {
@@ -224,7 +224,8 @@ fn answer_and_drop_clear_synchronously_and_a_late_backstop_keeps_the_next_comman
         assert_eq!(hub.lock().serving, Some(2));
         (request.answer)(completion());
         assert_eq!(
-            Deadline::after(WAIT).recv_or_fail(&second_result, "second command answer"),
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&second_result, "second command answer"),
             completion()
         );
     }
@@ -248,7 +249,8 @@ fn a_taken_closure_after_an_answer_or_runner_removal_sets_no_window() {
             // `serving`, so the clear cannot race the `taken` call below.
             *runner.pause.lock().unwrap() = Some((entered, held));
             (request.answer)(completion());
-            Deadline::after(WAIT).recv_or_fail(&paused, "runner paused after its answer");
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&paused, "runner paused after its answer");
         }
         (request.taken)();
         assert_eq!(hub.lock().serving, None);
@@ -258,7 +260,7 @@ fn a_taken_closure_after_an_answer_or_runner_removal_sets_no_window() {
             release.send(()).unwrap();
         }
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&result, "closed serving window")
                 .status,
             if removed {
@@ -307,10 +309,10 @@ fn queued_return_and_drop_clear_the_runner_and_window_before_waking_it() {
         assert_eq!(hub.lock().serving, None);
         assert_eq!(hub.lock().runners.len(), 0);
         assert!(runner.ended.is_cancelled());
-        Deadline::after(WAIT).recv_or_fail(&paused, "queued runner before backstop");
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&paused, "queued runner before backstop");
         release.send(()).unwrap();
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&result, "queued cleanup wake")
                 .status,
             CallStatus::Cancelled
@@ -359,7 +361,7 @@ fn ended_wakes_current_subscribers_once_and_is_set_before_the_wake() {
     ended.subscribe(Arc::downgrade(&notice));
     assert!(!ended.is_cancelled());
     ended.end();
-    assert!(Deadline::after(WAIT).recv_or_fail(&rx, "command ended wake"));
+    assert!(Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "command ended wake"));
     ended.subscribe(Arc::downgrade(&notice));
     ended.end();
     assert!(rx.try_recv().is_err());

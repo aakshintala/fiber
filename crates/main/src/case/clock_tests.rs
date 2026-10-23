@@ -1,5 +1,6 @@
 //! The case clock's manual-time contract (`docs/testing.md`, "Waits and timeouts").
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
@@ -24,7 +25,6 @@ fn per_call_advances_move_time_before_any_operation_parks() {
     }
 }
 
-const WAIT: Duration = Duration::from_secs(5);
 const NO_MATCH: Duration = Duration::from_millis(30);
 
 type ParkEvent = (Option<Instant>, Option<Duration>);
@@ -91,7 +91,9 @@ fn waiter<'scope, 'env: 'scope>(
                 let state = lock(&signal_for_wait.generation);
                 let (state, timeout) = signal_for_wait
                     .changed
-                    .wait_timeout_while(state, WAIT, |generation| *generation == observed)
+                    .wait_timeout_while(state, MUST_SUCCEED_WITHIN, |generation| {
+                        *generation == observed
+                    })
                     .unwrap_or_else(PoisonError::into_inner);
                 observed = *state;
                 timed_out = timeout.timed_out();
@@ -160,7 +162,7 @@ fn a_future_wait_is_visible_and_released_by_an_advance() {
     thread::scope(|scope| {
         let (parked, done) = waiter(scope, Arc::clone(&clock), until);
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&parked)
                 .expect("waited for the clock park"),
             (Some(until), None)
@@ -169,7 +171,7 @@ fn a_future_wait_is_visible_and_released_by_an_advance() {
 
         clock.advance(Duration::from_secs(3));
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done)
                 .expect("waited for the clock wake"),
             clock.now()
@@ -211,7 +213,7 @@ fn sleep_parks_until_its_deadline_is_advanced() {
     // The seam fires after the sleeper evaluates its predicate and stays
     // parked; under the flipped `<` it answers without reaching the seam,
     // so this receive fails every run. Hang guard only.
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&pause)
         .expect("waited for sleep to park");
     // No advance has happened, so correct code cannot have answered;
@@ -221,9 +223,12 @@ fn sleep_parks_until_its_deadline_is_advanced() {
         "sleep answered before the clock moved"
     );
 
-    assert_eq!(clock.advance_when_parked(delay, WAIT), Ok(()));
     assert_eq!(
-        Deadline::after(WAIT)
+        clock.advance_when_parked(delay, MUST_SUCCEED_WITHIN),
+        Ok(())
+    );
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("waited for sleep to finish"),
         before + delay
@@ -241,13 +246,13 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
         let (early_parked, early_done) = waiter(scope, Arc::clone(&clock), early);
         let (late_parked, late_done) = waiter(scope, Arc::clone(&clock), late);
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&early_parked)
                 .expect("waited for the early deadline to park"),
             (Some(early), None)
         );
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&late_parked)
                 .expect("waited for the late deadline to park"),
             (Some(late), None)
@@ -258,11 +263,11 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
         let before_cleanup = clock.now();
         let parked_before_cleanup = clock.parked();
         clock.advance(Duration::from_millis(9));
-        let early_finished = Deadline::after(WAIT).recv(&early_done);
-        let late_reparked = Deadline::after(WAIT).recv(&late_parked);
+        let early_finished = Deadline::after(MUST_SUCCEED_WITHIN).recv(&early_done);
+        let late_reparked = Deadline::after(MUST_SUCCEED_WITHIN).recv(&late_parked);
         let late_still_parked = clock.parked().contains(&Some(late));
         clock.advance(Duration::from_millis(2));
-        let late_finished = Deadline::after(WAIT).recv(&late_done);
+        let late_finished = Deadline::after(MUST_SUCCEED_WITHIN).recv(&late_done);
 
         assert!(
             result.is_err(),

@@ -263,7 +263,7 @@ pub(super) fn load_file(
 
 /// The message a person reads for a Lua error: its first line, which Lua
 /// starts with the file and line, without mlua's traceback.
-pub(super) fn message(e: &mlua::Error) -> String {
+pub(crate) fn message(e: &mlua::Error) -> String {
     let text = if let mlua::Error::RuntimeError(m) | mlua::Error::MemoryError(m) = e {
         m.clone()
     } else {
@@ -309,18 +309,18 @@ impl Deadline {
     }
 
     /// Points the hook at `at`, the deadline of the callback about to run.
-    pub(super) fn restore(&self, at: Option<Instant>) {
+    pub(crate) fn restore(&self, at: Option<Instant>) {
         self.at.set(at);
     }
 
     /// Whether the deadline has passed or the interrupt is raised.
-    pub(super) fn passed(&self) -> bool {
+    pub(crate) fn passed(&self) -> bool {
         self.interrupt.load(Ordering::SeqCst)
             || self.at.get().is_some_and(|at| self.clock.now() >= at)
     }
 
     /// Arms `thread` so the hook stops it at this deadline.
-    pub(super) fn arm(&self, thread: &Thread) -> mlua::Result<()> {
+    pub(crate) fn arm(&self, thread: &Thread) -> mlua::Result<()> {
         let deadline = self.clone();
         thread.set_hook(
             HookTriggers::new().every_nth_instruction(CHECK_EVERY),

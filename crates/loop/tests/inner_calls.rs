@@ -16,6 +16,7 @@ use contract::events::{CallStatus, ToolCallCompleted, TurnOutcome};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
+use fakes::MUST_SUCCEED_WITHIN;
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex};
 use support::{Session, calls_reply};
@@ -754,8 +755,7 @@ fn waiting_inner(
         cancel.subscribe(Arc::downgrade(&wake));
         running.send(()).unwrap();
         if !cancel.is_cancelled() {
-            fakes::Deadline::after(std::time::Duration::from_secs(2))
-                .recv_or_fail(&rx, "inner cancellation");
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "inner cancellation");
         }
         assert!(cancel.is_cancelled());
         cancelled.send(()).unwrap();
@@ -826,8 +826,8 @@ fn close_idle(
         .inbox
         .send(contract::inbox::Delivery::Close(support::ignore()))
         .unwrap();
-    let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
-        .recv_or_fail(done, "idle loop closed");
+    let (looped, outcome) =
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(done, "idle loop closed");
     session.looped = Some(looped);
     assert_eq!(outcome, None);
 }
@@ -877,9 +877,8 @@ fn an_idle_command_runs_turnless_and_answers_with_the_logged_completion() {
         .send(contract::inbox::Delivery::InnerCall(request.request))
         .unwrap();
     let (done, _) = start_turn(&mut session);
-    fakes::Deadline::after(std::time::Duration::from_secs(3))
-        .recv_or_fail(&request.taken, "request taken");
-    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&request.taken, "request taken");
+    let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&request.answer, "written completion");
     let lines = command_lines(&mut session);
     assert_eq!(
@@ -919,12 +918,12 @@ fn an_ended_command_or_a_shutdown_drops_the_request_without_taking_or_logging_it
         // A shutdown stops before draining the inbox; dropping the returned
         // loop drops its unanswered deliveries too.
         if shutdown {
-            let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
-                .recv_or_fail(&done, "shutdown loop");
+            let (looped, outcome) =
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "shutdown loop");
             assert_eq!(outcome, None);
             drop(looped);
         } else {
-            fakes::Deadline::after(std::time::Duration::from_secs(3))
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&request.dropped, "ended request dropped");
             close_idle(&mut session, &done);
         }
@@ -950,14 +949,13 @@ fn a_command_end_cancels_its_running_inner_call_and_shutdown_runs_no_after_hook(
             .send(contract::inbox::Delivery::InnerCall(request.request))
             .unwrap();
         let (done, _) = start_turn(&mut session);
-        fakes::Deadline::after(std::time::Duration::from_secs(3))
-            .recv_or_fail(&running, "inner tool running");
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&running, "inner tool running");
         if shutdown {
             session.cancel.shutdown(143);
         } else {
             request.cancel.cancel();
         }
-        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&request.answer, "cancelled inner completion");
         assert_eq!(completed.status, CallStatus::Cancelled);
         let lines = command_lines(&mut session);
@@ -974,7 +972,7 @@ fn a_command_end_cancels_its_running_inner_call_and_shutdown_runs_no_after_hook(
         if shutdown {
             assert!(completed.content.is_empty());
             assert_eq!(*hooks.seen.lock().unwrap(), ["before inner", "check inner"]);
-            let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            let (looped, outcome) = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&done, "shutdown loop stopped");
             session.looped = Some(looped);
             assert_eq!(outcome, None);
@@ -1022,7 +1020,7 @@ fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
             .send(contract::inbox::Delivery::InnerCall(request.request))
             .unwrap();
         let (done, _) = start_turn(&mut session);
-        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&request.answer, "command chain completion");
         assert_eq!(completed.status, CallStatus::Completed);
         assert_eq!(completed.content, text(result).content);
@@ -1082,7 +1080,7 @@ fn an_ask_in_a_command_chain_is_declined_even_in_an_answerable_session() {
         .send(contract::inbox::Delivery::InnerCall(request.request))
         .unwrap();
     let (done, _) = start_turn(&mut session);
-    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+    let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&request.answer, "declined command ask");
     assert_eq!(completed.content, text("declined").content);
     let lines = command_lines(&mut session);
@@ -1155,8 +1153,7 @@ fn command_at_step_boundary(hold: StepHold, cancel: bool) {
     let pending = match hold {
         StepHold::Approval => Some(tap.wait_for("permission_requested")),
         StepHold::Tool => {
-            fakes::Deadline::after(std::time::Duration::from_secs(3))
-                .recv_or_fail(&running, "step tool held");
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&running, "step tool held");
             None
         }
         StepHold::Interaction => Some(tap.wait_for("interaction_requested")),
@@ -1187,11 +1184,11 @@ fn command_at_step_boundary(hold: StepHold, cancel: bool) {
         }
     }
     if cancel {
-        fakes::Deadline::after(std::time::Duration::from_secs(3))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&inner_running, "command tool at step boundary");
         assert!(session.cancel.cancel());
     }
-    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+    let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&request.answer, "boundary command completion");
     assert_eq!(
         completed.status,
@@ -1202,7 +1199,7 @@ fn command_at_step_boundary(hold: StepHold, cancel: bool) {
         }
     );
     let (looped, outcome) =
-        fakes::Deadline::after(std::time::Duration::from_secs(3)).recv_or_fail(&done, "step ended");
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "step ended");
     session.looped = Some(looped);
     assert_eq!(
         outcome,
@@ -1299,7 +1296,7 @@ fn command_inner_calls_keep_credential_and_standing_denies_but_skip_standing_ask
             .send(contract::inbox::Delivery::InnerCall(request.request))
             .unwrap();
         let (done, _) = start_turn(&mut session);
-        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&request.answer, "command permission outcome");
         assert_eq!(completed.status, expected);
         let lines = command_lines(&mut session);
@@ -1360,7 +1357,7 @@ fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
             .send(contract::inbox::Delivery::InnerCall(request.request))
             .unwrap();
         let (done, _) = start_turn(&mut session);
-        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        let completed = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&request.answer, "command completion");
         assert_eq!(completed.status, status);
         let lines = session.events_until("command completion", |line| {
@@ -1396,8 +1393,8 @@ fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
             .inbox
             .send(contract::inbox::Delivery::Close(support::ignore()))
             .unwrap();
-        let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
-            .recv_or_fail(&done, "idle loop closed");
+        let (looped, outcome) =
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done, "idle loop closed");
         session.looped = Some(looped);
         assert_eq!(outcome, None);
     }
@@ -1421,7 +1418,7 @@ fn start_turn(
 #[test]
 fn turn_cancellation_and_shutdown_complete_the_inner_before_the_outer() {
     for shutdown in [false, true] {
-        let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+        let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
         let (started, running) = std::sync::mpsc::channel();
         let (stopped, cancelled) = std::sync::mpsc::channel();
         let inner = waiting_inner(started, stopped, None);
@@ -1464,7 +1461,7 @@ fn turn_cancellation_and_shutdown_complete_the_inner_before_the_outer() {
 
 #[test]
 fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling_itself() {
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let (started, running) = std::sync::mpsc::channel();
     let (stopped, cancelled) = std::sync::mpsc::channel();
     let (release, held) = std::sync::mpsc::channel();
@@ -1489,11 +1486,9 @@ fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling
     let (done, id) = start_turn(&mut session);
     deadline.recv_or_fail(&cancelled, "anchor cancellation");
     assert!(
-        session.clock.await_thread_parked(
-            id,
-            None,
-            fakes::Deadline::after(std::time::Duration::from_secs(2))
-        ),
+        session
+            .clock
+            .await_thread_parked(id, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "loop waits for the cancelled inner result before completing its outer"
     );
     let durable = log::read(&session.dir).unwrap();
@@ -1555,7 +1550,7 @@ fn a_request_taken_after_turn_cancellation_completes_without_starting() {
 fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_action() {
     use contract::clock::Clock;
     use contract::events::{Event, Progress};
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let (release_first, first) = std::sync::mpsc::channel();
     let (release_last, last) = std::sync::mpsc::channel();
     let (held, holding) = std::sync::mpsc::channel();
@@ -1591,7 +1586,7 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
         session.clock.await_thread_parked(
             thread,
             Some(session.clock.now() + interval),
-            fakes::Deadline::after(std::time::Duration::from_secs(2))
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "inner delta waits on its clock interval"
     );
@@ -1599,7 +1594,7 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
         Some(session.clock.now() + interval),
         Some(thread),
         interval,
-        &fakes::Deadline::after(std::time::Duration::from_secs(2)),
+        &fakes::Deadline::after(MUST_SUCCEED_WITHIN),
     );
     let b = tap.wait_for_delta("b");
     assert_eq!(b.action_id, a.action_id);
@@ -1642,7 +1637,7 @@ fn asking(prompt: &str) -> contract::tool::Asking {
 
 #[test]
 fn an_inner_ask_is_declined_but_a_model_ask_in_the_same_answerable_session_is_raised() {
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let inner = Arc::new(FakeTool::new("inner", |_, _, _, ask| {
         assert!(!ask.answerable());
         // Deliberately does not test answerability before raising.
@@ -1806,7 +1801,7 @@ fn an_inner_write_tracks_its_instruction_file_and_appends_the_prune_line_before_
 }
 
 /// A leaf inner call. It reports when it runs, then whether its cancel
-/// arrives within two seconds. It never fails inside its worker, so a missed
+/// arrives within the must-succeed bound. It never fails inside its worker, so a missed
 /// cancel reports `false` rather than hanging the turn.
 fn leaf(
     running: std::sync::mpsc::Sender<()>,
@@ -1818,7 +1813,7 @@ fn leaf(
         cancel.subscribe(Arc::downgrade(&wake));
         let _sent = running.send(());
         let seen = cancel.is_cancelled()
-            || fakes::Deadline::after(std::time::Duration::from_secs(2))
+            || fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&rx)
                 .is_ok();
         let _sent = cancelled.send(seen);
@@ -1839,7 +1834,7 @@ fn a_nested_inner_call_is_cancelled_when_its_anchor_returns() {
             return text("no runner");
         };
         std::thread::spawn(move || runner.run("ext", "deep", json!({})));
-        fakes::Deadline::after(std::time::Duration::from_secs(5)).recv_or_fail(
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(
             &running.lock().unwrap(),
             "deep running before middle returns",
         );
@@ -1857,8 +1852,7 @@ fn a_nested_inner_call_is_cancelled_when_its_anchor_returns() {
     let mut session = session(vec![outer, middle, deep]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert!(
-        fakes::Deadline::after(std::time::Duration::from_secs(5))
-            .recv_or_fail(&seen, "deep cancel report"),
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN * 2).recv_or_fail(&seen, "deep cancel report"),
         "the anchor's return cancels the nested call"
     );
 }
@@ -1867,7 +1861,7 @@ fn a_nested_inner_call_is_cancelled_when_its_anchor_returns() {
 /// return while it is still running, so the nested call is cancelled too.
 #[test]
 fn a_nested_inner_call_is_cancelled_when_its_anchor_is_cancelled() {
-    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(5));
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let (running_tx, _running) = std::sync::mpsc::channel();
     let (seen_tx, seen) = std::sync::mpsc::channel();
     let deep = leaf(running_tx, seen_tx);
@@ -1897,8 +1891,7 @@ fn a_nested_inner_call_is_cancelled_when_its_anchor_is_cancelled() {
     let mut session = session(vec![outer, middle, deep]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert!(
-        fakes::Deadline::after(std::time::Duration::from_secs(5))
-            .recv_or_fail(&seen, "deep cancel report"),
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN * 2).recv_or_fail(&seen, "deep cancel report"),
         "the cancelled anchor cancels the nested call"
     );
 }
