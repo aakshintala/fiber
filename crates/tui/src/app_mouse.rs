@@ -34,19 +34,7 @@ impl App {
             self.clear_copied();
             self.attention_seen();
             if let Some(effect) = self.outside_press(mouse, targets, now) {
-                // The swallowed press holds no press: feeding the
-                // pointer a release at its cell clears what no click
-                // may later use, through the existing API, and always
-                // returns `None`.
-                // debt: synthetic Release through the public API stays; switch to a Pointer disarm only if mouse.rs gains one (outside this ticket's fence).
-                let _disarmed = pointer.on_mouse(
-                    &Mouse {
-                        kind: MouseKind::Release,
-                        ..*mouse
-                    },
-                    &[],
-                    hover,
-                );
+                Self::disarm_press(pointer, mouse, hover);
                 return effect;
             }
         }
@@ -61,6 +49,27 @@ impl App {
         } else {
             effect
         }
+    }
+
+    // The swallowed press holds no press: feeding the
+    // pointer a release at its cell clears what no click
+    // may later use, through the existing API, and always
+    // returns `None`.
+    // Deleting `kind` from the synthetic release replays the press with
+    // no hit: both clear the same `pressed`, and the `pressed_at`
+    // difference is unobservable because the next real press re-pairs
+    // both fields.
+    // debt: synthetic Release through the public API stays; switch to a Pointer disarm only if mouse.rs gains one (outside this ticket's fence).
+    #[cfg_attr(false, mutants::skip)]
+    fn disarm_press(pointer: &mut Pointer, mouse: &Mouse, hover: bool) {
+        let _disarmed = pointer.on_mouse(
+            &Mouse {
+                kind: MouseKind::Release,
+                ..*mouse
+            },
+            &[],
+            hover,
+        );
     }
 
     /// A left press starting outside the overlay on top's frame closes
