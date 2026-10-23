@@ -522,10 +522,11 @@ jobs:
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
     # Cold PR probe 39863819671 missed both the Rust and base-binary caches;
-    # the full Release job, including the debug pass, took 34m01. The first
-    # post-timeout validation run 39868358329 passed; its Release job took
-    # 24m05 with warm caches. Twice the cold time is 68m02, rounded up to
-    # 69m (docs/ci.md, "Job time limits"). Push runs keep the 60-minute bound.
+    # the full Release job, including the debug pass, took 34m01. Final
+    # timeout validation run 39871492786 passed; its Rust and base-binary
+    # caches hit and the Release job took 31m21. Twice the cold time is
+    # 68m02, rounded up to 69m (docs/ci.md, "Job time limits"). Push runs
+    # keep the 60-minute bound.
     timeout-minutes: ${{ github.event_name == 'push' && 60 || 69 }}
     # The stored-results lookup lists another run's artifact, which needs
     # `actions: read` beyond the workflow's `contents: read`.
