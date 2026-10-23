@@ -570,12 +570,6 @@ fn a_long_focused_line_stays_within_the_capacity_and_ends_in_an_ellipsis() {
             "height {height}: {} rows",
             framed.body.len()
         );
-        let bars = framed.body.iter().filter(|row| row.barred).count();
-        assert!(bars >= 1, "height {height}: a barred row");
-        if height == 9 {
-            // `docs/tui.md`, "Overlays", "Choices": "Exactly one row is barred".
-            assert_eq!(bars, 1, "one row fits at height 9");
-        }
         let last = framed.body.last().expect("a body row");
         let text: String = last
             .spans
@@ -584,6 +578,46 @@ fn a_long_focused_line_stays_within_the_capacity_and_ends_in_an_ellipsis() {
             .collect();
         assert!(text.ends_with('…'), "height {height}: {text:?}");
         assert!(row_width(last) <= overlay::question_inner(120));
+    }
+}
+
+/// `docs/tui.md`, "Overlays", "Choices": "Exactly one row is barred", however
+/// many rows the focused line wraps to.
+#[test]
+fn a_400_character_focused_proposal_bars_exactly_one_row() {
+    let fx = long_proposal();
+    for height in [9u16, 12] {
+        let framed = frame(fx.setup(), overlay::question_inner(120), height);
+        let bars: Vec<usize> = framed
+            .body
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.barred)
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(bars.len(), 1, "height {height}: barred rows {bars:?}");
+        let narrow = frame(fx.setup(), overlay::question_inner(60), height);
+        assert_eq!(
+            narrow.body.iter().filter(|row| row.barred).count(),
+            1,
+            "height {height}, narrow"
+        );
+    }
+}
+
+#[test]
+fn a_400_character_struck_focused_proposal_bars_exactly_one_row() {
+    let mut fx = long_proposal();
+    fx.press(Key::Char('x'));
+    fx.press(Key::Esc);
+    assert_eq!(fx.setup().screen(), Screen::Lines);
+    for height in [9u16, 12] {
+        let framed = frame(fx.setup(), overlay::question_inner(60), height);
+        assert_eq!(
+            framed.body.iter().filter(|row| row.barred).count(),
+            1,
+            "height {height}"
+        );
     }
 }
 

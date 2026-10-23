@@ -132,7 +132,7 @@ fn question_body(setup: &Setup, inner: usize) -> Vec<Row> {
 // ---------------------------------------------------------------- lines
 
 /// A line's rows: the marker, the layer tag and the text wrapped under
-/// itself, the whole line barred while it has the focus. A line the person
+/// itself, its first row barred while it has the focus. A line the person
 /// kept, and the struck line on the bar, read as the tag and the text one
 /// space apart; every other line keeps the tag in its own column.
 fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
@@ -180,7 +180,7 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
                 pieces.insert(0, marker.clone());
             }
             let mut made = row(pieces);
-            made.barred = line.focused;
+            made.barred = line.focused && at == 0;
             rows.push(made);
         }
         return rows;
@@ -199,7 +199,7 @@ fn line_rows(line: &LineRow<'_>, inner: usize) -> Vec<Row> {
         };
         spans.push(Span::styled(piece, text_style));
         let mut made = row(spans);
-        made.barred = line.focused;
+        made.barred = line.focused && at == 0;
         rows.push(made);
     }
     rows
