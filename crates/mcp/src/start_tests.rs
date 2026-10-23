@@ -147,7 +147,8 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     let second = Setup::new();
     second.tools(&json!([{"name": "alpha"}]));
     second.result("alpha", r#"{"content":[]}"#);
-    let specs = vec![first.spec("one"), second.spec("two")];
+    let (held_two, _release) = held_spec(&second, "two");
+    let specs = vec![first.spec("one"), held_two];
     let started = first.start(specs);
     assert!(started.failed.is_empty());
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
