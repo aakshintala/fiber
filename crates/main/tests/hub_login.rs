@@ -7,12 +7,17 @@
     reason = "test assertions and fixtures"
 )]
 
+#[path = "support/hub_start.rs"]
+#[allow(dead_code, reason = "this test binary uses only `free_port`")]
+mod hub_start;
 mod support;
 
 use std::fs;
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::io::{BufRead as _, BufReader, Write as _};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use fakes::{OauthReply, OauthServer, ProviderServer, Response};
 use serde_json::json;
@@ -60,7 +65,7 @@ fn install(setup: &Setup, provider: &ProviderServer, oauth: &OauthServer, port: 
     );
     let interaction = match port {
         Some(port) => format!(
-            "host.oauth.open('{login}/verify'); host.oauth.callback({{port={port}}}); return 'callback-token'"
+            "host.oauth.open('{login}/verify'); host.oauth.callback({{port={port},path=\"/cb\"}}); return 'callback-token'"
         ),
         None => format!(
             "host.oauth.open('{login}/verify'); local reply=host.oauth.poll({{url='{login}/token',body='device_code=d'}}); return reply.access_token"
@@ -253,13 +258,63 @@ fn a_session_with_only_summary_clients_refuses_login_before_any_poll() {
 
 #[test]
 fn a_disconnected_callback_client_does_not_stop_the_next_turn() {
-    let setup = Setup::new();
+    retry_callback(&mut hub_start::free_port, ATTEMPTS, Deadline::start());
+}
+
+/// Callback attempts `retry_callback` makes, each on a port from `ports`.
+const ATTEMPTS: usize = 5;
+/// How long one listening probe connects, and then reads, before the
+/// refusal post is looked at again.
+const PROBE_SLICE: Duration = Duration::from_millis(100);
+
+/// Whether the Lua already reported a taken callback port: on a port the
+/// hub cannot bind the callback raises `io_failed`, which the fixture's
+/// Lua posts to `/lua-refused` before raising.
+fn callback_taken(server: &ProviderServer) -> bool {
+    server
+        .requests()
+        .iter()
+        .any(|request| request.path == "/lua-refused" && request.body == *b"io_failed")
+}
+
+/// Whether the hub's callback listener answers on `addr`: one GET to a
+/// path other than the callback's own gets a 404 while the callback keeps
+/// waiting, which proves the hub listens without consuming the callback.
+/// Anything else (refused, timeout, no 404) is "not yet".
+fn probe(addr: SocketAddr) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_SLICE) else {
+        return false;
+    };
+    if stream.set_read_timeout(Some(PROBE_SLICE)).is_err() {
+        return false;
+    }
+    let port = addr.port();
+    if write!(
+        stream,
+        "GET /probe HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let mut status = String::new();
+    if BufReader::new(stream).read_line(&mut status).is_err() {
+        return false;
+    }
+    status == "HTTP/1.1 404 Not Found\r\n"
+}
+
+/// Runs the disconnected-callback scenario on `port`, returning whether the
+/// port was taken, so the whole scenario must run again on a fresh port.
+/// Every wait draws on the one shared `deadline`, never renewed, so all
+/// attempts together stay under it.
+fn callback_attempt(port: u16, deadline: Deadline) -> bool {
+    let mut setup = Setup::new();
+    setup.deadline = deadline;
     let server = provider();
     let oauth = OauthServer::start(vec![]);
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    install(&setup, &server, &oauth, Some(addr.port()));
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    install(&setup, &server, &oauth, Some(port));
     let hub = Arc::new(Mutex::new(None));
     let client = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
@@ -270,12 +325,16 @@ fn a_disconnected_callback_client_does_not_stop_the_next_turn() {
     let seen = login_url(&client, &oauth);
     turn(&client, seen);
     loop {
-        let left = setup.deadline.left();
-        assert!(!left.is_zero(), "callback listener bound");
-        if let Ok(socket) = TcpStream::connect_timeout(&addr, left) {
-            drop(socket);
+        if callback_taken(&server) {
+            close(&client, &session, "c_close_taken");
+            drop(client);
+            stop(&hub, guard);
+            return true;
+        }
+        if probe(addr) {
             break;
         }
+        assert!(!setup.deadline.left().is_zero(), "callback listener bound");
         std::thread::yield_now();
     }
     drop(client);
@@ -290,6 +349,34 @@ fn a_disconnected_callback_client_does_not_stop_the_next_turn() {
     close(&other, &session, "c_close");
     drop(other);
     stop(&hub, guard);
+    callback_taken(&server)
+}
+
+/// Runs the scenario until one attempt's turn runs, drawing each
+/// attempt's port from `ports`. Returns the port that ran; panics when
+/// every attempt saw its port taken.
+fn retry_callback(ports: &mut dyn FnMut() -> u16, attempts: usize, deadline: Deadline) -> u16 {
+    for _ in 0..attempts {
+        let port = ports();
+        if !callback_attempt(port, deadline) {
+            return port;
+        }
+    }
+    panic!("callback port io_failed on all {attempts} attempts");
+}
+
+#[test]
+fn a_taken_callback_port_is_retried_with_a_fresh_one() {
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut first = Some(taken);
+    let ran = retry_callback(
+        &mut || first.take().unwrap_or_else(hub_start::free_port),
+        ATTEMPTS,
+        Deadline::start(),
+    );
+    assert_ne!(ran, taken, "the scenario ran on a fresh port");
+    drop(held);
 }
 
 #[test]
