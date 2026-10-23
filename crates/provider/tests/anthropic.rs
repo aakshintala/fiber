@@ -21,7 +21,6 @@ mod wire_tools;
 mod harness;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
@@ -365,10 +364,48 @@ fn deferred_tools_spend_the_strict_budget_and_tool_search_takes_none() {
     assert!(sent[21].get("defer_loading").is_none());
 }
 
-fn research(path: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../research")
-        .join(path)
+/// Every probe recording compiled into this test, in the order the old
+/// directory walk read them: the raw directory sorted by file name.
+/// Names are repo-relative paths, used as parse labels.
+static RECORDINGS: &[(&str, &[u8])] = &[
+    (
+        "research/anthropic-messages-probe/raw/beta.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/beta.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/cache.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/cache.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/caller.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/caller.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/choice.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/choice.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/ptc.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/ptc.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/stream.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/stream.json"),
+    ),
+    (
+        "research/anthropic-messages-probe/raw/thinking-enabled.json",
+        include_bytes!("../../../research/anthropic-messages-probe/raw/thinking-enabled.json"),
+    ),
+];
+
+/// The compiled-in bytes recorded under `name`.
+fn recording(name: &str) -> Vec<u8> {
+    RECORDINGS
+        .iter()
+        .find(|(entry, _)| *entry == name)
+        .unwrap_or_else(|| panic!("unknown recording {name}"))
+        .1
+        .to_vec()
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
@@ -494,16 +531,9 @@ fn expected(wrapper: &Value) -> Option<Expected> {
 
 #[test]
 fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(research("anthropic-messages-probe/raw"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
-    files.sort();
-
     let (mut streams, mut checked, mut statuses, mut usages) = (0, 0, 0, 0);
-    for file in &files {
-        for exchange in probes::read(file).unwrap() {
+    for (name, bytes) in RECORDINGS {
+        for exchange in probes::parse(name, bytes).unwrap() {
             let label = &exchange.label;
             let bytes = match exchange.response {
                 Recorded::Stream(bytes) => bytes,
@@ -616,7 +646,11 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 
 #[test]
 fn the_hard_question_stream_decodes_thinking_then_text() {
-    let exchanges = probes::read(&research("anthropic-messages-probe/raw/stream.json")).unwrap();
+    let exchanges = probes::parse(
+        "research/anthropic-messages-probe/raw/stream.json",
+        &recording("research/anthropic-messages-probe/raw/stream.json"),
+    )
+    .unwrap();
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("thinking forced"))
@@ -651,7 +685,11 @@ fn the_hard_question_stream_decodes_thinking_then_text() {
 
 #[test]
 fn the_tool_use_stream_decodes_the_call() {
-    let exchanges = probes::read(&research("anthropic-messages-probe/raw/stream.json")).unwrap();
+    let exchanges = probes::parse(
+        "research/anthropic-messages-probe/raw/stream.json",
+        &recording("research/anthropic-messages-probe/raw/stream.json"),
+    )
+    .unwrap();
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("stream tool use"))
@@ -872,7 +910,11 @@ fn thinking_delta_text_streams_as_reasoning_and_joins_in_order() {
 
 #[test]
 fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
-    let exchanges = probes::read(&research("anthropic-messages-probe/raw/stream.json")).unwrap();
+    let exchanges = probes::parse(
+        "research/anthropic-messages-probe/raw/stream.json",
+        &recording("research/anthropic-messages-probe/raw/stream.json"),
+    )
+    .unwrap();
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("plain text"))
@@ -1122,7 +1164,11 @@ fn the_previous_end_marker_lands_on_the_boundary_it_names() {
 
 #[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
-    let exchanges = probes::read(&research("anthropic-messages-probe/raw/stream.json")).unwrap();
+    let exchanges = probes::parse(
+        "research/anthropic-messages-probe/raw/stream.json",
+        &recording("research/anthropic-messages-probe/raw/stream.json"),
+    )
+    .unwrap();
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("thinking forced"))
