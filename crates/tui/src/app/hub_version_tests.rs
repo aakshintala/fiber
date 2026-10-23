@@ -88,9 +88,11 @@ fn readable(payload: Value) -> Line {
 fn notices(app: &App) -> Vec<String> {
     app.notices()
         .into_iter()
-        .filter_map(|line| match line {
-            NoticeLine::Notice { code, text, .. } if code == "hub_version" => Some(text),
-            _ => None,
+        .filter_map(|line| {
+            let NoticeLine::Notice { code, text, .. } = line else {
+                return None;
+            };
+            (code == "hub_version").then_some(text)
         })
         .collect()
 }
@@ -308,9 +310,11 @@ fn waits(app: &App) -> Vec<(String, Option<String>)> {
         .unwrap_or_else(|| panic!("home on screen"))
         .list
         .into_iter()
-        .filter_map(|line| match line {
-            crate::home::ListLine::Live { id, wait, .. } => Some((id, wait)),
-            _ => None,
+        .filter_map(|line| {
+            let crate::home::ListLine::Live { id, wait, .. } = line else {
+                return None;
+            };
+            Some((id, wait))
         })
         .collect()
 }
@@ -364,9 +368,11 @@ fn opening_an_unreadable_row_names_the_hubs_build() {
     let key = app
         .home_screen()
         .and_then(|screen| {
-            screen.list.into_iter().find_map(|line| match line {
-                crate::home::ListLine::Live { key, .. } => Some(key),
-                _ => None,
+            screen.list.into_iter().find_map(|line| {
+                let crate::home::ListLine::Live { key, .. } = line else {
+                    return None;
+                };
+                Some(key)
             })
         })
         .unwrap_or_else(|| panic!("a live row"));

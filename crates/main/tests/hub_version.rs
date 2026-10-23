@@ -250,7 +250,9 @@ fn a_hub_on_another_build_names_it_and_its_rows() {
     let column = column_at(&frame.rows[usize::from(row)], "alpha readable session");
     click(&mut run, column, row);
     let rail = run.wait_screen("the rail's CANNOT ATTACH card", |screen| {
-        shows(screen, "CANNOT ATTACH") && shows(screen, "✕")
+        !shows(screen, "Enter starts a session")
+            && shows(screen, "CANNOT ATTACH")
+            && shows(screen, "✕")
     });
     let card_row = row_with(&rail, "CANNOT ATTACH");
     assert!(
@@ -259,17 +261,18 @@ fn a_hub_on_another_build_names_it_and_its_rows() {
         rail.contents
     );
 
-    // The rail takes focus, and two steps down from the open session's
-    // card reach the hidden card's ✕: the open card, the unreadable
-    // card, then its ✕. Enter on it hides the card in this terminal.
+    // The rail takes focus on the open session's card. The hidden card
+    // sits in its own project group, so four steps down reach its ✕: that
+    // group's "+", its "N ✓", the card, then the ✕. Enter on it hides the
+    // card in this terminal.
     run.write(b"\x1b[D");
     run.wait_screen("the focused rail", |screen| shows(screen, "↑↓ move"));
-    run.write(b"\x1b[B\x1b[B\r");
+    run.write(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
     let hidden = run.wait_screen("the hidden CANNOT ATTACH card", |screen| {
         !shows(screen, "CANNOT ATTACH")
     });
     assert!(
-        shows(&hidden, "alpha readable session"),
+        shows(&hidden, "alpha readable"),
         "hiding keeps the open session: {}",
         hidden.contents
     );
