@@ -90,8 +90,9 @@ const PRESERVE_ORDER: &str = "serde_json feature \"preserve_order\"";
 
 /// Each failure where the workspace build enables serde_json's
 /// `preserve_order` feature, which `docs/prompt-cache.md` never allows.
-/// `tree` is the output of `cargo tree --prefix depth -e features -i
-/// serde_json`: every line starts with its depth, so the package lines
+/// `tree` is the output of `cargo tree --workspace --target all
+/// --all-features -e features,no-build --prefix depth -i serde_json`:
+/// every line starts with its depth, so the package lines
 /// directly under a `preserve_order` node, one level deeper, are the
 /// crates that enabled it. Deeper crates only depend on an enabler.
 /// A bare node with no crate under it still fails: the feature is on,
