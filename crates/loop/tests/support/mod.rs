@@ -1502,7 +1502,7 @@ impl Session {
         self.resume(Vec::new());
         self.inbox.send(delivery("again")).unwrap();
         assert_eq!(self.turn(), Some(TurnOutcome::Completed));
-        let mut conversation = self.requests().pop().unwrap().conversation;
+        let mut conversation = self.requests().pop().unwrap().conversation.to_vec();
         assert_eq!(
             conversation.pop(),
             Some(Input::User {

@@ -1925,10 +1925,11 @@ fn a_fixed_header_only_secret_is_redacted_from_the_recorded_path() {
         tool_choice: "auto".to_owned(),
         cache_lifetime: contract::events::CacheLifetime::OneHour,
         cache_key: "session_1".to_owned(),
-        conversation: vec![contract::provider::Input::User {
+        conversation: (vec![contract::provider::Input::User {
             text: "hi".to_owned(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
@@ -1999,10 +2000,11 @@ fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
         tool_choice: "auto".to_owned(),
         cache_lifetime: contract::events::CacheLifetime::OneHour,
         cache_key: "session_1".to_owned(),
-        conversation: vec![contract::provider::Input::User {
+        conversation: (vec![contract::provider::Input::User {
             text: "hi".to_owned(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
@@ -2301,10 +2303,11 @@ fn test_request() -> contract::provider::ModelRequest {
         tool_choice: "auto".to_owned(),
         cache_lifetime: contract::events::CacheLifetime::OneHour,
         cache_key: "session_1".to_owned(),
-        conversation: vec![contract::provider::Input::User {
+        conversation: (vec![contract::provider::Input::User {
             text: "hi".to_owned(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,

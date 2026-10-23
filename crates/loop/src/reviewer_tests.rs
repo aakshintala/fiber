@@ -759,8 +759,8 @@ fn batch_stage1_build_matches_the_serial_path_byte_for_byte() {
         built.iter().zip(&chained).zip([1_usize, 2, 3]).enumerate()
     {
         assert_eq!(
-            one.request.conversation,
-            *conversation,
+            &one.request.conversation[..],
+            &conversation[..],
             "call {}",
             index + 1
         );
@@ -892,10 +892,11 @@ fn fanout_returns_every_reply_in_request_order() {
             tool_choice: "auto".into(),
             cache_lifetime: CacheLifetime::OneHour,
             cache_key: "s_test:reviewer".into(),
-            conversation: vec![Input::User {
+            conversation: (vec![Input::User {
                 text: format!("request {index}"),
                 images: Vec::new(),
-            }],
+            }])
+            .into(),
             previous_end: None,
             sent_tools: None,
             max_output_tokens: Some(4096),

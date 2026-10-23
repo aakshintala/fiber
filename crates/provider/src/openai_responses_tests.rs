@@ -23,7 +23,7 @@ fn request() -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_root".into(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,

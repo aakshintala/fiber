@@ -241,6 +241,35 @@ fn a_request_without_a_session_dir_reads_an_empty_one() {
 }
 
 #[test]
+fn a_request_s_conversation_wires_as_a_plain_array_and_reads_back() {
+    let request = ModelRequest {
+        system_prompt: "s".into(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: "k".into(),
+        conversation: Arc::from([Input::User {
+            text: "hi".into(),
+            images: Vec::new(),
+        }]),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: PathBuf::new(),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        value["conversation"],
+        json!([{"type": "user", "text": "hi"}])
+    );
+    assert_eq!(
+        serde_json::from_value::<ModelRequest>(value).unwrap(),
+        request
+    );
+}
+
+#[test]
 fn a_tool_definition_without_hosted_has_no_hosted_key_and_reads_back() {
     let plain = ToolDefinition {
         name: "read".into(),
@@ -359,7 +388,7 @@ fn default_warms_is_true() {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: Arc::from([]),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
