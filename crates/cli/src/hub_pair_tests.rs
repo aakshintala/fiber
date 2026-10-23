@@ -1,6 +1,6 @@
 //! Pairing output, QR payloads and URL validation against a fake hub socket.
 use super::*;
-use contract::HubLine;
+use contract::{ErrorCode, HubLine};
 use fakes::Deadline;
 use serde_json::{Map, json};
 use std::io::{BufRead as _, BufReader};
@@ -16,7 +16,7 @@ fn run_wait(
     answer: Value,
     address: Option<Address>,
     terminal: bool,
-) -> (Result<(), Failure>, Vec<u8>, Value) {
+) -> (Result<(), CliError>, Vec<u8>, Value) {
     let (client, server) = UnixStream::pair().unwrap();
     client.set_read_timeout(Some(WAIT)).unwrap();
     server.set_read_timeout(Some(WAIT)).unwrap();
@@ -149,11 +149,8 @@ fn an_address_too_long_to_draw_fails_with_usage() {
     let long = Address::parse(&format!("wss://{}", "a".repeat(10_000))).unwrap();
     let (result, out, _) = run_wait(accepted(), Some(long), true);
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::Usage);
-    assert_eq!(
-        failure.message,
-        "The address is too long to draw as a QR code."
-    );
+    assert!(matches!(failure, CliError::QrTooLong), "{failure}");
+    assert_eq!(failure.code(), ErrorCode::Usage);
     assert!(out.is_empty());
     for (length, success) in [(2319, true), (2320, true), (2321, false)] {
         let address = Address::parse(&format!("wss://{}", "a".repeat(length - 6))).unwrap();
@@ -169,8 +166,11 @@ fn a_rejected_pairing_code_prints_its_message() {
     let rejected = json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":"c_pairing_code","code":"invalid_arguments","message":"already paired"}});
     let (result, out, _) = run_wait(rejected, None, false);
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::InvalidArguments);
-    assert_eq!(failure.message, "already paired");
+    assert!(
+        matches!(&failure, CliError::Rejected { message, .. } if message == "already paired"),
+        "{failure}"
+    );
+    assert_eq!(failure.code(), ErrorCode::InvalidArguments);
     assert!(out.is_empty());
 }
 #[test]
@@ -178,7 +178,9 @@ fn a_pair_reply_without_a_string_code_is_refused() {
     let mut answer = accepted();
     answer["payload"]["result"]["code"] = Value::from(1);
     let (result, out, _) = run_wait(answer, None, false);
-    assert_eq!(result.unwrap_err().code, ErrorCode::IoFailed);
+    let error = result.unwrap_err();
+    assert!(matches!(error, CliError::PairingAnswerMissing), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(out.is_empty());
 }
 #[test]

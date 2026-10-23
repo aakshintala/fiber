@@ -5,13 +5,11 @@
 
 use std::io::{self, BufReader, Write};
 
-use contract::ErrorCode;
 use contract::commands::hub::{HubCommand, NoArgs};
-use contract::shapes::Failure;
 use serde_json::Value;
 
-use crate::sessions::request;
-use crate::{failed, finish, write_line};
+use crate::sessions::request_value;
+use crate::{CliError, finish, write_line};
 
 /// The `id` of the `refresh` command `fiber hub refresh` sends.
 const REFRESH_ID: &str = "c_refresh";
@@ -31,21 +29,16 @@ pub fn hub_refresh(connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::E
 pub(crate) fn run(
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
+) -> Result<(), CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
     let mut read = BufReader::new(stream);
-    request(&mut read, REFRESH_ID, HubCommand::Refresh(NoArgs {}))?;
-    let result = request(&mut read, STATUS_ID, HubCommand::Status(NoArgs {}))?;
+    request_value(&mut read, REFRESH_ID, HubCommand::Refresh(NoArgs {}))?;
+    let result = request_value(&mut read, STATUS_ID, HubCommand::Status(NoArgs {}))?;
     let source = result
         .get("variables")
         .and_then(|variables| variables.get("source"))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            failed(
-                ErrorCode::IoFailed,
-                "the hub's answer to `status` has no variables",
-            )
-        })?;
+        .ok_or(CliError::StatusNoVariables)?;
     // The hub answers only its own capture's source: anything else is a
     // reply that does not fit `status`.
     let line = if source == "login_shell" {
@@ -53,10 +46,7 @@ pub(crate) fn run(
     } else if source == "inherited" {
         "the login-shell capture failed; sessions start with the hub's inherited environment"
     } else {
-        return Err(failed(
-            ErrorCode::IoFailed,
-            "the hub's answer to `status` has no variables",
-        ));
+        return Err(CliError::StatusNoVariables);
     };
     write_line(out, line)?;
     Ok(())
