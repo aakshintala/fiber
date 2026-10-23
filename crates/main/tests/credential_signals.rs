@@ -55,6 +55,16 @@ fn temp_root() -> fakes::TempDir {
     root
 }
 
+/// Warms the built `fiber` before a PTY test's deadline starts: these
+/// tests exec `CARGO_BIN_EXE_fiber` itself through `Run::spawn`, and a
+/// first exec can stall for seconds on macOS before `main` runs
+/// (`docs/testing.md`, "Waits and timeouts"). `-V` is rejected by the
+/// usage path before anything reads home or config, and exits 2. The
+/// stall lands in the warm-up's own `START_BOUND`.
+fn warm_built_fiber() {
+    fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["-V"], 2);
+}
+
 impl Setup {
     fn new() -> Self {
         let root = temp_root();
@@ -82,13 +92,6 @@ impl Setup {
             root,
             bin,
         }
-    }
-
-    /// A fresh temporary root under the same warmed `fiber` link: the
-    /// fork-loop test reuses one link across its attempts, so no attempt
-    /// pays the first-exec stall again.
-    fn fresh_root(&mut self) {
-        self.root = temp_root();
     }
 
     /// This test's own path to the built `fiber`.
@@ -390,14 +393,13 @@ fn ps_observer_runs_and_finds_no_member_in_an_absent_group() {
 #[cfg(target_os = "macos")]
 #[test]
 fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_fork_loop() {
-    // One link warmed once before the shared clock starts: every attempt
+    // One link warmed once before the clock below starts: every attempt
     // reuses this path with a fresh root, so the first-exec stall lands
-    // in the warm-up's own `START_BOUND`, never in the shared deadline.
+    // in the warm-up's own `START_BOUND`, never in the deadline.
     let mut setup = Setup::new();
-    let shared = Deadline::start();
+    setup.deadline = Deadline::start();
     for attempt in 0..20 {
-        setup.fresh_root();
-        setup.deadline = shared;
+        setup.root = temp_root();
         let ready = Ready::new(setup.root.path());
         let fifo = ready.path().to_path_buf();
         // Before the spawn: a command-line watchdog covers a spawn no
@@ -426,7 +428,9 @@ fn sigint_to_fiber_models_during_a_credential_fork_loop_leaves_no_group_member_f
             stderr(&output)
         );
         // Observed at Fiber exit, before the guarded cleanup below kills
-        // a survivor: any member, in any state, is the orphan.
+        // a survivor: the entry point exits once every such group is
+        // empty (`docs/invocation.md`, "Shutdown"), so any member, in
+        // any state, is the orphan.
         let members = observe_group_members(setup.deadline, pgid)
             .unwrap_or_else(|error| panic!("attempt {attempt}: observing group {pgid}: {error}"));
         // Guarded cleanup before the assertion: a survivor must not
@@ -627,6 +631,7 @@ fn refresh_model_lists_returning_normally_kills_what_its_credential_command_left
 
 #[test]
 fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_group() {
+    warm_built_fiber();
     let setup = support::Setup::new();
     let ready = Ready::new(setup.root.path());
     let fifo = ready.path().to_path_buf();
@@ -654,6 +659,7 @@ fn sigterm_to_the_terminal_while_a_picker_read_runs_exits_143_and_kills_its_grou
 
 #[test]
 fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group() {
+    warm_built_fiber();
     let setup = support::Setup::new();
     let ready = Ready::new(setup.root.path());
     let fifo = ready.path().to_path_buf();
@@ -691,6 +697,7 @@ fn sighup_to_the_terminal_while_a_picker_read_runs_exits_129_and_kills_its_group
 /// this file.
 #[test]
 fn queued_picker_read_restarts_without_its_asked_mark_2738() {
+    warm_built_fiber();
     let setup = support::Setup::new();
     let ready = Ready::new(setup.root.path());
     let fifo = ready.path().to_path_buf();
