@@ -161,17 +161,16 @@ pub fn project(launch: &Path) -> PathBuf {
 /// Resolves the project of `launch` with one `git rev-parse`: git's shared
 /// directory when `launch` is inside a repository, otherwise `launch`
 /// itself, symlinks resolved. The invocation carries the scrubbed
-/// environment (`worktree::hooked_command`): `core.fsmonitor` off,
+/// environment (`support::git::hooked_command`): `core.fsmonitor` off,
 /// `GIT_OPTIONAL_LOCKS` and `GIT_TERMINAL_PROMPT` pinned to `0`, and the
 /// `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and `GIT_INDEX_FILE`
 /// variables removed, so the caller's environment cannot redirect the
 /// discovery.
 pub fn resolve_project(launch: &Path) -> Project {
-    let common = worktree::hooked_command("git")
+    let common = support::git::hooked_command("git")
         .arg("-C")
         .arg(launch)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
     let (identity, in_repository) = match common {

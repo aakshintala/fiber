@@ -3842,6 +3842,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "support",
  "thiserror 2.0.21",
 ]
 
