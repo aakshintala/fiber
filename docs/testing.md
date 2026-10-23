@@ -67,7 +67,9 @@ the real panic hook, never in the test's own process.
 
 Fiber's own tests are Rust, run by cargo. The one exception is an extension's
 tests, Fiber's first-party extensions included: they are cases run by
-`fiber extension test` ("Testing an extension").
+`fiber extension test` ("Testing an extension"). Behaviour a case cannot
+observe, such as a file an extension writes, is tested at binary level in
+`crates/main/tests`.
 
 ## What a test asserts
 

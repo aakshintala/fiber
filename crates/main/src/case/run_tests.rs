@@ -18,12 +18,16 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
-use contract::events::{Event, FiberExited, TextDelta, TurnCompleted, TurnOutcome};
+use contract::events::{
+    Event, ExtensionUi, ExtensionsLoaded, FiberExited, TextDelta, TurnCompleted, TurnOutcome, Ui,
+};
+use contract::inbox::Rejection;
 use contract::shapes::{Tokens, Usage};
 use log::Log;
 use serde_json::{Value, json};
 
-use super::super::format::{ClockAdvance, Host, Selector, SessionCase};
+use super::super::clock::CaseClock;
+use super::super::format::{CaseCommand, ClockAdvance, Host, Input, Selector, SessionCase};
 use super::{CaseRun, WaitBounds, session_verdict, write_config};
 use fakes::Deadline;
 
@@ -126,7 +130,7 @@ fn session_case(
     SessionCase {
         name,
         script: json!({}),
-        prompt: String::new(),
+        input: Input::Prompt(String::new()),
         config: None,
         settings: None,
         host,
@@ -135,6 +139,54 @@ fn session_case(
         expect: expected,
         attended,
     }
+}
+
+fn command_session_case(
+    expected: Vec<Value>,
+    advances: Vec<ClockAdvance>,
+    until: Option<Selector>,
+    name: &str,
+    text: &str,
+) -> Arc<CaseRun> {
+    command_session_case_with_waits(expected, advances, until, name, text, TEST_WAITS)
+}
+
+fn command_session_case_with_waits(
+    expected: Vec<Value>,
+    advances: Vec<ClockAdvance>,
+    until: Option<Selector>,
+    name: &str,
+    text: &str,
+    waits: WaitBounds,
+) -> Arc<CaseRun> {
+    let mut case = session_case(
+        Some("command-loop".to_owned()),
+        expected,
+        Host::default(),
+        advances,
+        until,
+        true,
+    );
+    case.input = Input::Command(CaseCommand {
+        name: name.to_owned(),
+        text: text.to_owned(),
+    });
+    CaseRun::with_waits(case, fakes::clock::FakeClock::new(), waits)
+}
+
+fn extensions_loaded() -> Event {
+    Event::ExtensionsLoaded(ExtensionsLoaded {
+        extensions: Vec::new(),
+    })
+}
+
+fn extension_ui() -> Event {
+    Event::ExtensionUi(ExtensionUi {
+        extension: "export".to_owned(),
+        ui: Ui::Status {
+            status: "wrote out.md".to_owned(),
+        },
+    })
 }
 
 fn case_run(
@@ -381,11 +433,7 @@ fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
     case.host_script()
         .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
     let (release, waiter) = park_waiter(&case, stuck_at);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: true,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
@@ -436,11 +484,7 @@ fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
     case.host_script()
         .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
     let (release, waiter) = park_waiter(&case, stuck_at);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: true,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
@@ -480,11 +524,7 @@ fn a_stuck_hang_past_all_advances_skips_the_event_wait() {
     case.host_script()
         .hang_matched(1, &json!({"program": "hang-once"}), stuck_at);
     let (release, waiter) = park_waiter(&case, stuck_at);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
@@ -528,11 +568,7 @@ fn close_names_each_stuck_hang_and_releases_in_deadline_order() {
         .hang_matched(2, &json!({"program": "hang-early"}), early);
     let (release_early, waiter_early) = park_waiter(&case, early);
     let (release_late, waiter_late) = park_waiter(&case, late);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
     let mut failures = Vec::new();
     let drive = Arc::clone(&driver) as Arc<dyn contract::extension::Drive>;
     let released = case.close(
@@ -618,6 +654,28 @@ struct FakeDrive {
     log: Arc<Log>,
     close_calls: AtomicUsize,
     exit_on_close: bool,
+    commands: Mutex<Vec<(String, serde_json::Map<String, Value>)>>,
+    reject: Option<Rejection>,
+    drop_acks: bool,
+    clock: Option<Arc<CaseClock>>,
+    command_offsets: Mutex<Vec<Duration>>,
+    announce_ui_on_command: bool,
+}
+
+impl FakeDrive {
+    fn new(log: Arc<Log>, exit_on_close: bool) -> Self {
+        Self {
+            log,
+            close_calls: AtomicUsize::new(0),
+            exit_on_close,
+            commands: Mutex::new(Vec::new()),
+            reject: None,
+            drop_acks: false,
+            clock: None,
+            command_offsets: Mutex::new(Vec::new()),
+            announce_ui_on_command: false,
+        }
+    }
 }
 
 impl contract::extension::Drive for FakeDrive {
@@ -625,7 +683,7 @@ impl contract::extension::Drive for FakeDrive {
         &self,
         _extension: &str,
         command: &str,
-        _args: serde_json::Map<String, Value>,
+        args: serde_json::Map<String, Value>,
         answer: contract::inbox::Ack,
     ) {
         if command == "close" {
@@ -635,8 +693,33 @@ impl contract::extension::Drive for FakeDrive {
                     .append(&fiber_exited(), None, None)
                     .expect("append close event");
             }
+            if !self.drop_acks {
+                answer.0(Ok(None));
+            }
+            return;
         }
-        answer.0(Ok(None));
+        self.commands
+            .lock()
+            .unwrap()
+            .push((command.to_owned(), args));
+        if let Some(clock) = &self.clock {
+            self.command_offsets
+                .lock()
+                .unwrap()
+                .push(clock.parked_offsets().0);
+        }
+        if self.announce_ui_on_command {
+            self.log
+                .append(&extension_ui(), None, None)
+                .expect("append the announced ui line");
+        }
+        if self.drop_acks {
+            return;
+        }
+        match &self.reject {
+            Some(rejection) => answer.0(Err(rejection.clone())),
+            None => answer.0(Ok(None)),
+        }
     }
 }
 
@@ -654,11 +737,7 @@ fn a_recorded_failure_appears_in_the_child_verdict() {
 #[test]
 fn successful_initial_advances_do_not_close_before_the_until_event() {
     let (_root, log) = session_log(&[turn_completed()]);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: true,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
     let case = case_run(
         vec![
             json!({"kind": "turn_completed"}),
@@ -684,11 +763,7 @@ fn successful_initial_advances_do_not_close_before_the_until_event() {
 #[test]
 fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
     let (_root, log) = session_log(&[turn_completed()]);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
     let case = case_run(
         vec![json!({"kind": "turn_completed"})],
         Vec::new(),
@@ -737,11 +812,7 @@ fn exiting_before_the_next_advance_names_that_advance() {
             nth: 1,
         }),
     );
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver as Arc<dyn contract::extension::Drive>,
@@ -775,11 +846,7 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
             nth: 1,
         }),
     );
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
@@ -820,11 +887,7 @@ fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
             nth: 1,
         }),
     );
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver.clone() as Arc<dyn contract::extension::Drive>,
@@ -883,11 +946,7 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
     .expect("append the ephemeral delta");
     log.append(&turn_completed(), None, None)
         .expect("append the durable event");
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver as Arc<dyn contract::extension::Drive>,
@@ -952,11 +1011,7 @@ fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
     Deadline::after(Duration::from_secs(5))
         .recv(&parked_rx)
         .expect("the waiter parks before the driver runs");
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: false,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
 
     let failures = case.drive(
         driver as Arc<dyn contract::extension::Drive>,
@@ -1047,11 +1102,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         calls: AtomicUsize::new(0),
     });
     let (_root, log) = session_log(&[]);
-    let driver = Arc::new(FakeDrive {
-        log: Arc::clone(&log),
-        close_calls: AtomicUsize::new(0),
-        exit_on_close: true,
-    });
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
     let case = CaseRun::with_waits(
         session_case(
             Some("run-loop".to_owned()),
@@ -1163,4 +1214,375 @@ fn each_settings_entry_is_written_as_that_extensions_global_file() {
     );
     let text = fs::read_to_string(home.join("config").join("other.json")).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({}));
+}
+
+/// A command case sends its command once, with the name and text as args:
+/// a second send, or a missing one, breaks the recorded call. A command
+/// case runs no turn (docs/extensions.md:753-759), so `until` is the
+/// ephemeral `extension_ui` and the stream holds only the startup lines
+/// and the exit line.
+#[test]
+fn a_command_case_sends_its_command_once_after_extensions_loaded() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "out.md",
+    );
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
+
+    let watcher = log.watch_all();
+    log.append(&extension_ui(), None, None)
+        .expect("append the ephemeral ui line");
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].0, "command");
+    assert_eq!(
+        commands[0].1,
+        serde_json::Map::from_iter([
+            ("name".to_owned(), json!("export")),
+            ("text".to_owned(), json!("out.md")),
+        ])
+    );
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A session reload writes a second `extensions_loaded`: the command is
+/// already taken, so no second send follows it. A command case runs no
+/// turn (docs/extensions.md:753-759), so `until` is the ephemeral
+/// `extension_ui`.
+#[test]
+fn a_second_extensions_loaded_sends_no_further_command() {
+    let (_root, log) = session_log(&[extensions_loaded(), extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "out.md",
+    );
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
+
+    let watcher = log.watch_all();
+    log.append(&extension_ui(), None, None)
+        .expect("append the ephemeral ui line");
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// The command goes out on the `extensions_loaded` line even when the
+/// case ends there: the send runs before the `until` check for that line.
+#[test]
+fn a_command_case_sends_before_its_extensions_loaded_until() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "extensions_loaded".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].0, "command");
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A rejected command fails the case with the wire code and the message,
+/// then closes the session once: without that close the count is 0.
+#[test]
+fn a_rejected_command_fails_the_case_and_closes_once() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![json!({"kind": "extensions_loaded"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        reject: Some(Rejection {
+            code: contract::ErrorCode::UnknownCommand,
+            message: "export names no extension command".to_owned(),
+        }),
+        ..FakeDrive::new(Arc::clone(&log), true)
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("command export")
+                && failure.contains("unknown_command")
+                && failure.contains("export names no extension command")),
+        "{failures:?}"
+    );
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A rejected command stops the drive at once: the close inside the
+/// failure runs once, and the drive never reaches the `until` line to
+/// close again. Returning `true` from the failed send instead (mutant
+/// `CaseRun::send_command -> bool`) would close on the `until` line too,
+/// so this pins the stop with `close_calls == 1`.
+#[test]
+fn a_rejected_command_with_until_on_its_send_line_closes_once() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![json!({"kind": "extensions_loaded"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extensions_loaded".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive {
+        reject: Some(Rejection {
+            code: contract::ErrorCode::UnknownCommand,
+            message: "export names no extension command".to_owned(),
+        }),
+        ..FakeDrive::new(Arc::clone(&log), true)
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("command export")
+                && failure.contains("unknown_command")
+                && failure.contains("export names no extension command")),
+        "{failures:?}"
+    );
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// An ack that never arrives fails the case with the no-answer reason,
+/// then closes the session once. The `until` wait is zero, so no
+/// real-clock wait decides the result: the dropped ack can never arrive,
+/// and the failure is immediate.
+#[test]
+fn an_unanswered_command_ack_fails_and_closes_once() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let waits = WaitBounds {
+        advance: ADVANCE_WAIT,
+        until: Duration::ZERO,
+        close: EXIT_WAIT,
+    };
+    let case = command_session_case_with_waits(
+        vec![json!({"kind": "extensions_loaded"})],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+        waits,
+    );
+    let driver = Arc::new(FakeDrive {
+        drop_acks: true,
+        ..FakeDrive::new(Arc::clone(&log), true)
+    });
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("command export")
+                && failure.contains("no answer within")),
+        "{failures:?}"
+    );
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A clock entry after `extensions_loaded` applies after the send: the
+/// offset at the command call is still zero, while the run ends advanced.
+#[test]
+fn the_command_is_sent_before_the_extensions_loaded_advance() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        vec![ClockAdvance {
+            hang: None,
+            after: Some(Selector {
+                kind: "extensions_loaded".to_owned(),
+                nth: 1,
+            }),
+            advance_ms: 50,
+        }],
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let deadline = case.session_clock().now() + Duration::from_millis(50);
+    let (release, waiter) = park_waiter(&case, deadline);
+    // The fake announces the command's output only once it receives the
+    // command: the `until` line cannot arrive before the send it observes.
+    let driver = Arc::new(FakeDrive {
+        clock: Some(Arc::clone(&case.clock)),
+        announce_ui_on_command: true,
+        ..FakeDrive::new(Arc::clone(&log), true)
+    });
+
+    let watcher = log.watch_all();
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+    let _ignored = release.send(());
+    waiter.join().expect("join the parked waiter");
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        driver.command_offsets.lock().unwrap().as_slice(),
+        &[Duration::ZERO]
+    );
+    let (offset, _) = case.clock.parked_offsets();
+    assert_eq!(offset, Duration::from_millis(50));
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A prompt case never sends a command: always sending one would add a
+/// call here. The log carries the `extensions_loaded` every real session
+/// writes, so a runner that arms a command for a prompt would fire.
+#[test]
+fn a_prompt_case_sends_no_command() {
+    let (_root, log) = session_log(&[extensions_loaded(), turn_completed()]);
+    let case = case_run(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "turn_completed"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "turn_completed".to_owned(),
+            nth: 1,
+        }),
+    );
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
+
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        log.watch_all(),
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert!(driver.commands.lock().unwrap().is_empty());
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// An omitted `text` parses to the empty string and is sent as one: the
+/// driver line carries `"text": ""`, not a missing key. A command case
+/// runs no turn (docs/extensions.md:753-759), so `until` is the ephemeral
+/// `extension_ui`.
+#[test]
+fn omitted_command_text_sends_the_empty_string() {
+    let (_root, log) = session_log(&[extensions_loaded()]);
+    let case = command_session_case(
+        vec![
+            json!({"kind": "extensions_loaded"}),
+            json!({"kind": "fiber_exited"}),
+        ],
+        Vec::new(),
+        Some(Selector {
+            kind: "extension_ui".to_owned(),
+            nth: 1,
+        }),
+        "export",
+        "",
+    );
+    let driver = Arc::new(FakeDrive::new(Arc::clone(&log), true));
+
+    let watcher = log.watch_all();
+    log.append(&extension_ui(), None, None)
+        .expect("append the ephemeral ui line");
+    let failures = case.drive(
+        driver.clone() as Arc<dyn contract::extension::Drive>,
+        watcher,
+        Arc::new(r#loop::TurnCancel::default()),
+    );
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let commands = driver.commands.lock().unwrap();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(commands[0].1.get("text"), Some(&json!("")));
+    drop(commands);
+    assert_eq!(driver.close_calls.load(Ordering::SeqCst), 1);
 }

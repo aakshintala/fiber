@@ -711,12 +711,22 @@ exempt.
 
 ### Session cases
 
-A session case requires `script`, `prompt` and `expect`. `script` uses the
+A session case requires `script`, `expect` and exactly one of `prompt` and
+`command`. `script` uses the
 format in `docs/model-routing.md`, "The scripted provider". `expect` lists the
 complete ordered durable event stream. Each expected object checks only its
 fields, so `{"kind":"turn_completed"}` checks the event kind. Ephemeral lines
 are ignored. Objects match a subset of fields; arrays and scalar values match
 exactly. An expected `null` matches a missing field or a field set to `null`.
+
+`command` is an object with `name` (string, required) and `text` (string,
+optional; omitted is the empty string). The runner sends it as the protocol's
+`command` driver command after `extensions_loaded`, as a person typing
+`/name text`. A `command` case requires `until` and has no default. `until`
+may name an ephemeral kind (`extension_ui`, `notice`) with `nth`. A rejected
+command (`unknown_command`, `extension_failed`) fails the case with its code
+and message. Giving both `prompt` and `command`, neither, or a `command` case
+with no `until` is a malformed case (`FAIL <name>`, exit 2).
 
 ```json
 {
@@ -735,6 +745,34 @@ exactly. An expected `null` matches a missing field or a field set to `null`.
     {"kind": "usage_recorded"},
     {"kind": "assistant_message_completed"},
     {"kind": "turn_completed"},
+    {"kind": "fiber_exited"}
+  ]
+}
+```
+
+A command case names no turn, so its stream has none. The lines below are the
+ones `docs/events.md` proves for a session that runs no turn: `session_started`
+is the log's first line, `fiber_started` follows it in a new session,
+`extensions_loaded` is written before the first model request, and `fiber_exited`
+is the last line the process writes. That is the whole durable stream the
+export command cases observe: no turn runs, so nothing writes between
+`extensions_loaded` and `fiber_exited`. The `expect` lists in
+`extensions/export/tests/export-writes-no-durable-line.json` and
+`extensions/export/tests/export-text-reaches-the-extension.json` pin this
+order under `docs/testing.md`, "What a test asserts" ("A test asserts an order
+or a count only where a doc promises it"): the promise is `expect` lists the
+complete ordered durable event stream above, and each position is proved by
+`docs/events.md` as the preceding sentences cite.
+
+```json
+{
+  "script": {"steps": [{"text": "unused"}]},
+  "command": {"name": "export"},
+  "until": {"kind": "extension_ui"},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
     {"kind": "fiber_exited"}
   ]
 }
@@ -762,7 +800,8 @@ advance until the entry has matched as a hang. The runner
 advances only when the operation is parked on that clock deadline. After the
 last entry, a hang still parked fails the case, naming the request, and the
 runner advances to its deadline to end the session. `until`
-selects the event after which the runner closes the session; by default it
+selects the event after which the runner closes the session; for a prompt case,
+by default it
 closes after the first `turn_completed` or `turn_failed`. `attended`
 defaults to true; `attended: false` runs the session with nobody attached,
 as it does for a call case: a call that would escalate to a person is

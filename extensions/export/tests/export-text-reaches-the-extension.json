@@ -1,0 +1,11 @@
+{
+  "script": {"steps": [{"text": "unused"}]},
+  "command": {"name": "export", "text": "nodir/a.md"},
+  "until": {"kind": "notice"},
+  "expect": [
+    {"kind": "session_started"},
+    {"kind": "fiber_started"},
+    {"kind": "extensions_loaded"},
+    {"kind": "fiber_exited"}
+  ]
+}

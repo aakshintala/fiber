@@ -175,8 +175,7 @@ fn export_is_listed_with_no_vm_and_writes_the_transcript_to_the_default_path() {
         })]
     );
     session.prompt("c_prompt", "fix it");
-    let accepted = session.ask("c_export", "command", &json!({ "name": "export" }));
-    assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
+    session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
     // docs/testing.md:74-75: the test asserts the file left behind. Its order
@@ -271,8 +270,7 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
     // A setup guard, not a doc count: past seq 300 with 256-line pages
     // (docs/invocation.md:452) the transcript spans more than one page.
     assert!(highest > 300, "the log never passed seq 300");
-    let accepted = session.ask("c_export", "command", &json!({ "name": "export" }));
-    assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
+    session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
     let quotes: Vec<&str> = written
@@ -413,8 +411,7 @@ fn steering_and_a_failed_call_are_written() {
     until_session(&session.client, "the nudged turn to complete", |line| {
         line["kind"] == "turn_completed"
     });
-    let accepted = session.ask("c_export", "command", &json!({ "name": "export" }));
-    assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
+    session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
     let prompt_at = written.find("> run it").expect("the prompt is quoted");
@@ -471,8 +468,7 @@ fn an_inner_tool_call_is_not_listed() {
         seen.last().unwrap()["payload"]["status"],
         "peeked completed"
     );
-    let accepted = session.ask("c_export", "command", &json!({ "name": "export" }));
-    assert_eq!(accepted.last().unwrap()["kind"], "command_accepted");
+    session.ask("c_export", "command", &json!({ "name": "export" }));
     assert_eq!(export_status(&session), format!("wrote {id}.md"));
     let written = fs::read_to_string(session.setup.workspace().join(format!("{id}.md"))).unwrap();
     assert!(written.contains("> hi"), "{written}");
