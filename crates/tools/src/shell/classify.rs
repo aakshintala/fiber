@@ -139,8 +139,8 @@ fn stage_outcome(stage: &Stage, workdir: &Path, configured: &[(String, Vec<Strin
         // allow-list.
         return Outcome::Executes;
     };
-    // An assignment prefix executes unless the built-in entry blesses every
-    // name, so `LC_ALL=C git status` reads and `FOO=1 ls` does not.
+    // An assignment prefix executes: no built-in entry blesses an
+    // assignment name, so `LC_ALL=C git status` and `FOO=1 ls` both do.
     if !simple.assignments.is_empty() {
         let Found::Builtin(entry) = entry::find(&simple.words, configured) else {
             return Outcome::Executes;
@@ -149,8 +149,8 @@ fn stage_outcome(stage: &Stage, workdir: &Path, configured: &[(String, Vec<Strin
             return Outcome::Executes;
         }
     }
-    // An exact form reads with no paths: `git init`, `git status`,
-    // `git stash list`, `git push --dry-run` or `git branch --show-current`.
+    // An exact form reads with no paths: `git status`, `git stash list`
+    // or `git branch --show-current`.
     if EXACT.iter().any(|row| cooked_equals(&simple.words, row)) {
         return with_inputs(Outcome::Reads(Vec::new()), simple, workdir);
     }

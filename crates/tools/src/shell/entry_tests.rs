@@ -192,14 +192,14 @@ fn owned_covers_built_ins_sed_and_exact_paths() {
         "git status",
         "git status -s",
         "git stash list",
-        "git push --dry-run",
-        "git init",
         "git branch --show-current",
     ] {
         assert!(owned(name), "{name}");
     }
     for name in [
         "git",
+        "git init",
+        "git push --dry-run",
         "git branch",
         "git stash",
         "git push",

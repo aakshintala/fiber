@@ -293,15 +293,18 @@ fn new_git_forms_read() {
 
 #[test]
 fn exact_forms_read_without_paths() {
-    for command in [
-        "git branch --show-current",
-        "git init",
-        "git status",
-        "git stash list",
-        "git push --dry-run",
-    ] {
+    // `docs/tools.md`, "Shell", "Effects": if every command is on the
+    // read-only list, the call declares `reads` with no paths here.
+    for command in ["git branch --show-current", "git status", "git stash list"] {
         assert_reads(command);
         assert!(classified(command).declared.paths.is_none(), "{command}");
+    }
+    // A writing form executes even with a discard redirect: `git init`
+    // creates or updates `.git` state, and `git push --dry-run` reaches
+    // the remote.
+    for command in ["git init", "git push --dry-run"] {
+        assert_closed(command);
+        assert_closed(&format!("{command} 2>/dev/null"));
     }
     // A discard redirect drops out before the exact match.
     for command in [
@@ -326,36 +329,38 @@ fn the_longest_built_in_path_wins() {
     );
     // A configured entry at the same path is never consulted: the exact
     // form reads, and the longer call executes as an owned path.
-    let entries = [configured("git push --dry-run", &[])];
-    assert_reads("git push --dry-run");
+    let entries = [configured("git stash list", &[])];
+    assert_reads("git stash list");
     assert!(
-        classified_with("git push --dry-run", &entries)
+        classified_with("git stash list", &entries)
             .declared
             .paths
             .is_none()
     );
-    assert_configured_closed("git push --dry-run extra", &entries);
+    assert_configured_closed("git stash list extra", &entries);
 }
 
 #[test]
 fn an_assignment_after_the_name_is_an_operand() {
     // `ls FOO=1` reads the `FOO=1` operand; a leading assignment
-    // executes unless the entry blesses its name.
+    // executes, whatever its name (#1497 task 1.3).
     assert_eq!(
         classified("ls FOO=1").declared.paths,
         Some(vec!["/work/FOO=1".to_owned()])
     );
     assert_closed("FOO=1 ls");
-    assert_reads("LC_ALL=C git status");
-    assert!(classified("LC_ALL=C git status").declared.paths.is_none());
+    assert_closed("LC_ALL=C git status");
 }
 
 #[test]
-fn only_a_blessed_assignment_name_reads_for_git_status() {
-    // `git status` blesses `LC_ALL` but no other name: an unlisted name
-    // executes even though the entry holds a takes-value flag.
+fn assignment_prefixes_execute_despite_takes_value_flags() {
+    // No built-in entry blesses an assignment name (#1497 task 1.3): not
+    // `LC_ALL`, and not a bare letter matching a takes-value flag such
+    // as `head -n`. `docs/tools.md`, "Shell", "Effects" promises the
+    // call declares `executes` with no paths.
     assert_closed("FOO=1 git status");
-    assert_reads("LC_ALL=C git status");
+    assert_closed("LC_ALL=C git status");
+    assert_closed("n=1 head -5");
 }
 
 #[test]
@@ -397,6 +402,9 @@ fn hostile_git_forms_execute() {
         "git checkout x",
         "git stash",
         "git config x",
+        // Writing forms, not read-only ones.
+        "git init",
+        "git push --dry-run",
     ] {
         assert_closed(command);
     }
