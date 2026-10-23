@@ -37,6 +37,7 @@ use support::clock::System;
 use super::{
     STOP_WITHIN, on_stop_answered, run_local, run_remote, stop_local, stop_remote, wait_for_close,
 };
+use crate::CliError;
 use crate::hub_service::{ManagerRun, Ran, manager};
 use crate::hub_unit::{Manager, name, unit_path};
 
@@ -112,7 +113,7 @@ fn connect(client: UnixStream) -> impl FnMut() -> Result<doors::hub::Hub, doors:
 fn run_wait(
     client: UnixStream,
     clock: &Arc<FakeClock>,
-) -> mpsc::Receiver<(Result<(), Failure>, Vec<u8>)> {
+) -> mpsc::Receiver<(Result<(), CliError>, Vec<u8>)> {
     let (done_tx, done_rx) = mpsc::channel();
     let worker = Arc::clone(clock);
     thread::spawn(move || {
@@ -201,9 +202,10 @@ fn a_rejected_stop_is_a_failure_with_no_count() {
         .recv(&run_wait(client, &clock))
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "s_aaa still running");
-    assert_eq!(doors::exit_code(&error), 1);
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.to_string(), "s_aaa still running");
+    assert_eq!(doors::exit_code(&Failure::from(&error)), 1);
     assert!(out.is_empty());
 }
 
@@ -242,12 +244,9 @@ fn a_close_before_the_answer_is_a_failure() {
         .recv(&run_wait(client, &clock))
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        "the hub closed the connection before answering stop"
-    );
-    assert_eq!(doors::exit_code(&error), 1);
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::HubClosedBeforeAnswer), "{error}");
+    assert_eq!(doors::exit_code(&Failure::from(&error)), 1);
     assert!(out.is_empty());
     Deadline::after(DEADLINE)
         .recv(&got)
@@ -270,11 +269,8 @@ fn an_answer_without_a_session_count_is_a_failure() {
         .recv(&run_wait(client, &clock))
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        "the hub answered stop without a session count"
-    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::StopCountMissing), "{error}");
     assert!(out.is_empty());
 }
 
@@ -298,12 +294,12 @@ fn a_silent_hub_fails_at_the_deadline() {
         .recv(&done)
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs())
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(error, CliError::HubStopLate { secs } if secs == STOP_WITHIN.as_secs()),
+        "{error}"
     );
-    assert_eq!(doors::exit_code(&error), 1);
+    assert_eq!(doors::exit_code(&Failure::from(&error)), 1);
     assert!(out.is_empty());
 }
 
@@ -557,11 +553,8 @@ fn a_transport_failure_skips_the_service_step() {
     let clock = System;
     let mut out = Vec::new();
     let error = run_local(&mut out, dir.path(), &mut no_starter(), &clock, &stub.run).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        "the hub closed the connection before answering stop"
-    );
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::HubClosedBeforeAnswer), "{error}");
     assert!(out.is_empty());
     assert!(stub.calls().is_empty());
     handle.join().unwrap();
@@ -730,8 +723,9 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
         panic!("the probe answers: the starter never runs");
     };
     let error = run_local(out, home, &mut start, clock, &stub.run).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "s_aaa still running");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.to_string(), "s_aaa still running");
     assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
     let mut expected = vec!["answer".to_owned(), print_args(&service)];
     expected.extend(stop_args(&service));
@@ -898,8 +892,9 @@ fn installed_rejected_service_error(home: &Path, out: &mut dyn Write) {
     let clock_ref: &FakeClock = &clock;
     let error = run_local(out, home, &mut start, clock_ref, &stub.run).unwrap_err();
     stepper.join().unwrap();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "s_aaa still running");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.to_string(), "s_aaa still running");
     assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
     // The stop is attempted after the rejection, then fails: no gone
     // poll follows a failed stop.
@@ -991,12 +986,12 @@ fn a_failed_close_read_is_lost_not_late() {
         .recv(&done_rx)
         .expect("the close wait answers");
     let error = result.expect_err("a failed close read is lost");
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(
-        error.message.starts_with("the hub: "),
-        "the close read is lost, not late: {}",
-        error.message
+        matches!(error, CliError::Hub(doors::Error::Local(_))),
+        "the close read is lost, not late: {error}"
     );
+    assert!(error.to_string().starts_with("the hub: "), "{error}");
 }
 
 #[test]
@@ -1021,8 +1016,9 @@ fn a_stalled_close_after_a_rejection_still_reports_the_rejection() {
         .recv(&done)
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "s_aaa still running");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.to_string(), "s_aaa still running");
     assert!(out.is_empty());
     release_tx.send(()).unwrap();
 }
@@ -1049,10 +1045,10 @@ fn a_stalled_close_after_an_answer_fails_at_the_deadline() {
         .recv(&done)
         .expect("the stop returns");
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs())
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(error, CliError::HubStopLate { secs } if secs == STOP_WITHIN.as_secs()),
+        "{error}"
     );
     assert!(out.is_empty());
     release_tx.send(()).unwrap();
@@ -1065,7 +1061,7 @@ fn stalled_local(
     answer: Value,
     dir: fakes::TempDir,
 ) -> (
-    Result<(), Failure>,
+    Result<(), CliError>,
     Vec<u8>,
     mpsc::Sender<()>,
     thread::JoinHandle<()>,
@@ -1109,8 +1105,9 @@ fn a_local_stalled_close_after_a_rejection_still_reports_the_rejection() {
     let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-stalled-rejected");
     let (result, out, release, handle) = stalled_local(rejected(), dir);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "s_aaa still running");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.to_string(), "s_aaa still running");
     assert!(out.is_empty());
     release.send(()).unwrap();
     handle.join().unwrap();
@@ -1121,10 +1118,10 @@ fn a_local_stalled_close_after_an_answer_fails_at_the_deadline() {
     let dir = fakes::TempDir::under(Path::new("/tmp"), "cli-stop-local-stalled-accepted");
     let (result, out, release, handle) = stalled_local(accepted(2), dir);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(
-        error.message,
-        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs())
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(error, CliError::HubStopLate { secs } if secs == STOP_WITHIN.as_secs()),
+        "{error}"
     );
     assert!(out.is_empty());
     release.send(()).unwrap();

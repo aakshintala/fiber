@@ -18,7 +18,6 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, HubCommandLine, StopArgs};
 use contract::shapes::Failure;
@@ -30,7 +29,7 @@ use crate::hub_service::{
     ManagerRun, current_exe, manager, read_unit, stop_login_service, system_run_bounded,
 };
 use crate::hub_unit::Service;
-use crate::{failed, finish, write_line};
+use crate::{CliError, finish, write_line};
 
 /// The stop command's id, sent with the request and matched on the answer.
 const STOP_ID: &str = "c_stop";
@@ -97,7 +96,7 @@ pub(crate) fn run_local(
     start: &mut dyn FnMut() -> io::Result<()>,
     clock: &dyn Clock,
     run: &ManagerRun<'_>,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     let service = Service::locate(manager(), home, &current_exe()?, &|key| {
         std::env::var_os(key)
     })?;
@@ -111,18 +110,14 @@ pub(crate) fn run_local(
                 }
                 return report(out, NOTHING_RUNNING, installed);
             }
-            let (stream, _) =
-                doors::hub::connect_until(home, start, clock, deadline, &mut || {})
-                    .map_err(|error| crate::sessions::hub_failure(doors::Error::Local(error)))?;
+            let (stream, _) = doors::hub::connect_until(home, start, clock, deadline, &mut || {})
+                .map_err(|error| CliError::Hub(doors::Error::Local(error)))?;
             with_answer(
                 out, &stream, deadline, clock, &service, run, installed, true,
             )
         }
-        doors::hub::Probe::Failed(error) => {
-            Err(failed(ErrorCode::IoFailed, format!("the hub: {error}")))
-        }
-        doors::hub::Probe::Connected(Err(error)) => {
-            Err(failed(ErrorCode::IoFailed, format!("the hub: {error}")))
+        doors::hub::Probe::Failed(error) | doors::hub::Probe::Connected(Err(error)) => {
+            Err(CliError::Hub(doors::Error::Local(error)))
         }
         doors::hub::Probe::Connected(Ok((stream, _))) => with_answer(
             out, &stream, deadline, clock, &service, run, installed, false,
@@ -136,8 +131,8 @@ pub(crate) fn run_remote(
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
     clock: &dyn Clock,
-) -> Result<(), Failure> {
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
+) -> Result<(), CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
     // No service step remotely: the close still follows the answer, and
     // a stalled one never replaces a survivor rejection.
     let deadline = clock.now() + STOP_WITHIN;
@@ -157,7 +152,7 @@ pub(crate) fn run_remote(
                 reason = "a stalled close never replaces the survivor rejection"
             )]
             let _ = wait_for_close(&stream, deadline, clock);
-            Err(rejection)
+            Err(rejection.into())
         }
     }
 }
@@ -197,7 +192,7 @@ fn with_answer(
     run: &ManagerRun<'_>,
     installed: bool,
     started: bool,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     // The answer first: either answer runs the service step below.
     // Only a transport failure, where no answer arrives, returns
     // before it.
@@ -254,16 +249,16 @@ fn with_answer(
                 // The command's result is the rejection below; the
                 // manager failure is reported additionally, the way
                 // every failure prints.
-                writeln!(io::stderr(), "fiber: {}", error.message).unwrap_or(());
+                writeln!(io::stderr(), "fiber: {error}").unwrap_or(());
             }
-            Err(rejection)
+            Err(rejection.into())
         }
     }
 }
 
 /// Prints the stop's outcome: its first line, then the installed line
 /// whenever the unit file was present.
-fn report(out: &mut dyn Write, first: &str, installed: bool) -> Result<(), Failure> {
+fn report(out: &mut dyn Write, first: &str, installed: bool) -> Result<(), CliError> {
     write_line(out, first)?;
     if installed {
         write_line(out, INSTALLED_AGAIN)?;
@@ -273,9 +268,8 @@ fn report(out: &mut dyn Write, first: &str, installed: bool) -> Result<(), Failu
 
 /// The session ids with a socket entry under `home`'s `run/`, with no
 /// connect: a missing `run/` is no entries.
-fn session_entries(home: &Path) -> Result<Vec<contract::SessionId>, Failure> {
-    doors::session_entries(home)
-        .map_err(|error| crate::sessions::hub_failure(doors::Error::Local(error)))
+fn session_entries(home: &Path) -> Result<Vec<contract::SessionId>, CliError> {
+    doors::session_entries(home).map_err(|error| CliError::Hub(doors::Error::Local(error)))
 }
 
 /// Sends `stop` with `sessions` and waits for the answer through the
@@ -288,14 +282,14 @@ fn exchange_stop(
     stream: &UnixStream,
     deadline: Instant,
     clock: &dyn Clock,
-) -> Result<Answered, Failure> {
+) -> Result<Answered, CliError> {
     let mut request = serde_json::to_vec(&HubCommandLine {
         id: CommandId(STOP_ID.to_owned()),
         command: HubCommand::Stop(StopArgs {
             sessions: Some(true),
         }),
     })
-    .map_err(|error| failed(ErrorCode::IoFailed, format!("the hub: {error}")))?;
+    .map_err(CliError::HubRequestEncode)?;
     request.push(b'\n');
     // The refusal already carries the stop's failure: the exchange maps
     // only the transport. The close is not awaited here: it follows the
@@ -307,15 +301,10 @@ fn exchange_stop(
         clock,
         &mut || {},
         &mut || {},
-        || {
-            failed(
-                ErrorCode::IoFailed,
-                "the hub closed the connection before answering stop",
-            )
-        },
+        || CliError::HubClosedBeforeAnswer,
         late,
         lost,
-        |line: &HubLine| -> Result<Option<Answered>, Failure> {
+        |line: &HubLine| -> Result<Option<Answered>, CliError> {
             let Some(answered) = crate::sessions::answer_of(line, STOP_ID, "stop") else {
                 return Ok(None);
             };
@@ -328,7 +317,7 @@ fn exchange_stop(
     let restore = crate::hub_env::restore_blocking(stream);
     match (result, restore) {
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
+        (Ok(_), Err(error)) => Err(CliError::Hub(doors::Error::Local(error))),
         (Ok(answered), Ok(())) => Ok(answered),
     }
 }
@@ -340,7 +329,7 @@ fn wait_for_close(
     mut stream: &UnixStream,
     deadline: Instant,
     clock: &dyn Clock,
-) -> Result<(), Failure> {
+) -> Result<(), CliError> {
     stream.set_nonblocking(true).map_err(|error| lost(&error))?;
     let result = loop {
         if clock.now() >= deadline {
@@ -362,35 +351,33 @@ fn wait_for_close(
     let restore = crate::hub_env::restore_blocking(stream);
     match (result, restore) {
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
+        (Ok(_), Err(error)) => Err(CliError::Hub(doors::Error::Local(error))),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
 
 /// The confirmed-closed count in an accepted stop answer.
-fn sessions_stopped(result: &Value) -> Result<u64, Failure> {
+fn sessions_stopped(result: &Value) -> Result<u64, CliError> {
     result
         .get("sessions_stopped")
         .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            failed(
-                ErrorCode::IoFailed,
-                "the hub answered stop without a session count",
-            )
-        })
+        .ok_or(CliError::StopCountMissing)
 }
 
 /// The stop exchange's deadline failure.
-fn late() -> Failure {
-    failed(
-        ErrorCode::IoFailed,
-        format!("the hub did not stop in {} s", STOP_WITHIN.as_secs()),
-    )
+fn late() -> CliError {
+    CliError::HubStopLate {
+        secs: STOP_WITHIN.as_secs(),
+    }
 }
 
-/// An I/O failure on the hub's socket.
-fn lost(error: &io::Error) -> Failure {
-    failed(ErrorCode::IoFailed, format!("the hub: {error}"))
+/// An I/O failure on the hub's socket. The exchange lends the error, so it
+/// is rebuilt with the same kind and text.
+fn lost(error: &io::Error) -> CliError {
+    CliError::Hub(doors::Error::Local(io::Error::new(
+        error.kind(),
+        error.to_string(),
+    )))
 }
 
 #[cfg(test)]
