@@ -6,10 +6,11 @@
     clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
+#[path = "support/hub_start.rs"]
+mod hub_start;
 mod support;
 use serde_json::{Value, json};
 use std::fs;
-use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::Output;
@@ -64,22 +65,20 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
         .stderr(std::process::Stdio::piped())
         .process_group(0);
     succeeds(&run_to_exit(b.deadline, "the client's git repository", git));
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    write_json(&a.home().join("config.json"), &json!({"hub":{"port":port}}));
     let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":"/remote/workspace", "name":"remote session", "how":"exited"});
     fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
-    let process =
-        HubProc::spawn_command(a.deadline, &mut a.fiber(&["hub", "serve", "--installed"]));
-    let home = a.home();
-    let (ready, hello) = bounded(a.deadline, "the installed hub's hello", move || {
-        doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
-    })
-    .unwrap();
-    assert_eq!(hello.kind, "hub_hello");
-    let address = format!("ws://127.0.0.1:{port}");
+    let served = hub_start::serve_installed(
+        &a,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(&a.home().join("config.json"), &json!({"hub":{"port":port}}));
+            a.fiber(&["hub", "serve", "--installed"])
+        },
+    );
+    assert_eq!(served.hub.1.kind, "hub_hello");
+    let address = format!("ws://127.0.0.1:{}", served.port);
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);
     let code = String::from_utf8(code.stdout).unwrap();
@@ -168,9 +167,9 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["id"], "s_remote");
     assert!(!b.hub_socket().exists());
-    drop(ready);
-    process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    drop(served.hub);
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
 }
 
 #[test]
