@@ -71,6 +71,13 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
         String::from_utf8_lossy(&output.stdout),
         "Stopped 1 sessions and the hub.\n"
     );
+    // The hub unlinks its socket after answering `stop`, so the socket
+    // assertions run only once the hub has exited.
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    assert!(
+        !hub.wait().success(),
+        "the stopped hub exits as SIGTERM does"
+    );
     assert!(
         UnixStream::connect(setup.hub_socket()).is_err(),
         "the hub socket is gone"
@@ -78,11 +85,6 @@ fn stop_stops_the_session_and_the_hub_and_the_session_resumes() {
     assert!(
         UnixStream::connect(setup.session_socket(&session)).is_err(),
         "the session socket is gone"
-    );
-    let hub = hub.lock().unwrap().take().expect("the starter ran");
-    assert!(
-        !hub.wait().success(),
-        "the stopped hub exits as SIGTERM does"
     );
 
     let prefix = &session[..8];
