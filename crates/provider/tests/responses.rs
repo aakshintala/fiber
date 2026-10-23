@@ -24,7 +24,6 @@ mod wire_tools;
 mod harness;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
@@ -476,10 +475,235 @@ fn a_search_result_whose_call_is_absent_falls_back_to_its_action_id() {
     assert_eq!(body["input"][0]["type"], "tool_search_output");
 }
 
-fn research(path: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../research")
-        .join(path)
+/// Every probe recording compiled into this test, in the order the old
+/// directory walk read them: the fixed set, then the codex walk sorted by
+/// file name. Names are repo-relative paths, used as parse labels.
+static RECORDINGS: &[(&str, &[u8])] = &[
+    (
+        "crates/provider/tests/recordings/opencode-go-tool-call.sse",
+        include_bytes!("recordings/opencode-go-tool-call.sse"),
+    ),
+    (
+        "research/codex-responses-probe/raw/beta-other.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/beta-other.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/beta-with.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/beta-with.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/beta-without-nosid.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/beta-without-nosid.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/beta-without.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/beta-without.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-1-fresh-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-1-fresh-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-1-fresh-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-1-fresh-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-1-stable-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-1-stable-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-1-stable-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-1-stable-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-2-fresh-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-2-fresh-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-2-fresh-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-2-fresh-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-2-stable-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-2-stable-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-2-stable-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-2-stable-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-3-fresh-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-3-fresh-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-3-fresh-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-3-fresh-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-3-stable-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-3-stable-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cache-3-stable-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cache-3-stable-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-session-id-hyphen-1.json",
+        include_bytes!(
+            "../../../research/codex-responses-probe/raw/cachehdr-session-id-hyphen-1.json"
+        ),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-session-id-hyphen-2.json",
+        include_bytes!(
+            "../../../research/codex-responses-probe/raw/cachehdr-session-id-hyphen-2.json"
+        ),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-sessionid-underscore-1.json",
+        include_bytes!(
+            "../../../research/codex-responses-probe/raw/cachehdr-sessionid-underscore-1.json"
+        ),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-sessionid-underscore-2.json",
+        include_bytes!(
+            "../../../research/codex-responses-probe/raw/cachehdr-sessionid-underscore-2.json"
+        ),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-xreq-only-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdr-xreq-only-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdr-xreq-only-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdr-xreq-only-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdronly-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachehdronly-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachehdronly-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachekeyonly-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachekeyonly-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachekeyonly-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachekeyonly-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachenone-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachenone-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachenone-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachenone-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachesplit-1.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachesplit-1.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/cachesplit-2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/cachesplit-2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/ev-text.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-text.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/ev-text2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-text2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/ev-tool.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-tool.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/ev-tool2.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/ev-tool2.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-baseline.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-baseline.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-parallel-false.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-parallel-false.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-parallel-omitted.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-parallel-omitted.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-parallel-true.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-parallel-true.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-temp.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-temp.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-temp0.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-temp0.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-tier-auto.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-tier-auto.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-tier-default.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-tier-default.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-tier-flex.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-tier-flex.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-tier-priority.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-tier-priority.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-toolchoice-auto.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-toolchoice-auto.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-toolchoice-required.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-toolchoice-required.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-verb-high.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-verb-high.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-verb-low.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-verb-low.json"),
+    ),
+    (
+        "research/codex-responses-probe/raw/f-verb-omitted.json",
+        include_bytes!("../../../research/codex-responses-probe/raw/f-verb-omitted.json"),
+    ),
+    (
+        "research/openai-responses-probe/raw/probe.json",
+        include_bytes!("../../../research/openai-responses-probe/raw/probe.json"),
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_0.sse",
+        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_0.sse"),
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_1.sse",
+        include_bytes!("../../../research/opencode-probe/raw/go_stream_tools_1.sse"),
+    ),
+];
+
+/// The compiled-in bytes recorded under `name`.
+fn recording(name: &str) -> &'static [u8] {
+    probes::lookup(RECORDINGS, name)
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
@@ -633,24 +857,9 @@ fn expected(wrapper: &Value) -> Option<Expected> {
 
 #[test]
 fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
-    let mut files = vec![
-        research("opencode-probe/raw/go_stream_tools_0.sse"),
-        research("opencode-probe/raw/go_stream_tools_1.sse"),
-        research("openai-responses-probe/raw/probe.json"),
-        // Recorded with the `record` jig, from the request Fiber builds.
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/opencode-go-tool-call.sse"),
-    ];
-    let mut codex: Vec<PathBuf> = std::fs::read_dir(research("codex-responses-probe/raw"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
-    codex.sort();
-    files.extend(codex);
-
     let (mut streams, mut checked, mut statuses) = (0, 0, 0);
-    for file in &files {
-        for exchange in probes::read(file).unwrap() {
+    for (name, bytes) in RECORDINGS {
+        for exchange in probes::parse(name, bytes).unwrap() {
             let label = &exchange.label;
             let bytes = match exchange.response {
                 Recorded::Stream(bytes) => bytes,
@@ -765,8 +974,8 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 
 #[test]
 fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
-    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
-    let (reply, deltas) = decoded(&bytes);
+    let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
+    let (reply, deltas) = decoded(bytes);
     let reply = reply.unwrap();
     assert_eq!(reply.text(), "I'll check the weather in Paris for you.");
     assert_eq!(
@@ -807,8 +1016,8 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
         }
     )));
 
-    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_1.sse")).unwrap();
-    let reply = decoded(&bytes).0.unwrap();
+    let bytes = recording("research/opencode-probe/raw/go_stream_tools_1.sse");
+    let reply = decoded(bytes).0.unwrap();
     assert_eq!(reply.text(), "The weather in Paris is 18°C and clear.");
     assert_eq!(
         (
@@ -823,11 +1032,11 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
 
 #[test]
 fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
-    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
-    let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
+    let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
+    let server = ProviderServer::start([Response::stream(bytes)]).unwrap();
     let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
     let (reply, deltas) = run(provider.call(&request()));
-    let (want, want_deltas) = decoded(&bytes);
+    let (want, want_deltas) = decoded(bytes);
     let mut want = want.unwrap();
     want.input_size = InputSize {
         bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
@@ -977,8 +1186,8 @@ fn store_and_extra_fields_come_from_model_data_only() {
 
 #[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
-    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
-    let reply = decoded(&bytes).0.unwrap();
+    let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
+    let reply = decoded(bytes).0.unwrap();
     let ReplyAction::Reasoning(ReasoningCompleted {
         provider_item: Some(item),
         ..
