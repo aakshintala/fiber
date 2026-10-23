@@ -191,6 +191,10 @@ pub const LOGOUT_SHAPE: &str =
 /// A workspace's project: its `sessions` directory and its key
 /// (`docs/state.md`, "Projects"). The key comes from `log::project_key`,
 /// the one place it is derived.
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 pub fn project_of(
     home: &Path,
     workspace: &Path,
