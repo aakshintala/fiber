@@ -151,7 +151,7 @@ pub(crate) struct Gate {
     images: OnceLock<Arc<dyn contract::images::Images>>,
     /// The cancel a pasted image in flight sees: one per session, cancelled
     /// by shutdown alongside the driver shells, and never by `cancel`.
-    pub(crate) pasting: Arc<crate::shell::ShellCancel>,
+    pub(crate) pasting: Arc<support::cancel::Token>,
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
@@ -936,7 +936,7 @@ fn open_in(
         hooks: Mutex::new(None),
         door: Mutex::new(None),
         images: OnceLock::new(),
-        pasting: Arc::new(crate::shell::ShellCancel::new()),
+        pasting: Arc::new(support::cancel::Token::new()),
         history: OnceLock::new(),
         prompts: crate::prompt_history::Pending::new(),
         home: home.to_owned(),
