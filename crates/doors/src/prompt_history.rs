@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use contract::clock::wall_ms;
 use contract::inbox::Ack;
 use contract::shapes::ContentPart;
 use contract::{CommandId, SessionId};
+use support::lock;
 
 use crate::session::Gate;
 
@@ -59,10 +60,6 @@ impl Pending {
     pub(crate) fn contains(&self, id: &CommandId) -> bool {
         lock(&self.0).contains_key(id)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Wraps a prompt's acknowledgement so an accepted prompt is appended to
