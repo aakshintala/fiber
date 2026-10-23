@@ -196,7 +196,6 @@ const SOCKET_SETTERS: &[&str] = &["set_read_timeout", "set_write_timeout"];
 /// One failure line per parse error, short bound and stale named allowance,
 /// in path then line order. Only test files are scanned.
 pub(crate) fn must_succeed(files: &[RustFile], allowances: &[Allowance]) -> Vec<String> {
-    let floor_ms = FLOOR.as_millis();
     let mut scanned: Vec<&RustFile> = files.iter().filter(|f| is_test_file(&f.rel)).collect();
     scanned.sort_by(|a, b| a.path.cmp(&b.path));
     let mut failures = Vec::new();
@@ -209,8 +208,13 @@ pub(crate) fn must_succeed(files: &[RustFile], allowances: &[Allowance]) -> Vec<
                 continue;
             }
         };
+        let mut scan = Scan {
+            floor_ms: FLOOR.as_millis(),
+            durations: vec!["Duration".to_string()],
+        };
+        scan.collect_aliases(&trees);
         let mut found = Vec::new();
-        walk(&trees, floor_ms, &mut found);
+        walk(&trees, &scan, &mut found);
         found.sort_by_key(|site| site.line);
         let whole_file = allowances
             .iter()
@@ -229,7 +233,7 @@ pub(crate) fn must_succeed(files: &[RustFile], allowances: &[Allowance]) -> Vec<
                     file.path,
                     site.line,
                     site.what,
-                    show(floor_ms)
+                    show(FLOOR.as_millis())
                 )),
             }
         }
@@ -265,6 +269,37 @@ struct Site {
     what: String,
 }
 
+/// What a file's bounds are read against.
+struct Scan {
+    floor_ms: u128,
+    /// `Duration` and each name the file gives it with `use .. Duration as NAME`.
+    durations: Vec<String>,
+}
+
+impl Scan {
+    fn collect_aliases(&mut self, trees: &[TokenTree]) {
+        for (i, tree) in trees.iter().enumerate() {
+            if let TokenTree::Group(group) = tree {
+                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                self.collect_aliases(&inner);
+            } else if is_ident(Some(tree), "Duration")
+                && is_ident(trees.get(i + 1), "as")
+                && let Some(TokenTree::Ident(alias)) = trees.get(i + 2)
+            {
+                self.durations.push(alias.to_string());
+            }
+        }
+    }
+
+    fn is_duration(&self, tree: Option<&TokenTree>) -> bool {
+        matches!(tree, Some(TokenTree::Ident(ident)) if self.durations.contains(&ident.to_string()))
+    }
+
+    fn in_range(&self, ms: u128) -> bool {
+        (1000..self.floor_ms).contains(&ms)
+    }
+}
+
 fn tokens(source: &str) -> Result<Vec<TokenTree>, String> {
     let stream: TokenStream = source
         .parse()
@@ -273,22 +308,22 @@ fn tokens(source: &str) -> Result<Vec<TokenTree>, String> {
 }
 
 /// Each short bound in `trees`, groups included.
-fn walk(trees: &[TokenTree], floor_ms: u128, found: &mut Vec<Site>) {
+fn walk(trees: &[TokenTree], scan: &Scan, found: &mut Vec<Site>) {
     for (i, tree) in trees.iter().enumerate() {
-        found.extend(site_at(trees, i, floor_ms));
+        found.extend(site_at(trees, i, scan));
         if let TokenTree::Group(group) = tree {
             let inner: Vec<TokenTree> = group.stream().into_iter().collect();
-            walk(&inner, floor_ms, found);
+            walk(&inner, scan, found);
         }
     }
 }
 
-fn site_at(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
+fn site_at(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
     let TokenTree::Ident(ident) = trees.get(i)? else {
         return None;
     };
     if ident == "const" {
-        return const_site(trees, i, floor_ms);
+        return const_site(trees, i, scan);
     }
     let TokenTree::Group(call) = trees.get(i + 1)? else {
         return None;
@@ -301,14 +336,14 @@ fn site_at(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
     let args = split_top_level(&inner);
     let method = i > 0 && is_punct(trees.get(i - 1), '.');
     let what = if word == "after" && deadline_path(trees, i) {
-        format!("Deadline::after({})", short_in(&args, floor_ms, true)?)
+        format!("Deadline::after({})", short_in(&args, scan, true)?)
     } else if WAIT_CALLS.contains(&word.as_str()) {
-        format!("{word}(.., {})", short_in(&args, floor_ms, false)?)
+        format!("{word}(.., {})", short_in(&args, scan, false)?)
     } else if method && WAIT_METHODS.contains(&word.as_str()) {
         let second = args.get(1..2).unwrap_or(&[]);
-        format!("{word}(.., {})", short_in(second, floor_ms, false)?)
+        format!("{word}(.., {})", short_in(second, scan, false)?)
     } else if method && word == "min" {
-        format!(".min({})", short_in(&args, floor_ms, true)?)
+        format!(".min({})", short_in(&args, scan, true)?)
     } else if method && SOCKET_SETTERS.contains(&word.as_str()) {
         let [part] = args.as_slice() else {
             return None;
@@ -320,7 +355,7 @@ fn site_at(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
             return None;
         }
         let wrapped: Vec<TokenTree> = wrapped.stream().into_iter().collect();
-        let bound = short_in(&split_top_level(&wrapped), floor_ms, true)?;
+        let bound = short_in(&split_top_level(&wrapped), scan, true)?;
         format!("{word}(Some({bound}))")
     } else {
         return None;
@@ -334,7 +369,7 @@ fn site_at(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
 
 /// A `const NAME: Duration = Duration::from_secs(N)` (or `from_millis`) at
 /// `trees[i]`, when it is in range.
-fn const_site(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
+fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
     let TokenTree::Ident(name) = trees.get(i + 1)? else {
         return None;
     };
@@ -342,14 +377,14 @@ fn const_site(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
         return None;
     }
     let eq = (i + 3..trees.len().min(i + 16)).find(|&j| is_punct(trees.get(j), '='))?;
-    if !is_ident(trees.get(eq - 1), "Duration") {
+    if !scan.is_duration(trees.get(eq - 1)) {
         return None;
     }
     let end = (eq..trees.len())
         .find(|&j| is_punct(trees.get(j), ';'))
         .unwrap_or(trees.len());
-    let ms = duration_ms(trees.get(eq + 1..end)?)?;
-    in_range(ms, floor_ms).then(|| Site {
+    let (ms, _) = duration(trees.get(eq + 1..end)?, scan)?;
+    scan.in_range(ms).then(|| Site {
         line: name.span().start().line,
         name: Some(name.to_string()),
         what: format!("const {name} is {}, below", show(ms)),
@@ -359,18 +394,14 @@ fn const_site(trees: &[TokenTree], i: usize, floor_ms: u128) -> Option<Site> {
 /// The spelled literal of the one argument in `parts` that is a short bound.
 /// `single` requires exactly one argument; otherwise any argument may be the
 /// literal.
-fn short_in(parts: &[&[TokenTree]], floor_ms: u128, single: bool) -> Option<String> {
+fn short_in(parts: &[&[TokenTree]], scan: &Scan, single: bool) -> Option<String> {
     if single && parts.len() != 1 {
         return None;
     }
     parts.iter().find_map(|part| {
-        let ms = duration_ms(part)?;
-        in_range(ms, floor_ms).then(|| spelled(part))
+        let (ms, spelling) = duration(part, scan)?;
+        scan.in_range(ms).then_some(spelling)
     })
-}
-
-fn in_range(ms: u128, floor_ms: u128) -> bool {
-    (1000..floor_ms).contains(&ms)
 }
 
 /// Whether `trees[i]` is the `after` of `Deadline::after`, with any path
@@ -388,14 +419,15 @@ fn split_top_level(args: &[TokenTree]) -> Vec<&[TokenTree]> {
         .collect()
 }
 
-/// The value in ms of `[::][path::]Duration::from_secs(N)` or `from_millis(N)`
-/// and nothing else. A path before `Duration`, such as `std::time::` or
-/// `::std::time::`, is allowed.
-fn duration_ms(tokens: &[TokenTree]) -> Option<u128> {
+/// The value in ms, and the call as written without its path, of
+/// `[::][path::]Duration::from_secs(N)` or `from_millis(N)` and nothing else.
+/// A path before `Duration`, such as `std::time::` or `::std::time::`, is
+/// allowed, and so is a name the file gives `Duration` with `as`.
+fn duration(tokens: &[TokenTree], scan: &Scan) -> Option<(u128, String)> {
     let [path @ .., duration, c1, c2, from, TokenTree::Group(call)] = tokens else {
         return None;
     };
-    if !(is_ident(Some(duration), "Duration")
+    if !(scan.is_duration(Some(duration))
         && is_punct(Some(c1), ':')
         && is_punct(Some(c2), ':')
         && call.delimiter() == Delimiter::Parenthesis)
@@ -421,19 +453,12 @@ fn duration_ms(tokens: &[TokenTree]) -> Option<u128> {
         return None;
     };
     let n = u128::from(single_integer(number)?);
-    match from.to_string().as_str() {
-        "from_secs" => Some(n * 1000),
-        "from_millis" => Some(n),
-        _ => None,
-    }
-}
-
-/// `Duration::from_secs(5)` as written, without a path.
-fn spelled(tokens: &[TokenTree]) -> String {
-    let [.., duration, _, _, from, TokenTree::Group(call)] = tokens else {
-        return String::new();
+    let ms = match from.to_string().as_str() {
+        "from_secs" => n * 1000,
+        "from_millis" => n,
+        _ => return None,
     };
-    format!("{duration}::{from}({})", call.stream())
+    Some((ms, format!("{duration}::{from}({})", call.stream())))
 }
 
 /// The value of an integer literal, `_` separators, a `0x`, `0o` or `0b`

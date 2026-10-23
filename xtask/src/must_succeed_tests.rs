@@ -268,6 +268,9 @@ fn only_test_files_are_scanned() {
     }
 }
 
+/// `docs/ci.md`, "On Linux x86_64 alone", promises the check "reports each
+/// site by file path, then line": the assertion below pins that order and
+/// that each of the four sites is reported.
 #[test]
 fn failures_come_in_path_then_line_order() {
     let source =
@@ -476,5 +479,44 @@ fn a_prefix_that_is_not_ident_double_colon_segments_is_not_a_path() {
     ));
     assert!(!flagged(
         "fn a() { Deadline::after(::std:time::Duration::from_secs(5)); }"
+    ));
+}
+
+#[test]
+fn a_duration_the_file_renames_is_still_a_duration() {
+    for source in [
+        "use std::time::Duration as D;\nfn a() { Deadline::after(D::from_secs(5)); }",
+        "use std::time::{Duration as D, Instant};\nconst W: D = D::from_secs(5);",
+        "mod m { use std::time::Duration as Span; }\nfn a() { rx.recv_timeout(Span::from_millis(2_000)); }",
+        "use std::time::Duration as D;\nfn a() { s.set_read_timeout(Some(D::from_secs(5))); }",
+    ] {
+        assert!(flagged(source), "{source}");
+    }
+    let rename = "use std::time::Duration as D;\n";
+    assert!(!flagged(&format!(
+        "{rename}fn a() {{ Deadline::after(D::from_secs(10)); }}"
+    )));
+    assert!(!flagged(&format!(
+        "{rename}fn a() {{ Deadline::after(E::from_secs(5)); }}"
+    )));
+    assert!(!flagged("fn a() { Deadline::after(D::from_secs(5)); }"));
+    assert!(
+        check(&format!(
+            "{rename}fn a() {{ Deadline::after(D::from_secs(5)); }}"
+        ))[0]
+            .contains("Deadline::after(D::from_secs(5))")
+    );
+}
+
+#[test]
+fn arithmetic_around_a_duration_is_not_a_short_bound() {
+    assert!(!flagged(
+        "fn a() { Deadline::after(3 * Duration::from_secs(5)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { rx.recv_timeout(base + Duration::from_secs(5)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { g.wait_timeout(guard, left - Duration::from_secs(5)); }"
     ));
 }

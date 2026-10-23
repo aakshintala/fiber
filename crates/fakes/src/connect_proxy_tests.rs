@@ -194,7 +194,9 @@ fn await_connects_pins_its_boundary_and_deadline() {
         let (done, finished) = mpsc::channel();
         let waiting = &proxy;
         s.spawn(move || {
-            let met = waiting.await_connects(2, Deadline::after(CONNECT_WITHIN));
+            // Three times the outer receive's bound, so that receive fails
+            // first on a wait that ignores its met count.
+            let met = waiting.await_connects(2, Deadline::after(MUST_SUCCEED_WITHIN * 3));
             match done.send(met) {
                 Ok(()) | Err(_) => {}
             }
@@ -248,7 +250,9 @@ fn await_closed_pins_its_deadline() {
         let (done, finished) = mpsc::channel();
         let waiting = &proxy;
         s.spawn(move || {
-            let closed = waiting.await_closed(1, Deadline::after(CLOSE_WITHIN));
+            // Three times the outer receive's bound, so that receive fails
+            // first on a wait that ignores its met count.
+            let closed = waiting.await_closed(1, Deadline::after(MUST_SUCCEED_WITHIN * 3));
             match done.send(closed) {
                 Ok(()) | Err(_) => {}
             }

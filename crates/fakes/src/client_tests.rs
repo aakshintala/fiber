@@ -338,7 +338,8 @@ fn send_by_returns_ok_when_the_peer_closes_before_the_reset() {
         // Set on the sending thread: the hook runs inside `send_by`.
         set_send_by_before_reset(Some(Box::new(move || {
             written_tx.send(()).unwrap();
-            match Deadline::after(MUST_SUCCEED_WITHIN).recv(&go_rx) {
+            // The test owns `go_tx`: it sends to release, or drops it on exit.
+            match go_rx.recv() {
                 Ok(()) | Err(_) => {}
             }
         })));

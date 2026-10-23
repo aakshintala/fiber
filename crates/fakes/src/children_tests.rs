@@ -8,7 +8,9 @@ use std::thread;
 use std::time::Duration;
 
 use super::{Ready, escapes_group, grouped_output, ignores_sigterm, leaves_descendants};
+use contract::clock::Clock;
 
+use crate::clock::FakeClock;
 use crate::deadline::Deadline;
 use crate::temp_dir::TempDir;
 use crate::watchdog::Watchdog;
@@ -180,7 +182,17 @@ fn ready_at_reads_an_existing_fifo() {
     let dir = TempDir::new("fiber-ready-at");
     let fifo = dir.path().join("made.fifo");
     crate::fifo(&fifo);
-    let ready = Ready::at(&fifo, &|| MUST_SUCCEED_WITHIN);
+    // The fake clock never advances, so the span never ends: the closure
+    // returns the wall-clock bound only while fake time remains.
+    let clock = FakeClock::new();
+    let end = clock.origin() + Duration::from_secs(5);
+    let ready = Ready::at(&fifo, &|| {
+        if clock.now() < end {
+            MUST_SUCCEED_WITHIN
+        } else {
+            Duration::ZERO
+        }
+    });
     assert_eq!(ready.path(), fifo);
     let child = Command::new("/bin/sh")
         .arg("-c")
