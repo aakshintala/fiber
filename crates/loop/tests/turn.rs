@@ -1809,9 +1809,11 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     // ends, held open below, so only the turn's cancel releases the real
     // `registry.wait` the fake enters.
     let wait_home = fakes::TempDir::new("fiber-wait");
+    let wait_clock = fakes::clock::FakeClock::new();
+    let wait_start = wait_clock.origin();
     let registry = jobs::Registry::new(
         wait_home.path().to_path_buf(),
-        fakes::clock::FakeClock::new(),
+        Arc::clone(&wait_clock),
         Arc::new(fakes::Recorder::default()),
     );
     let waiter = registry
@@ -1828,9 +1830,11 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
         job_id: waiter.started.job_id.0.clone(),
         entered: entered_tx,
     });
-    // Held to the end of the test: dropping the end would report the
-    // waited-on job failed, ending the real wait before the cancel.
-    let _never_ends = waiter;
+    // Held while the turn runs: dropping the end would report the
+    // waited-on job failed, ending the real wait before the cancel. On a
+    // failed wait below it is ended explicitly so the scope's join still
+    // terminates.
+    let mut never_ends = Some(waiter);
     let mut session = Session::with_tools(
         vec![
             support::calls_reply(
@@ -1871,14 +1875,43 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             let outcome = session.turn();
             done_tx.send(outcome).unwrap();
         });
-        // The fake signals it entered its wait, so the cancel lands
-        // mid-`jobs wait` while the delegate still runs.
-        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the jobs wait to start");
-        assert!(cancel.cancel());
-        let outcome = Deadline::after(MUST_SUCCEED_WITHIN)
-            .recv_or_fail(&done_rx, "the cancelled turn to end");
-        assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+        // The fake signals it entered its wait, and the clock proves the
+        // registry wait parked, so the cancel lands mid-`Registry::wait`
+        // while the delegate still runs.
+        let entered_ok = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&entered_rx)
+            .is_ok();
+        let wait_until = wait_start + std::time::Duration::from_millis(60000);
+        let parked_ok = entered_ok
+            && wait_clock.await_parked(wait_until, Deadline::after(MUST_SUCCEED_WITHIN));
+        let cancelled = parked_ok && cancel.cancel();
+        let done = Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx);
+        if !(entered_ok && parked_ok && cancelled && done.is_ok()) {
+            // Release the registry wait so the join terminates even when
+            // the cancel never woke it: ending the never-ending job wakes
+            // the same park the cancel would.
+            if let Some(waiter) = never_ends.take() {
+                let job_id = waiter.started.job_id.clone();
+                (waiter.end.0)(contract::events::JobCompleted {
+                    job_id,
+                    status: Outcome::Completed,
+                    error: None,
+                    process: None,
+                    output_tail: None,
+                    notice: None,
+                    changed_by: None,
+                });
+            }
+        }
         turn.join().unwrap();
+        assert!(entered_ok, "the jobs wait to start");
+        assert!(
+            parked_ok,
+            "the jobs wait to park in the registry wait"
+        );
+        assert!(cancelled);
+        let outcome = done.expect("the cancelled turn to end");
+        assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     });
     let cut = session.lines();
     assert_eq!(
