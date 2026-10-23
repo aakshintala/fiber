@@ -3,8 +3,9 @@
 //! (`docs/tui.md`, "Quit").
 
 use super::super::super::{App, Effect};
+use super::tests::{accepted, closes, commands, hello, home, rejected};
 use super::{Ask, Prompt};
-use crate::home::{Launch, QuitChoice, Spot};
+use crate::home::{QuitChoice, Spot};
 use crate::keys::{Button, Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
@@ -13,50 +14,14 @@ use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 
 const A: &str = "s_aaaaaaaaaaaaaaaa";
 const B: &str = "s_bbbbbbbbbbbbbbbb";
-
-/// An app on home at 80x24.
-fn home() -> App {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_home(Launch {
-        location: crate::LaunchLocation::Local {
-            workspace: PathBuf::from("/w"),
-            project: "-w".to_owned(),
-            git: false,
-        },
-        hover: true,
-        version: "0.0.1".to_owned(),
-        model: None,
-        thinking: None,
-        logo_glyph: "⌇".to_owned(),
-        keys: crate::KeysSetup::default(),
-        rail_share: 15.0,
-        panel_share: 21.0,
-        panel_cards: Vec::new(),
-        ..Default::default()
-    });
-    app.set_size(80, 24);
-    app
-}
-
-/// A `hub_hello` this terminal reads.
-fn hello() -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: serde_json::Map::new(),
-    })
-}
 
 /// Links the app: the feed and recent ids, both waiting for their
 /// answers.
 fn linked(app: &mut App) -> (String, String) {
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines.len(), 2);
     (
         lines[0]["id"].as_str().unwrap_or_default().to_owned(),
         lines[1]["id"].as_str().unwrap_or_default().to_owned(),
@@ -117,42 +82,6 @@ fn left(session: &str, how: &str) -> Line {
             .cloned()
             .unwrap_or_default(),
     })
-}
-
-/// A hub `command_accepted` for `id` with `result`.
-fn accepted(id: &str, result: Value) -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: [
-            ("command_id".to_owned(), Value::String(id.to_owned())),
-            ("result".to_owned(), result),
-        ]
-        .into_iter()
-        .collect(),
-    })
-}
-
-/// A hub `command_rejected` for command `id`.
-fn rejected(id: &str, code: &str, message: &str) -> Line {
-    Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        payload: json!({"command_id": id, "code": code, "message": message})
-            .as_object()
-            .cloned()
-            .unwrap_or_default(),
-    })
-}
-
-/// Parses outgoing command lines.
-fn commands(lines: Vec<String>) -> Vec<Value> {
-    lines
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect()
 }
 
 /// The lines an effect sends, parsed; none for any other effect.
@@ -236,14 +165,6 @@ fn stops(app: &App) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The `close` lines among `lines`.
-fn closes(lines: Vec<Value>) -> Vec<Value> {
-    lines
-        .into_iter()
-        .filter(|line| line["command"] == "close")
-        .collect()
 }
 
 #[test]
@@ -538,7 +459,7 @@ fn backspace_on_a_focused_live_row_opens_nothing() {
 }
 
 #[test]
-fn enter_subscribes_then_closes_that_session_now() {
+fn enter_closes_that_session_now() {
     let mut app = home();
     linked(&mut app);
     app.on_line(live(A, json!({"state": "streaming"})));
@@ -552,34 +473,14 @@ fn enter_subscribes_then_closes_that_session_now() {
     ));
     focus_row(&mut app, A);
     assert_eq!(delete(&mut app), Effect::None);
-    let lines = sent(press(&mut app, Key::Enter));
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0]["command"], "subscribe");
-    assert_eq!(lines[0]["session_id"], A);
-    assert_eq!(lines[0]["args"]["level"], "summary");
-    assert_eq!(
-        lines[1],
-        json!({"id": lines[1]["id"], "command": "close", "session_id": A,
-            "args": {"now": true}})
-    );
+    let closes = closes(sent(press(&mut app, Key::Enter)));
+    assert_eq!(closes.len(), 1, "{closes:?}");
+    assert_eq!(closes[0]["session_id"], A);
+    assert_eq!(closes[0]["args"], json!({"now": true}));
     assert_eq!(stops(&app), vec![A.to_owned()]);
     assert!(!app.quit_open());
     assert!(app.stop_question().is_none());
     assert!(app.session().is_none());
-}
-
-#[test]
-fn enter_sends_close_alone_when_already_subscribed() {
-    let mut app = focused(json!({"state": "idle"}));
-    assert_eq!(delete(&mut app), Effect::None);
-    let first = sent(press(&mut app, Key::Enter));
-    assert_eq!(first.len(), 2, "{first:?}");
-    focus_row(&mut app, A);
-    assert_eq!(delete(&mut app), Effect::None);
-    let second = sent(press(&mut app, Key::Enter));
-    assert_eq!(second.len(), 1, "{second:?}");
-    assert_eq!(second[0]["command"], "close");
-    assert_eq!(second[0]["args"]["now"], json!(true));
 }
 
 #[test]

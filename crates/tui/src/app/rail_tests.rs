@@ -3141,11 +3141,6 @@ fn down_leaves_a_focused_rail_alone_with_the_approval_panel_open() {
     assert_eq!(rail_focus(&app), before);
 }
 
-/// `ch` typed as a stroke with no modifier.
-fn char_stroke(ch: char) -> Stroke {
-    plain(Code::Char(ch))
-}
-
 /// Rebinds `delete_session` to `keys` on `app`.
 fn rebind_delete_session(app: &mut App, keys: Value) {
     let mut user = serde_json::Map::new();
@@ -3190,7 +3185,7 @@ fn delete_on_a_focused_live_card_asks_to_stop_it_over_the_conversation() {
 fn delete_on_a_focused_card_asks_with_a_draft_and_leaves_it_alone() {
     let mut app = rail_on_a();
     for ch in "hi".chars() {
-        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Char(ch))), Effect::None);
     }
     assert_eq!(app.draft(), "hi");
     assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
@@ -3265,7 +3260,7 @@ fn delete_on_a_crashed_card_a_plus_or_a_done_count_opens_nothing() {
 fn backspace_on_a_focused_rail_edits_the_draft_and_stops_nothing() {
     let mut app = rail_on_a();
     for ch in "ab".chars() {
-        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Char(ch))), Effect::None);
     }
     assert_eq!(stroke_press(&mut app, plain(Code::Backspace)), Effect::None);
     assert_eq!(app.draft(), "a");
@@ -3278,7 +3273,7 @@ fn delete_with_the_box_focused_edits_the_draft_and_stops_nothing() {
     let mut app = opened_in_conversation();
     framed(&mut app);
     for ch in "abc".chars() {
-        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Char(ch))), Effect::None);
     }
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
@@ -3306,7 +3301,7 @@ fn a_rebound_backspace_never_stops_the_card() {
     let mut app = rail_on_a();
     rebind_delete_session(&mut app, json!(["backspace"]));
     for ch in "ab".chars() {
-        assert_eq!(stroke_press(&mut app, char_stroke(ch)), Effect::None);
+        assert_eq!(stroke_press(&mut app, plain(Code::Char(ch))), Effect::None);
     }
     assert_eq!(stroke_press(&mut app, plain(Code::Backspace)), Effect::None);
     assert_eq!(app.draft(), "a");
@@ -3317,7 +3312,7 @@ fn a_rebound_backspace_never_stops_the_card() {
 fn a_rebound_character_types_on_the_rail_and_stops_on_a_home_row() {
     let mut app = rail_on_a();
     rebind_delete_session(&mut app, json!(["x"]));
-    assert_eq!(stroke_press(&mut app, char_stroke('x')), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Char('x'))), Effect::None);
     assert_eq!(app.draft(), "x");
     assert!(!app.quit_open());
     // On home's list the same key stops the row.
@@ -3325,7 +3320,7 @@ fn a_rebound_character_types_on_the_rail_and_stops_on_a_home_row() {
     rebind_delete_session(&mut app, json!(["x"]));
     let row = row_key(&app, A);
     app.focus = Some(TargetId::Home(HomeSpot::Entry(row)));
-    assert_eq!(stroke_press(&mut app, char_stroke('x')), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Char('x'))), Effect::None);
     assert!(app.quit_open());
 }
 

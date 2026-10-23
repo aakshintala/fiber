@@ -1671,12 +1671,8 @@ search box and the draft shows without a cursor.
 | Refresh every model list in the model picker | `refresh_lists` | Ctrl+R | click "⟳ refresh all" |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
-`delete_session` stops a live session on its focused home row or rail card, after
-asking ("Quit"), and deletes an exited one, after asking ("The session list").
-Every key bound to it acts as Delete does. Backspace never stops a session, bound
-or by default: on a live row it does nothing, and on a rail it edits the draft. A rebound character key
-stops on home's list, and types on a focused rail. `[]` unbinds the stop with
-the delete.
+Every key bound to `delete_session` acts as Delete does. A rebound character key
+stops on home's list and types on a focused rail. `[]` unbinds it.
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,

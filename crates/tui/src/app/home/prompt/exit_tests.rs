@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// An app on home at 80x24.
-fn home() -> App {
+pub(super) fn home() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -36,7 +36,7 @@ fn home() -> App {
 }
 
 /// A `hub_hello` this terminal reads.
-fn hello() -> Line {
+pub(super) fn hello() -> Line {
     Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,
@@ -111,7 +111,7 @@ fn left(session: &str, how: &str) -> Line {
 }
 
 /// Parses outgoing command lines.
-fn commands(lines: Vec<String>) -> Vec<Value> {
+pub(super) fn commands(lines: Vec<String>) -> Vec<Value> {
     lines
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
@@ -855,7 +855,7 @@ fn slash(app: &mut App, text: &str) -> Effect {
 }
 
 /// A hub `command_accepted` for `id` with `result`.
-fn accepted(id: &str, result: Value) -> Line {
+pub(super) fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
         kind: "command_accepted".to_owned(),
         ts: 0,
@@ -975,7 +975,7 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
 }
 
 /// A hub `command_rejected` for command `id`.
-fn rejected(id: &str, code: &str, message: &str) -> Line {
+pub(super) fn rejected(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
         kind: "command_rejected".to_owned(),
         ts: 0,
@@ -1005,7 +1005,7 @@ fn listed(app: &App) -> Vec<String> {
 /// `close` with `now` for each counted session still live (`docs/tui.md`,
 /// "Quit"), and nothing about the subscribes the connection needs
 /// first, so tests pin only the closes.
-fn closes(lines: Vec<Value>) -> Vec<Value> {
+pub(super) fn closes(lines: Vec<Value>) -> Vec<Value> {
     lines
         .into_iter()
         .filter(|line| line["command"] == "close")
