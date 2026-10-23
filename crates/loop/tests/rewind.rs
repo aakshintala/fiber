@@ -2449,6 +2449,37 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
 }
 
 #[test]
+fn a_malformed_line_after_line_0_refuses_the_rewind_log_corrupt_and_writes_no_rewound() {
+    use std::io::Write as _;
+    let mut session = run_a();
+    // The own log's line 0 reads; a later line is not an envelope.
+    let path = session.dir.join("events.jsonl");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"not an envelope\n")
+        .unwrap();
+    let (rw, answered) = rewind(args(None, None, false));
+    session.inbox.send(rw).unwrap();
+    let mut looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(looped.turn()).unwrap());
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended the wait in time");
+    assert_eq!(result.unwrap_err().code(), ErrorCode::LogCorrupt);
+    // The ack is dropped unanswered, and nothing was written before the
+    // check refused it.
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&answered),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("\"kind\":\"rewound\""));
+}
+
+#[test]
 fn a_message_after_rewound_is_refused() {
     let mut session = run_a();
     let admission = Arc::new(ext_support::admission::Admission::default());

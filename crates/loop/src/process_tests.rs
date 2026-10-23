@@ -1109,3 +1109,14 @@ fn a_raw_interaction_names_an_extension_ask_only_when_extension_is_a_string() {
     assert!(seed.open_extension.is_empty());
     assert_eq!(seed.open.len(), 1);
 }
+
+/// A line that cannot be encoded fails the run, and the exit reports it:
+/// `log::Error::Encode` is `log_corrupt` (`docs/errors.md`, `log_corrupt`:
+/// "a log line that cannot be encoded"). No event can fail encoding from
+/// data, and no write failure is injectable into `Log::append` without a
+/// seam, so the mapping is the level this is pinned at.
+#[test]
+fn an_encode_failure_is_log_corrupt() {
+    let encode = log::Error::Encode(serde_json::from_str::<u8>("x").unwrap_err());
+    assert_eq!(crate::Error::from(encode).code(), ErrorCode::LogCorrupt);
+}
