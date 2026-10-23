@@ -63,36 +63,30 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let package =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/openrouter");
-    extensions::plan(
+    crate::test_support::install_extension(
         &home,
-        &extensions::Request::Path(package),
-        "0.1.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    // The data file holds no models: the cached entry stands in for a
-    // discovery run, so resolving the reference never touches the network.
-    config::write_model_cache(
-        &home,
-        "openrouter",
-        &serde_json::json!([{
-            "id": "z-ai/glm-5.3-flash",
-            "protocol": "openai-completions",
-            "base_url": "https://openrouter.ai/api/v1",
-            "compat": {"cache_key_field": "session_id", "reasoning_object": true},
-            "context_window": 1048576,
-            "max_output_tokens": 943717,
-            "input": ["text", "image", "video"],
-            "cost": {"input": 0.15, "output": 0.5, "cache_read": 0.03},
-        }]),
+        "extensions/qp",
+        serde_json::from_str(
+            r#"{"name": "qp", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
+        )
+        .unwrap(),
+        &[(
+            "qp",
+            serde_json::from_str(
+                r#"{"name": "qp", "models": [
+            {"id": "m1", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+            {"id": "m2", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
+        ]}"#,
+            )
+            .unwrap(),
+        )],
+    );
+    std::fs::write(
+        home.join("extensions/qp/providers/qp.lua"),
+        "fiber.provider(\"qp\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
     )
     .unwrap();
-    let reference = "openrouter/z-ai/glm-5.3-flash";
+    let reference = "qp/m2";
     let config = crate::test_support::load(
         &home,
         &workspace,
@@ -100,20 +94,29 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
         [format!("reviewer.model={reference}")],
     );
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
-    let session_extensions = extensions::SessionExtensions::load(
-        &home,
-        &config,
-        fakes::clock::FakeClock::new(),
-        std::sync::Arc::new(fakes::NoLock),
-        None,
+    // `SessionExtensions::load` can wait on Lua registration, so it runs
+    // under a deadline instead of hanging the test.
+    let (load_home, load_config) = (home.clone(), config.clone());
+    let session_extensions = fakes::within(
+        "loading the extensions",
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            extensions::SessionExtensions::load(
+                &load_home,
+                &load_config,
+                fakes::clock::FakeClock::new(),
+                std::sync::Arc::new(fakes::NoLock),
+                None,
+            )
+        },
     );
     let lua = session_extensions
         .lua_providers()
         .iter()
-        .find(|(_, provider)| provider.name() == "openrouter")
+        .find(|(_, provider)| provider.name() == "qp")
         .map(|(_, provider)| std::sync::Arc::clone(provider))
         .expect("the package registers its provider");
-    let session = providers.resolve(reference).unwrap();
+    let session = providers.resolve("qp/m1").unwrap();
     let here = here();
     for (with, carries) in [(Some(&lua), true), (None, false)] {
         let mut lookup = |_: &config::ProviderData| {
