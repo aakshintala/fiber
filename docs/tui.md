@@ -69,7 +69,7 @@ its own. From the top:
    the new worktree switch, the model and thinking chips and "Enter starts a
    session".
 
-A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
+A key hint sits at the foot: "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit". Each key shows bold and the rest dim; Enter, Delete and Esc name their action's first bound key, leaving an unbound action's part out, while Ctrl+C cannot be rebound so its hint stays fixed. "→ or Esc back to the session" joins it after "↑↓ move", only when home was entered from a session whose row is still live. The key goes back to that session when the box is empty, nothing is open and no notice is up; Esc also goes back with a chip focused, while → then moves between the chips. A session that exited or closed hides the hint and leaves both keys untaken; with the link down or a `start` in flight the keys are taken as a no-op and the hint stays. Until the first prompt, the input box's
 placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
 the hub to start a session in the chosen workspace, and the screen switches to
 it. No session exists before Enter, so opening the terminal, glancing at home
@@ -270,6 +270,7 @@ Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows
 "Cannot resume: <path> no longer exists. Delete removes the session.": it
 adds no rail card, and the row stays under "exited". A ✕ on a live row stops that session ("Quit"). Delete on a
+focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
 "Deleting and pruning"). A row whose
@@ -321,10 +322,10 @@ rail sets it once. Home is the rail at full width ("Home").
 on the card of the session on screen; with text in the box, ← moves the
 cursor. The focused card is lifted: its tint lifted, as hover draws it
 ("Mouse and hover"); with no colour it is bold and its box is not dim, while the other cards' boxes stay dim. The input box's stripe and text dim while the rail has
-focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · → or
+focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · Delete stop · → or
 Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
 project groups, Enter switches to the focused card's session, and → or Esc
-gives focus back to the input box. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
+gives focus back to the input box. Delete on a focused live card asks "Stop <name>?" over the conversation ("Quit"), with or without a draft in the box; the draft stays as it was. On a crashed card, a project header's "+" or "N ✓" it does nothing. Typing on a focused rail goes to the draft and keeps the focus on the rail, and Backspace edits the draft and never stops a session; a key that types nothing, Delete by default, is what stops, and a key rebound to a character types it. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
 the rail is hidden, by the person or for width ("Shedding"), one ← from an
 empty input box opens home.
 
@@ -1638,7 +1639,7 @@ search box and the draft shows without a cursor.
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
-| Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
+| Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Backspace, on the row | click the row's ✕ |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
@@ -1670,6 +1671,13 @@ search box and the draft shows without a cursor.
 | Refresh every model list in the model picker | `refresh_lists` | Ctrl+R | click "⟳ refresh all" |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
+`delete_session` stops a live session on its focused home row or rail card, after
+asking ("Quit"), and deletes an exited one, after asking ("The session list").
+Every key bound to it acts as Delete does. Backspace never stops a session, bound
+or by default: on a live row it does nothing, and on a rail it edits the draft. A rebound character key
+stops on home's list, and types on a focused rail. `[]` unbinds the stop with
+the delete.
+
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
@@ -1699,7 +1707,7 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  import report, the home screen's delete question or workspace picker, the
+  close-all and stop questions, the import report, the home screen's delete question or workspace picker, the
   key map, an approval or question, an offer, the Ctrl+R panel, or a
   notice's whole text; or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
@@ -1715,6 +1723,8 @@ of them when a key arrives:
   row ("Home"), and Esc on a focused row goes back to the session home came
   from; on a focused rail ↑, ↓, Enter, → and Esc move and
   switch ("The rail"); like an overlay's own keys, they are not bindings.
+  Delete on a focused rail card stops that session after asking ("Quit"); with
+  the input box focused it edits the draft.
 
 A global action acts in all six. The rest act only where they are listed:
 
@@ -1951,9 +1961,22 @@ list: "↑↓ move · Enter delete · Esc close".
     (`docs/invocation.md`, "Lifecycle").
   - "Close all" sends each working session `close` with `now`. The prompt says how many of them are also
     open elsewhere: a session's `clients` on its `session_status`, less the terminal's own `full` connection to it when it holds one.
-- **Stopping one session** is `/close`, or the ✕ on its home row. It sends
-  `close` with `now`, which ends its turn, stops its jobs and delegates,
-  and exits it (`docs/invocation.md`, "Shutdown").
+- **Stopping one session** is `/close`, the ✕ on its home row, or Delete on
+  its focused home row or rail card. It sends `close` with `now`, which ends
+  its turn, stops its jobs and delegates, and exits it
+  (`docs/invocation.md`, "Shutdown"). Delete asks first, in an overlay: the
+  title "Stop <name>?", a dim line that reads "working", "open elsewhere",
+  both as "working, open elsewhere", or nothing, then two choices, "Enter" to
+  stop and "Esc" to cancel, with Enter's focused. The footer reads "click a
+  choice". The line is counted as the quit prompt counts, once, when the
+  question opens, and the overlay never live-updates. It draws over the
+  conversation when asked from a rail card. Enter sends `close` with `now`;
+  when the stopped session is the one on screen the terminal goes home, and
+  stopping another card leaves the screen as it is. Esc, the ✕ and a click
+  outside the frame close the question and send nothing. With the link down
+  Delete opens nothing, and Enter does nothing and leaves the question
+  open. If the session left while the question showed, Enter sends nothing
+  and closes it.
 - **Stopping every session** is `/close all`, on home or over a session. It asks in an overlay: the title "Close all", "2 sessions, 1 working, 0 open elsewhere" dim (live top-level sessions on this hub, how many of them are working, how many are open elsewhere, counted as in the quit prompt), then two choices, "Enter" to close all and "Esc" to cancel, with Enter's focused. The footer reads "click a choice". Enter sends each live top-level session `close` with `now` and leaves the terminal on home; Esc closes the question. With no live session it opens nothing and says "No sessions to close."; with the link down it opens nothing and keeps the draft. `/quit` straight after it exits without asking once those sessions have left, since none is working. Quit's own behaviour does not change.
 
 ### Getting the person's attention
@@ -2076,7 +2099,7 @@ tui       212   9,804
 ### Overlays
 
 Every surface drawn over the screen shares one frame: the
-key map, the quit question, the close-all question, home's delete question and workspace picker, the
+key map, the quit question, the close-all question, the stop question, home's delete question and workspace picker, the
 `/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
 the model picker inside its view.
 
