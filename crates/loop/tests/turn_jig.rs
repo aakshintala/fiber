@@ -20,12 +20,13 @@ use fakes::Deadline;
 use serde_json::{Value, json};
 
 /// How long the turn jig exchange may take once the binary has started.
-/// `.config/nextest.toml` kills a slow test after a 30s period times 4
-/// (120s total); the test's start bound and its exchange bound each count
-/// alone against that limit, and the ticket's margin table gives the total
-/// for the pass-then-hang path: `docs/testing.md`, "Waits and timeouts",
-/// needs nextest's timeout to be at least twice the test's longest single
-/// deadline plus its normal run time, so a hang reports which wait expired.
+/// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
+/// total); the test's start bound and its exchange bound each count alone
+/// against that limit, and a pass-then-hang path adds the start bound, the
+/// exchange deadline and the stand-down, a sum that stays under that limit:
+/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be at
+/// least twice the test's longest single deadline plus its normal run time, so
+/// a hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The example `cargo test` built beside this test binary

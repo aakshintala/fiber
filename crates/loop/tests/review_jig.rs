@@ -36,12 +36,13 @@ use support::review::{RequestKind, ReviewArgs, parse_args, replay};
 use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
-/// `.config/nextest.toml` kills a slow test after a 30s period times 4
-/// (120s total); the test's start bound and its exchange bound each count
-/// alone against that limit, and the ticket's margin table gives the total
-/// for the pass-then-hang path: `docs/testing.md`, "Waits and timeouts",
-/// needs nextest's timeout to be at least twice the test's longest single
-/// deadline plus its normal run time, so a hang reports which wait expired.
+/// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
+/// total); the test's start bound and its exchange bound each count alone
+/// against that limit, and a pass-then-hang path adds the start bound, the
+/// exchange deadline and the stand-down, a sum that stays under that limit:
+/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be at
+/// least twice the test's longest single deadline plus its normal run time, so
+/// a hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(10);
 
 /// The start bound stays within nextest's timeout: twice it fits the 4 x
