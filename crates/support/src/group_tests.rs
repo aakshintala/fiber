@@ -273,6 +273,17 @@ fn kill_every_group_kills_a_listed_live_group() {
     );
 
     // Reaped, the group is empty: the next kill drops it unsignalled.
+    // The probe can lag the reap (see [`alive`]'s doc): poll it until the kill prunes.
+    fakes::within(
+        &format!("group {pgid} to read not alive"),
+        Deadline::after(DEADLINE),
+        move || {
+            let (_tick, ticked) = mpsc::channel::<()>();
+            while alive(pgid) {
+                let _waited = Deadline::after(GROUP_POLL).recv(&ticked);
+            }
+        },
+    );
     kill_every_group();
     assert!(!live().contains(pgid), "an empty group leaves the list");
     live().unlist(listing);

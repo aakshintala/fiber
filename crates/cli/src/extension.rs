@@ -364,9 +364,7 @@ fn repository_project(
     if !declares_extensions(workspace) {
         return Ok(None);
     }
-    crate::project_of(home, workspace)
-        .map_err(CliError::from)
-        .map(|(_, project)| Some(project))
+    crate::project_of(home, workspace).map(|(_, project)| Some(project))
 }
 
 /// `fiber extension list` in `workspace`: the personal lines, then one

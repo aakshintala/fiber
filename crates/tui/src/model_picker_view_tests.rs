@@ -500,15 +500,15 @@ fn model_picker_filtered_empty() {
 }
 
 #[test]
-fn a_query_over_an_empty_catalogue_shows_no_no_match_row() {
+fn a_query_over_an_empty_catalogue_shows_the_no_match_row() {
     let mut app = attached(80, 24);
     open(&mut app);
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
     app.on_models(Ok(Catalogue::default()));
     type_filter(&mut app, "q");
     let view = app.model_picker_view().expect("open");
-    // No installed model, so no "No models match": the status names the
-    // empty catalogue instead.
-    assert!(!view.no_match);
+    // The doc: a query matching no model and no row shows the line,
+    // whatever the catalogue holds. The status still names it empty.
+    assert!(view.no_match);
     assert!(view.status.iter().any(|line| line.contains("No models")));
 }

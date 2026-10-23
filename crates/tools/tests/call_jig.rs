@@ -18,12 +18,10 @@ use std::time::Duration;
 use fakes::Deadline;
 use serde_json::{Value, json};
 
-/// How long the call jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total); with the 5s watchdog stand-down
-/// the deadlines sum to 25s, so 120s is at least twice them:
-/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
-/// at least twice the test's own deadlines, so a hang reports which wait
-/// expired.
+/// How long the call jig exchange may take once the binary has started.
+/// This file's exchange bound, the start bound (`fakes::START_BOUND`) and the
+/// stand-down sum under nextest's 120 s limit (`docs/testing.md`, "Waits and
+/// timeouts").
 const JIG_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The example `cargo test` built beside this test binary
@@ -38,6 +36,7 @@ fn example_path() -> PathBuf {
 
 #[track_caller]
 fn call(tool: &str, arguments: &str) -> Output {
+    fakes::warm_up(&example_path(), &[], 2);
     let child = Command::new(example_path())
         .args([tool, arguments])
         .stdout(Stdio::piped())

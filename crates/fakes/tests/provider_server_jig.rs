@@ -20,6 +20,7 @@ use std::thread;
 use std::time::Duration;
 
 use fakes::Deadline;
+use fakes::START_BOUND;
 
 #[path = "support/provider_server.rs"]
 mod support;
@@ -29,13 +30,9 @@ mod support;
 /// (`docs/testing.md`, "Waits and timeouts").
 const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
-/// How long the jig may take to print its listening line, process start
-/// included. The first exec of a freshly linked binary can stall under load,
-/// past [`DEADLINE`], so the line gets this bound. This is the bound
-/// `crates/loop/tests/review_jig.rs` gives a built binary's first start. The
-/// exchange after the line keeps [`DEADLINE`].
-const START_BOUND: Duration = Duration::from_secs(30);
-
+/// The listening wait takes [`START_BOUND`], shared with the loop jig's
+/// first-start bound: the warm-up below absorbs the first-exec stall, and
+/// the exchange after the line keeps [`DEADLINE`].
 const _: () = assert!(START_BOUND.as_secs() > DEADLINE.as_secs());
 
 /// The example `cargo test` built beside this test binary
@@ -115,6 +112,7 @@ fn it_serves_one_fixture_and_prints_the_request_it_received() {
     let dir = fakes::TempDir::new("provider-server-jig");
     let fixture = dir.path().join("reply.sse");
     std::fs::write(&fixture, "data: hi\n\n").unwrap();
+    fakes::warm_up(&example_path(), &[], 2);
     let mut command = Command::new(example_path());
     command.arg(&fixture);
     serve_one_fixture(command);

@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::shapes::Failure;
 
 use crate::error::CliError;
 use crate::extension::Io;
@@ -162,7 +161,7 @@ fn run(
     io: Io<'_>,
     binary: &Path,
     origin: &extensions::Origin,
-    restart: &dyn Fn(&Path) -> Result<bool, Failure>,
+    restart: &dyn Fn(&Path) -> Result<bool, CliError>,
 ) -> Result<i32, CliError> {
     let tag = match channel {
         Channel::Stable => extensions::latest_stable_tag(&bases.web)?,
@@ -233,8 +232,7 @@ fn run(
         Err(restart) => {
             writeln!(
                 io.err,
-                "fiber: warning: the hub was not restarted: {}",
-                restart.message
+                "fiber: warning: the hub was not restarted: {restart}"
             )
             .unwrap_or(());
         }

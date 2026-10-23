@@ -603,6 +603,11 @@ impl<B: Backend> Loop<B> {
                 crate::login_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
             self.app.login_started(worker);
         }
+        // The install the input chose, if one waits: its end arrives as
+        // `Input::Install`.
+        if let Some(start) = self.app.take_install_start() {
+            crate::install_worker::start(start, Arc::clone(&self.clock), self.files_out.clone());
+        }
         self.save_shares();
         None
     }
@@ -666,6 +671,7 @@ impl<B: Backend> Loop<B> {
             // Its frame already drew: the next moving frame arms the
             // tick again below.
             Input::Tick => self.tick.ack(),
+            Input::Install { provider, result } => self.app.on_install(provider, result),
             Input::Login { ticket, step } => {
                 // Only the waiting ticket's `Open` opens anything: any
                 // other ticket changes nothing and opens nothing.
@@ -1031,6 +1037,10 @@ mod tests;
 #[cfg(test)]
 #[path = "lib_login_tests.rs"]
 mod login_tests;
+
+#[cfg(test)]
+#[path = "lib_install_tests.rs"]
+mod install_tests;
 
 #[cfg(test)]
 #[path = "lib_image_tests.rs"]

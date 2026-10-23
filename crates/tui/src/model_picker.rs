@@ -11,8 +11,15 @@ use serde_json::{Value, json};
 use crate::catalogue::{Catalogue, ModelEntry, Price, Refresh};
 use crate::keys::Key;
 use crate::swapped::List;
+use crate::text::controls_to_space;
 
 mod filter;
+#[cfg(test)]
+pub(crate) mod fixtures;
+mod install;
+
+use install::Stop;
+pub(crate) use install::{InstallStart, Installs, Landed, Outcome, Progress, credential_text};
 
 /// What the picker was opened for: choosing a model and its level,
 /// choosing a level for the current model, or marking the models a
@@ -123,6 +130,10 @@ pub(crate) struct PickerView {
     pub(crate) spinner: String,
     /// The focused model row's layout index, else the first shown row.
     pub(crate) focused: Option<usize>,
+    /// One row per not-installed provider the picker lists, in order.
+    pub(crate) installs: Vec<InstallRow>,
+    /// What landed installs show under the list.
+    pub(crate) outcomes: Vec<Outcome>,
 }
 
 /// One shown provider: its freshness and its models in list order.
@@ -167,8 +178,20 @@ pub(crate) struct ModelRow {
     pub(crate) session_only: bool,
 }
 
+/// One not-installed provider's row. `at` is the `RowAt` index that
+/// `Spot::Row(at)` and `Spot::Cell(at, 0)` use.
+pub(crate) struct InstallRow {
+    pub(crate) at: usize,
+    /// The provider's name, control characters turned to spaces.
+    pub(crate) provider: String,
+    /// One flag per name character: whether the query matched it.
+    pub(crate) hits: Vec<bool>,
+    /// `None` is "not installed".
+    pub(crate) progress: Option<Progress>,
+}
+
 /// One layout row: the filter, the buttons, a provider heading, a model
-/// by catalogue index, or the empty-filter line.
+/// by catalogue index, a not-installed provider, or the empty-filter line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowAt {
     /// The filter query, first in every choosing frame.
@@ -179,6 +202,8 @@ enum RowAt {
     Heading(String),
     /// A model, by catalogue index.
     Model(usize),
+    /// A not-installed provider, by name, after the last model.
+    Install(String),
     /// The typed query matches no model: one dim line, no sections.
     NoMatch,
 }
@@ -227,6 +252,9 @@ pub(crate) struct ModelPicker {
     pub(crate) start_model: Option<Choice>,
     /// The open picker, if one is open.
     pub(crate) open: Option<Open>,
+    /// The not-installed rows: the install that runs, the failures, the
+    /// outcomes and the row focus. A running install outlives an open.
+    pub(crate) installs: Installs,
 }
 
 impl ModelPicker {
@@ -275,6 +303,7 @@ impl ModelPicker {
         let target = self.open.as_ref().and_then(|open| open.target.clone());
         let old = std::mem::replace(&mut self.catalogue, incoming);
         self.error = None;
+        self.prune_focus();
         let Some(open) = self.open.as_mut() else {
             return;
         };
@@ -518,10 +547,8 @@ impl ModelPicker {
             // Every open starts with an empty query.
             query: String::new(),
         });
-        self.want = Some(match self.want {
-            Some(Refresh::Every) => Refresh::Every,
-            _ => Refresh::Stale,
-        });
+        self.installs.reset();
+        self.ask_stale();
     }
 
     /// Closes the picker, sending nothing and saving nothing.
@@ -534,32 +561,26 @@ impl ModelPicker {
         self.open.is_some()
     }
 
-    /// Moves the selection over the model rows by `delta`, clamped:
-    /// headings are not stops, and no key cycles past either end.
+    /// Moves the focus over the model rows and then the not-installed
+    /// rows by `delta`, clamped: headings are not stops, and no key
+    /// cycles past either end. With nothing focused, only a step down
+    /// lands, on the first stop.
     pub(crate) fn move_row(&mut self, delta: isize) {
-        let Some(open) = self.open.as_mut() else {
-            return;
-        };
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
-        if rows.is_empty() {
+        let stops = self.stops();
+        if stops.is_empty() {
             return;
         }
-        let at = rows
-            .iter()
-            .position(|index| *index == open.selected)
-            .unwrap_or(0);
-        let next = at
-            .saturating_add_signed(delta)
-            .clamp(0, rows.len().saturating_sub(1));
-        if let Some(selected) = rows.get(next) {
-            open.selected = *selected;
+        let next = match self.focus() {
+            Some(now) => {
+                let at = stops.iter().position(|stop| *stop == now).unwrap_or(0);
+                at.saturating_add_signed(delta)
+                    .clamp(0, stops.len().saturating_sub(1))
+            }
+            None if delta > 0 => 0,
+            None => return,
+        };
+        if let Some(stop) = stops.get(next).cloned() {
+            self.go(stop);
         }
     }
 
@@ -568,6 +589,11 @@ impl ModelPicker {
     /// no row shown the selection sits hidden off the shown rows, so the
     /// chip keys change nothing.
     pub(crate) fn move_chip(&mut self, delta: isize) {
+        // A not-installed row has no chip, and the hidden selection must
+        // not move under it.
+        if matches!(self.focus(), Some(Stop::Install(_))) {
+            return;
+        }
         let Some(open) = self.open.as_mut() else {
             return;
         };
@@ -607,34 +633,25 @@ impl ModelPicker {
         }
     }
 
-    /// Moves the selection by a page through the list's own page step:
-    /// the shown height less one, clamped at both ends. Headings are
-    /// not stops, and any other key leaves the selection where it was.
+    /// Moves the focus by a page through the list's own page step: the
+    /// shown height less one, clamped at both ends, over the models and
+    /// then the not-installed rows. Headings are not stops, and any
+    /// other key leaves the focus where it was.
     pub(crate) fn move_page(&mut self, key: &Key, height: usize) {
-        let Some(open) = self.open.as_mut() else {
-            return;
-        };
-        let rows = shown_in(
-            &self.catalogue.models,
-            &self.scoped,
-            open.show_all,
-            open.mode,
-            open.target.as_ref(),
-            &open.query,
-        );
-        if rows.is_empty() {
+        let stops = self.stops();
+        if stops.is_empty() {
             return;
         }
-        let at = rows
-            .iter()
-            .position(|index| *index == open.selected)
+        let at = self
+            .focus()
+            .and_then(|now| stops.iter().position(|stop| *stop == now))
             .unwrap_or(0);
         let mut list = List::default();
-        list.select(at, rows.len(), height);
-        if list.key(key, rows.len(), height)
-            && let Some(selected) = rows.get(list.selected())
+        list.select(at, stops.len(), height);
+        if list.key(key, stops.len(), height)
+            && let Some(stop) = stops.get(list.selected()).cloned()
         {
-            open.selected = *selected;
+            self.go(stop);
         }
     }
 
@@ -709,6 +726,7 @@ impl ModelPicker {
             return;
         };
         open.query.push(c);
+        self.installs.focus = None;
         let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
@@ -730,6 +748,7 @@ impl ModelPicker {
         if open.query.pop().is_none() {
             return;
         }
+        self.installs.focus = None;
         let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
@@ -752,6 +771,7 @@ impl ModelPicker {
             return;
         }
         open.query.clear();
+        self.installs.focus = None;
         let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
@@ -780,16 +800,16 @@ impl ModelPicker {
         }
     }
 
-    /// Selects the model `frame_row` names. Headings and the buttons are
-    /// not stops, so they select nothing.
+    /// Focuses the model or not-installed row `frame_row` names. Headings
+    /// and the buttons are not stops, so they select nothing.
     pub(crate) fn select_frame_row(&mut self, frame_row: usize) {
         let Some(layout) = self.layout() else {
             return;
         };
-        if let Some(RowAt::Model(index)) = layout.get(frame_row)
-            && let Some(open) = self.open.as_mut()
-        {
-            open.selected = *index;
+        match layout.get(frame_row) {
+            Some(RowAt::Model(index)) => self.go(Stop::Model(*index)),
+            Some(RowAt::Install(name)) => self.go(Stop::Install(name.clone())),
+            Some(RowAt::Filter | RowAt::Buttons | RowAt::Heading(_) | RowAt::NoMatch) | None => {}
         }
     }
 
@@ -801,7 +821,7 @@ impl ModelPicker {
     /// toggles its marks with Enter and saves them with Ctrl+S, and
     /// never chooses.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
-        if self.is_scope() {
+        if self.is_scope() || matches!(self.focus(), Some(Stop::Install(_))) {
             return None;
         }
         let open = self.open.as_ref()?;
@@ -848,9 +868,12 @@ impl ModelPicker {
                 }
                 None
             }
-            Some(RowAt::Filter | RowAt::Heading(_) | RowAt::NoMatch) | None => None,
+            Some(RowAt::Filter | RowAt::Heading(_) | RowAt::NoMatch | RowAt::Install(_)) | None => {
+                None
+            }
             Some(RowAt::Model(index)) => {
                 let index = *index;
+                self.installs.focus = None;
                 // The checklist has no chips to choose: the mark cell
                 // toggles its row, and any other cell selects it.
                 if self.is_scope() {
@@ -919,13 +942,17 @@ impl ModelPicker {
         let buttons_at = layout.iter().position(|row| *row == RowAt::Buttons)?;
         // The selection may sit off the shown rows after a read
         // answered, so it falls to the first model row shown.
-        let focused = layout
-            .iter()
-            .position(|row| *row == RowAt::Model(open.selected))
-            .or_else(|| layout.iter().position(|row| matches!(row, RowAt::Model(_))));
+        let focused = match self.focus() {
+            Some(Stop::Model(index)) => layout.iter().position(|row| *row == RowAt::Model(index)),
+            Some(Stop::Install(name)) => layout
+                .iter()
+                .position(|row| *row == RowAt::Install(name.clone())),
+            None => None,
+        };
         // The shown models are the layout's model rows, in order.
         let mut shown = 0;
         let mut sections = Vec::new();
+        let mut installs = Vec::new();
         for (at, row) in layout.iter().enumerate() {
             if let RowAt::Heading(provider) = row {
                 let listed = self
@@ -949,6 +976,13 @@ impl ModelPicker {
                         }
                     },
                     models: Vec::new(),
+                });
+            } else if let RowAt::Install(provider) = row {
+                installs.push(InstallRow {
+                    at,
+                    provider: controls_to_space(provider),
+                    hits: filter::id_hits(provider, &open.query),
+                    progress: self.installs.progress(provider).cloned(),
                 });
             } else if let RowAt::Model(index) = row
                 && let Some(entry) = self.catalogue.models.get(*index)
@@ -1023,7 +1057,7 @@ impl ModelPicker {
             }),
             buttons_at,
             sections,
-            no_match: !open.query.is_empty() && shown == 0 && total > 0,
+            no_match: !open.query.is_empty() && shown == 0 && installs.is_empty(),
             status: self.status(),
             spinner: ctx.spinner.to_owned(),
             // The checklist marks rows and saves the list: no model
@@ -1049,6 +1083,8 @@ impl ModelPicker {
             // The selection may sit off the shown rows after a read
             // answered, so it falls to the first model row shown.
             focused,
+            installs,
+            outcomes: self.installs.outcomes().to_vec(),
             // The checklist draws no refresh button and no refresh
             // click target.
             refresh: open.mode != Mode::Scope,
@@ -1071,9 +1107,14 @@ impl ModelPicker {
         // The filter row is first in every mode, so the buttons row
         // is 1 everywhere.
         let mut layout = vec![RowAt::Filter, RowAt::Buttons];
-        // A typed query hiding every installed model shows one dim line
-        // and no provider sections.
-        if !open.query.is_empty() && rows.is_empty() && !self.catalogue.models.is_empty() {
+        let installs = self.shown_installs();
+        // A typed query hiding every installed model and every
+        // not-installed row shows one dim line and no provider sections.
+        if !open.query.is_empty()
+            && rows.is_empty()
+            && installs.is_empty()
+            && !self.catalogue.models.is_empty()
+        {
             layout.push(RowAt::NoMatch);
             return Some(layout);
         }
@@ -1088,6 +1129,7 @@ impl ModelPicker {
             }
             layout.push(RowAt::Model(index));
         }
+        layout.extend(installs.into_iter().map(RowAt::Install));
         Some(layout)
     }
 

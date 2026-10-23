@@ -1,0 +1,13 @@
+{
+  "name": "github.com/aakshintala/fiber/extensions/export",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "memory_mib": 16,
+  "commands": {
+    "export": {
+      "description": "Write the transcript as Markdown",
+      "argument_hint": "[path]"
+    }
+  }
+}

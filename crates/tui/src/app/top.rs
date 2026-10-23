@@ -23,6 +23,8 @@ pub(crate) enum Surface {
     KeysScreen,
     /// The key map.
     Keymap,
+    /// The reviewer notes setup.
+    ReviewerSetup,
     /// The model picker or the credential picker.
     Picker,
     /// A configuration view other than the credential picker.
@@ -73,6 +75,7 @@ impl Surface {
             Surface::Quit
                 | Surface::Report
                 | Surface::Keymap
+                | Surface::ReviewerSetup
                 | Surface::Picker
                 | Surface::ConfigView
                 | Surface::DeleteQuestion
@@ -158,6 +161,7 @@ impl App {
             (Surface::Report, self.import_report_open()),
             (Surface::KeysScreen, self.keys_screen_open()),
             (Surface::Keymap, self.keymap_top().is_some()),
+            (Surface::ReviewerSetup, self.reviewer_setup_open()),
             (
                 Surface::Picker,
                 self.model_picker_open() || self.credential_view_open(),
@@ -219,6 +223,7 @@ impl App {
             Surface::Quit
             | Surface::Report
             | Surface::Keymap
+            | Surface::ReviewerSetup
             | Surface::ConfigView
             | Surface::SessionView
             | Surface::DeleteQuestion
@@ -265,6 +270,7 @@ impl App {
             // completion panels in `route_key`, between two slices.
             Surface::KeysScreen | Surface::Completion => None,
             Surface::Keymap => self.keymap_key(key),
+            Surface::ReviewerSetup => self.reviewer_setup_key(key),
             Surface::Picker => self
                 .model_picker_key(key)
                 .or_else(|| self.config_view_key(key)),

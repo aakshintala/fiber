@@ -228,7 +228,7 @@ impl World {
         channel: Channel,
         terminal: bool,
         input: &[u8],
-        restart: &dyn Fn(&std::path::Path) -> Result<bool, contract::shapes::Failure>,
+        restart: &dyn Fn(&std::path::Path) -> Result<bool, CliError>,
     ) -> (Result<i32, CliError>, String) {
         let mut err = Vec::new();
         let result = super::run(
@@ -250,7 +250,7 @@ impl World {
         (result, String::from_utf8(err).unwrap())
     }
 
-    fn no_restart(_: &std::path::Path) -> Result<bool, contract::shapes::Failure> {
+    fn no_restart(_: &std::path::Path) -> Result<bool, CliError> {
         Ok(false)
     }
 }
@@ -569,10 +569,10 @@ fn unwritable_binary_directory_names_it_before_any_rename() {
 fn restart_failure_still_exits_zero_with_a_warning() {
     let world = World::new("0.1.0", "0.2.0", "v0.2.0", None, OLD_BINARY);
     let refused = |_: &std::path::Path| {
-        Err(crate::failed(
+        Err(CliError::Forwarded(crate::failed(
             contract::ErrorCode::IoFailed,
             "the manager refused",
-        ))
+        )))
     };
     let (result, err) = world.run("0.1.0", Channel::Stable, false, b"", &refused);
     assert_eq!(result.unwrap(), 0);

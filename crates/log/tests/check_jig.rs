@@ -39,6 +39,7 @@ fn example_path() -> PathBuf {
 /// wait and leaves no process behind.
 #[track_caller]
 fn run_jig(dir: &Path) -> Output {
+    fakes::warm_up(&example_path(), &[], 2);
     let child = Command::new(example_path())
         .arg(dir)
         .stdout(Stdio::piped())
