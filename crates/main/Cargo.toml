@@ -24,6 +24,7 @@ mcp = { path = "../mcp" }
 net = { path = "../net" }
 picture = { path = "../picture" }
 provider = { path = "../provider" }
+routing = { path = "../routing" }
 rustix.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true

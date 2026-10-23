@@ -72,15 +72,18 @@ pub(crate) fn ten_turns_runs(event: &str, release_paths: &[String]) -> bool {
 /// (`delegates.rs:34`), `net` (`connect.rs:193`), `worktree`
 /// (`doors/src/isolation.rs:61`), `extensions` (`session_command.rs:216`),
 /// `config` (`lua_providers.rs:9`) and `hub` (`session_command.rs:605`,
-/// the `hub::RecentRow` it appends). Slash-bounded, so
+/// the `hub::RecentRow` it appends), and `routing`, which picks the
+/// session's model (`docs/architecture.md`, module table, `routing` row;
+/// `main` calls it at startup). Slash-bounded, so
 /// `crates/loopback/…` does not match.
-const SESSION_CRATES: [&str; 15] = [
+const SESSION_CRATES: [&str; 16] = [
     "crates/contract/",
     "crates/support/",
     "crates/log/",
     "crates/loop/",
     "crates/doors/",
     "crates/provider/",
+    "crates/routing/",
     "crates/tools/",
     "crates/mcp/",
     "crates/jobs/",
@@ -116,13 +119,14 @@ const LIST_CRATES: [&str; 8] = [
 /// session-start process plus the terminal itself: `tui`
 /// (`main/src/main.rs:753`, `tui::run`) and `cli`
 /// (`main/src/configure.rs:34`, `::cli::project_of`).
-const TERMINAL_CRATES: [&str; 17] = [
+const TERMINAL_CRATES: [&str; 18] = [
     "crates/contract/",
     "crates/support/",
     "crates/log/",
     "crates/loop/",
     "crates/doors/",
     "crates/provider/",
+    "crates/routing/",
     "crates/tools/",
     "crates/mcp/",
     "crates/jobs/",
