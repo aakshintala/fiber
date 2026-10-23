@@ -709,6 +709,11 @@ fn resumed_session(
                         .on_rewrite(rewrites)
                         .admission(admission)
                         .steering(steering)
+                        .tool_search(crate::builtin::tool_search_factory())
+                        .tool_rows(crate::builtin::tool_rows(
+                            session.declarer(),
+                            session.state_setter(),
+                        ))
                 }),
                 budget,
                 idle,

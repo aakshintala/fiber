@@ -421,6 +421,7 @@ pub(crate) fn parts_in(
         &extensions,
         model.model,
         &model.reference(),
+        &mut startup_notices,
     );
     let thinking = settings::thinking(
         model.thinking,
@@ -474,6 +475,7 @@ pub(crate) fn parts_in(
         overrides.clone(),
     ));
     prompt.credential = crate::scripted::credential(model.provider, label);
+    prompt.deferrals = patch.deferrals;
     prompt.cache_lifetime = patch.cache_lifetime;
     prompt.thinking = thinking;
     // The startup notices are written with the MCP notices, after
@@ -537,6 +539,7 @@ pub(crate) fn reload_inputs(
     extensions: &extensions::SessionExtensions,
     model: &config::ModelData,
     reference: &str,
+    notices: &mut Vec<contract::events::Notice>,
 ) -> (r#loop::PromptPatch, r#loop::ReloadSettings) {
     (
         r#loop::PromptPatch {
@@ -546,6 +549,7 @@ pub(crate) fn reload_inputs(
             extension_dirs: extensions.dirs(),
             extension_sections: extensions.sections(project),
             skills_disabled: config.union_list("skills.disabled"),
+            deferrals: settings::deferrals(config, notices),
             cache_lifetime: settings::cache_lifetime(config, reference),
         },
         r#loop::ReloadSettings {

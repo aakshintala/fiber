@@ -50,7 +50,7 @@ pub fn resources_definition() -> ToolDefinition {
             },
             "required": ["action"],
         }),
-        deferred: false,
+        deferred: true,
         hosted: None,
     }
 }

@@ -335,6 +335,8 @@ impl State {
         extensions.retain_lua_providers(&[]);
         let extensions = Arc::new(extensions);
         let model = self.switching.resolved(&route.model).map_err(failure)?;
+        let mut notices = config.notices().to_vec();
+        notices.extend(extensions.notices().iter().cloned());
         let (patch, settings) = crate::parts::reload_inputs(
             &config,
             &self.sources.home,
@@ -342,6 +344,7 @@ impl State {
             &extensions,
             model.model,
             &route.model,
+            &mut notices,
         );
         let mut inputs = self.template.clone();
         inputs.system = patch.system.clone();
@@ -350,10 +353,9 @@ impl State {
         inputs.extension_dirs = patch.extension_dirs.clone();
         inputs.extension_sections = patch.extension_sections.clone();
         inputs.skills_disabled = patch.skills_disabled.clone();
+        inputs.deferrals = patch.deferrals.clone();
         inputs.cache_lifetime = patch.cache_lifetime;
         let skills = r#loop::skills(&inputs, &self.sources.workspace);
-        let mut notices = config.notices().to_vec();
-        notices.extend(extensions.notices().iter().cloned());
         // The MCP sync: classify the new person specs against the live
         // slots, stage (re-list keeps, shadow-start replacements and
         // starts), and commit only after every required shadow start
