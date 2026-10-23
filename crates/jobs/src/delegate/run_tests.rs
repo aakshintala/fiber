@@ -2609,7 +2609,12 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
         fiber_exited_line(4, "Done."),
     ])]);
     let exit = serde_json::to_string(&fiber_exited_line(4, "Done.")).unwrap();
-    let shell = format!("printf '%s\\n' '{exit}'");
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch check ever runs, so no watcher would ever forward.
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
     let waited = rig
         .start_timeout(
             &shell,
@@ -2621,10 +2626,19 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
         )
         .0;
     let _waited = waited;
-    // The watcher's forwards and the runner's reap race (see #3005):
-    // the take holds the Job and both lines whichever lands first, so
-    // no schedule changes which values land. The bound is liveness
-    // only, the plan's MUST_SUCCEED_WITHIN.
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and both lines whichever lands first.
+    // Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
     let (notice, usages) = take_report_with_usages(&rig, 2);
     let generations: Vec<&str> = usages
         .iter()
@@ -2670,9 +2684,10 @@ fn take_report_with_usages(
                 Err(_) => {
                     stop.store(true, Ordering::Relaxed);
                     panic!(
-                        "the report and the streamed usage never arrived; job={} usages={want} got={}",
+                        "the report and the streamed usage never arrived; job={} usages={want} got={} watch_calls={}",
                         notice.is_some(),
                         usages.len(),
+                        rig.script.calls().len(),
                     );
                 }
             }
@@ -3128,7 +3143,12 @@ fn a_correction_applies_only_its_delta() {
     // folds it before the report, so the notice is `Completed` whether
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
-    let shell = format!("printf '%s\\n' '{exit}'");
+    // The child blocks on a fifo until the watch starts: an instant
+    // child would otherwise let the drive reap and report before its
+    // first launch check ever runs, so no watcher would ever forward.
+    let fifo = rig._dir.path().join("watch-started");
+    fakes::fifo(&fifo);
+    let shell = format!("read _ < '{}'; printf '%s\\n' '{exit}'", fifo.display());
     let waited = rig
         .start_timeout(
             &shell,
@@ -3140,11 +3160,20 @@ fn a_correction_applies_only_its_delta() {
         )
         .0;
     let _waited = waited;
-    // The watcher's forwards and the runner's reap race (see #3005):
-    // the take holds the Job and both lines whichever lands first, so
-    // no schedule changes which values land, and the tap is read only
-    // after the take holds both streamed lines. The bound is liveness
-    // only, the plan's MUST_SUCCEED_WITHIN.
+    // The watch started, so the launch happened and its delivery is
+    // inevitable on the watcher's own thread: release the child. The
+    // watcher's forwards and the runner's reap still race (see #3005),
+    // so the take holds the Job and both lines whichever lands first,
+    // and the tap is read only after the take holds both streamed
+    // lines. Every bound here is liveness only.
+    wait_calls(&rig, 1);
+    within(
+        "the child reads the fifo",
+        Deadline::after(DEADLINE),
+        move || {
+            std::fs::write(&fifo, "\n").unwrap();
+        },
+    );
     let (notice, usages) = take_report_with_usages(&rig, 2);
     // Both arrivals of the corrected generation stream exactly once,
     // and neither trips the budget. The delta arithmetic itself is
