@@ -146,12 +146,12 @@ fn provider(protocol: Protocol) -> Result<Arc<dyn Provider>, String> {
         model: &data.models[0],
         thinking: None,
     };
-    let here = crate::connect::Here {
+    let here = crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
     };
-    crate::connect::connect(model, None, None, None, &here)
+    crate::connect(model, None, None, None, &here)
         .map_err(|failure| format!("{:?}: {}", failure.code, failure.message))
 }
 

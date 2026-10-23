@@ -9,27 +9,24 @@ mod cli;
 mod clock;
 mod completion;
 mod configure;
-mod connect;
 mod continue_session;
-mod credential;
 mod delegates;
 mod handoff;
 mod hub_command;
 mod late_emit;
 mod launch;
-mod lua_providers;
 mod mcp_servers;
 mod model_host;
 mod model_list;
 mod open;
 mod parts;
+mod placeholders;
 mod prompt_files;
 mod read_signals;
 mod reap;
 mod reload;
 mod resume;
 mod rewind;
-mod scripted;
 mod session_command;
 mod session_extensions;
 mod settings;
@@ -59,6 +56,9 @@ mod read_signals_entry_tests;
 #[path = "reviewer_tests.rs"]
 mod reviewer_tests;
 #[cfg(test)]
+#[path = "scripted_session_tests.rs"]
+mod scripted_session_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 #[path = "timing_tests.rs"]
@@ -75,7 +75,6 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
-use connect::{Here, connect, connect_observed};
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -84,7 +83,9 @@ use log::Log;
 use r#loop::Loop;
 #[cfg(test)]
 use parts::parts_in;
-use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_reference};
+use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_model};
+use routing::{Here, connect, connect_observed};
+use routing::{credential, lua_providers, scripted};
 
 fn main() -> ExitCode {
     ExitCode::from(u8::try_from(run()).unwrap_or(1))

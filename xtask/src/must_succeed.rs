@@ -166,7 +166,7 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
     ),
     held(
-        "crates/main/src/connect_tests.rs",
+        "crates/routing/src/connect_tests.rs",
         "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
     ),
     held(

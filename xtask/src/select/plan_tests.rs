@@ -450,6 +450,14 @@ fn a_loop_diff_skips_the_list_and_paging_rows() {
 }
 
 #[test]
+fn a_routing_diff_skips_the_list_and_paging_rows() {
+    assert_eq!(
+        skipped("pull_request", &["crates/routing/src/lib.rs"]),
+        vec!["sessions list", "paging"]
+    );
+}
+
+#[test]
 fn a_hub_diff_skips_only_paging() {
     assert_eq!(
         skipped("pull_request", &["crates/hub/src/feed.rs"]),
