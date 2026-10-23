@@ -32,11 +32,7 @@ use super::{
 };
 
 const TEST_WAIT: Duration = Duration::from_secs(15);
-const READY_WAIT: Duration = Duration::from_secs(5);
-const GROUP_EMPTY_WAIT: Duration = Duration::from_secs(5);
-const PID_EXIT_WAIT: Duration = Duration::from_secs(5);
 const PID_EXIT_POLL: Duration = Duration::from_millis(50);
-const MATCHING_EXIT_WAIT: Duration = Duration::from_secs(5);
 const WAIT_SIGNAL_BOUND: Duration = Duration::from_millis(50);
 
 fn empty_group(_group: u32) -> bool {
@@ -634,8 +630,8 @@ PERL
         ..options
     };
     let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
-    let group = ready.wait(fakes::Deadline::after(READY_WAIT))[0];
-    let descendant = ready.wait(fakes::Deadline::after(READY_WAIT))[0];
+    let group = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let descendant = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let watchdog = Watchdog::group(group);
 
     clock.advance_when_parked(
@@ -675,15 +671,15 @@ PERL
     );
     assert!(err.is_empty());
     assert!(
-        pid_exits_or_is_zombie(group, PID_EXIT_WAIT),
+        pid_exits_or_is_zombie(group, fakes::MUST_SUCCEED_WITHIN),
         "the process-group leader {group} did not exit"
     );
     assert!(
-        group_empties(group, fakes::Deadline::after(GROUP_EMPTY_WAIT)),
+        group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "SIGKILL did not empty process group {group}"
     );
     assert!(
-        pid_exits_or_is_zombie(descendant, PID_EXIT_WAIT),
+        pid_exits_or_is_zombie(descendant, fakes::MUST_SUCCEED_WITHIN),
         "SIGKILL did not stop descendant {descendant}"
     );
     watchdog.stand_down(fakes::Deadline::after(TEST_WAIT));
@@ -723,8 +719,8 @@ fn an_unreaped_child_gets_sigkill_even_when_the_group_probe_is_empty() {
     options.group_probe = empty_group;
     let reap_timeout = options.timeouts.reap;
     let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
-    let group = ready.wait(fakes::Deadline::after(READY_WAIT))[0];
-    let _child = ready.wait(fakes::Deadline::after(READY_WAIT));
+    let group = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let _child = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let watchdog = Watchdog::group(group);
 
     clock.advance_when_parked(
@@ -778,7 +774,7 @@ fn an_unreaped_child_gets_sigkill_even_when_the_group_probe_is_empty() {
     assert!(err.is_empty());
     assert!(group_empties(
         group,
-        fakes::Deadline::after(GROUP_EMPTY_WAIT)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     watchdog.stand_down(fakes::Deadline::after(TEST_WAIT));
 }
@@ -803,7 +799,7 @@ fn a_child_that_ignores_term_is_killed_as_a_group_at_the_injected_deadline() {
     let tag = ready.path().to_string_lossy().into_owned();
     let watchdog = Watchdog::matching(&tag);
     let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
-    let group = ready.wait(fakes::Deadline::after(READY_WAIT))[0];
+    let group = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     clock.advance_when_parked(
         Some(clock.origin() + case_limit),
         None,
@@ -830,14 +826,14 @@ fn a_child_that_ignores_term_is_killed_as_a_group_at_the_injected_deadline() {
     assert!(out.contains("FAIL hang\n  did not finish within"), "{out}");
     assert!(err.is_empty());
     assert!(
-        group_empties(group, fakes::Deadline::after(GROUP_EMPTY_WAIT)),
+        group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "group {group} survived"
     );
     assert!(
-        matching_exits(&tag, fakes::Deadline::after(MATCHING_EXIT_WAIT)),
+        matching_exits(&tag, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "{tag} survived"
     );
-    watchdog.stand_down(fakes::Deadline::after(MATCHING_EXIT_WAIT));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -943,8 +939,8 @@ PERL
     let tag = ready.path().to_string_lossy().into_owned();
     let watchdog = Watchdog::matching(&tag);
     let receive = run_in_thread(setup.package.clone(), PathBuf::from("/bin/sh"), options);
-    let group = ready.wait(fakes::Deadline::after(READY_WAIT))[0];
-    let children = ready.wait(fakes::Deadline::after(READY_WAIT));
+    let group = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    let children = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let same_group_child = *children.first().unwrap();
     let escaped_child = *children.get(1).unwrap();
     let same_group_pid =
@@ -969,14 +965,20 @@ PERL
         case_limit,
         &Deadline::after(TEST_WAIT),
     );
-    assert_eq!(ready.wait(fakes::Deadline::after(READY_WAIT)), [group]);
+    assert_eq!(
+        ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        [group]
+    );
     clock.advance_when_parked(
         Some(clock.now() + Duration::from_secs(1)),
         None,
         Duration::from_secs(1),
         &Deadline::after(TEST_WAIT),
     );
-    assert_eq!(ready.wait(fakes::Deadline::after(READY_WAIT)), [group]);
+    assert_eq!(
+        ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        [group]
+    );
     let grace_deadline = clock.now() + Duration::from_secs(4);
     clock.advance_when_parked(
         Some(grace_deadline),
@@ -994,22 +996,22 @@ PERL
     assert!(err.is_empty());
     assert_eq!(fs::read_to_string(&trace).unwrap(), "1\n2\n");
     assert!(
-        group_empties(group, fakes::Deadline::after(GROUP_EMPTY_WAIT)),
+        group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "group {group} survived"
     );
     assert!(
-        pid_exits_or_is_zombie(escaped_child, PID_EXIT_WAIT),
+        pid_exits_or_is_zombie(escaped_child, fakes::MUST_SUCCEED_WITHIN),
         "escaped child {escaped_child} survived"
     );
     assert!(
-        pid_exits_or_is_zombie(same_group_child, PID_EXIT_WAIT),
+        pid_exits_or_is_zombie(same_group_child, fakes::MUST_SUCCEED_WITHIN),
         "same-group child {same_group_child} survived"
     );
     assert!(
-        matching_exits(&tag, fakes::Deadline::after(MATCHING_EXIT_WAIT)),
+        matching_exits(&tag, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "{tag} survived"
     );
-    watchdog.stand_down(fakes::Deadline::after(MATCHING_EXIT_WAIT));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 const CREDENTIAL_LUA: &str = "fiber.provider('NAME', { credential = { timeout = 1000, run = function() error('called') end } })\n";

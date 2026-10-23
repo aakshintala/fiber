@@ -25,10 +25,6 @@ use serde_json::{Map, Value, json};
 use crate::Files;
 use crate::image::{ImageChild, test_spawn};
 
-/// One bound per action and receive sequence: a wait that reaches it fails
-/// the test instead of hanging it.
-const STEP: Duration = Duration::from_secs(5);
-
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
 
 /// A stub `fiber` that runs `body` with `$2` the input, `$3` the artifacts
@@ -368,7 +364,7 @@ fn files_timing_reaches_the_built_child() {
     let (probe, records) = probe();
     let files = image_files(fixture.path(), &fiber, &probe);
     let files = Arc::new(files);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let output = read_bounded(
         Arc::clone(&files),
@@ -411,7 +407,7 @@ fn first_timing_wins_over_a_second_builder() {
         .with_images(fiber, fixture.path().join("artifacts"));
     let files = Arc::new(files);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let output = read_bounded(
         Arc::clone(&files),
         "a.png".to_owned(),
@@ -444,7 +440,7 @@ fn timing_after_with_images_leaves_the_built_child_unchanged() {
         .with_timing(probe.timing());
     let files = Arc::new(files);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let output = read_bounded(
         Arc::clone(&files),
         "a.png".to_owned(),
@@ -473,7 +469,7 @@ fn without_timing_reads_match_the_old_constructors() {
         .with_images(fiber, fixture.path().join("artifacts"));
     let files = Arc::new(files);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let image = read_bounded(
         Arc::clone(&files),
         "a.png".to_owned(),
@@ -606,7 +602,7 @@ fn renderer_and_timing_apply_in_either_order() {
                 .with_images(fiber, fixture.path().join("artifacts"))
         };
         let files = Arc::new(files);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let output = read_bounded(
             Arc::clone(&files),
@@ -645,7 +641,7 @@ fn a_missing_renderer_keeps_the_cut_with_one_scope() {
         .with_timing(probe.timing())
         .with_images(fiber, fixture.path().join("artifacts"));
     let files = Arc::new(files);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let output = read_bounded(
         Arc::clone(&files),
@@ -696,17 +692,17 @@ fn two_rendered_pages_emit_three_scopes_with_no_renderer_hold() {
         let _hook = test_spawn::install(report);
         drop(done_tx.send(read_with(&files, "a.pdf", None, &CancelToken::new())));
     });
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     // The first render starts only after the count/cut scope closed: its
     // record is already waiting, and no page scope is open during the
     // renderer's hold.
-    ready.wait(fakes::Deadline::after(STEP));
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let count_cut = closed(&records, deadline);
     assert_eq!(count_cut.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "no guard during the hold");
     release(&mut held, 1);
     // The second render starts only after the first page's scope closed.
-    ready.wait(fakes::Deadline::after(STEP));
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let page_one = closed(&records, deadline);
     assert_eq!(page_one.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "no guard during the hold");
@@ -774,7 +770,7 @@ fn entered_pdf_failures_keep_their_output_and_drop_once() {
             .with_timing(probe.timing())
             .with_images(fiber, fixture.path().join("artifacts"));
         let files = Arc::new(files);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let output = read_bounded(
             Arc::clone(&files),
@@ -832,10 +828,10 @@ fn a_cancel_during_the_count_cut_times_it() {
             .with_images(fiber_path, artifacts);
         drop(done_tx.send(read_with(&files, "a.pdf", None, &call_cancel)));
     });
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let pid = fixture.spawned(deadline);
     let group = Fixture::watch(pid);
-    ready.wait(fakes::Deadline::after(STEP));
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert_eq!(probe.active(), 1, "the count/cut scope is open");
     assert!(done_rx.try_recv().is_err(), "no result before the cancel");
     cancel.cancel();
@@ -861,7 +857,7 @@ fn a_failing_renderer_adds_no_picture_scope() {
     let (probe, records) = probe();
     let files = pdf_files(fixture.path(), &fiber, &ppm, &probe);
     let files = Arc::new(files);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let output = read_bounded(
         Arc::clone(&files),
@@ -922,12 +918,12 @@ fn a_cancel_between_pages_adds_no_picture_scope() {
             .with_images(fiber_path, artifacts);
         drop(done_tx.send(read_with(&files, "a.pdf", None, &call_cancel)));
     });
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     // The count/cut child already exited; the renderer's pid is second.
     let _count_cut = fixture.spawned(deadline);
     let renderer = fixture.spawned(deadline);
     let group = Fixture::watch(renderer);
-    ready.wait(fakes::Deadline::after(STEP));
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     // The render starts only after the count/cut scope closed.
     let count_cut = closed(&records, deadline);
     assert_eq!(count_cut.op, Op::PictureRun);
@@ -968,7 +964,7 @@ printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#
     let (probe, records) = probe();
     let files = pdf_files(fixture.path(), &fiber, &ppm, &probe);
     let files = Arc::new(files);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let output = read_bounded(
         Arc::clone(&files),
@@ -1012,7 +1008,7 @@ cat >/dev/null"#,
     let cancel = CancelToken::new();
     cancel.cancel();
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let output = read_bounded(
         Arc::clone(&files),
         "a.png".to_owned(),
@@ -1080,7 +1076,7 @@ fn stderr_caps_hold_with_timing() {
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
         let child = Arc::new(child);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let result = process_bounded(
             Arc::clone(&child),
@@ -1112,7 +1108,7 @@ fn the_capture_carries_no_stderr_sentinel() {
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
     let child = Arc::new(child);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let result = process_bounded(
         Arc::clone(&child),
@@ -1205,7 +1201,7 @@ fn image_filename_validation_with_timing() {
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
         let child = Arc::new(child);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let result = process_bounded(
             Arc::clone(&child),
@@ -1265,7 +1261,7 @@ fn unusual_answers_fail_with_timing_on_linux() {
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
         let child = Arc::new(child);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let result = process_bounded(
             Arc::clone(&child),
@@ -1344,7 +1340,7 @@ fn pdf_filename_validation_with_timing() {
             .with_timing(probe.timing())
             .with_images(fiber, fixture.path().join("artifacts"));
         let files = Arc::new(files);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let output = read_bounded(
             Arc::clone(&files),
@@ -1505,7 +1501,7 @@ cat >/dev/null"#,
         };
         let files = Arc::new(files);
 
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
         let output = read_bounded(
             Arc::clone(&files),
             case.path.to_owned(),
@@ -1544,7 +1540,7 @@ fn a_timed_success_returns_the_same_answer_with_one_picture_run() {
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
     let child = Arc::new(child);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let result = process_bounded(
         Arc::clone(&child),
@@ -1601,7 +1597,7 @@ fn without_timing_the_same_work_emits_nothing() {
     let child = ImageChild::new(fiber, fixture.path().join("artifacts"));
     let child = Arc::new(child);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let result = process_bounded(
         Arc::clone(&child),
         PNG.to_vec(),
@@ -1631,7 +1627,7 @@ fn a_declining_callable_runs_once_per_call_without_a_scope() {
         .with_timing(probe.timing());
     let child = Arc::new(child);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let first = process_bounded(
         Arc::clone(&child),
         PNG.to_vec(),
@@ -1688,8 +1684,8 @@ fn the_guard_is_live_while_the_child_is_held() {
         let child = ImageChild::new(fiber, dir.join("artifacts")).with_timing(timing);
         drop(done_tx.send(child.process(PNG, &CancelToken::new())));
     });
-    let deadline = Deadline::after(STEP);
-    ready.wait(fakes::Deadline::after(STEP));
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert_eq!(probe.active(), 1, "the scope is open while held");
     assert!(
         done_rx.try_recv().is_err(),
@@ -1724,7 +1720,7 @@ fn exact_milliseconds_come_from_the_two_clock_reads() {
     let child = timed_child(&fiber, fixture.path(), &probe);
     let child = Arc::new(child);
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let result = process_bounded(
         Arc::clone(&child),
         PNG.to_vec(),
@@ -1750,7 +1746,7 @@ fn repeated_calls_open_independent_scopes_with_fresh_names() {
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
     let child = Arc::new(child);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
     let first = process_bounded(
         Arc::clone(&child),
@@ -1855,7 +1851,7 @@ fn entered_failures_keep_their_error_and_drop_once() {
         let (probe, records) = probe();
         let child = timed_child(&fiber, fixture.path(), &probe);
         let child = Arc::new(child);
-        let deadline = Deadline::after(STEP);
+        let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
 
         let result = process_bounded(
             Arc::clone(&child),
@@ -1894,7 +1890,7 @@ fn a_pre_cancelled_call_spawns_nothing_and_times_nothing() {
     let cancel = CancelToken::new();
     cancel.cancel();
 
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let result = process_bounded(
         Arc::clone(&child),
         PNG.to_vec(),
@@ -1957,10 +1953,10 @@ fn cancelled_call(
         let child = ImageChild::new(fiber, dir.join("artifacts")).with_timing(timing);
         drop(done_tx.send(child.process(&bytes, &call_cancel)));
     });
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let pid = client.spawned(deadline);
     let group = Fixture::watch(pid);
-    ready.wait(fakes::Deadline::after(STEP));
+    ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         done_rx.try_recv().is_err(),
         "the call ends only at the cancel"
@@ -1991,7 +1987,7 @@ fn assert_cancelled(call: CancelledCall) {
     assert_eq!(result, Err(ImageError::Cancelled));
     assert_eq!(probe.calls(), 1);
     assert_eq!(probe.active(), 0);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let record = closed(&records, deadline);
     assert_eq!(record.op, Op::PictureRun);
     assert!(records.try_recv().is_err(), "one entry, one record");
@@ -2051,7 +2047,7 @@ exit 3"#,
     let (probe, records) = probe();
     let child = timed_child(&fiber, fixture.path(), &probe);
     let child = Arc::new(child);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let bytes = vec![b'z'; 64 * 1024];
 
     let result = process_bounded(

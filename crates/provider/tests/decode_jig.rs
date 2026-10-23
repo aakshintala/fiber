@@ -55,7 +55,7 @@ fn decode(file: &Path) -> Output {
         .recv(&finished)
         .expect("the decode jig finished")
         .unwrap();
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     output
 }
 

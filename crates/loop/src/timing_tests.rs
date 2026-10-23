@@ -3,7 +3,7 @@
 //!
 //! Time comes from the injected clock; a test advances the fake clock only
 //! after a signal that the code under test is waiting on it, and every
-//! receive or join carries one named 5 s deadline.
+//! receive or join carries the must-succeed bound.
 
 #![allow(
     clippy::unwrap_used,
@@ -37,10 +37,6 @@ use serde_json::{Map, Value, json};
 use support::lock;
 
 use crate::{BlockLimits, Loop, Model, Reviewer};
-
-/// How long a test waits for a turn, a handshake or a parked wait: the one
-/// named deadline every receive and join in this file carries.
-const WAIT: Duration = Duration::from_secs(5);
 
 // One-shot test controls, reached only from in-fence sites. Each arm is
 // consumed by its next hook call; production holds no observer.
@@ -913,7 +909,8 @@ fn turn(world: &mut World) -> Option<TurnOutcome> {
         let outcome = looped.turn();
         let _sent = done_tx.send((outcome, looped));
     });
-    let (outcome, looped) = fakes::Deadline::after(WAIT).recv_or_fail(&done_rx, "the turn ends");
+    let (outcome, looped) =
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "the turn ends");
     world.looped = Some(looped);
     outcome.unwrap()
 }
@@ -1962,43 +1959,47 @@ fn a_partial_failure_after_deltas_times_its_hold() {
 // though the provider fast-cancels.
 #[test]
 fn a_cancel_mid_call_times_one_scope() {
-    fakes::within("a cancel mid call", Deadline::after(WAIT), || {
-        let mut world = build(Build {
-            probe_state: true,
-            ..plain_build(vec![Answer::Hold {
-                cancel_advance_ms: 7,
-            }])
-        });
-        prompt(&world, "hi");
-        let (done_tx, done_rx) = mpsc::channel();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let outcome = world
-                    .looped
-                    .as_mut()
-                    .expect("the loop is parked in the world")
-                    .turn();
-                done_tx.send(outcome).unwrap();
+    fakes::within(
+        "a cancel mid call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let mut world = build(Build {
+                probe_state: true,
+                ..plain_build(vec![Answer::Hold {
+                    cancel_advance_ms: 7,
+                }])
             });
-            // The hold parks far out: the test cancels only once the park
-            // shows the call waiting on the clock.
-            assert!(
-                world.clock.await_parked(
-                    world.origin + Duration::from_secs(3600),
-                    fakes::Deadline::after(WAIT)
-                ),
-                "the held call parks before the cancel lands"
-            );
-            world.cancel.cancel();
-            let outcome = fakes::Deadline::after(WAIT)
-                .recv(&done_rx)
-                .expect("the cancelled turn ends");
-            assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
-        });
-        let models = ops(&world, "turn.model_call");
-        assert_eq!(models.len(), 1, "{:?}", op_records(&world));
-        assert_eq!(models[0].ms, 7);
-    });
+            prompt(&world, "hi");
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let outcome = world
+                        .looped
+                        .as_mut()
+                        .expect("the loop is parked in the world")
+                        .turn();
+                    done_tx.send(outcome).unwrap();
+                });
+                // The hold parks far out: the test cancels only once the park
+                // shows the call waiting on the clock.
+                assert!(
+                    world.clock.await_parked(
+                        world.origin + Duration::from_secs(3600),
+                        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    ),
+                    "the held call parks before the cancel lands"
+                );
+                world.cancel.cancel();
+                let outcome = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_rx)
+                    .expect("the cancelled turn ends");
+                assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
+            });
+            let models = ops(&world, "turn.model_call");
+            assert_eq!(models.len(), 1, "{:?}", op_records(&world));
+            assert_eq!(models[0].ms, 7);
+        },
+    );
 }
 
 #[test]
@@ -2080,105 +2081,117 @@ fn a_stream_write_error_closes_one_scope_and_returns_the_error() {
 
 #[test]
 fn a_retry_measures_runs_without_the_backoff() {
-    fakes::within("a retry without its backoff", Deadline::after(WAIT), || {
-        let mut world = build(Build {
-            observe: true,
-            probe_state: true,
-            retry: Some(crate::Retry {
-                attempts: 3,
-                initial: Duration::from_secs(2),
-                max: Duration::from_secs(60),
-            }),
-            ..plain_build(vec![
-                run_failed_answer(ErrorCode::RateLimited, 7),
-                run_answer("Recovered.", 7),
-            ])
-        });
-        prompt(&world, "hi");
-        let (done_tx, done_rx) = mpsc::channel();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let outcome = world
-                    .looped
-                    .as_mut()
-                    .expect("the loop is parked in the world")
-                    .turn();
-                done_tx.send(outcome).unwrap();
+    fakes::within(
+        "a retry without its backoff",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let mut world = build(Build {
+                observe: true,
+                probe_state: true,
+                retry: Some(crate::Retry {
+                    attempts: 3,
+                    initial: Duration::from_secs(2),
+                    max: Duration::from_secs(60),
+                }),
+                ..plain_build(vec![
+                    run_failed_answer(ErrorCode::RateLimited, 7),
+                    run_answer("Recovered.", 7),
+                ])
             });
-            // The backoff parks two seconds past the failed run's 7 ms: the
-            // test advances only once the wait shows on the clock.
-            let backoff_until = world.origin + Duration::from_millis(7) + Duration::from_secs(2);
-            assert!(
-                world
-                    .clock
-                    .await_parked(backoff_until, fakes::Deadline::after(WAIT)),
-                "the retry parks its backoff before the advance"
-            );
-            world.clock.advance_when_parked(
-                Some(backoff_until),
-                None,
-                Duration::from_secs(2),
-                &fakes::Deadline::after(WAIT),
-            );
-            let outcome = fakes::Deadline::after(WAIT)
-                .recv(&done_rx)
-                .expect("the retried turn ends");
-            assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
-        });
-        let models = ops(&world, "turn.model_call");
-        assert_eq!(models.len(), 2, "{:?}", op_records(&world));
-        assert_eq!(models[0].ms, 7);
-        assert_eq!(models[1].ms, 7, "the backoff stays outside both scopes");
-        assert_eq!(ops(&world, "turn.request").len(), 1);
-        assert_eq!(*world.attempts.lock().unwrap(), vec![1, 2]);
-    });
+            prompt(&world, "hi");
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let outcome = world
+                        .looped
+                        .as_mut()
+                        .expect("the loop is parked in the world")
+                        .turn();
+                    done_tx.send(outcome).unwrap();
+                });
+                // The backoff parks two seconds past the failed run's 7 ms: the
+                // test advances only once the wait shows on the clock.
+                let backoff_until =
+                    world.origin + Duration::from_millis(7) + Duration::from_secs(2);
+                assert!(
+                    world.clock.await_parked(
+                        backoff_until,
+                        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    ),
+                    "the retry parks its backoff before the advance"
+                );
+                world.clock.advance_when_parked(
+                    Some(backoff_until),
+                    None,
+                    Duration::from_secs(2),
+                    &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                );
+                let outcome = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_rx)
+                    .expect("the retried turn ends");
+                assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
+            });
+            let models = ops(&world, "turn.model_call");
+            assert_eq!(models.len(), 2, "{:?}", op_records(&world));
+            assert_eq!(models[0].ms, 7);
+            assert_eq!(models[1].ms, 7, "the backoff stays outside both scopes");
+            assert_eq!(ops(&world, "turn.request").len(), 1);
+            assert_eq!(*world.attempts.lock().unwrap(), vec![1, 2]);
+        },
+    );
 }
 
 #[test]
 fn a_cancel_during_the_backoff_runs_nothing_more() {
-    fakes::within("a cancel during the backoff", Deadline::after(WAIT), || {
-        let mut world = build(Build {
-            retry: Some(crate::Retry {
-                attempts: 3,
-                initial: Duration::from_secs(2),
-                max: Duration::from_secs(60),
-            }),
-            ..plain_build(vec![
-                run_failed_answer(ErrorCode::RateLimited, 7),
-                run_answer("Unused.", 7),
-            ])
-        });
-        prompt(&world, "hi");
-        let (done_tx, done_rx) = mpsc::channel();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let outcome = world
-                    .looped
-                    .as_mut()
-                    .expect("the loop is parked in the world")
-                    .turn();
-                done_tx.send(outcome).unwrap();
+    fakes::within(
+        "a cancel during the backoff",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let mut world = build(Build {
+                retry: Some(crate::Retry {
+                    attempts: 3,
+                    initial: Duration::from_secs(2),
+                    max: Duration::from_secs(60),
+                }),
+                ..plain_build(vec![
+                    run_failed_answer(ErrorCode::RateLimited, 7),
+                    run_answer("Unused.", 7),
+                ])
             });
-            let backoff_until = world.origin + Duration::from_millis(7) + Duration::from_secs(2);
-            assert!(
-                world
-                    .clock
-                    .await_parked(backoff_until, fakes::Deadline::after(WAIT)),
-                "the retry parks its backoff before the cancel"
+            prompt(&world, "hi");
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let outcome = world
+                        .looped
+                        .as_mut()
+                        .expect("the loop is parked in the world")
+                        .turn();
+                    done_tx.send(outcome).unwrap();
+                });
+                let backoff_until =
+                    world.origin + Duration::from_millis(7) + Duration::from_secs(2);
+                assert!(
+                    world.clock.await_parked(
+                        backoff_until,
+                        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    ),
+                    "the retry parks its backoff before the cancel"
+                );
+                world.cancel.cancel();
+                let outcome = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_rx)
+                    .expect("the cancelled turn ends");
+                assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
+            });
+            assert_eq!(ops(&world, "turn.model_call").len(), 1);
+            assert_eq!(
+                world.provider.requests.lock().unwrap().len(),
+                1,
+                "no second run started"
             );
-            world.cancel.cancel();
-            let outcome = fakes::Deadline::after(WAIT)
-                .recv(&done_rx)
-                .expect("the cancelled turn ends");
-            assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
-        });
-        assert_eq!(ops(&world, "turn.model_call").len(), 1);
-        assert_eq!(
-            world.provider.requests.lock().unwrap().len(),
-            1,
-            "no second run started"
-        );
-    });
+        },
+    );
 }
 
 #[test]
@@ -2771,42 +2784,46 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
 
 #[test]
 fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
-    fakes::within("a cancel mid note", Deadline::after(WAIT), || {
-        let mut world = auto_world(vec![
-            run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
-            Answer::Hold {
-                cancel_advance_ms: 7,
-            },
-        ]);
-        prompt(&world, "hi");
-        let (done_tx, done_rx) = mpsc::channel();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let outcome = world
-                    .looped
-                    .as_mut()
-                    .expect("the loop is parked in the world")
-                    .turn();
-                done_tx.send(outcome).unwrap();
+    fakes::within(
+        "a cancel mid note",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        || {
+            let mut world = auto_world(vec![
+                run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
+                Answer::Hold {
+                    cancel_advance_ms: 7,
+                },
+            ]);
+            prompt(&world, "hi");
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let outcome = world
+                        .looped
+                        .as_mut()
+                        .expect("the loop is parked in the world")
+                        .turn();
+                    done_tx.send(outcome).unwrap();
+                });
+                assert!(
+                    world.clock.await_parked(
+                        world.origin + Duration::from_secs(3600),
+                        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    ),
+                    "the note parks before the cancel lands"
+                );
+                world.cancel.cancel();
+                let outcome = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                    .recv(&done_rx)
+                    .expect("the cancelled turn ends");
+                assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
             });
-            assert!(
-                world.clock.await_parked(
-                    world.origin + Duration::from_secs(3600),
-                    fakes::Deadline::after(WAIT)
-                ),
-                "the note parks before the cancel lands"
-            );
-            world.cancel.cancel();
-            let outcome = fakes::Deadline::after(WAIT)
-                .recv(&done_rx)
-                .expect("the cancelled turn ends");
-            assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
-        });
-        assert_eq!(ops(&world, "turn.handoff").len(), 1);
-        let models = ops(&world, "turn.model_call");
-        assert_eq!(models.len(), 2, "{:?}", op_records(&world));
-        assert_eq!(models[1].ms, 7);
-    });
+            assert_eq!(ops(&world, "turn.handoff").len(), 1);
+            let models = ops(&world, "turn.model_call");
+            assert_eq!(models.len(), 2, "{:?}", op_records(&world));
+            assert_eq!(models[1].ms, 7);
+        },
+    );
 }
 
 #[test]
