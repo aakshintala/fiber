@@ -1353,6 +1353,8 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
 
 #[test]
 fn the_close_all_count_holds_singular_below_and_plural_above_one() {
+    // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere);
+    // "Stopping every session" pins the same count line on the close-all question.
     assert_eq!(
         crate::home::close_all_count(0, 0, 0),
         "0 sessions, 0 working, 0 open elsewhere"
