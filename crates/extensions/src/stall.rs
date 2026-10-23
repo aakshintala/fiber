@@ -37,9 +37,6 @@ pub(crate) fn advance_past_grace_or_answer<T>(
     advance: Duration,
     answered: Option<T>,
 ) -> Option<T> {
-    use contract::clock::Clock as _;
-    use support::group::DRAIN;
-
     if answered.is_some() {
         return answered;
     }
