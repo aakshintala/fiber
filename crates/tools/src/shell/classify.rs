@@ -352,11 +352,14 @@ fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
 }
 
 /// Whether a stdin word is statically known: it holds no `xargs`
-/// metacharacter, so the pipeline feeds it whole. A blank or a newline
-/// would split it, a quote would re-quote it, and a backslash would escape
-/// the next character, so any of them leaves the word unproven.
+/// metacharacter, so the pipeline feeds it whole, and it names no flag:
+/// a leading `-` would read as a flag at runtime, following links the
+/// call never declares. A blank or a newline would split it, a quote
+/// would re-quote it, and a backslash would escape the next character,
+/// so any of them leaves the word unproven.
 fn static_word(word: &str) -> bool {
     !word.is_empty()
+        && !word.starts_with('-')
         && !word.chars().any(|ch| {
             matches!(
                 ch,

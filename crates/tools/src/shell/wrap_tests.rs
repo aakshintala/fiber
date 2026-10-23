@@ -174,11 +174,19 @@ fn xargs_reads_only_into_six_commands() {
         // words never reach the target, so the call is reviewed.
         "echo f | xargs head < g",
         // A word the pipeline would split is never proven: `xargs` feeds
-        // `a` and `b`, neither of which the call declares.
+        // `a` and `b`, neither of which the call declares. A leading `-`
+        // reads as a flag at runtime, so an option-like word fails the
+        // whole call even beside plain words.
         "echo \"a b\" | xargs head",
+        "echo -R needle dir | xargs grep",
     ] {
         assert_closed(command);
     }
+    // Plain static words still read with every word declared.
+    assert_reads_paths(
+        "echo needle dir | xargs grep",
+        &["/work", "/work/needle", "/work/dir"],
+    );
 }
 
 #[test]
