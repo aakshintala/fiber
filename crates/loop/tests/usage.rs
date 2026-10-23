@@ -333,7 +333,17 @@ fn unnamed_failure() -> Scripted {
 }
 
 /// The complete ordered event kinds of a turn whose call fails after an
-/// unnamed generation (`docs/testing.md`, "Event streams").
+/// unnamed generation (`docs/testing.md`, "Event streams"). The order is
+/// promised by: `preamble_built` follows `session_started` and comes before
+/// the first model request, then `opening_message` (`docs/events.md`,
+/// "`preamble_built`", "`opening_message`"); `turn_started` comes before
+/// the first model call (`docs/loop.md`, "Starting a turn"); `step_started` is written
+/// before anything else in its step (`docs/loop.md`, "One step";
+/// `docs/events.md`, "Session and turn"); `assistant_message_started` is
+/// written before the request is sent, so before a failed call's
+/// `usage_recorded`, which is written at once (`docs/events.md`, "Writing",
+/// "`usage_recorded`"); `assistant_message_completed` closes the reply and
+/// `turn_completed` the turn (`docs/events.md`, "Actions").
 const FAILED_UNNAMED_KINDS: [&str; 9] = [
     "session_started",
     "preamble_built",
@@ -348,7 +358,10 @@ const FAILED_UNNAMED_KINDS: [&str; 9] = [
 
 /// One turn of `session`, and its one `usage_recorded` payload. `expected`
 /// is the complete ordered list of event kinds, so a duplicated, missing or
-/// reordered event fails (`docs/testing.md`, "Event streams").
+/// reordered event fails (`docs/testing.md`, "Event streams"). The count of
+/// one is promised by "One `usage_recorded` per model call, whatever started
+/// it, however it ended", and a failed call writes it at once with the tokens
+/// it saw (`docs/events.md`, "`usage_recorded`").
 fn only_record(session: &mut Session, expected: &[&str]) -> UsageRecorded {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
@@ -401,6 +414,8 @@ fn a_call_failed_before_its_generation_records_the_tokens_it_saw() {
     let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.tokens.output, 3);
+    assert_eq!(recorded.tokens.cache_read, 0);
+    assert!(recorded.tokens.cache_write.is_empty());
     assert_eq!(recorded.input_bytes, 1000);
     assert_eq!(recorded.cost, None);
 }
