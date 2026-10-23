@@ -398,11 +398,11 @@ fn group_lives(group: u32) -> bool {
 
 /// How long each liveness wait holds between probes: one bounded wait
 /// against its stop channel, so no wait spins.
-const POLL: Duration = Duration::from_millis(10);
+pub(crate) const POLL: Duration = Duration::from_millis(10);
 
 /// True once `stop` sent or disconnected: the one bounded wait every probe
 /// loop shares, holding no lock between probes.
-fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
+pub(crate) fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
     !matches!(
         Deadline::after(POLL).recv(stop),
         Err(mpsc::RecvTimeoutError::Timeout)

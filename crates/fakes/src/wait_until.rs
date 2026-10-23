@@ -2,24 +2,9 @@
 //! "Waits and timeouts"): every wait carries the test's deadline on the
 //! wall clock, and the poll pauses between probes instead of spinning.
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
-
 use crate::deadline::Deadline;
+use crate::process_group::stop_closed;
 use crate::within::within;
-
-/// How long each poll waits between predicate probes: one bounded wait
-/// against the stop channel, so the poll holds no core between probes.
-const POLL: Duration = Duration::from_millis(10);
-
-/// True once `stop` is gone: the one bounded wait the poll loop shares,
-/// holding no lock between probes.
-fn stop_closed(stop: &Receiver<()>) -> bool {
-    !matches!(
-        Deadline::after(POLL).recv(stop),
-        Err(RecvTimeoutError::Timeout)
-    )
-}
 
 /// Waits up to what remains of `deadline` on the wall clock for `pred` to
 /// hold, probing it on a thread once per poll pause. Fails the test naming
