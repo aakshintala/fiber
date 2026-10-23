@@ -615,6 +615,7 @@ fn prepared() -> ReloadPrepared {
             extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
             cache_lifetime: CacheLifetime::FiveMinutes,
+            deferrals: Default::default(),
         },
         tools: vec![("builtin".into(), tool("probe"))],
         extensions: vec![LoadedExtension {
