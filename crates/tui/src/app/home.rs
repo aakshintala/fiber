@@ -188,7 +188,11 @@ fn home_foot(
         hint_back(&mut spans, esc.as_deref());
     }
     if let Some(label) = delete {
-        hint_key(&mut spans, &label, "deletes an exited one");
+        hint_key(
+            &mut spans,
+            &label,
+            "stops a live one, deletes an exited one",
+        );
     }
     if let Some(label) = key_map {
         hint_key(&mut spans, &label, "the key map");
