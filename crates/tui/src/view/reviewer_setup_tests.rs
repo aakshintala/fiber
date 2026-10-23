@@ -748,15 +748,13 @@ fn modifiers_at(fx: &Fixture, needle: &str) -> Modifier {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     crate::view::render(&fx.app, area, &mut buf, None);
-    let symbols: Vec<char> = needle.chars().collect();
     for y in 0..height {
-        for x in 0..width.saturating_sub(symbols.len() as u16) {
-            let found = symbols.iter().enumerate().all(|(at, symbol)| {
-                buf[(x + at as u16, y)].symbol().chars().next() == Some(*symbol)
-            });
-            if found {
-                return buf[(x, y)].modifier;
-            }
+        let row: Vec<&str> = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+        let at = row
+            .windows(needle.chars().count())
+            .position(|cells| cells.concat() == needle);
+        if let Some(x) = at {
+            return buf[(u16::try_from(x).expect("a column"), y)].modifier;
         }
     }
     panic!("{needle:?} is not on the screen");
