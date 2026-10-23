@@ -210,6 +210,24 @@ fn owned_kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// The stream's kinds in order, setting aside only the lines
+/// `docs/testing.md` ("Event streams") leaves unpositioned: `clients`,
+/// `session_status` and the hub's `attention`.
+fn ordered_kinds(lines: &[Value]) -> Vec<String> {
+    owned_kinds(lines)
+        .into_iter()
+        .filter(|kind| kind != "clients" && kind != "session_status" && kind != "attention")
+        .collect()
+}
+
+/// The `job_completed` line for `job`.
+fn ended<'a>(lines: &'a [Value], job: &str) -> &'a Value {
+    lines
+        .iter()
+        .find(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job)
+        .unwrap()
+}
+
 /// A running `fiber` process: its drained stdout lines, its stderr, and its
 /// group, killed on drop. The watchdog is armed before spawning, so a
 /// failing test leaves no child behind.
@@ -1070,6 +1088,105 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
     assert_eq!(exited["payload"]["exit_code"], 143);
 }
 
+/// The crash test's stream kinds in order, setting aside `session_status`,
+/// `clients` and `attention` per `docs/testing.md` ("Event streams").
+/// Pinned from a real run; the `clients` count is asserted separately.
+const CRASH_ORDERED: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "usage_recorded",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "steering_queue",
+    "steering_queue",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "usage_recorded",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
 #[test]
 fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     let setup = support::Setup::new();
@@ -1078,11 +1195,9 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // spawns the second, and the second receipt's reply ends the prompt.
     // Reviewer verdicts answer "allow", as the answering helper does. A
     // request carrying the steered text below spawns a third delegate.
-    let session_calls = Arc::new(AtomicUsize::new(0));
-    let spawned_third = Arc::new(AtomicBool::new(false));
     let parent = ProviderServer::start_responding({
-        let session_calls = Arc::clone(&session_calls);
-        let spawned_third = Arc::clone(&spawned_third);
+        let session_calls = Arc::new(AtomicUsize::new(0));
+        let spawned_third = Arc::new(AtomicBool::new(false));
         move |request: &Request| {
             let text = String::from_utf8_lossy(&request.body);
             let body: Value = serde_json::from_slice(&request.body).unwrap();
@@ -1108,7 +1223,6 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
         ProviderServer::start([support::hello(), support::hello(), support::hello()]).unwrap();
     child.hold();
     providers(&setup, &parent, &child);
-    standing_allow(&setup);
     slow_idle(&setup);
 
     let id = doors::mint("s_");
@@ -1135,19 +1249,35 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
         child_ids.len() == 2
     });
     // Crash the first delegate as an outside kill does: SIGKILL to its
-    // group, which it leads. Its sibling keeps stalling until the release.
+    // group, which it leads. Its sibling keeps stalling, so the crashed
+    // end and its wake turn complete before the release: the sibling's end
+    // lands in its own later turn and the stream order is fixed.
     support::kill_matching(setup.deadline, &child_ids[0]).unwrap();
+    let mut ends = running.wait_line("the crashed delegate end", |line| {
+        line["kind"] == "job_completed"
+    });
+    ends.retain(|line| line["kind"] == "job_completed");
+    assert_eq!(ends.len(), 1, "the crashed delegate ends: {ends:?}");
+    running.wait_line("the crashed end's wake turn", |line| {
+        line["kind"] == "turn_completed"
+    });
     child.release();
-    // Both ends arrive, each exactly once.
-    let mut ends = Vec::new();
+    // The sibling's end arrives, each delegate ending once.
     while ends.len() < 2 {
-        let more = running.wait_line("both delegate ends", |line| line["kind"] == "job_completed");
+        let more = running.wait_line("the sibling delegate end", |line| {
+            line["kind"] == "job_completed"
+        });
         ends.extend(
             more.into_iter()
                 .filter(|line| line["kind"] == "job_completed"),
         );
     }
     assert_eq!(ends.len(), 2, "each delegate ends once: {ends:?}");
+    // The sibling's wake turn completes before the steer, so the steered
+    // spawn starts its own turn and the stream order is fixed.
+    running.wait_line("the sibling end's wake turn", |line| {
+        line["kind"] == "turn_completed"
+    });
     // The registry still answers commands: steer the parent, which spawns
     // a third delegate that completes on its released provider.
     let client = running.connect(&setup);
@@ -1167,14 +1297,9 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     assert_eq!(ends.len(), 3, "each delegate ends once: {ends:?}");
     // The late delegate's end wakes one more turn: let it complete
     // before closing, so the close lands idle and interrupts nothing.
-    let woken = running.wait_line("the late delegate's wake turn", |line| {
+    running.wait_line("the late delegate's wake turn", |line| {
         line["kind"] == "turn_completed"
     });
-    assert_eq!(
-        woken.last().unwrap()["payload"]["outcome"],
-        "completed",
-        "{woken:?}"
-    );
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -1183,6 +1308,15 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The crash is contained to the dead delegate: it ends failed with
     // the signal named, never a `failed signal` status; its sibling and
     // the late delegate complete, and every parent turn completes.
+    assert_eq!(ordered_kinds(&lines), CRASH_ORDERED);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "one attach, one clients line"
+    );
     let starts: Vec<Value> = lines
         .iter()
         .filter(|line| line["kind"] == "delegate_started")
@@ -1198,17 +1332,10 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
             .unwrap()
             .to_owned()
     };
-    let done_of = |job: &str| {
-        lines
-            .iter()
-            .find(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job)
-            .unwrap()
-            .clone()
-    };
-    let crashed_done = done_of(&job_of(&child_ids[0]));
+    let crashed_done = ended(&lines, &job_of(&child_ids[0]));
     assert_eq!(crashed_done["payload"]["status"], "failed");
     assert_eq!(crashed_done["payload"]["error"]["code"], "signal");
-    let sibling_done = done_of(&job_of(&child_ids[1]));
+    let sibling_done = ended(&lines, &job_of(&child_ids[1]));
     assert_eq!(sibling_done["payload"]["status"], "completed");
     let finished: Vec<Value> = lines
         .iter()
@@ -1221,6 +1348,90 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     }
 }
 
+/// The escalation test's parent stream kinds in order, setting aside
+/// `session_status`, `clients` and `attention` per `docs/testing.md`
+/// ("Event streams"). Pinned from a real run.
+const ESC_PARENT_ORDERED: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "jobs_pending_notified",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "usage_recorded",
+    "usage_recorded",
+    "usage_recorded",
+    "usage_recorded",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The escalation test's delegate log kinds in order: the log file holds no
+/// unpositioned lines, so this is the complete list.
+const ESC_CHILD_ORDERED: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 #[test]
 fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     let setup = support::Setup::new();
@@ -1228,11 +1439,9 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     // The delegate tries to spawn again, which its reviewer blocks: with
     // nobody to answer, the block denies the call and the delegate
     // carries on. The parent's own verdict answers "allow".
-    let session_calls = Arc::new(AtomicUsize::new(0));
-    let reviewer_calls = Arc::new(AtomicUsize::new(0));
     let parent = ProviderServer::start_responding({
-        let session_calls = Arc::clone(&session_calls);
-        let reviewer_calls = Arc::clone(&reviewer_calls);
+        let session_calls = Arc::new(AtomicUsize::new(0));
+        let reviewer_calls = Arc::new(AtomicUsize::new(0));
         move |request: &Request| {
             let body: Value = serde_json::from_slice(&request.body).unwrap();
             if body["tools"]
@@ -1260,12 +1469,11 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     ])
     .unwrap();
     providers(&setup, &parent, &child);
-    standing_allow(&setup);
 
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    // The escalation never asked anyone: no approval line in either log.
+    assert_eq!(ordered_kinds(&lines), ESC_PARENT_ORDERED);
     assert!(
         lines
             .iter()
@@ -1277,6 +1485,7 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
         .unwrap()
         .to_owned();
     let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    assert_eq!(owned_kinds(&child_lines), ESC_CHILD_ORDERED);
     assert!(
         child_lines
             .iter()
@@ -1291,11 +1500,7 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     let denied = completed_for(&child_lines, "delegate_spawn");
     assert_eq!(denied["payload"]["status"], "denied");
     assert_eq!(denied["payload"]["reason"], "reviewer");
-    let child_turn = child_lines
-        .iter()
-        .find(|line| line["kind"] == "turn_completed")
-        .unwrap();
-    assert_eq!(child_turn["payload"]["outcome"], "completed");
+    assert_eq!(one(&child_lines, "turn_completed")["outcome"], "completed");
     let done = one(&lines, "job_completed");
     assert_eq!(done["status"], "completed");
 }

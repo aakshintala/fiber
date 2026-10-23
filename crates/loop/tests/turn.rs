@@ -23,13 +23,14 @@ use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::{Failure, Tokens};
 use contract::{ActionId, ErrorCode, GenerationId, Seq, SessionId};
 use fakes::Deadline;
-use fakes::{Scripted, reply};
+use fakes::{MUST_SUCCEED_WITHIN, Scripted, reply};
 use serde_json::{Value, json};
 
 use support::{
     MODEL, Session, TestTool, child_usage, delivery, kinds, message, reasoning_item,
     reasoning_reply, send_child, steer, tool_call_reply,
 };
+
 fn user(text: &str) -> Input {
     Input::User {
         text: text.into(),
@@ -1744,17 +1745,97 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     // does: the cancel ends the turn `interrupted` with no stop reaching
     // the registry, and the delegate's end still wakes a later turn
     // (`docs/delegates.md`, "Lifetime").
+    // Overbuild finding 2 is subsumed here: a `Session::blocking` scaffold
+    // cannot prove a mid-`jobs wait` cancel, so this keeps its own wait tool.
+    use contract::clock::Wake;
     use contract::events::Outcome;
     use contract::jobs::{Jobs, Opening, Stop};
+    use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+    use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Condvar, Mutex, mpsc};
 
-    let gate = Arc::new(support::Gate::default());
-    let mut tool = TestTool::reads("get_weather", "Sunny.");
-    tool.script = vec![support::Script::Wait(Arc::clone(&gate))];
-    let tool = Arc::new(tool);
+    #[derive(Default)]
+    struct WaitLatch {
+        fired: Mutex<bool>,
+        changed: Condvar,
+    }
+    impl Wake for WaitLatch {
+        fn wake(&self) {
+            *self.fired.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+    /// A `jobs wait` stand-in: signals when its wait starts, then holds
+    /// until the turn cancels it, as a real wait does.
+    struct JobsWait {
+        entered: mpsc::Sender<()>,
+    }
+    impl Tool for JobsWait {
+        fn definition(&self) -> contract::provider::ToolDefinition {
+            contract::provider::ToolDefinition {
+                name: "jobs".into(),
+                description: "Waits as `jobs wait` does.".into(),
+                input_schema: json!({"type": "object"}),
+                deferred: false,
+                hosted: None,
+            }
+        }
+        fn effects(&self, _: &serde_json::Map<String, Value>) -> Result<Effects, EffectsError> {
+            Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                },
+                subject: Some(String::new()),
+                prefix: None,
+                always_reviewed: false,
+                hosts: None,
+            })
+        }
+        fn run(
+            &self,
+            _: &serde_json::Map<String, Value>,
+            cancel: &dyn Cancel,
+            _: &dyn contract::emit::Emit,
+        ) -> Output {
+            self.entered.send(()).unwrap();
+            let latch: Arc<WaitLatch> = Arc::default();
+            cancel.subscribe(Arc::downgrade(&latch) as std::sync::Weak<dyn Wake>);
+            if !cancel.is_cancelled() {
+                let fired = latch.fired.lock().unwrap();
+                let (fired, _) = latch
+                    .changed
+                    .wait_timeout_while(fired, MUST_SUCCEED_WITHIN, |fired| !*fired)
+                    .unwrap();
+                assert!(*fired, "timed out waiting for the turn's cancel");
+            }
+            Output {
+                content: vec![ContentPart::Text {
+                    text: "still running\n".into(),
+                }],
+                ..Output::default()
+            }
+        }
+        fn bound(&self) -> contract::tool::Bound {
+            contract::tool::Bound::DEFAULT
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let tool = Arc::new(JobsWait {
+        entered: entered_tx,
+    });
     let mut session = Session::with_tools(
         vec![
-            tool_call_reply("", &["get_weather"]),
+            support::calls_reply(
+                "",
+                &[(
+                    "jobs",
+                    json!({"action": "wait", "job_id": "j_pending", "timeout_ms": 60000}),
+                )],
+            ),
             Scripted::text("Done."),
         ],
         None,
@@ -1779,19 +1860,42 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     let job_id = opened.started.job_id.clone();
     jobs.deliver_to(session.inbox.clone());
     session.inbox.send(delivery("hi")).unwrap();
-    let tap = support::Tap::new(&session.log);
     let cancel = Arc::clone(&session.cancel);
+    let (done_tx, done_rx) = mpsc::channel();
     std::thread::scope(|scope| {
-        let turn = scope.spawn(|| session.turn());
-        // The tool started its call, so the turn is parked in it as in
-        // `jobs wait`: the cancel lands while the delegate still runs.
-        tap.wait_for("tool_call_started");
+        let turn = scope.spawn(|| {
+            let outcome = session.turn();
+            done_tx.send(outcome).unwrap();
+        });
+        // The fake signals it entered its wait, so the cancel lands
+        // mid-`jobs wait` while the delegate still runs.
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&entered_rx, "the jobs wait to start");
         assert!(cancel.cancel());
-        gate.open();
-        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
+        let outcome = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&done_rx, "the cancelled turn to end");
+        assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+        turn.join().unwrap();
     });
-    gate.check("tool");
     let cut = session.lines();
+    assert_eq!(
+        kinds(&cut),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(cut.last().unwrap().payload["outcome"], "interrupted");
     // No stop reached the registry: neither the delegates nor the job.
     assert!(!stopped.load(Ordering::SeqCst));
@@ -1809,6 +1913,21 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     });
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "job_completed",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let done = lines
         .iter()
         .find(|line| line.kind == "job_completed")
