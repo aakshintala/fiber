@@ -14,7 +14,10 @@ use fakes::Deadline;
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::clock::FakeClock;
 
-use super::{advance_past_grace_or_answer, await_grace_or_answer};
+use super::{
+    advance_past_grace_or_answer, advance_past_grace_or_answer_within, await_grace_or_answer,
+    await_grace_or_answer_within,
+};
 
 #[track_caller]
 fn park(clock: &Arc<FakeClock>, until: Instant) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
@@ -215,21 +218,26 @@ fn wrong_park_without_an_answer_panics() {
 #[test]
 #[should_panic(expected = "the stalled run neither parks for the grace nor answers")]
 fn post_park_neither_park_nor_answer_hits_the_hang_guard() {
-    // The negative proves itself only by exhausting the shared
-    // ROUNDS x SIGHT bound: no park and no answer ever arrive, so
-    // no signal can release the wait early. The clock's pause
-    // points are #[cfg(test)]-private inside fakes
-    // (crates/fakes/src/clock.rs:120-127, 555-589) and unreachable
-    // from extensions, and ROUNDS/SIGHT are shared with the
-    // sighting helper, so shortening them would loosen its guard
-    // too. Same 8 x 200 ms wait as the pre-existing sighting
-    // hang-guard test below.
+    // The negative proves the guard fires on exhausting the bound it is
+    // given: no park and no answer ever arrive, so no signal can
+    // release the wait early, and the panic below fires after the
+    // 2 x 10 ms it passes. The shared ROUNDS x SIGHT bound stays
+    // covered by the positive callers, which delegate with the
+    // production values.
     let clock = FakeClock::new();
     let kill_at = clock.origin() + Duration::from_secs(30);
     let advance = Duration::from_secs(5);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
-    advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
+    advance_past_grace_or_answer_within(
+        &clock,
+        &answer_rx,
+        kill_at,
+        advance,
+        None,
+        2,
+        Duration::from_millis(10),
+    );
 }
 
 #[test]
@@ -239,7 +247,7 @@ fn neither_park_nor_answer_hits_the_hang_guard() {
     let until = clock.origin() + Duration::from_secs(30);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
-    await_grace_or_answer(&clock, &answer_rx, until);
+    await_grace_or_answer_within(&clock, &answer_rx, until, 2, Duration::from_millis(10));
 }
 
 /// Wakes the parked run below on every clock move: the run's second park
