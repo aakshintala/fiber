@@ -234,6 +234,15 @@ per 4,096 lines and one per 64 lines. The table also shows the residual, the
 terminal time minus the hub replay, the parse, the fold and the single frame:
 process start, home and the extra frames.
 
+The harness also runs each timing workload and each busy workload once more,
+in a home of its own whose `diagnostics.level` is `"debug"`, on the head
+binary and only with `--only all`. It does not rerun the fsyncs pass, and this
+run is never a timing or memory sample. It records, per workload, the run's
+wall-clock time, each `op_timing` operation in the run's `logs/` files with its
+count and total `ms`, and `provider_request`'s count and total `total_ms`
+(`docs/state.md`), as `op_breakdown`. The `bench-report`
+comment shows it under "Debug run"; it is reported, never gated.
+
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
 separate from the tests. The harness, `cargo run -p bench --example bench`,
 measures a `fiber` binary and writes its results to a file, and

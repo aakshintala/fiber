@@ -205,7 +205,7 @@ pub(crate) fn generate(
 fn resume(ctx: &Ctx<'_>, fixture: &Fixture, notes: &mut Vec<String>) -> Result<Samples, String> {
     let script = fixture.script();
     let requests = script.len();
-    in_home(Home::scripted(ctx.home.fiber(), script)?, |home| {
+    in_home(ctx.home.child(script)?, |home| {
         let id = doors::mint("s_");
         generate(ctx, home, fixture, &id, notes)?;
         let session = Session::spawn(&mut session(ctx, home, &id, &["--resume"]), ctx.clock)?;

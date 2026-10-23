@@ -596,7 +596,7 @@ fn attach_fixture(
 fn probe_turn_bytes(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<(u64, u64), String> {
     let mut script = PROBE_A.script_prefix();
     script.extend(PROBE_B.script_prefix());
-    let home = Home::scripted(ctx.home.fiber(), script)?;
+    let home = ctx.home.child(script)?;
     let (mut first, mut extra) = (0, 0);
     in_home(home, |home| {
         let a = doors::mint("s_");
@@ -623,7 +623,7 @@ fn terminal_attach(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, St
             reply_bytes: TURN_REPLY_BYTES,
             handoffs: turns - 1,
         };
-        let home = Home::scripted(ctx.home.fiber(), fixture.script_with_last(ATTACH_TAIL))?;
+        let home = ctx.home.child(fixture.script_with_last(ATTACH_TAIL))?;
         samples.extend(in_home(home, |home| {
             attach_fixture(ctx, home, label, &fixture, notes)
         })?);
