@@ -18,11 +18,13 @@ use crate::{API, Error, LuaProvider, ModelsArg, SessionExtensions};
 use contract::ThinkingLevel;
 
 mod declared;
+mod naming;
 mod placeholders;
 mod scripted;
 
 pub(crate) use declared::{first_undeclared, provider_scripts};
 pub use placeholders::Unconfigured;
+pub use scripted::START_ONLY;
 
 /// One model a placeholder fill left out: its per-model notice, and, for a
 /// placeholder with no value, its group of one.

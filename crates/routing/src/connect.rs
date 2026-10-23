@@ -8,10 +8,9 @@ use config::Protocol;
 use contract::ErrorCode;
 use contract::Secret;
 use contract::clock::Clock;
-use contract::diag::{DebugLog, Observe};
+use contract::diag::{DebugLog, Observe, Timing};
 use contract::provider::{ModelCall, ModelRequest, Provider};
 use contract::shapes::Failure;
-use doors::failure;
 use extensions::{CredentialPair, LuaProvider};
 use provider::anthropic_messages::Messages;
 use provider::bedrock_converse::Converse;
@@ -22,18 +21,30 @@ use provider::scripted::{Script, ScriptError, Scripted};
 use provider::{Compat, Endpoint, RequestObservation};
 use serde_json::Value;
 
+use crate::failure;
+
 /// Where a session runs: the workspace a `scripted` model's path resolves
 /// against, and the clock its pauses wait on (`docs/model-routing.md`, "The
 /// scripted provider"). The cache-diagnostics opt-in rides here too,
 /// read once from the startup configuration: the observed factories built
 /// from here carry it (`docs/prompt-cache.md`, "Cache diagnostics").
-pub(crate) struct Here {
+pub struct Here {
     /// The session's workspace.
-    pub(crate) workspace: PathBuf,
+    pub workspace: PathBuf,
     /// The session's clock.
-    pub(crate) clock: Arc<dyn Clock>,
+    pub clock: Arc<dyn Clock>,
     /// Whether observed model calls hash their cacheable prefix segments.
-    pub(crate) cache_diagnostics: bool,
+    pub cache_diagnostics: bool,
+}
+
+/// The session's diagnostic writer and connector timing, as the observed
+/// factories take them: `contract`'s seams, which a restricted crate takes
+/// instead of depending on `log`. `main` builds it from its `Diag`.
+pub struct Diagnostics {
+    /// The writer each observed attempt records its request through.
+    pub log: Arc<dyn DebugLog>,
+    /// The connector timing each attempt carries.
+    pub timings: Timing,
 }
 
 /// The `scripted` protocol for the script at `id`, resolved against the
@@ -68,7 +79,7 @@ fn scripted(id: &str, here: &Here) -> Result<Arc<dyn Provider>, Failure> {
 /// with the label's key (`docs/tools.md`, "Provider quota"). A package that fails to start gets
 /// neither; the calls' costs stay as first recorded. `here` is where a
 /// `scripted` model's script is read.
-pub(crate) fn connect(
+pub fn connect(
     model: extensions::Model<'_>,
     key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
@@ -87,13 +98,13 @@ pub(crate) fn connect(
     clippy::too_many_arguments,
     reason = "one construction with its observation writer beside the existing inputs"
 )]
-pub(crate) fn connect_observed(
+pub fn connect_observed(
     model: extensions::Model<'_>,
     key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
     lua: Option<(&Arc<LuaProvider>, &str)>,
     here: &Here,
-    diag: &Arc<log::diag::Diag>,
+    diag: &Diagnostics,
 ) -> Result<(Arc<dyn Provider>, Option<Observe>), Failure> {
     let built = build(model, key, signer, lua, here, Some(diag))?;
     Ok((built.provider, built.observe))
@@ -110,7 +121,7 @@ struct Built {
 /// records that route. `None` at `info`: the call then runs exactly as an
 /// unobserved one does, with no model cloned and no clock read.
 fn observed<P>(
-    diag: &Arc<log::diag::Diag>,
+    diag: &Diagnostics,
     clock: &Arc<dyn Clock>,
     protocol: P,
     call: fn(&P, &ModelRequest, RequestObservation) -> Box<dyn ModelCall>,
@@ -119,15 +130,15 @@ fn observed<P>(
 where
     P: Clone + Send + Sync + 'static,
 {
-    if !diag.debugging() {
+    if !diag.log.debugging() {
         return None;
     }
-    let log = Arc::clone(diag) as Arc<dyn DebugLog>;
+    let log = Arc::clone(&diag.log);
     let clock = Arc::clone(clock);
     // The connector timing rides each attempt beside the writer and the
     // clock: one `net.connect` scope per actual attempt group, obtained
     // only at debug before the writer is erased into the observation.
-    let timings = diag.timings();
+    let timings = Arc::clone(&diag.timings);
     Some(Arc::new(
         move |request: &ModelRequest, attempt: std::num::NonZeroU32| {
             call(
@@ -154,7 +165,7 @@ fn build(
     signer: Option<Arc<dyn contract::signing::Signer>>,
     lua: Option<(&Arc<LuaProvider>, &str)>,
     here: &Here,
-    diag: Option<&Arc<log::diag::Diag>>,
+    diag: Option<&Diagnostics>,
 ) -> Result<Built, Failure> {
     let lookup_key = key.clone();
     let credential = match lua {
@@ -178,7 +189,7 @@ fn build(
         extra_body: model.model.extra_body.clone(),
         text_only: !model.model.input.iter().any(|kind| kind == "image"),
         direct: false,
-        limits: net::LIMITS,
+        limits: Default::default(),
         login_advice: crate::lua_providers::login_advice(credential, model.provider),
     };
     let cache_key_header = model

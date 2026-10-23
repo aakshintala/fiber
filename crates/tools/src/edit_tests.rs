@@ -55,21 +55,6 @@ fn fiber_temps(dir: &Path) -> Vec<String> {
     names
 }
 
-#[track_caller]
-fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        while !pred() {
-            thread::yield_now();
-        }
-        done.send(()).unwrap();
-    });
-    assert!(
-        Deadline::after(DEADLINE).recv(&finished).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 fn edit_of(dir: &Path, value: Value) -> contract::tool::Output {
     Files::new(dir.to_path_buf()).edit().run(
         &fakes::tool_args(value),
@@ -449,9 +434,11 @@ fn two_edits_of_one_file_serialise_and_both_apply() {
             .unwrap();
     });
     let locks = files.locks();
-    wait_until("both edits to be waiting on the path", move || {
-        locks.waiting() == 2
-    });
+    fakes::wait_until(
+        "both edits to be waiting on the path",
+        Deadline::after(DEADLINE),
+        move || locks.waiting() == 2,
+    );
     drop(hold);
     let left = Deadline::after(DEADLINE)
         .recv(&left_rx)
@@ -487,9 +474,11 @@ fn a_held_lock_blocks_edit_until_it_is_released() {
             .unwrap();
     });
     let locks = files.locks();
-    wait_until("edit to be waiting on the path", move || {
-        locks.waiting() == 1
-    });
+    fakes::wait_until(
+        "edit to be waiting on the path",
+        Deadline::after(DEADLINE),
+        move || locks.waiting() == 1,
+    );
     assert!(done_rx.try_recv().is_err());
     drop(hold);
     let output = Deadline::after(DEADLINE)
@@ -547,9 +536,11 @@ fn a_symlink_retargeted_while_the_lock_is_held_writes_nothing() {
             .unwrap();
     });
     let locks = files.locks();
-    wait_until("edit to be waiting on the old target", move || {
-        locks.waiting() == 1
-    });
+    fakes::wait_until(
+        "edit to be waiting on the old target",
+        Deadline::after(DEADLINE),
+        move || locks.waiting() == 1,
+    );
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
     drop(hold);
