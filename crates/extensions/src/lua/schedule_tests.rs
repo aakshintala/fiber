@@ -1644,11 +1644,16 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
             "the timer callback suspends on its exec"
         );
     }
+    // A host call suspends the callback until the reply arrives
+    // (`docs/extensions.md`, "How an extension runs"), so the suspended
+    // timer has not finished and settles nothing yet.
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
     hold.release();
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
+    // Each callback finishes before the next starts (`docs/extensions.md`,
+    // "How an extension runs"), so the released timer settles exactly once.
     assert_eq!(
         timer_done(&log),
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
@@ -1725,6 +1730,9 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
             "the timer callback suspends on its exec"
         );
     }
+    // A host call suspends the callback until the reply arrives
+    // (`docs/extensions.md`, "How an extension runs"), so the suspended
+    // timer has not finished and settles nothing yet.
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
     // The release lands before the gate opens, and the child's block open
     // comes after its gate read, so the release lands before the open.
@@ -1741,6 +1749,8 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
+    // Each callback finishes before the next starts (`docs/extensions.md`,
+    // "How an extension runs"), so the released timer settles exactly once.
     assert_eq!(
         timer_done(&log),
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
