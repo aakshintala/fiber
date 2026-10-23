@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "tests unwrap")]
 
 use super::super::syntax::Word;
-use super::{Found, find, owned, skip};
+use super::{Found, find, owned};
 
 fn w(cooked: &str) -> Word {
     Word {
@@ -24,7 +24,7 @@ fn configured(name: &str, flags: &[&str]) -> (String, Vec<String>) {
 fn builtin_name(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<&'static str> {
     match find(words, configured) {
         Found::Builtin(entry) => Some(entry.name),
-        Found::Configured(_) => None,
+        Found::Configured(_, _) => None,
         Found::None => None,
     }
 }
@@ -32,7 +32,7 @@ fn builtin_name(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<
 fn configured_flags(words: &[Word], configured: &[(String, Vec<String>)]) -> Option<Vec<String>> {
     match find(words, configured) {
         Found::Builtin(_) => None,
-        Found::Configured(flags) => Some(flags.to_vec()),
+        Found::Configured(flags, _) => Some(flags.to_vec()),
         Found::None => None,
     }
 }
@@ -160,24 +160,6 @@ fn a_configured_subcommand_path_must_match_word_for_word() {
         configured_flags(&ws(&["my", "tool"]), &[configured("my tool", &[])]),
         Some(Vec::new())
     );
-}
-
-#[test]
-fn skip_counts_the_command_path() {
-    let empty: Vec<(String, Vec<String>)> = Vec::new();
-    assert_eq!(skip(&ws(&["git", "status", "x"]), &empty), 2);
-    assert_eq!(skip(&ws(&["ls"]), &empty), 1);
-    assert_eq!(skip(&ws(&["frobnicate"]), &empty), 0);
-    assert_eq!(skip(&[], &empty), 0);
-    assert_eq!(skip(&ws(&["jq", ".", "f"]), &[configured("jq", &[])]), 1);
-    assert_eq!(
-        skip(
-            &ws(&["gh", "pr", "status"]),
-            &[configured("gh pr status", &["--json"])]
-        ),
-        3
-    );
-    assert_eq!(skip(&ws(&["", "a"]), &[configured("", &[])]), 1);
 }
 
 #[test]

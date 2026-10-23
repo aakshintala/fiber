@@ -77,14 +77,14 @@ fn subject_and_prefix(script: &Script) -> (Option<String>, Option<String>) {
     if !simple.assignments.is_empty() {
         return (None, None);
     }
-    let tokens = simple.tokens.clone();
+    let tokens = &simple.tokens;
     let Some(first) = tokens.first() else {
         return (None, None);
     };
     if !simple.words.first().is_some_and(|word| word.raw == *first) {
         return (None, None);
     }
-    let prefix = prefix_of(&tokens);
+    let prefix = prefix_of(tokens);
     (Some(tokens.join(" ")), prefix)
 }
 
@@ -168,24 +168,30 @@ fn stage_outcome(stage: &Stage, workdir: &Path, configured: &[(String, Vec<Strin
     }
     let verdict = match entry::find(&simple.words, configured) {
         Found::Builtin(entry) => builtin_outcome(simple, entry, workdir),
-        Found::Configured(flags) => {
-            let skip = entry::skip(&simple.words, configured);
-            entry::configured_outcome(flags, rest_after(&simple.words, skip), workdir)
+        Found::Configured(flags, consumed) => {
+            entry::configured_outcome(flags, rest_after(&simple.words, consumed), workdir)
         }
         Found::None => Outcome::Executes,
     };
     with_inputs(verdict, simple, workdir)
 }
 
-/// Declares the input redirect files beside a read-only verdict: the shell
-/// opens each for the command's stdin before it runs, so `cat <f` reads
-/// `f` and a `/proc` file executes.
+/// The input redirect files, in order, beside a read-only verdict: the
+/// shell opens each for the command's stdin before it runs, so `cat <f`
+/// reads `f` and a `/proc` file executes.
 fn with_inputs(verdict: Outcome, simple: &Simple, workdir: &Path) -> Outcome {
     let Outcome::Reads(mut paths) = verdict else {
         return Outcome::Executes;
     };
-    for input in input_words(simple) {
-        let Some(path) = resolve(workdir, &input) else {
+    let inputs = simple
+        .redirects
+        .iter()
+        .filter_map(|redirect| match redirect {
+            Redirect::Input(word) => Some(&word.cooked),
+            Redirect::Discard | Redirect::Merge => None,
+        });
+    for input in inputs {
+        let Some(path) = resolve(workdir, input) else {
             return Outcome::Executes;
         };
         paths.push(path);
@@ -194,18 +200,6 @@ fn with_inputs(verdict: Outcome, simple: &Simple, workdir: &Path) -> Outcome {
         return Outcome::Executes;
     }
     Outcome::Reads(paths)
-}
-
-/// The input redirect files, in order.
-fn input_words(simple: &Simple) -> Vec<String> {
-    simple
-        .redirects
-        .iter()
-        .filter_map(|redirect| match redirect {
-            Redirect::Input(word) => Some(word.cooked.clone()),
-            Redirect::Discard | Redirect::Merge => None,
-        })
-        .collect()
 }
 
 /// The words after the command path, for the flag walks: `git status -s`

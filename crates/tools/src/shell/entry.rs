@@ -16,8 +16,9 @@ use super::syntax::Word;
 pub(super) enum Found<'a> {
     /// A built-in entry, matched by its longest command path.
     Builtin(&'static Command),
-    /// The person's first matching entry: its flag spellings.
-    Configured(&'a [String]),
+    /// The person's first matching entry: its flag spellings, and how
+    /// many leading words it consumes.
+    Configured(&'a [String], usize),
     /// No entry owns the words.
     None,
 }
@@ -33,20 +34,9 @@ pub(super) fn find<'a>(words: &[Word], configured: &'a [(String, Vec<String>)]) 
         return Found::Builtin(entry);
     }
     match locate_configured(words, configured) {
-        Some((_, flags)) => Found::Configured(flags),
+        Some((consumed, flags)) => Found::Configured(flags, consumed),
         None => Found::None,
     }
-}
-
-/// How many leading words the lookup consumed: the built-in command path
-/// length, or the configured entry's command word plus subcommand path. The
-/// match is re-run rather than carried, because `Found::Configured` holds
-/// only the flag spellings; the walk is over a few words.
-pub(super) fn skip(words: &[Word], configured: &[(String, Vec<String>)]) -> usize {
-    if let Some(entry) = locate_builtin(words) {
-        return entry.name.split(' ').count();
-    }
-    locate_configured(words, configured).map_or(0, |(len, _)| len)
 }
 
 /// Whether a configured entry name is never consulted: `sed`, which has its

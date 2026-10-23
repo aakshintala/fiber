@@ -185,19 +185,10 @@ fn pipeline(node: Node, src: &str) -> Element {
                 stages.push(cook_command(stage, src).map_or(Stage::Opaque, Stage::Simple));
             }
             "redirected_statement" => {
-                let mut nested = redirected(stage, src);
-                let single =
-                    nested.len() == 1 && nested.first().is_some_and(|e| e.stages.len() == 1);
-                if !single {
-                    return opaque();
-                }
-                let Some(mut only) = nested.pop() else {
+                let Some(stage) = single_stage(redirected(stage, src)) else {
                     return opaque();
                 };
-                let Some(first) = only.stages.pop() else {
-                    return opaque();
-                };
-                stages.push(first);
+                stages.push(stage);
             }
             "variable_assignment" => stages.push(
                 cook_assignment(stage, src).map_or(Stage::Opaque, |assignments| {
@@ -218,6 +209,22 @@ fn pipeline(node: Node, src: &str) -> Element {
         next = children.next();
     }
     Element { stages }
+}
+
+/// The one stage of a redirect body standing alone, if it does: exactly
+/// one element holding exactly one stage.
+fn single_stage(nested: Vec<Element>) -> Option<Stage> {
+    let mut nested = nested.into_iter();
+    let only = nested.next()?;
+    if nested.next().is_some() {
+        return None;
+    }
+    let mut stages = only.stages.into_iter();
+    let first = stages.next()?;
+    if stages.next().is_some() {
+        return None;
+    }
+    Some(first)
 }
 
 /// Convert a redirected statement: its body plus each redirect, the leading
