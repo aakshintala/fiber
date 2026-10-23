@@ -1351,6 +1351,42 @@ fn a_headless_stage_2_failure_denies_naming_the_reviewer_at_stage_2() {
 }
 
 #[test]
+fn an_unanswerable_escalation_denies_and_the_turn_carries_on() {
+    // A delegate's escalation is a block, as for any unattended run: with
+    // nobody to answer, the unreadable verdicts deny the call under the
+    // reviewer, and the turn carries on with no approval addressed to
+    // anyone (`docs/delegates.md`, "Permissions").
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![shell(None, None) as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.reviewer(vec![
+        Scripted::text("maybe ZQX-FIRST"),
+        Scripted::text("perhaps ZQX-LAST"),
+    ]);
+    let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    // No escalation line: nobody was asked, so no person or model is
+    // named as an approver anywhere in the log.
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&"notice"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "reviewer");
+}
+
+#[test]
 fn a_review_at_the_spending_budget_denies_without_sending() {
     let tool = shell(None, None);
     let calls: Vec<(&str, Value)> = vec![("shell", paris()), ("shell", paris())];

@@ -23,7 +23,7 @@ use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::{Failure, Tokens};
 use contract::{ActionId, ErrorCode, GenerationId, Seq, SessionId};
 use fakes::Deadline;
-use fakes::{Scripted, reply};
+use fakes::{MUST_SUCCEED_WITHIN, Scripted, reply};
 use serde_json::{Value, json};
 
 use support::{
@@ -1778,4 +1778,235 @@ fn a_late_cost_for_a_copy_applies_only_its_delta() {
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
     assert_eq!(exited.payload["usage"]["cost"], 0.05);
+}
+
+#[test]
+fn cancelling_the_turn_leaves_its_delegates_running() {
+    // A delegate survives cancellation of its parent's turn, as every job
+    // does: the cancel ends the turn `interrupted` with no stop reaching
+    // the registry, and the delegate's end still wakes a later turn
+    // (`docs/delegates.md`, "Lifetime").
+    // Overbuild finding 2 is subsumed here: a `Session::blocking` scaffold
+    // cannot prove a mid-`jobs wait` cancel, so this keeps its own wait tool.
+    use contract::events::Outcome;
+    use contract::jobs::{Jobs, Opening, Stop};
+    use contract::shapes::{DeclaredEffects, Effect};
+    use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    /// A `jobs wait` stand-in that enters the real wait: it signals when
+    /// its wait starts, then blocks in the production `JobsTool::wait`
+    /// on a job that never ends, so the turn's cancel releases the same
+    /// `registry.wait` path a model-held wait parks in.
+    struct JobsWait {
+        jobs: Arc<jobs::JobsTool>,
+        job_id: String,
+        entered: mpsc::Sender<()>,
+    }
+    impl Tool for JobsWait {
+        fn definition(&self) -> contract::provider::ToolDefinition {
+            contract::provider::ToolDefinition {
+                name: "jobs".into(),
+                description: "Waits as `jobs wait` does.".into(),
+                input_schema: json!({"type": "object"}),
+                deferred: false,
+                hosted: None,
+            }
+        }
+        fn effects(&self, _: &serde_json::Map<String, Value>) -> Result<Effects, EffectsError> {
+            Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Reads],
+                    reversible: true,
+                    paths: None,
+                },
+                subject: Some(String::new()),
+                prefix: None,
+                always_reviewed: false,
+                hosts: None,
+            })
+        }
+        fn run(
+            &self,
+            _: &serde_json::Map<String, Value>,
+            cancel: &dyn Cancel,
+            emit: &dyn contract::emit::Emit,
+        ) -> Output {
+            let mut arguments = serde_json::Map::new();
+            arguments.insert("action".into(), json!("wait"));
+            arguments.insert("job_id".into(), json!(self.job_id.clone()));
+            arguments.insert("timeout_ms".into(), json!(60000));
+            self.entered.send(()).unwrap();
+            self.jobs.run(&arguments, cancel, emit)
+        }
+        fn bound(&self) -> contract::tool::Bound {
+            contract::tool::Bound::DEFAULT
+        }
+    }
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    // The production wait parks on its own registry: a job that never
+    // ends, held open below, so only the turn's cancel releases the real
+    // `registry.wait` the fake enters.
+    let wait_home = fakes::TempDir::new("fiber-wait");
+    let wait_clock = fakes::clock::FakeClock::new();
+    let wait_start = wait_clock.origin();
+    let registry = jobs::Registry::new(
+        wait_home.path().to_path_buf(),
+        Arc::clone(&wait_clock) as Arc<dyn contract::clock::Clock>,
+        Arc::new(fakes::Recorder::default()),
+    );
+    let waiter = registry
+        .open(Opening {
+            tool: "sleep".into(),
+            description: "never ends".into(),
+            stop: Stop(Box::new(|| {})),
+            input: None,
+            lines: false,
+        })
+        .unwrap();
+    let tool = Arc::new(JobsWait {
+        jobs: Arc::new(jobs::JobsTool::new(Arc::clone(&registry))),
+        job_id: waiter.started.job_id.0.clone(),
+        entered: entered_tx,
+    });
+    // Held while the turn runs: dropping the end would report the
+    // waited-on job failed, ending the real wait before the cancel. On a
+    // failed wait below it is ended explicitly so the scope's join still
+    // terminates.
+    let mut never_ends = Some(waiter);
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply(
+                "",
+                &[(
+                    "jobs",
+                    json!({"action": "wait", "job_id": "j_pending", "timeout_ms": 60000}),
+                )],
+            ),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool],
+    );
+    let jobs = attach_jobs(&mut session);
+    // A running delegate, opened straight on the registry as a spawn
+    // does: its stop closure records any stop the turn sends it.
+    let stopped = Arc::new(AtomicBool::new(false));
+    let opened = jobs
+        .open(Opening {
+            tool: "delegate_spawn".into(),
+            description: "scan".into(),
+            stop: Stop(Box::new({
+                let stopped = Arc::clone(&stopped);
+                move || stopped.store(true, Ordering::SeqCst)
+            })),
+            input: None,
+            lines: false,
+        })
+        .unwrap();
+    let job_id = opened.started.job_id.clone();
+    jobs.deliver_to(session.inbox.clone());
+    session.inbox.send(delivery("hi")).unwrap();
+    let cancel = Arc::clone(&session.cancel);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| {
+            let outcome = session.turn();
+            done_tx.send(outcome).unwrap();
+        });
+        // The fake signals it entered its wait, and the clock proves the
+        // registry wait parked, so the cancel lands mid-`Registry::wait`
+        // while the delegate still runs.
+        let entered_ok = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&entered_rx)
+            .is_ok();
+        let wait_until = wait_start + std::time::Duration::from_millis(60000);
+        let parked_ok =
+            entered_ok && wait_clock.await_parked(wait_until, Deadline::after(MUST_SUCCEED_WITHIN));
+        let cancelled = parked_ok && cancel.cancel();
+        let done = Deadline::after(MUST_SUCCEED_WITHIN).recv(&done_rx);
+        if !(entered_ok && parked_ok && cancelled && done.is_ok()) {
+            // Release the registry wait so the join terminates even when
+            // the cancel never woke it: ending the never-ending job wakes
+            // the same park the cancel would.
+            if let Some(waiter) = never_ends.take() {
+                let job_id = waiter.started.job_id.clone();
+                (waiter.end.0)(contract::events::JobCompleted {
+                    job_id,
+                    status: Outcome::Completed,
+                    error: None,
+                    process: None,
+                    output_tail: None,
+                    notice: None,
+                    changed_by: None,
+                });
+            }
+        }
+        turn.join().unwrap();
+        assert!(entered_ok, "the jobs wait to start");
+        assert!(parked_ok, "the jobs wait to park in the registry wait");
+        assert!(cancelled);
+        let outcome = done.expect("the cancelled turn to end");
+        assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+    });
+    let cut = session.lines();
+    assert_eq!(
+        kinds(&cut),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(cut.last().unwrap().payload["outcome"], "interrupted");
+    // No stop reached the registry: neither the delegates nor the job.
+    assert!(!stopped.load(Ordering::SeqCst));
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+    assert_eq!(jobs.running(), vec![job_id.clone()]);
+    // The delegate's end still wakes a later turn, which claims it.
+    (opened.end.0)(contract::events::JobCompleted {
+        job_id: job_id.clone(),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "job_completed",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("the later turn claims the delegate's end");
+    assert_eq!(done.payload["job_id"], job_id.0);
+    assert_eq!(done.payload["status"], "completed");
 }
