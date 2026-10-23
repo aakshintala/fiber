@@ -1,9 +1,10 @@
 //! Binary-level tests of `tool_search` through `fiber ask` and one
 //! `fiber session` (`docs/testing.md`, "Levels"): the built `fiber` runs in
 //! its own process group with its own `FIBER_HOME`, holding a provider on
-//! `openai-responses` with `deferred_tools` on at the fake server, and a
-//! configured fixture server. Every wait runs under the test's [`Deadline`]
-//! with the setup's [`Watchdog`] beside it.
+//! `openai-responses` with `deferred_tools` on at the fake server unless the
+//! case says otherwise, and a configured fixture server. Every wait runs
+//! under the test's [`Deadline`] with the setup's [`Watchdog`] beside it.
+//! Every case asserts the full ordered list of event kinds.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -24,7 +25,7 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Deadline, HELLO_KINDS, KillGroup, Run, Socket, first_line, function_call, group_alive, hello,
-    is_status, read_kinds, spawn_watched, stream, until, until_close,
+    is_status, kinds, read_kinds, spawn_watched, stream, until, until_close,
 };
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
@@ -66,9 +67,13 @@ impl Setup {
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server with `deferred_tools` on, and makes `fake/m` the
-    /// configured model.
-    fn provider(&self, server: &ProviderServer) {
+    /// fake server, and makes `fake/m` the configured model. `deferred`
+    /// decides whether the model's data sets `deferred_tools`.
+    fn provider_with_deferral(&self, server: &ProviderServer, deferred: bool) {
+        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+        if deferred {
+            model["deferred_tools"] = json!(true);
+        }
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
@@ -79,7 +84,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "deferred_tools": true}]
+                "models": [model]
             }),
         );
         extensions::plan(
@@ -96,6 +101,11 @@ impl Setup {
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
         );
+    }
+
+    /// Installs the provider with `deferred_tools` on.
+    fn provider(&self, server: &ProviderServer) {
+        self.provider_with_deferral(server, true);
     }
 
     /// Adds `servers` under `mcp.servers` and `tools` under `tools` to the
@@ -210,18 +220,18 @@ fn echo_tool() -> Value {
     })
 }
 
+/// The one configured fixture server `fx` in `dir`.
+fn fx_server(dir: &Path) -> Value {
+    json!({
+        "command": "/bin/bash",
+        "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        "startup_timeout_ms": 600000,
+    })
+}
+
 /// Configures one fixture server `fx` in `dir` and returns nothing.
 fn configure_fx(setup: &Setup, dir: &Path) {
-    setup.configure_with(
-        &json!({
-            "fx": {
-                "command": "/bin/bash",
-                "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
-                "startup_timeout_ms": 600000,
-            }
-        }),
-        &json!({}),
-    );
+    setup.configure_with(&json!({"fx": fx_server(dir)}), &json!({}));
 }
 
 /// A finished `tool_search_call` for `query`, as the provider's reply.
@@ -241,7 +251,10 @@ fn request_tools(body: &[u8]) -> Vec<Value> {
 
 /// Whether `tools` holds OpenAI's client-executed search declaration.
 fn has_native_search(tools: &[Value]) -> bool {
-    tools.iter().any(|tool| tool["type"] == "tool_search")
+    tools.iter().any(|tool| {
+        tool["type"] == "tool_search"
+            && tool.get("execution").and_then(Value::as_str) == Some("client")
+    })
 }
 
 /// The `function` entry for `name` in `tools`.
@@ -250,6 +263,19 @@ fn function_entry<'a>(tools: &'a [Value], name: &str) -> &'a Value {
         .iter()
         .find(|tool| tool["type"] == "function" && tool["name"] == name)
         .unwrap_or_else(|| panic!("no function entry for {name}: {tools:?}"))
+}
+
+/// The sent deferred flag of `name` in a `preamble_built` line.
+fn sent_deferred(line: &Value, name: &str) -> bool {
+    line["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| panic!("no sent {name}"))
+        .get("deferred")
+        .and_then(Value::as_bool)
+        .unwrap()
 }
 
 /// The search's `tool_call_completed`, by its `loaded` list.
@@ -261,58 +287,31 @@ fn search_completed(lines: &[Value]) -> &Value {
         .expect("one search tool_call_completed")
 }
 
-/// A deferred search over one MCP tool: the first request declares
-/// `tool_search` next to the deferred echo, and the ask answers the
-/// loaded list as text.
-#[test]
-fn a_deferred_search_declares_the_search_and_answers_loaded() {
-    let setup = Setup::new();
-    let dir = setup.fixture(&json!([echo_tool()]), &[]);
-    let server = ProviderServer::start([stream(&[search_call("echo")]), hello()]).unwrap();
-    setup.provider(&server);
-    configure_fx(&setup, &dir);
-
-    let run = setup.run(&["ask", "echo hi"]);
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), read_kinds());
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    // Request 1 declares the native search alongside the deferred echo.
-    let first = request_tools(&requests[0].body);
-    assert!(has_native_search(&first), "{first:?}");
-    assert_eq!(
-        function_entry(&first, "mcp__fx__echo")["defer_loading"],
-        json!(true),
-        "{first:?}"
+/// The event kinds of a turn whose first reply calls the search, whose
+/// second calls one reads-only tool, and whose third is [`hello`]: neither
+/// call takes the permission path.
+fn search_then_call_kinds() -> Vec<&'static str> {
+    let mut expected = read_kinds();
+    expected.splice(
+        13..13,
+        [
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
     );
-    // Request 2 carries the load back as a `tool_search_output` holding
-    // the echo's whole definition.
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    let output = second["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["type"] == "tool_search_output")
-        .expect("a tool_search_output");
-    let loaded = output["tools"].as_array().unwrap();
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0]["name"], "mcp__fx__echo");
-    assert!(loaded[0]["parameters"]["properties"].get("text").is_some());
-    let completed = search_completed(&run.lines);
-    assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(completed["payload"]["loaded"], json!(["mcp__fx__echo"]));
-    assert_eq!(
-        completed["payload"]["content"],
-        json!([{"type": "text", "text": "Loaded: mcp__fx__echo."}]),
-    );
+    expected
 }
 
-/// A deferred search that loads the echo, then the model calls it: the
-/// search's completion carries the loaded name, and the echo's result
-/// reaches the next request.
+/// (a) Deferral on: request 1 declares the native search next to the
+/// deferred echo; the search loads the echo, the model calls it, and the
+/// echo's result reaches the third request.
 #[test]
-fn a_search_completed_before_the_call_it_loads() {
+fn a_deferred_search_loads_before_the_call_it_loads() {
     let setup = Setup::new();
     let dir = setup.fixture(
         &json!([echo_tool()]),
@@ -337,17 +336,40 @@ fn a_search_completed_before_the_call_it_loads() {
     let run = setup.run(&["ask", "echo hi"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let completed = run
-        .lines
-        .iter()
-        .filter(|line| line["kind"] == "tool_call_completed")
-        .collect::<Vec<_>>();
-    assert_eq!(completed.len(), 2, "{:?}", run.kinds());
-    assert_eq!(completed[0]["payload"]["loaded"], json!(["mcp__fx__echo"]));
-    assert_eq!(completed[1]["payload"]["status"], "completed");
-    assert_eq!(completed[1]["payload"]["content"][0]["text"], "hi");
+    assert_eq!(run.kinds(), search_then_call_kinds());
+    // Request 1 declares the native search alongside the deferred echo.
     let requests = server.requests();
     assert_eq!(requests.len(), 3);
+    let first = request_tools(&requests[0].body);
+    assert!(has_native_search(&first), "{first:?}");
+    assert_eq!(
+        function_entry(&first, "mcp__fx__echo")["defer_loading"],
+        json!(true),
+        "{first:?}"
+    );
+    let built = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(sent_deferred(built, "mcp__fx__echo"));
+    assert!(!sent_deferred(built, "tool_search"));
+    // The search loads the echo before the model calls it.
+    let completed = search_completed(&run.lines);
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["loaded"], json!(["mcp__fx__echo"]));
+    // Request 2 carries the search call and its output holding the echo's
+    // declared object; request 3 holds the echo call's output.
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let input = second["input"].as_array().unwrap();
+    assert!(input.iter().any(|item| item["type"] == "tool_search_call"));
+    let output = input
+        .iter()
+        .find(|item| item["type"] == "tool_search_output")
+        .expect("a tool_search_output");
+    let loaded = output["tools"].as_array().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0]["name"], "mcp__fx__echo");
     let third: Value = serde_json::from_slice(&requests[2].body).unwrap();
     let output = third["input"]
         .as_array()
@@ -358,64 +380,24 @@ fn a_search_completed_before_the_call_it_loads() {
     assert_eq!(output["output"], "hi");
 }
 
-/// A deferred search matching nothing completes with an empty loaded list,
-/// and the next request carries the zero-match text as a function result.
+/// (b) `declare_in_full`: the server's tools are declared whole, so no
+/// search is declared.
 #[test]
-fn a_search_matching_nothing_sends_the_zero_match_text() {
+fn a_declare_in_full_server_declares_whole_with_no_search() {
     let setup = Setup::new();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
-    let server = ProviderServer::start([stream(&[search_call("zzz")]), hello()]).unwrap();
+    let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    configure_fx(&setup, &dir);
+    let mut fx = fx_server(&dir);
+    fx["declare_in_full"] = json!(true);
+    setup.configure_with(&json!({"fx": fx}), &json!({}));
 
-    let run = setup.run(&["ask", "echo zzz"]);
+    let run = setup.run(&["ask", "hi"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), read_kinds());
-    let completed = search_completed(&run.lines);
-    assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(completed["payload"]["loaded"], json!([]));
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    let output = second["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["type"] == "function_call_output")
-        .unwrap();
-    assert_eq!(output["output"], "No deferred tool matched the query.");
-}
-
-/// A scoped configuration sending echo whole: request 1 holds echo next
-/// to the other builtins with nothing deferred, so no search is declared.
-#[test]
-fn a_scoped_configuration_sends_echo_whole_with_no_search() {
-    let setup = Setup::new();
-    let dir = setup.fixture(&json!([echo_tool()]), &[]);
-    let server = ProviderServer::start_with_fallback([], hello()).unwrap();
-    setup.provider(&server);
-    setup.configure_with(
-        &json!({
-            "fx": {
-                "command": "/bin/bash",
-                "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
-                "startup_timeout_ms": 600000,
-            }
-        }),
-        &json!({"mcp__fx__echo": {"deferred": false}}),
-    );
-
-    let mut session = Session::start(setup);
-    session.prompt();
-    assert!(
-        server.await_requests(1, session.setup.deadline),
-        "the prompt sent one request"
-    );
+    assert_eq!(run.kinds(), HELLO_KINDS.to_vec());
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
-    // Echo whole next to the other builtins; nothing deferred, so no
-    // native search declaration.
     let tools = request_tools(&requests[0].body);
     assert!(!has_native_search(&tools), "{tools:?}");
     assert!(
@@ -424,23 +406,77 @@ fn a_scoped_configuration_sends_echo_whole_with_no_search() {
             .is_none(),
         "{tools:?}"
     );
-    // The rows hold echo and declare nothing else.
-    let answer = session.tools_answer("c_tools");
-    let rows = answer["payload"]["result"]["tools"].as_array().unwrap();
-    let echo = rows
+    let built = run
+        .lines
         .iter()
-        .find(|tool| tool["name"] == "mcp__fx__echo")
-        .expect("an echo row");
-    assert_eq!(echo["state"], "full");
-    assert!(
-        rows.iter().all(|tool| tool["name"] != "tool_search"),
-        "{rows:?}"
-    );
-    session.finish();
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(!sent_deferred(built, "mcp__fx__echo"));
 }
 
-/// `tools."tool_search".deferred` has no effect: the ask logs one notice
-/// and still declares the search next to the deferred echo.
+/// (c) Provider data without `deferred_tools`: every tool is declared in
+/// full and no search is declared.
+#[test]
+fn without_deferred_tools_everything_is_full_with_no_search() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_deferral(&server, false);
+    configure_fx(&setup, &dir);
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS.to_vec());
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let tools = request_tools(&requests[0].body);
+    assert!(!has_native_search(&tools), "{tools:?}");
+    assert!(
+        function_entry(&tools, "mcp__fx__echo")
+            .get("defer_loading")
+            .is_none(),
+        "{tools:?}"
+    );
+}
+
+/// (d) `tools."mcp__fx__echo".deferred: false`: echo is declared whole
+/// next to the other builtins, so no search is declared.
+#[test]
+fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.configure_with(
+        &json!({"fx": fx_server(&dir)}),
+        &json!({"mcp__fx__echo": {"deferred": false}}),
+    );
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS.to_vec());
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let tools = request_tools(&requests[0].body);
+    assert!(!has_native_search(&tools), "{tools:?}");
+    assert!(
+        function_entry(&tools, "mcp__fx__echo")
+            .get("defer_loading")
+            .is_none(),
+        "{tools:?}"
+    );
+    let built = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(!sent_deferred(built, "mcp__fx__echo"));
+}
+
+/// (e) `tools."tool_search".deferred` has no effect: the ask logs one
+/// notice and still declares the search next to the deferred echo.
 #[test]
 fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
     let setup = Setup::new();
@@ -448,13 +484,7 @@ fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.configure_with(
-        &json!({
-            "fx": {
-                "command": "/bin/bash",
-                "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
-                "startup_timeout_ms": 600000,
-            }
-        }),
+        &json!({"fx": fx_server(&dir)}),
         &json!({"tool_search": {"deferred": false}}),
     );
 
@@ -467,8 +497,10 @@ fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
     let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
     assert_eq!(notices.len(), 1, "{:?}", run.kinds());
     assert_eq!(notices[0]["payload"]["code"], "config_key_ignored");
-    let message = notices[0]["payload"]["message"].as_str().unwrap();
-    assert!(message.contains("tool_search"), "{message}");
+    assert_eq!(
+        notices[0]["payload"]["message"],
+        "`tools.\"tool_search\".deferred` has no effect: `tool_search` is never deferred."
+    );
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     let tools = request_tools(&requests[0].body);
@@ -480,59 +512,89 @@ fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
     );
 }
 
-/// A reload over a deferred session: the reloaded preamble holds the
-/// deferred flags, and the rows publish `tool_search` deferred.
+/// (f) `/reload` applies a scoped deferral key: the session starts
+/// deferring, the config exempts echo, and after the reload the next turn
+/// declares echo whole with no search and the rows keep echo's source.
 #[test]
-fn a_reload_keeps_the_search_row_deferred() {
+fn a_reload_applies_an_echo_deferral_key() {
     let setup = Setup::new();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
-    let server = ProviderServer::start_with_fallback([], hello()).unwrap();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     configure_fx(&setup, &dir);
 
     let mut session = Session::start(setup);
-    session.prompt();
-    session.reload();
-    // The reloaded preamble holds the deferred flags: echo deferred,
-    // the search never deferred.
-    let built = session
-        .stream
-        .iter()
-        .rev()
-        .find(|line| line["kind"] == "preamble_built")
-        .unwrap();
-    assert_eq!(built["payload"]["reason"], "reload");
-    let tools = built["payload"]["tools"].as_array().unwrap();
-    let echo = tools
-        .iter()
-        .find(|tool| tool["name"] == "mcp__fx__echo")
-        .expect("a sent echo");
-    assert_eq!(echo["deferred"], true);
-    let search = tools
-        .iter()
-        .find(|tool| tool["name"] == "tool_search")
-        .expect("a sent tool_search");
-    assert_eq!(search["deferred"], false);
-    // The rows publish the search in full next to the deferred echo
-    // (`docs/tools.md`, "Tool search": the search "is declared, in
-    // full").
+    session.first_hello_turn();
+    assert!(
+        server.await_requests(1, session.setup.deadline),
+        "the first turn sent one request"
+    );
+    // The first turn starts deferring, with (a)'s request shape.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let first = request_tools(&requests[0].body);
+    assert!(has_native_search(&first), "{first:?}");
+    assert_eq!(
+        function_entry(&first, "mcp__fx__echo")["defer_loading"],
+        json!(true),
+        "{first:?}"
+    );
+    // The rows list echo under its server, deferred.
     let answer = session.tools_answer("c_tools");
     let rows = answer["payload"]["result"]["tools"].as_array().unwrap();
-    let search_row = rows
-        .iter()
-        .find(|tool| tool["name"] == "tool_search")
-        .expect("a tool_search row");
-    assert_eq!(search_row["state"], "full");
-    let echo_row = rows
+    let echo = rows
         .iter()
         .find(|tool| tool["name"] == "mcp__fx__echo")
         .expect("an echo row");
-    assert_eq!(echo_row["state"], "deferred");
+    assert_eq!(echo["source"], "mcp");
+    assert_eq!(echo["server"], "fx");
+    assert_eq!(echo["tool"], "echo");
+    assert_eq!(echo["state"], "deferred");
+    // The config exempts echo; the reload applies it.
+    session.setup.configure_with(
+        &json!({"fx": fx_server(&dir)}),
+        &json!({"mcp__fx__echo": {"deferred": false}}),
+    );
+    session.reload();
+    session.hello_turn();
+    assert!(
+        server.await_requests(2, session.setup.deadline),
+        "the second turn sent one more request"
+    );
+    // The next turn declares echo whole with no search, and the rows keep
+    // echo's source, now full, with no search row.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let tools = request_tools(&requests[1].body);
+    assert!(!has_native_search(&tools), "{tools:?}");
+    assert!(
+        function_entry(&tools, "mcp__fx__echo")
+            .get("defer_loading")
+            .is_none(),
+        "{tools:?}"
+    );
+    let answer = session.tools_answer("c_tools2");
+    let rows = answer["payload"]["result"]["tools"].as_array().unwrap();
+    let echo = rows
+        .iter()
+        .find(|tool| tool["name"] == "mcp__fx__echo")
+        .expect("an echo row");
+    assert_eq!(echo["source"], "mcp");
+    assert_eq!(echo["server"], "fx");
+    assert_eq!(echo["tool"], "echo");
+    assert_eq!(echo["state"], "full");
+    assert!(
+        rows.iter().all(|tool| tool["name"] != "tool_search"),
+        "{rows:?}"
+    );
     session.finish();
 }
 
 /// One `fiber session` under the test's [`Deadline`]: prompted, reloaded
-/// and asked for its rows, then closed.
+/// and asked for its rows, then closed. The stream's kinds must run the
+/// full expected list: startup, the first turn (a search, a call, hello),
+/// the rows answer, the reload, the second turn (hello), the rows answer
+/// again, and the close.
 struct Session {
     child: Child,
     guard: KillGroup,
@@ -541,6 +603,7 @@ struct Session {
     client: Socket,
     setup: Setup,
     stream: Vec<Value>,
+    expected: Vec<&'static str>,
 }
 
 impl Session {
@@ -592,6 +655,11 @@ impl Session {
             }
             seen_clients && seen_extensions
         });
+        let clients = stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count();
+        assert_eq!(clients, 1, "{stream:?}");
         Self {
             child,
             guard,
@@ -600,6 +668,12 @@ impl Session {
             client,
             setup,
             stream,
+            expected: vec![
+                "command_accepted",
+                "session_started",
+                "fiber_started",
+                "extensions_loaded",
+            ],
         }
     }
 
@@ -614,6 +688,44 @@ impl Session {
             }));
     }
 
+    /// A prompt answered by [`hello`]: the turn's kinds after an already
+    /// built preamble.
+    fn hello_turn(&mut self) {
+        self.prompt();
+        self.expected.extend([
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]);
+    }
+
+    /// The first prompt, answered by [`hello`]: the turn's kinds with the
+    /// preamble and the opening message before them.
+    fn first_hello_turn(&mut self) {
+        self.prompt();
+        self.expected
+            .splice(4..4, ["preamble_built", "opening_message"]);
+        self.expected.extend([
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]);
+    }
+
     fn reload(&mut self) {
         self.client
             .send(&json!({"id":doors::mint("c_"),"command":"reload"}).to_string());
@@ -621,6 +733,12 @@ impl Session {
             .extend(until(&self.client, "reload preamble", |line| {
                 line["kind"] == "preamble_built" && line["payload"]["reason"] == "reload"
             }));
+        self.expected.extend([
+            "reloaded",
+            "command_accepted",
+            "extensions_loaded",
+            "preamble_built",
+        ]);
     }
 
     /// Asks for the `tools` answer as `id` and returns it.
@@ -631,6 +749,7 @@ impl Session {
             line["payload"]["command_id"] == id
         });
         self.stream.extend(lines.clone());
+        self.expected.push("command_accepted");
         let answer = lines.last().unwrap();
         assert_eq!(answer["kind"], "command_accepted", "{answer}");
         answer.clone()
@@ -651,12 +770,12 @@ impl Session {
         std::mem::forget(self.guard);
         self.watchdog
             .stand_down(self.setup.deadline.cleanup_phase());
-        assert!(
-            self.stream
-                .iter()
-                .any(|line| line["kind"] == "fiber_exited"),
-            "{:?}",
-            support::kinds(&self.stream)
-        );
+        self.expected.extend(["command_accepted", "fiber_exited"]);
+        let stream: Vec<Value> = self
+            .stream
+            .into_iter()
+            .filter(|line| line["kind"] != "clients")
+            .collect();
+        assert_eq!(kinds(&stream), self.expected, "{stream:?}");
     }
 }
