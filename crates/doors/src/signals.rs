@@ -38,6 +38,7 @@ use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use log::diag::{Diag, Severity};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use support::lock;
 
 /// From the signal to exit, per process (`docs/invocation.md`, "Shutdown").
 /// A delegate's stop waits this long too: `main` passes it into `jobs`
@@ -660,10 +661,6 @@ fn sleep_until(clock: &dyn Clock, until: Instant) {
 /// `io::copy` does; any other error ends it like EOF.
 fn drain(mut input: Box<dyn Read + Send>) {
     let _copied = io::copy(&mut input, &mut io::sink());
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
