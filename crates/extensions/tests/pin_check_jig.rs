@@ -18,12 +18,14 @@ use std::time::Duration;
 
 use fakes::Deadline;
 
-/// How long the pin_check jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total); with the 10s watchdog stand-down
-/// the deadlines sum to 60s, so 120s is at least twice them:
-/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
-/// at least twice the test's own deadlines, so a hang reports which wait
-/// expired.
+/// How long the pin_check jig exchange may take once the binary has
+/// started. `.config/nextest.toml` kills a slow test after a 30s period
+/// times 4 (120s total); the test's start bound and its exchange bound
+/// each count alone against that limit, and the ticket's margin table
+/// gives the total for the pass-then-hang path: `docs/testing.md`,
+/// "Waits and timeouts", needs nextest's timeout to be at least twice
+/// the test's longest single deadline plus its normal run time, so a
+/// hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
 /// The example `cargo test` built beside this test binary
@@ -38,6 +40,7 @@ fn example_path() -> PathBuf {
 
 #[track_caller]
 fn pin_check(files: &str, bytes: &str) -> Output {
+    fakes::warm_up(&example_path(), &["x"], 2);
     let child = Command::new(example_path())
         .args([files, bytes])
         .stdout(Stdio::piped())

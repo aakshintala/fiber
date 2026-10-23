@@ -23,13 +23,13 @@ use contract::provider::{Input, ModelRequest};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Point, Sender};
 use contract::tool::Tool;
 use contract::{ActionId, CommandId, RequestId, Seq, SessionId, TurnId};
-use fakes::{Deadline, Scripted, Watchdog, kill_group};
+use fakes::{Deadline, START_BOUND, Scripted, Watchdog, kill_group};
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Once, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
@@ -37,19 +37,17 @@ use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
 /// `.config/nextest.toml` kills a slow test after a 30s period times 4
-/// (120s total); with the 30s ready wait, the 30s release hang guard,
-/// the 5s reap and the 5s watchdog stand-down the longest run sums to
-/// 70s, under the 120s timeout, and the longest single deadline stays
-/// 30s: `docs/testing.md`, "Waits and timeouts", needs nextest's timeout
-/// to be at least twice the test's longest single deadline plus its normal
-/// run time, so a hang reports which wait expired.
+/// (120s total); the test's start bound and its exchange bound each count
+/// alone against that limit, and the ticket's margin table gives the total
+/// for the pass-then-hang path: `docs/testing.md`, "Waits and timeouts",
+/// needs nextest's timeout to be at least twice the test's longest single
+/// deadline plus its normal run time, so a hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(10);
 
-/// How long the built binary's first start may take. The first exec of a
-/// freshly linked binary can stall for seconds under load; the warm-up
-/// below absorbs that stall here, so the exchange keeps its own
-/// [`JIG_DEADLINE`].
-const START_BOUND: Duration = Duration::from_secs(30);
+/// The start bound stays within nextest's timeout: twice it fits the 4 x
+/// 30 s limit, so a missed warm-up with its reap still reports before the
+/// harness kills the test.
+const _: () = assert!(START_BOUND.as_secs() * 2 <= 120);
 
 /// One prompt turn, asserting it completes.
 fn prompt_turn(session: &mut Session, text: &str) {
@@ -299,16 +297,11 @@ fn example_path() -> PathBuf {
 /// Runs the built `review` binary on `dir` with `answers` as its stdin
 /// and `args` after the directory. `keep_open` leaves stdin open, so a
 /// second read would block instead of seeing EOF. A [`START_BOUND`]
-/// warm-up absorbs the first-exec stall, then one [`JIG_DEADLINE`]
-/// covers the exchange and the exit; the watchdog reaps the
-/// process group on every path, including failure.
-/// The first-exec warm-up has run once in this test process: the ticket
-/// asks for a one-time warm-up exec, and every [`run_jig`] caller shares
-/// it instead of spawning its own.
-static WARMED_UP: Once = Once::new();
-
+/// warm-up absorbs the first-exec stall on every call, then one
+/// [`JIG_DEADLINE`] covers the exchange and the exit; the watchdog reaps
+/// the process group on every path, including failure.
 fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output {
-    WARMED_UP.call_once(warm_up_binary);
+    fakes::warm_up(&example_path(), &["--bogus"], 2);
     let mut child = Command::new(example_path())
         .arg(dir)
         .args(args)
@@ -355,24 +348,6 @@ fn wait_under(child: Child, bound: Duration) -> Output {
     };
     watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
-}
-
-/// Runs the already-built binary once under [`START_BOUND`], so a
-/// first-exec scan stall lands here instead of in the exchange's
-/// [`JIG_DEADLINE`]. The `--bogus` flag fails fast with exit 2 before
-/// the binary touches any session directory; asserting that exit proves
-/// the warm-up ran.
-fn warm_up_binary() {
-    let child = Command::new(example_path())
-        .arg("--bogus")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let output = wait_under(child, START_BOUND);
-    assert_eq!(output.status.code(), Some(2), "the warm-up fails fast");
 }
 
 /// The jig's stdout, one parsed JSON value per line.
@@ -1607,7 +1582,7 @@ fn bad_argv_and_notes_fail_through_the_binary() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = wait_under(none, START_BOUND);
+    let output = wait_under(none, JIG_DEADLINE);
     assert_eq!(output.status.code(), Some(2));
 }
 
