@@ -343,9 +343,7 @@ pub(crate) fn shell_read_only(config: &Config) -> Vec<(String, Vec<String>)> {
 /// only the assignment runs under it. A poisoned lock is recovered.
 pub(crate) fn refresh_shell_read_only(handle: &ShellReadOnly, config: &Config) {
     let next = shell_read_only(config);
-    *handle
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+    *support::lock(handle) = next;
 }
 
 #[cfg(test)]

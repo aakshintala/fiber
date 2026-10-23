@@ -47,9 +47,7 @@ pub(crate) fn record_declarations(
 ) -> doors::Declare {
     Arc::new(move |name, info| {
         {
-            let mut held = late
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut held = support::lock(&late);
             match &info {
                 Some(info) => {
                     held.infos.insert(name.to_owned(), info.clone());
@@ -70,16 +68,10 @@ pub(crate) fn record_load(
 ) -> r#loop::LoadApproved {
     Arc::new(move |outcome| {
         let approved = load(outcome)?;
-        late.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .tools
-            .extend(approved.tools.clone());
+        support::lock(&late).tools.extend(approved.tools.clone());
         // The offer's skips join the scope the next preparation reads:
         // skipped content stays out of a reloaded or late set.
-        repository
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .skipped = outcome.skipped.clone();
+        support::lock(&repository).skipped = outcome.skipped.clone();
         Ok(approved)
     })
 }
@@ -267,7 +259,6 @@ impl State {
         route: &r#loop::ReloadRoute,
         preparation: Preparation,
     ) -> Result<r#loop::ReloadPrepared, Rejection> {
-        use std::sync::PoisonError;
         let failure = |error: Failure| Rejection {
             code: error.code,
             message: error.message,
@@ -288,11 +279,7 @@ impl State {
         // The repository set is read again, from the scope's workspace
         // minus the offer's skips: a changed declaration or a skipped
         // content loads, or drops, on reload.
-        let scope = self
-            .repository
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let scope = support::lock(&self.repository).clone();
         let set = crate::session_extensions::repository_set(
             &self.sources.home,
             &self.sources.project,
@@ -449,11 +436,7 @@ impl State {
         // session's current rows — startup plus every earlier reload's
         // additions — so a second reload keeps the first reload's rows
         // for kept servers.
-        let baseline = self
-            .prompt_rows
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let baseline = support::lock(&self.prompt_rows).clone();
         let mut new_prompts = Vec::new();
         if let Some(synced) = &synced {
             new_prompts.extend(synced.prompt_sources.commands());
@@ -475,7 +458,7 @@ impl State {
         // tool, cache or prompt row changes.
         let (mut tools, mut infos): (Tools, Vec<contract::events::ToolInfo>) = match &synced {
             Some(_) => {
-                let held_tools = self.tools.lock().unwrap_or_else(PoisonError::into_inner);
+                let held_tools = support::lock(&self.tools);
                 let tools: Tools = held_tools
                     .iter()
                     .filter(|(owner, tool)| {
@@ -490,11 +473,7 @@ impl State {
                     })
                     .cloned()
                     .collect();
-                let mut infos = self
-                    .kept_infos
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone();
+                let mut infos = support::lock(&self.kept_infos).clone();
                 infos.retain(|info| {
                     info.name != "web_search"
                         && info.name != mcp::RESOURCES_TOOL
@@ -509,14 +488,8 @@ impl State {
                 (tools, infos)
             }
             None => (
-                self.tools
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone(),
-                self.kept_infos
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .clone(),
+                support::lock(&self.tools).clone(),
+                support::lock(&self.kept_infos).clone(),
             ),
         };
         if let Some((tool, info)) = crate::builtin::web_search(
@@ -551,7 +524,7 @@ impl State {
         let caps = crate::settings::result_caps(&config);
         let mut tools = r#loop::capped(tools, &caps);
         {
-            let late = self.late.lock().unwrap_or_else(PoisonError::into_inner);
+            let late = support::lock(&self.late);
             for (owner, tool) in &late.tools {
                 let name = tool.definition().name;
                 if !tools.iter().any(|(_, held)| held.definition().name == name) {
@@ -615,12 +588,9 @@ impl State {
             // preparation rebuilds from, so a late approval after a
             // replacing reload keeps the replacement's tools.
             {
-                let mut held_tools = shared.tools.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut held_tools = support::lock(&shared.tools);
                 *held_tools = stored_tools;
-                let mut held_infos = shared
-                    .kept_infos
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut held_infos = support::lock(&shared.kept_infos);
                 *held_infos = stored_infos;
             }
             // The session's current rows grow by this reload's additions,
@@ -629,10 +599,7 @@ impl State {
             // the fetch below still routes every carried tag — including
             // replaced ones — to the replacement source.
             {
-                let mut rows = shared
-                    .prompt_rows
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut rows = support::lock(&shared.prompt_rows);
                 r#loop::ServerSync::merge_command_rows(&mut rows, &carried_prompts);
             }
             extensions.emit_to(Arc::new(log::WeakEmit::new(&shared.log)));
@@ -651,10 +618,8 @@ impl State {
                 hooks: Some(extensions.clone()),
             });
             let next_names: Vec<_> = infos.iter().map(|info| info.name.clone()).collect();
-            let old_names = std::mem::replace(
-                &mut *shared.names.lock().unwrap_or_else(PoisonError::into_inner),
-                next_names.clone(),
-            );
+            let old_names =
+                std::mem::replace(&mut *support::lock(&shared.names), next_names.clone());
             for name in old_names {
                 if !next_names.contains(&name) {
                     (shared.declare)(&name, None);

@@ -581,9 +581,7 @@ fn servers_refresh(
                 *counts.entry(server).or_default() += 1;
             }
         }
-        let waiting = waiting
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let waiting = support::lock(&waiting);
         let rows: Vec<contract::events::McpServerRow> = declared
             .iter()
             .map(|declared| {
@@ -674,9 +672,7 @@ fn mcp_login(
     Arc::new(
         move |server: &str, deliver: Arc<dyn Fn(contract::inbox::Delivery) + Send + Sync>| {
             {
-                let mut waiting = waiting
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut waiting = support::lock(&waiting);
                 if waiting.contains_key(server) {
                     return Err(Failure {
                         code: contract::ErrorCode::Busy,
@@ -690,10 +686,7 @@ fn mcp_login(
                 waiting.insert(server.to_owned(), None);
             }
             let finish = |waiting: &Arc<std::sync::Mutex<HashMap<String, Option<String>>>>| {
-                waiting
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(server);
+                support::lock(waiting).remove(server);
             };
             let url = match cli::login_target(
                 &sources.home,
@@ -717,17 +710,11 @@ fn mcp_login(
             }
             let files = config::McpTokenFiles::new(sources.home.clone());
             let present = |auth_url: &str| {
-                waiting
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(server.to_owned(), Some(auth_url.to_owned()));
+                support::lock(&waiting).insert(server.to_owned(), Some(auth_url.to_owned()));
                 extensions::SystemBrowser::default().open(auth_url);
             };
             let outcome = mcp::login(&files, &url, &present, clock.as_ref());
-            waiting
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(server.to_owned(), None);
+            support::lock(&waiting).insert(server.to_owned(), None);
             if let Err(error) = outcome {
                 finish(&waiting);
                 return Err(Failure {
