@@ -10,7 +10,7 @@ Ctrl+C                      clear_then_quit Clear the draft, then quit
 ⌥0                          go_home Go home
 Ctrl+N                      new_session Start a new session
 ⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7 ⌥8 ⌥9  rail_row_n Switch to the session of rail card N
-Delete, Backspace           delete_session Delete the selected exited session in
+Delete, Backspace           delete_session Delete the selected exited, or a live
 ↑                           recall_prompt Recall an earlier prompt from the proj
 ←                           focus_rail Move focus from an empty input box into t
 Ctrl+R                      search_prompts Search those prompts

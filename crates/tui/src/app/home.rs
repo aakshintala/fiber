@@ -188,7 +188,11 @@ fn home_foot(
         hint_back(&mut spans, esc.as_deref());
     }
     if let Some(label) = delete {
-        hint_key(&mut spans, &label, "deletes an exited one");
+        hint_key(
+            &mut spans,
+            &label,
+            "stops a live one, deletes an exited one",
+        );
     }
     if let Some(label) = key_map {
         hint_key(&mut spans, &label, "the key map");
@@ -265,7 +269,7 @@ impl App {
         self.home.as_ref().is_some_and(|home| {
             matches!(
                 home.questions.prompt(),
-                Some(Prompt::Quit) | Some(Prompt::CloseAll { .. })
+                Some(Prompt::Quit) | Some(Prompt::CloseAll { .. }) | Some(Prompt::Stop { .. })
             )
         })
     }
@@ -322,9 +326,12 @@ impl App {
             // the question carries its head.
             Some(Prompt::Import) => (Some(import_head()), 0),
             // The quit question draws through the hint below, recomputed
-            // every frame; the close-all question draws as an overlay from
-            // the counts fixed when it opened.
-            Some(Prompt::Quit) | Some(Prompt::CloseAll { .. }) | None => (None, 0),
+            // every frame; the close-all and stop questions draw as overlays
+            // from what was fixed when they opened.
+            Some(Prompt::Quit)
+            | Some(Prompt::CloseAll { .. })
+            | Some(Prompt::Stop { .. })
+            | None => (None, 0),
         };
         // The foot names each action by its first bound key, leaving
         // an unbound action's part out with its joiner; Ctrl+C cannot
@@ -817,13 +824,16 @@ impl App {
     }
 
     /// Whether home's delete question or first-run import offer is open:
-    /// the home screen's question, below the quit question.
+    /// the home screen's question, below the quit-surface questions.
     pub(in crate::app) fn home_question_open(&self) -> bool {
         self.on_home()
             && self.home.as_ref().is_some_and(|home| {
-                home.questions
-                    .prompt()
-                    .is_some_and(|prompt| !matches!(prompt, Prompt::Quit | Prompt::CloseAll { .. }))
+                home.questions.prompt().is_some_and(|prompt| {
+                    !matches!(
+                        prompt,
+                        Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. }
+                    )
+                })
             })
     }
 
@@ -977,7 +987,8 @@ impl App {
         }
     }
 
-    /// An edit on home: Delete asks about an exited row; otherwise the
+    /// An edit on home: Delete asks to stop a live row or delete an
+    /// exited one; otherwise the
     /// picker and chip row get first refusal, and unhandled edits reach the
     /// draft. The workspace picker owns every edit while open, so
     /// nothing reaches the chip row or the draft behind it. A focused
@@ -1019,7 +1030,7 @@ impl App {
             return Some(effect);
         }
         match edit {
-            Edit::Delete => self.delete_key(),
+            Edit::Delete => self.delete_or_stop_key(),
             Edit::Left
             | Edit::Right
             | Edit::ShiftEnter

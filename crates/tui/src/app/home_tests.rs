@@ -2943,7 +2943,7 @@ fn the_foot_names_the_key_maps_bound_key() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -2955,7 +2955,7 @@ fn the_foot_leaves_the_key_map_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -2967,7 +2967,7 @@ fn x_with_the_link_down_sends_nothing() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3053,7 +3053,7 @@ fn backspace_on_a_focused_live_row_does_nothing() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3062,13 +3062,14 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
-    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Workspace));
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
+    assert!(!app.quit_open());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     assert!(app.input().expand().is_empty());
 }
@@ -3098,7 +3099,7 @@ fn esc_sends_nothing() {
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3416,7 +3417,7 @@ fn an_accepted_delete_removes_the_row_and_asks_recent_again() {
     assert_eq!(rows(&app), ["○  older work"]);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3547,7 +3548,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
     // The notice carries the refusal's own code, not a default.
     assert!(app.notices().iter().any(|line| matches!(
@@ -3610,7 +3611,7 @@ fn a_refused_cascade_delete_notes_the_row() {
     assert_eq!(app.notice(), Some(message));
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3724,7 +3725,7 @@ fn backspace_with_the_box_focused_edits_the_draft() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -3747,7 +3748,7 @@ fn stop_on_a_key_with_no_row_does_nothing() {
     assert_eq!(app.home_click(Spot::Stop(999)), Effect::None);
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4425,7 +4426,7 @@ fn the_foot_names_the_default_keys() {
     let app = home();
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4486,7 +4487,7 @@ fn the_foot_uses_rebound_labels_in_their_slots() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x deletes an exited one · F2 the key map · Ctrl+C twice to quit"
+        "Ctrl+O opens the focused session, or starts one from the box · ↑↓ move · x stops a live one, deletes an exited one · F2 the key map · Ctrl+C twice to quit"
     );
     let screen = app.home_screen().expect("home draws");
     let bold: Vec<String> = screen
@@ -4511,7 +4512,7 @@ fn the_foot_lists_only_the_first_key_of_a_multi_key_list() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · F7 stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4523,7 +4524,7 @@ fn the_foot_leaves_open_focused_out_when_unbound() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4548,7 +4549,7 @@ fn the_foot_leaves_unbound_pairs_out_without_stray_joiners() {
     app.set_keys(crate::KeysSetup { user });
     assert_eq!(
         foot(&app),
-        "↑↓ move · Delete deletes an exited one · Ctrl+C twice to quit"
+        "↑↓ move · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
     );
     let mut user = serde_json::Map::new();
     user.insert("key_map".to_owned(), json!([]));
@@ -4624,7 +4625,7 @@ fn the_foot_names_the_back_key_after_home_from_a_live_session() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or Esc back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4638,7 +4639,7 @@ fn the_foot_names_the_rebound_back_key() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → or F5 back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4652,7 +4653,7 @@ fn the_foot_leaves_the_back_key_out_when_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 
@@ -4667,7 +4668,7 @@ fn the_foot_keeps_quit_named_when_the_key_map_is_unbound() {
     home_from(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete deletes an exited one · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · → back to the session · Delete stops a live one, deletes an exited one · Ctrl+C twice to quit"
     );
 }
 
@@ -4706,7 +4707,7 @@ fn opening_a_row_then_closing_names_no_back_key() {
     assert!(app.on_home());
     assert_eq!(
         foot(&app),
-        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"
+        "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit"
     );
 }
 

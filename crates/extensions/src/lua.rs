@@ -40,7 +40,7 @@ const ENTRY: &str = "init.lua";
 /// How long reading, compiling and running the entry script may take. It is
 /// not a callback, so it declares no timeout of its own.
 // docs/extensions.md, "How an extension runs".
-const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long past a deadline the caller waits before it abandons the VM.
 // docs/extensions.md, "How an extension runs".
@@ -1164,9 +1164,9 @@ pub(crate) use schedule::fail_next_spawn_for;
 pub(crate) use tool::{DeclaredTool, effects_from, urls_from};
 use vm::{Step, Vm};
 
-pub(crate) use setup::Deadline;
 #[cfg(test)]
 pub(crate) use setup::install_prelude;
+pub(crate) use setup::{Deadline, message};
 
 /// Observes a completed timer callback in tests without waiting on the wall clock.
 #[cfg(test)]

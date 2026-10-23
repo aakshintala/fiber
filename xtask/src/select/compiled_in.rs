@@ -36,6 +36,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/invocation.md", "main"),
     ("docs/user/commands.md", "main"),
     ("docs/tui.md", "contract"),
+    ("docs/tui.md", "extensions"),
     ("docs/tui.md", "tui"),
     ("crates/contract/prompt/loaded.md", "contract"),
     ("crates/contract/prompt/no-match.md", "contract"),
@@ -94,7 +95,16 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/openrouter/providers/openrouter.json", "config"),
     ("providers/vertex/providers/vertex.json", "config"),
     ("providers/opencode/providers/opencode-go.json", "provider"),
+    ("providers/anthropic/providers/anthropic.json", "xtask"),
+    ("providers/bedrock/providers/bedrock.json", "xtask"),
+    ("providers/codex/providers/codex.json", "xtask"),
+    ("providers/databricks/thinking.lua", "xtask"),
+    ("providers/gemini/providers/gemini.json", "xtask"),
+    ("providers/muse/providers/muse.json", "xtask"),
+    ("providers/openai/providers/openai.json", "xtask"),
     ("providers/opencode/providers/opencode-go.json", "xtask"),
+    ("providers/opencode/providers/opencode-zen.json", "xtask"),
+    ("providers/vertex/providers/vertex.json", "xtask"),
     (
         "providers/openrouter/tests/models-from-the-recording.json",
         "main",
@@ -128,6 +138,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/anthropic-messages-probe/raw/stream.json",
         "provider",
     ),
+    ("research/anthropic-messages-probe/raw/stream.json", "main"),
     (
         "research/anthropic-messages-probe/raw/thinking-enabled.json",
         "provider",
@@ -477,6 +488,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     (
+        "research/google-generative-ai-probe/raw/auth2-query-stream.txt",
+        "provider",
+    ),
+    (
         "research/google-generative-ai-probe/raw/auth3-header-gemini-2.5-flash-image.json",
         "provider",
     ),
@@ -499,6 +514,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     (
         "research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json",
         "provider",
+    ),
+    (
+        "research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json",
+        "main",
     ),
     (
         "research/google-generative-ai-probe/raw/id-good-gemini-2.5-flash.json",
@@ -679,6 +698,10 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     (
         "research/google-generative-ai-probe/raw/sse2-stream-ok.json",
         "provider",
+    ),
+    (
+        "research/google-generative-ai-probe/raw/sse2-stream-ok.json",
+        "main",
     ),
     (
         "research/google-generative-ai-probe/raw/sysrole-model-gemini-2.5-flash.json",
@@ -1065,9 +1088,18 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "provider",
     ),
     ("research/openai-responses-probe/raw/probe.json", "provider"),
+    ("research/openai-responses-probe/raw/probe.json", "main"),
     ("research/opencode-probe/raw/go_protocols.json", "provider"),
     (
         "research/opencode-probe/raw/go_stream_tools.json",
+        "provider",
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_0.sse",
+        "provider",
+    ),
+    (
+        "research/opencode-probe/raw/go_stream_tools_1.sse",
         "provider",
     ),
     ("research/opencode-probe/raw/go_stream_tools_1.sse", "main"),
@@ -2359,8 +2391,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
 /// sources by `package_reader_mismatches`.
-pub(super) const PACKAGE_READERS: &[&str] =
-    &["cli", "config", "extensions", "main", "provider", "xtask"];
+pub(super) const PACKAGE_READERS: &[&str] = &["cli", "config", "extensions", "main", "xtask"];
 
 fn include_path(stream: TokenStream) -> Option<String> {
     let mut tokens = stream.into_iter();
