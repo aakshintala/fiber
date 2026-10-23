@@ -313,8 +313,8 @@ impl SessionExtensions {
             .collect()
     }
 
-    /// The lazy extensions whose start finished: a reload starts these again
-    /// and leaves every other lazy extension unstarted.
+    /// The lazy extensions whose VM started: a reload starts these again and
+    /// leaves every other lazy extension unstarted.
     fn started_lazy(&self) -> BTreeSet<String> {
         self.commands
             .lazies()
@@ -491,8 +491,7 @@ impl SessionExtensions {
             // A `commands` key, `{}` included, makes the extension lazy: its
             // VM is built but not started, and its commands come from the
             // manifest.
-            let lazy = entry.manifest.commands.is_some();
-            if lazy || entry.dir.join(ENTRY).is_file() {
+            if entry.manifest.commands.is_some() || entry.dir.join(ENTRY).is_file() {
                 let extension = match start::start_vm(
                     &entry.name,
                     &entry.dir,
@@ -590,8 +589,9 @@ impl SessionExtensions {
             })
             .collect();
         session.commands = SessionCommands::build(&real_sources, config);
-        let lazies: Vec<Arc<Lazy>> = started.iter().filter_map(|s| s.lazy.clone()).collect();
-        session.commands.attach_lazy(&lazies);
+        session
+            .commands
+            .attach_lazy(started.iter().filter_map(|s| s.lazy.clone()).collect());
         for lazy in session.commands.lazies() {
             if restart.contains(lazy.extension())
                 && let Err(rejection) = lazy.start()

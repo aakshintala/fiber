@@ -97,10 +97,7 @@ where
 /// Whether `name` is one `fiber.command` accepts: non-empty with no
 /// whitespace, `/` or `:`.
 fn is_command_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.chars().any(char::is_whitespace)
-        && !name.contains('/')
-        && !name.contains(':')
+    !name.is_empty() && !name.contains(['/', ':']) && !name.contains(char::is_whitespace)
 }
 
 /// An extension section's files in the opening message

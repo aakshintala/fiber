@@ -47,6 +47,8 @@ pub(crate) struct SessionCommands {
     notices: Vec<Notice>,
     /// Extensions unloaded by the `replaces` check, by name.
     unloaded: BTreeSet<String>,
+    /// The lazy extensions with an admitted command.
+    lazies: Vec<Arc<Lazy>>,
 }
 
 impl SessionCommands {
@@ -238,28 +240,33 @@ impl SessionCommands {
             admitted,
             notices,
             unloaded,
+            lazies: Vec::new(),
         }
     }
 
     /// Gives each admitted command of an extension in `lazies` its start and
-    /// its manifest's argument hint. Run once, before the table is shared.
-    pub(crate) fn attach_lazy(&mut self, lazies: &[Arc<Lazy>]) {
+    /// its manifest's argument hint, and keeps the extensions that have one.
+    /// Run once, before the table is shared.
+    pub(crate) fn attach_lazy(&mut self, lazies: Vec<Arc<Lazy>>) {
         for cmd in self.admitted.values_mut() {
             if let Some(lazy) = lazies.iter().find(|lazy| lazy.extension == cmd.extension) {
                 cmd.argument_hint = lazy.declared.get(&cmd.registered).cloned().flatten();
                 cmd.lazy = Some(Arc::clone(lazy));
             }
         }
+        self.lazies = lazies
+            .into_iter()
+            .filter(|lazy| {
+                self.admitted
+                    .values()
+                    .any(|cmd| cmd.extension == lazy.extension)
+            })
+            .collect();
     }
 
-    /// The lazy extensions with an admitted command, in extension-name order.
-    pub(crate) fn lazies(&self) -> Vec<Arc<Lazy>> {
-        let by_extension: BTreeMap<&str, &Arc<Lazy>> = self
-            .admitted
-            .values()
-            .filter_map(|cmd| cmd.lazy.as_ref().map(|lazy| (cmd.extension.as_str(), lazy)))
-            .collect();
-        by_extension.into_values().map(Arc::clone).collect()
+    /// The lazy extensions with an admitted command, in load order.
+    pub(crate) fn lazies(&self) -> &[Arc<Lazy>] {
+        &self.lazies
     }
 
     /// Notices from renames, conflicts and the `replaces` check.
@@ -329,12 +336,6 @@ impl SessionCommands {
     }
 }
 
-/// Why a lazy extension's start or check failed.
-struct Failed {
-    code: ErrorCode,
-    message: String,
-}
-
 /// What a lazy extension's start registered.
 struct Registered {
     /// The commands it registered, by registered name.
@@ -356,7 +357,7 @@ pub(crate) struct Lazy {
     /// The session's list of extensions whose data a misplaced
     /// `fiber.provider` call refuses.
     rejected: Arc<Mutex<Vec<String>>>,
-    started: OnceLock<Result<Registered, Failed>>,
+    started: OnceLock<Result<Registered, Rejection>>,
 }
 
 impl Lazy {
@@ -380,23 +381,18 @@ impl Lazy {
         &self.extension
     }
 
-    /// Whether the start has finished and succeeded. A start still running
-    /// reads as not started.
+    /// Whether the extension's VM has started, whatever started it: a
+    /// command, a provider's first use or a restart. A start that failed
+    /// counts.
     pub(crate) fn started(&self) -> bool {
-        matches!(self.started.get(), Some(Ok(_)))
+        self.lua.started()
     }
 
     /// Starts the extension if no one has, waits for a start in flight, and
     /// returns its outcome. Registering anything but the declared commands
     /// fails it.
     pub(crate) fn start(&self) -> Result<(), Rejection> {
-        self.registered()
-            .as_ref()
-            .map(|_| ())
-            .map_err(|failed| Rejection {
-                code: failed.code.clone(),
-                message: failed.message.clone(),
-            })
+        self.registered().as_ref().map(|_| ()).map_err(Clone::clone)
     }
 
     /// Starts the extension as [`start`](Self::start) does, then checks that
@@ -434,7 +430,7 @@ impl Lazy {
         Err(reject(missing.code(), &text))
     }
 
-    fn registered(&self) -> &Result<Registered, Failed> {
+    fn registered(&self) -> &Result<Registered, Rejection> {
         self.started.get_or_init(|| {
             self.read().map_err(|e| {
                 if self.lua.misplaced_provider() {
@@ -443,7 +439,7 @@ impl Lazy {
                         .unwrap_or_else(PoisonError::into_inner)
                         .push(self.extension.clone());
                 }
-                Failed {
+                Rejection {
                     code: e.code(),
                     message: e.to_string(),
                 }
