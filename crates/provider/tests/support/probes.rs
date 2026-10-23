@@ -54,16 +54,21 @@ pub(crate) struct Exchange {
 /// The exchanges `path` holds.
 pub(crate) fn read(path: &Path) -> Result<Vec<Exchange>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let name = path.display().to_string();
-    if path.extension().is_some_and(|e| e == "sse") {
+    parse(&path.display().to_string(), &bytes)
+}
+
+/// The exchanges `bytes` hold, named `name` in labels and failures:
+/// the same decoding as `read`, for bytes compiled into the test.
+pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Vec<Exchange>, String> {
+    if Path::new(name).extension().is_some_and(|e| e == "sse") {
         return Ok(vec![Exchange {
-            label: name,
-            response: Recorded::Stream(bytes),
+            label: name.to_owned(),
+            response: Recorded::Stream(bytes.to_vec()),
             wrapper: Value::Null,
         }]);
     }
     let value: Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("{name}: not JSON ({e})"))?;
+        serde_json::from_slice(bytes).map_err(|e| format!("{name}: not JSON ({e})"))?;
     let wrappers = if let Value::Array(list) = value {
         list
     } else {
