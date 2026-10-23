@@ -35,7 +35,7 @@ const LAYER_COLUMN: usize = 10;
 const GAP: usize = 2;
 
 /// The columns the two gaps of a row take.
-const GAPS: usize = 2 * GAP;
+const GAPS: usize = GAP.saturating_mul(2);
 
 /// When a written key takes effect (`docs/configuration.md`, "When Fiber
 /// reads configuration").
