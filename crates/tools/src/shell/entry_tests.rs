@@ -145,6 +145,24 @@ fn an_owned_name_is_never_consulted() {
 }
 
 #[test]
+fn a_configured_subcommand_path_must_match_word_for_word() {
+    // Every subcommand word must equal its part: `other` never stands in
+    // for `tool`, even with words to spare.
+    assert_eq!(
+        configured_flags(&ws(&["my", "other"]), &[configured("my tool", &[])]),
+        None
+    );
+    assert_eq!(
+        configured_flags(&ws(&["my"]), &[configured("my tool", &[])]),
+        None
+    );
+    assert_eq!(
+        configured_flags(&ws(&["my", "tool"]), &[configured("my tool", &[])]),
+        Some(Vec::new())
+    );
+}
+
+#[test]
 fn skip_counts_the_command_path() {
     let empty: Vec<(String, Vec<String>)> = Vec::new();
     assert_eq!(skip(&ws(&["git", "status", "x"]), &empty), 2);
