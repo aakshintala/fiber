@@ -1657,7 +1657,6 @@ dependencies = [
  "log 0.0.0",
  "loop",
  "mcp",
- "net",
  "picture",
  "provider",
  "routing",

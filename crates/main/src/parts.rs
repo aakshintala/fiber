@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::connect::{Here, connect, connect_observed};
 use config::{Config, Sources};
 use contract::diag::DebugLog as _;
 use contract::diag::{Observe, Op};
@@ -17,6 +16,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use doors::failure;
 use extensions::Providers;
 use r#loop::Model;
+use routing::{Here, connect, connect_observed};
 
 use crate::{
     failed, handoff, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
@@ -334,7 +334,7 @@ pub(crate) fn parts_in(
         signer,
         lua.map(|lua| (lua, label.as_str())),
         &here,
-        &diag,
+        &diagnostics(&diag),
     )?;
     // The credentials read at startup, seeding `Switching`'s keys: the
     // session's entry first, so a reviewer on its provider reuses them.
@@ -597,6 +597,15 @@ pub(crate) fn reviewer_reference(
     }
 }
 
+/// The session's `Diag` as routing's observed factories take it: the writer
+/// and the connector timing, both from the one shared `Diag`.
+pub(crate) fn diagnostics(diag: &Arc<log::diag::Diag>) -> routing::Diagnostics {
+    routing::Diagnostics {
+        log: Arc::clone(diag) as Arc<dyn contract::diag::DebugLog>,
+        timings: diag.timings(),
+    }
+}
+
 /// Who judges step 7's calls: `reviewer.model` when set, else the session
 /// provider's own `providers."<name>".reviewer_model`, else the package's
 /// `reviewer_model`, else no reviewer at all. A failure to
@@ -638,7 +647,7 @@ pub(crate) fn choose_reviewer(
             access.signer,
             access.lua.as_ref().map(|lua| (lua, label.as_str())),
             here,
-            diag,
+            &diagnostics(diag),
         )?,
         None => (
             connect(

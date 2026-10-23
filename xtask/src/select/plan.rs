@@ -67,11 +67,11 @@ pub(crate) fn ten_turns_runs(event: &str, release_paths: &[String]) -> bool {
 /// (`main/src/session_command.rs`), through `contract`, `support` and
 /// `log` (`session_command.rs:9`, `shutdown.rs:30`,
 /// `session_extensions.rs:9`), the `loop` (`session_extensions.rs:10`),
-/// `doors` (`builtin.rs:126`), `provider` (`lua_providers.rs:14`),
+/// `doors` (`builtin.rs:126`), `provider` (`routing/src/connect.rs`),
 /// `tools` (`builtin.rs:58`), `mcp` (`mcp_servers.rs:30`), `jobs`
-/// (`delegates.rs:34`), `net` (`connect.rs:193`), `worktree`
+/// (`delegates.rs:34`), `net` (through `provider`), `worktree`
 /// (`doors/src/isolation.rs:61`), `extensions` (`session_command.rs:216`),
-/// `config` (`lua_providers.rs:9`) and `hub` (`session_command.rs:605`,
+/// `config` (`routing/src/lua_providers.rs`) and `hub` (`session_command.rs:605`,
 /// the `hub::RecentRow` it appends), and `routing`, which picks the
 /// session's model (`docs/architecture.md`, module table, `routing` row;
 /// `main` calls it at startup). Slash-bounded, so

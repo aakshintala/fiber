@@ -4,10 +4,12 @@
 //! The one module that uses `config`, `extensions` and `provider`
 //! together. `main` calls it at startup and when a session switches models.
 
+pub mod connect;
 pub mod credential;
 pub mod lua_providers;
 pub mod scripted;
 
+pub use connect::{Diagnostics, Here, connect, connect_observed};
 use contract::shapes::Failure;
 
 #[cfg(test)]

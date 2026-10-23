@@ -9,7 +9,6 @@ mod cli;
 mod clock;
 mod completion;
 mod configure;
-mod connect;
 mod continue_session;
 mod delegates;
 mod handoff;
@@ -76,7 +75,6 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use config::{Config, Layer, Sources};
-use connect::{Here, connect, connect_observed};
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -86,6 +84,7 @@ use r#loop::Loop;
 #[cfg(test)]
 use parts::parts_in;
 use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_reference};
+use routing::{Here, connect, connect_observed};
 use routing::{credential, lua_providers, scripted};
 
 fn main() -> ExitCode {

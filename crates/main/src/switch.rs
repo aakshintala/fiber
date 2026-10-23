@@ -249,7 +249,7 @@ pub(crate) type Connector = Arc<
             Option<Secret>,
             Option<Arc<dyn contract::signing::Signer>>,
             Option<(&Arc<LuaProvider>, &str)>,
-            &crate::connect::Here,
+            &crate::Here,
         ) -> Result<Arc<dyn Provider>, Failure>
         + Send
         + Sync,
@@ -741,7 +741,7 @@ pub(crate) fn prepare(
             got.access.signer.clone(),
             got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
             &here,
-            diag,
+            &crate::parts::diagnostics(diag),
         )
         .map_err(|failure| invalid(failure.message))?,
         None => (
