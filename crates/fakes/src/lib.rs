@@ -5,7 +5,6 @@
 
 pub mod alloc;
 mod blocking;
-mod cancel;
 pub mod children;
 mod client;
 pub mod clock;
@@ -44,7 +43,6 @@ mod within;
 use std::path::{Path, PathBuf};
 
 pub use blocking::BlockingProvider;
-pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
@@ -56,6 +54,7 @@ pub use jig_start::{START_BOUND, warm_up};
 pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};
 pub use skills::NoSkills;
+pub use support::cancel::Token as CancelToken;
 pub mod git;
 /// The dropped server's own state, read after the drop: the public path
 /// for integration tests, which reach only the public wrappers.
