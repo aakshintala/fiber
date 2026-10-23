@@ -25,13 +25,9 @@ use std::thread;
 use std::time::Duration;
 
 /// How long the jig exchange may take once the binary has started.
-/// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
-/// total); the test's start bound and its exchange bound each count alone
-/// against that limit, and a pass-then-hang path adds the start bound, the
-/// exchange deadline and the stand-down, a sum that stays under that limit:
-/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be at
-/// least twice the test's longest single deadline plus its normal run time, so
-/// a hang reports which wait expired.
+/// This file's exchange bound, the start bound (`fakes::START_BOUND`) and the
+/// stand-down sum under nextest's 120 s limit (`docs/testing.md`, "Waits and
+/// timeouts").
 const JIG_DEADLINE: Duration = Duration::from_secs(50);
 
 /// The example `cargo test` built beside this test binary
@@ -76,10 +72,8 @@ impl Jig {
         if let Err(err) = std::fs::hard_link(example_path(), &exe) {
             panic!("hard-linking `paging` to {}: {err}", exe.display());
         }
-        // Both paths exec the same bytes, so both get a warm-up: the
-        // built example's first start and the link's own first exec each
-        // stall here instead of in the exchange's [`JIG_DEADLINE`].
-        fakes::warm_up(&example_path(), &["--bogus"], 2);
+        // The hard link shares the example's inode, so one warm-up covers both
+        // the built example and the link; it stalls here, not in the exchange.
         fakes::warm_up(&exe, &["--bogus"], 2);
         Self { dir, bin }
     }

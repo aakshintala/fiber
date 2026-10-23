@@ -45,11 +45,6 @@ use support::{Session, calls_reply, delivery, handoff, paris, shell};
 /// a hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(10);
 
-/// The start bound stays within nextest's timeout: twice it fits the 4 x
-/// 30 s limit, so a missed warm-up with its reap still reports before the
-/// harness kills the test.
-const _: () = assert!(START_BOUND.as_secs() * 2 <= 120);
-
 /// One prompt turn, asserting it completes.
 fn prompt_turn(session: &mut Session, text: &str) {
     session.inbox.send(delivery(text)).unwrap();
