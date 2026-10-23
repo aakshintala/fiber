@@ -52,10 +52,11 @@ several at once, waits on them, cancels them and runs verification gates lives
 outside Fiber, in a tool that wraps both `fiber` and `cursor-agent`.
 
 Fiber's entire obligation to the delegation slot is a hub the supervisor
-drives as a client, as the terminal does: a session started with no tty in a
-workspace path it is given rather than creates, the session id in the answer,
-prompts, steering and replies as driver commands, a documented and versioned
-event stream, and `close` to end it
+drives as a client, as the terminal does: a supervised session started with
+no tty in a workspace path it is given rather than creates, the session id in
+the answer, prompts and steering as driver commands, a documented and
+versioned event stream, and `close` to end it, with `fiber_exited` as the
+verdict
 ([Door A](https://github.com/aakshintala/fiber/issues/2852)).
 
 Fiber is an MCP client, consuming tool servers, and that client is built in

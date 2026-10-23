@@ -890,8 +890,9 @@ session. A person answers it through a `form` interaction. A program answers
 by resuming the session.
 
 How a session started decides who drives it. A session the hub started is
-driven by a person until it is sent `close`. Every other session is driven by
-a program, such as a delegate (a fork included) or a `fiber ask` session.
+driven by a person until it is sent `close`, unless it was started
+`supervised`. Every other session is driven by a program, such as a delegate
+(a fork included), a supervised session or a `fiber ask` session.
 
 ### The call
 
@@ -922,7 +923,8 @@ a program, such as a delegate (a fork included) or a `fiber ask` session.
 
 ### When a person can answer
 
-This is a session the hub started, which any client may answer.
+This is a session the hub started without `supervised`, which any client
+may answer.
 
 - One call raises one `form` interaction, with one field per question: select,
   multi-select or text input. One `reply` answers the whole form.
@@ -935,7 +937,8 @@ This is a session the hub started, which any client may answer.
 ### When a program drives the session
 
 This is every session the hub did not start, such as a delegate (a fork
-included) or a `fiber ask` session, and a session that has been sent `close`.
+included) or a `fiber ask` session, a supervised session, and a session that
+has been sent `close`.
 
 - The turn ends `completed`, with the questions on `turn_completed`. The
   call's result is one line saying the questions went to the driver.
@@ -950,12 +953,14 @@ included) or a `fiber ask` session, and a session that has been sent `close`.
 - `fiber ask` exits 0 with `questions` on `fiber_exited`, and the caller
   resumes the session with the answers (`docs/invocation.md`, "What a caller
   gets back").
+- A supervisor reads the questions from `turn_completed` on the event stream
+  and sends the answers as its next `prompt`.
 
 A child's question goes to its parent, never straight to the person. The
 parent wrote the child's brief and can usually answer, and the person is never
 interrupted by a session they did not start. An approval is different: no
-model may answer one, so a delegate's escalation is a block
-(`docs/permissions.md`, "Delegates").
+model may answer one, so a delegate's or a supervised session's escalation is
+a block (`docs/permissions.md`, "Delegates", "Supervised sessions").
 
 ### The result
 

@@ -501,7 +501,8 @@ _Avoid_: teardown, graceful exit, termination
 A way a person or program reaches Fiber. There are two: the terminal, a client
 of the hub, and `fiber ask`, a one-shot session for a caller outside Fiber.
 A program that drives sessions, such as a delegation supervisor, uses neither:
-it is a client of the hub, as the terminal is.
+it is a client of the hub, as the terminal is, and the sessions it starts are
+supervised.
 Which door was used changes where a prompt comes from and when a session
 exits, never what the loop does.
 _Avoid_: mode, entry point, interface
