@@ -160,6 +160,17 @@ fn a_non_utf8_gitfile_executes() {
 }
 
 #[test]
+fn a_regular_file_where_a_directory_belongs_is_not_bare() {
+    let (_dir, workspace) = workspace("fiber-shell-git-file-marker");
+    std::fs::write(workspace.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(workspace.join("objects"), "not a directory\n").unwrap();
+    std::fs::create_dir_all(workspace.join("refs")).unwrap();
+    // A regular file where a directory belongs does not count toward
+    // bareness, so the layout reads.
+    assert!(repository_ok(&workspace));
+}
+
+#[test]
 fn symlinked_bare_markers_execute() {
     let (_dir, workspace) = workspace("fiber-shell-git-symlink-bare");
     std::fs::write(workspace.join("HEAD"), "ref: refs/heads/main\n").unwrap();
