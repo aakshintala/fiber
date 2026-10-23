@@ -606,9 +606,10 @@ fn a_missing_service_manager_says_what_the_installed_hub_needs() {
         assert_eq!(error.code(), ErrorCode::IoFailed);
         // launchd asks before it writes, so its error is bare; systemd's
         // comes from the load after the write.
-        let case = match &error {
-            CliError::RerunInstall { cause } => &**cause,
-            other => other,
+        let case = if let CliError::RerunInstall { cause } = &error {
+            &**cause
+        } else {
+            &error
         };
         assert!(
             matches!(case, CliError::ManagerNotFound { program: p } if p == program),
