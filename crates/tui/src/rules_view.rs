@@ -9,12 +9,12 @@ use crate::keys::{Edit, Key};
 use crate::local_time::utc_minute;
 use crate::model_picker::age;
 use crate::settings_view::{Act, Ctx};
-use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
 use crate::text;
 use crate::theme::Role;
 
 /// The columns beside a rule's text: ` · `, the ✕ and the focus gutter.
-const BESIDE_TEXT: usize = 6;
+const BESIDE_TEXT: usize = 4 + GUTTER;
 
 /// One row of the view: a section's heading, one of its rules, or the
 /// note in place of its rules.
@@ -81,16 +81,8 @@ impl Rules {
         }
         self.items = build(self.sections.as_ref());
         let shown = self.shown(ctx);
-        // The selection rests on a row that takes a key: the one it was
-        // on, else the next, else the last.
-        let takes = self.takes();
-        let at = takes
-            .iter()
-            .copied()
-            .find(|at| *at >= self.list.selected())
-            .or_else(|| takes.last().copied())
-            .unwrap_or(self.list.selected());
-        self.list.select(at, self.items.len(), shown);
+        // The selection rests on a row that takes a key.
+        self.list.rest_on(&self.takes(), self.items.len(), shown);
     }
 
     /// The rows the view shows at `ctx`'s height.

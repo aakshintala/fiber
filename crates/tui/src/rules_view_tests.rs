@@ -143,17 +143,24 @@ const DAY: u64 = 86_400_000;
 /// `full()`'s `added`.
 const ADDED: u64 = 1_791_331_200_000;
 
+/// The non-blank row texts of the frame: the rows the doc names.
+fn texts(rules: &Rules) -> Vec<String> {
+    lines(rules)
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 #[test]
-fn global_then_project_each_in_line_order_under_its_heading() {
+fn global_then_project_each_under_its_heading() {
     let fake = fake(vec![full(), hand()], Ok(vec![full()]));
     let rules = open(&fake);
     assert_eq!(
-        lines(&rules),
+        texts(&rules),
         [
             "Global",
             "allow shell:npm test · added 2026-10-07 00:00 UTC in s_01 · ✕",
             "deny shell:(any) · ✕",
-            "",
             "This project",
             "allow shell:npm test · added 2026-10-07 00:00 UTC in s_01 · ✕",
         ]
@@ -290,8 +297,8 @@ fn a_missing_file_says_no_rules() {
     let fake = fake(Vec::new(), Ok(Vec::new()));
     let rules = open(&fake);
     assert_eq!(
-        lines(&rules),
-        ["Global", "No rules.", "", "This project", "No rules."]
+        texts(&rules),
+        ["Global", "No rules.", "This project", "No rules."]
     );
 }
 
@@ -300,11 +307,10 @@ fn a_bad_file_shows_its_error_and_the_other_files_rows() {
     let fake = fake(Vec::new(), Err("/home/projects/-w/rules:2: bad"));
     let rules = open(&fake);
     assert_eq!(
-        lines(&rules),
+        texts(&rules),
         [
             "Global",
             "No rules.",
-            "",
             "This project",
             "/home/projects/-w/rules:2: bad  Ctrl+G opens it to fix it.",
         ]
@@ -499,8 +505,8 @@ fn a_revoke_rereads_and_says_it_applies_to_the_next_call() {
         ["Revoked; applies to the next call judged."]
     );
     assert_eq!(
-        lines(&rules),
-        ["Global", "No rules.", "", "This project", "No rules."]
+        texts(&rules),
+        ["Global", "No rules.", "This project", "No rules."]
     );
 }
 

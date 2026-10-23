@@ -305,9 +305,11 @@ fn the_rules_view_matches_the_doc() {
     assert!(!grid.cell(col_at(&grid, y, "✕"), y).inverse);
     assert!(x >= 2);
     assert!(!grid.contents.contains("Global rules"), "{}", grid.contents);
-    // A click on the ✕ revokes the rule: the row goes and the line leaves
-    // the file.
-    click(&mut run, col_at(&grid, y, "✕"), y);
+    // Delete revokes the selected rule: the row goes and the line leaves
+    // the file. (The ✕ is a pointer target; a test clicks only a row
+    // whose position a signal has fixed, and this view has no such
+    // signal, so the keyboard path revokes.)
+    run.write(b"\x1b[3~");
     let grid = run.wait_screen("the rule revoked", |grid| {
         find_row(grid, "allow shell:git status").is_none()
             && grid
@@ -386,20 +388,19 @@ fn the_settings_view_matches_the_doc() {
     let value_x = col_at(&grid, header, "value");
     // The model's value draws unquoted, in the value column, with its
     // layer in the layer column.
-    let model = grid
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(y, _)| *y as u16 > header)
-        .find(|(y, row)| {
-            row.trim_start_matches(['›', ' ']).starts_with("model ")
-                && col_at_or(&grid, *y as u16, "scripted/s.json").is_some()
+    let model = (header + 1..47)
+        .find(|y| {
+            grid.rows[usize::from(*y)]
+                .trim_start_matches(['›', ' '])
+                .starts_with("model ")
         })
-        .map(|(y, _)| y as u16);
-    if let Some(model) = model {
-        assert_eq!(col_at(&grid, model, "scripted/s.json"), value_x);
-        assert_eq!(col_at(&grid, model, "global"), layer_x);
-    }
+        .unwrap_or_else(|| panic!("the model row in\n{}", grid.contents));
+    assert_eq!(col_at(&grid, model, "scripted/s.json"), value_x);
+    assert!(
+        !grid.rows[usize::from(model)].contains("\"scripted/s.json\""),
+        "the model's value is unquoted"
+    );
+    assert_eq!(col_at(&grid, model, "global"), layer_x);
     // Every row's layer starts where the header's does.
     let handoff = row_with(&grid, "handoff.tokens");
     assert_eq!(col_at(&grid, handoff, "default"), layer_x);

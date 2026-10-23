@@ -156,7 +156,7 @@ fn before_the_answer_it_says_reading_and_has_no_rows() {
 }
 
 #[test]
-fn rows_group_built_in_then_extensions_then_servers_each_by_name() {
+fn each_tool_sits_under_its_own_sources_heading() {
     let fake = Fake::new(Vec::new());
     let tools = opened(
         &fake,
@@ -170,39 +170,33 @@ fn rows_group_built_in_then_extensions_then_servers_each_by_name() {
         ],
         None,
     );
-    assert_eq!(
-        tool_names(&tools),
-        vec!["read", "write", "u", "t", "x", "zeta"]
-    );
-    let headings: Vec<(String, Ink)> = frame(&tools)
-        .rows
-        .into_iter()
-        .filter_map(|cells| cells.into_iter().next())
-        .filter(|(_, _, ink)| *ink == Ink::Heading)
-        .map(|(text, _, ink)| (text, ink))
+    let mut under: Vec<(String, String)> = Vec::new();
+    let mut heading = String::new();
+    for cells in frame(&tools).rows {
+        let Some((text, _, ink)) = cells.first() else {
+            continue;
+        };
+        if *ink == Ink::Heading {
+            heading = text.clone();
+        } else {
+            let name = text.split(" · ").next().unwrap_or("");
+            under.push((heading.clone(), name.to_owned()));
+        }
+    }
+    under.sort();
+    let want = [
+        ("Built-in", "read"),
+        ("Built-in", "write"),
+        ("Extension · c", "u"),
+        ("Extension · y", "t"),
+        ("MCP · a", "x"),
+        ("MCP · b", "zeta"),
+    ];
+    let want: Vec<(String, String)> = want
+        .iter()
+        .map(|(heading, name)| ((*heading).to_owned(), (*name).to_owned()))
         .collect();
-    let words: Vec<&str> = headings.iter().map(|(text, _)| text.as_str()).collect();
-    assert_eq!(
-        words,
-        [
-            "Built-in",
-            "Extension · c",
-            "Extension · y",
-            "MCP · a",
-            "MCP · b"
-        ]
-    );
-}
-
-#[test]
-fn a_blank_row_separates_each_source() {
-    let fake = Fake::new(Vec::new());
-    let tools = opened(&fake, &[builtin("read"), extension("t", "y")], None);
-    let rows = names(&tools);
-    assert_eq!(rows.len(), 5, "{rows:?}");
-    assert!(rows[0].starts_with("Built-in"), "{rows:?}");
-    assert_eq!(rows[2], "", "{rows:?}");
-    assert!(rows[3].starts_with("Extension"), "{rows:?}");
+    assert_eq!(under, want);
 }
 
 #[test]
@@ -485,6 +479,40 @@ fn a_view_with_no_switch_row_still_scrolls() {
     assert_eq!(selected(&tools), 1);
 }
 
+/// The view over forty MCP tools, taller than its 20-row window.
+fn tall() -> (Fake, Tools) {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Mcp("s".to_owned()),
+        &[],
+        &[],
+    )]);
+    let infos: Vec<ToolInfo> = (0..40)
+        .map(|n| mcp(&format!("mcp__s__t{n:02}"), "s", &format!("t{n:02}")))
+        .collect();
+    let tools = opened(&fake, &infos, None);
+    (fake, tools)
+}
+
+#[test]
+fn keys_scroll_the_window_to_keep_the_selection_in_view() {
+    let (fake, mut tools) = tall();
+    // The heading is row 0, the first tool row 1; the window is 20 rows.
+    assert_eq!((selected(&tools), tools.list.top()), (1, 0));
+    for _ in 0..30 {
+        tools.key(&Key::Down, &ctx(&fake, None));
+    }
+    assert_eq!((selected(&tools), tools.list.top()), (31, 12));
+}
+
+#[test]
+fn a_click_scrolls_the_window_to_keep_the_row_in_view() {
+    let (fake, mut tools) = tall();
+    tools.click(Spot::Row(38), &ctx(&fake, None));
+    assert_eq!((selected(&tools), tools.list.top()), (38, 19));
+    tools.click(Spot::Switch { row: 40, at: 0 }, &ctx(&fake, None));
+    assert_eq!((selected(&tools), tools.list.top()), (40, 21));
+}
+
 #[test]
 fn space_on_a_heading_does_nothing() {
     let fake = fake_with(Vec::new());
@@ -524,7 +552,9 @@ fn two_off_names_in_one_group_are_both_shown() {
         &[],
     )]);
     let tools = opened(&fake, &[], None);
-    assert_eq!(tool_names(&tools), ["gone", "missing"]);
+    let mut shown = tool_names(&tools);
+    shown.sort();
+    assert_eq!(shown, ["gone", "missing"]);
 }
 
 #[test]

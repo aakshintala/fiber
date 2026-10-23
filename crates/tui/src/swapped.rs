@@ -14,6 +14,9 @@ use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
 use crate::theme::Role;
 
+/// The columns a list with a gutter keeps before each row's text.
+pub(crate) const GUTTER: usize = 2;
+
 /// The selected row's style: reversed, so it shows on every theme and
 /// with no colour.
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
@@ -107,11 +110,10 @@ impl List {
         self
     }
 
-    /// Moves the selection by `key` as `key` does, but only onto the rows
-    /// in `takes` (ascending): the rows that take Enter or a switch. ↑ and
-    /// ↓ go to the next one in their direction; PageUp and PageDown to
-    /// the first one at or past the page's end, else the last one in
-    /// reach. With none in `takes` it is `key`. Whether it moved.
+    /// Moves the selection by ↑ or ↓ onto the next row in `takes`
+    /// (ascending) in that direction: the rows that take Enter or a
+    /// switch. Any other key, and a list with none in `takes`, moves as
+    /// [`List::key`] does. Whether it moved.
     pub(crate) fn key_over(
         &mut self,
         key: &Key,
@@ -122,35 +124,31 @@ impl List {
         if takes.is_empty() {
             return self.key(key, rows, height);
         }
-        let page = height.saturating_sub(1).max(1);
         let at = self.selected;
         let to = if *key == Key::Down {
             takes.iter().copied().find(|row| *row > at)
         } else if *key == Key::Up {
             takes.iter().rev().copied().find(|row| *row < at)
-        } else if *key == Key::PageDown {
-            let end = at.saturating_add(page).min(rows.saturating_sub(1));
-            takes
-                .iter()
-                .copied()
-                .find(|row| *row >= end)
-                .or_else(|| takes.last().copied().filter(|row| *row > at))
-        } else if *key == Key::PageUp {
-            let end = at.saturating_sub(page);
-            takes
-                .iter()
-                .rev()
-                .copied()
-                .find(|row| *row <= end)
-                .or_else(|| takes.first().copied().filter(|row| *row < at))
         } else {
-            None
+            return self.key(key, rows, height);
         };
         let Some(to) = to else {
             return false;
         };
         self.select(to, rows, height);
         self.selected != at
+    }
+
+    /// Puts the selection on a row in `takes`: the one it is on, else the
+    /// next, else the last. With none in `takes` it stays.
+    pub(crate) fn rest_on(&mut self, takes: &[usize], rows: usize, height: usize) {
+        let at = takes
+            .iter()
+            .copied()
+            .find(|row| *row >= self.selected)
+            .or_else(|| takes.last().copied())
+            .unwrap_or(self.selected);
+        self.select(at, rows, height);
     }
 
     /// Moves the selection by `key` over `rows` rows shown `height` at a
@@ -374,9 +372,11 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         let mut x = area.x;
         if gutter {
             if at == frame.list.selected() {
-                buf.set_stringn(x, y, "› ", 2, Style::default());
+                buf.set_stringn(x, y, "› ", GUTTER, Style::default());
             }
-            x = x.saturating_add(2).min(area.right());
+            x = x
+                .saturating_add(crate::text::to_u16(GUTTER))
+                .min(area.right());
         }
         for (text, spot, ink) in cells {
             let (end, _) = buf.set_stringn(

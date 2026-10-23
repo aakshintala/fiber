@@ -10,11 +10,8 @@ use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::format::tokens;
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx};
-use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
+use crate::swapped::{Frame, GUTTER, Ink, List, Spot, about, rows_height};
 use crate::text;
-
-/// The columns a view with a gutter keeps before each row's text.
-const GUTTER: usize = 2;
 
 /// A switch at its widest, as the name's room counts it.
 const WIDEST_SWITCH: &str = "[off]";
@@ -376,16 +373,8 @@ impl Tools {
         }
         self.rows = rows;
         let shown = rows_height(&self.frame(ctx.width, None), ctx.height);
-        let takes = self.takes();
-        // The selection rests on a row that takes a switch: the one it
-        // was on, else the next, else the last.
-        let at = takes
-            .iter()
-            .copied()
-            .find(|at| *at >= self.list.selected())
-            .or_else(|| takes.last().copied())
-            .unwrap_or(self.list.selected());
-        self.list.select(at, self.rows.len(), shown);
+        // The selection rests on a row that takes a switch.
+        self.list.rest_on(&self.takes(), self.rows.len(), shown);
     }
 
     /// The frame to draw at `width` columns. `cost` is what a reload's

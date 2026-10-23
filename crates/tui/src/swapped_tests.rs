@@ -513,30 +513,41 @@ fn arrows_move_only_between_the_rows_that_take_a_key() {
 }
 
 #[test]
-fn a_page_lands_on_the_first_taking_row_at_or_past_its_end() {
-    // The page is 3 rows over a 4-row view: from 0 it ends on 3.
-    let takes = [0, 2, 4, 9];
-    assert_eq!(stepped(&[Key::PageDown], 10, 4, &takes), [4]);
-    // Ending exactly on a taking row stops there.
-    assert_eq!(stepped(&[Key::PageDown], 10, 3, &[0, 2, 4, 9]), [2]);
-    // Past the last taking row, the last one in reach.
-    assert_eq!(
-        stepped(
-            &[Key::PageDown, Key::PageDown, Key::PageDown],
-            10,
-            4,
-            &takes
-        ),
-        [4, 9, 9]
-    );
-    // And back up: the last taking row at or before the page's start.
+fn a_page_key_moves_as_the_plain_list_does() {
+    // Only ↑ and ↓ skip: a page lands where the plain list puts it.
+    let takes = [1, 3];
     let mut list = List::default();
-    list.select(9, 10, 4);
-    assert!(list.key_over(&Key::PageUp, 10, 4, &takes));
+    list.select(1, 10, 4);
+    assert!(list.key_over(&Key::PageDown, 10, 4, &takes));
     assert_eq!(list.selected(), 4);
     assert!(list.key_over(&Key::PageUp, 10, 4, &takes));
-    assert_eq!(list.selected(), 0);
-    assert!(!list.key_over(&Key::PageUp, 10, 4, &takes));
+    assert_eq!(list.selected(), 1);
+}
+
+#[test]
+fn rest_on_keeps_a_taking_row_else_the_next_else_the_last() {
+    let takes = [2, 5];
+    for (from, to) in [(0, 2), (2, 2), (3, 5), (5, 5), (6, 5)] {
+        let mut list = List::default();
+        list.select(from, 8, 8);
+        list.rest_on(&takes, 8, 8);
+        assert_eq!(list.selected(), to, "from {from}");
+    }
+    // With none that take a key, the selection stays.
+    let mut list = List::default();
+    list.select(3, 8, 8);
+    list.rest_on(&[], 8, 8);
+    assert_eq!(list.selected(), 3);
+    // The window follows: from row 6 the three-row window starts at 4,
+    // and row 5 is still in it.
+    let mut list = List::default();
+    list.select(6, 8, 3);
+    list.rest_on(&takes, 8, 3);
+    assert_eq!((list.selected(), list.top()), (5, 4));
+    // From row 0 to row 2 the window stays at the top.
+    let mut list = List::default();
+    list.rest_on(&takes, 8, 3);
+    assert_eq!((list.selected(), list.top()), (2, 0));
 }
 
 #[test]

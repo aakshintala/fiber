@@ -14,7 +14,7 @@ use crate::ThemeSetting;
 use crate::configure::{Configure, Layer, SettingRow, Shown, WriteScope};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::swapped::{Frame, GUTTER, Ink, List, Spot, rows_height};
 use crate::text;
 
 /// The key the theme choice edits.
@@ -33,9 +33,6 @@ const LAYER_COLUMN: usize = 10;
 
 /// The gap between two columns.
 const GAP: usize = 2;
-
-/// The columns a view with a gutter keeps before each row's text.
-const GUTTER: usize = 2;
 
 /// When a written key takes effect (`docs/configuration.md`, "When Fiber
 /// reads configuration").
@@ -267,11 +264,6 @@ impl Settings {
         }
     }
 
-    /// The list's rows that take a key: every key's, not the header.
-    fn takes(&self) -> Vec<usize> {
-        (1..=self.rows.len()).collect()
-    }
-
     /// The view opened directly in the theme choices, as `/theme`
     /// opens it: the `tui.theme` row focused with its choices open.
     /// With no theme row the view opens on its rows, as `open` does.
@@ -420,10 +412,12 @@ impl Settings {
             self.edit(ctx);
             return Act::Stay;
         }
-        if self
-            .list
-            .key_over(key, self.list_len(), shown, &self.takes())
-        {
+        let before = self.list.selected();
+        self.list.key(key, self.list_len(), shown);
+        // The header takes no selection.
+        let at = self.list.selected().max(1);
+        self.list.select(at, self.list_len(), shown);
+        if self.list.selected() != before {
             self.said.clear();
         }
         Act::Stay
@@ -563,7 +557,7 @@ impl Settings {
             },
             (Spot::Row(at), Mode::Rows) => {
                 // The header row is not a key.
-                if self.takes().contains(&at) {
+                if (1..=self.rows.len()).contains(&at) {
                     self.list.select(at, self.list_len(), shown);
                     self.said.clear();
                 }
