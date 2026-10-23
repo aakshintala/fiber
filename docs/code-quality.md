@@ -239,5 +239,10 @@ Only what no tool can:
 - every code a doc says something fails with, is rejected with, or carries
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
+- in each test the pull request adds or changes: every asserted order or
+  count cites the doc line that promises it (`docs/testing.md`, "Event
+  streams"); every pointer input follows a readiness signal, not a grid
+  match (`docs/testing/screens.md`); every fake's signal is sent after the
+  state it announces
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docscode-qualitymd).

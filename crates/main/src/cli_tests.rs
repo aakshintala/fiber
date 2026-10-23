@@ -2199,6 +2199,54 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
     }
 }
 
+/// `--session` takes one exact session id, before or after the
+/// description, and its absence leaves the choice to the project.
+#[test]
+fn feedback_takes_an_optional_exact_session_id() {
+    for args in [
+        &["fiber", "feedback", "--session", "s_0123456789abcdef", "hi"][..],
+        &["fiber", "feedback", "hi", "--session", "s_0123456789abcdef"],
+    ] {
+        let Invocation::Run(Some(Commands::Feedback(feedback)), _) =
+            parse_from(args.iter().copied())
+        else {
+            panic!("{args:?}");
+        };
+        assert_eq!(feedback.session.as_deref(), Some("s_0123456789abcdef"));
+        assert_eq!(
+            super::ask_parts(&feedback.prompt).unwrap(),
+            (Some("hi".to_owned()), false)
+        );
+    }
+    let Invocation::Run(Some(Commands::Feedback(feedback)), _) =
+        parse_from(["fiber", "feedback", "hi"])
+    else {
+        panic!("no session");
+    };
+    assert_eq!(feedback.session, None);
+}
+
+/// A session id that is not `s_` and 16 lowercase hex digits is a usage
+/// error before anything is read.
+#[test]
+fn feedback_rejects_a_malformed_session_id() {
+    for id in [
+        "s_abc",
+        "s_0123456789ABCDEF",
+        "0123456789abcdef",
+        "s_0123456789abcdef0",
+        "../x",
+    ] {
+        let error = sentence(&["fiber", "feedback", "--session", id, "hi"]);
+        assert!(
+            error.contains("a session id is `s_` followed by 16 lowercase hex digits"),
+            "{id}: {error}"
+        );
+    }
+    let error = sentence(&["fiber", "feedback", "--session"]);
+    assert!(error.contains("--session"), "{error}");
+}
+
 /// `feedback` resolves its description through the same `ask_parts`
 /// seam as `ask`: one description, then an optional `-`.
 #[test]

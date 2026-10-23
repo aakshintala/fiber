@@ -1,7 +1,7 @@
 //! The `hover` jig (`docs/testing.md`, "Jigs"): measures what hover costs
 //! the terminal (`docs/tui.md`, "Mouse and hover").
 //!
-//! `cargo run --release -p tui --example hover -- <events.jsonl> [width] [height]`
+//! `cargo run --release -p tui --example hover -- <events.jsonl> [width] [height] [reports]`
 //!
 //! It folds the events file, puts the request the panel shows aside so it
 //! waits on the badge, then sends motion reports through the terminal's
@@ -12,7 +12,8 @@
 //! the reports, the frames and bytes they wrote, and the mean time per
 //! report, the median of 5 runs less the time to fold and draw the first
 //! frame. `examples/hover.jsonl` is a session with one request waiting.
-//! The size defaults to 160 by 48.
+//! The size defaults to 160 by 48, the reports per case to 20,000;
+//! pass fewer reports to run a shorter measurement.
 
 #![allow(
     clippy::print_stdout,
@@ -23,8 +24,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str =
-    "usage: cargo run --release -p tui --example hover -- <events.jsonl> [width] [height]";
+const USAGE: &str = "usage: cargo run --release -p tui --example hover -- <events.jsonl> [width] [height] [reports]";
 
 /// Reports per case.
 const REPORTS: u16 = 20_000;
@@ -45,6 +45,15 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
+    let reports = args.get(3).map_or(Ok(REPORTS), |arg| arg.parse::<u16>());
+    let Ok(reports) = reports else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    if reports == 0 {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
     if width < BADGE || height < 2 {
         eprintln!("hover: the screen must be at least {BADGE} by 2");
         return ExitCode::from(2);
@@ -64,20 +73,20 @@ fn main() -> ExitCode {
         }
     };
     let cases: [(&str, Vec<(u16, u16)>); 4] = [
-        ("still pointer", (0..REPORTS).map(|_| (3, row)).collect()),
+        ("still pointer", (0..reports).map(|_| (3, row)).collect()),
         (
             "one target",
-            (0..REPORTS).map(|at| (at % BADGE, row)).collect(),
+            (0..reports).map(|at| (at % BADGE, row)).collect(),
         ),
         (
             "target change",
-            (0..REPORTS)
+            (0..reports)
                 .map(|at| if at % 2 == 0 { (3, row) } else { (3, 0) })
                 .collect(),
         ),
         (
             "fast sweep",
-            (0..REPORTS)
+            (0..reports)
                 .map(|at| {
                     let at = u32::from(at);
                     let col = at.saturating_mul(7) % u32::from(width);
@@ -103,7 +112,7 @@ fn main() -> ExitCode {
             };
         let frames = bytes.iter().filter(|written| **written > 0).count();
         let total: usize = bytes.iter().sum();
-        let per = time.saturating_sub(base) / u32::from(REPORTS);
+        let per = time.saturating_sub(base) / u32::from(reports);
         println!(
             "{name:<15} {reports:>7} {frames:>7} {total:>8} {micros:>9.1} µs",
             reports = pointer.len(),

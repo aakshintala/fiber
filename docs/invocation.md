@@ -147,7 +147,7 @@ credential a session uses"). A new session takes its label from
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `stop [--hub <name>]` | Shuts down every running session, then the hub. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
-| `feedback [<prompt>] [-]` | Writes a feedback report with the description, version, platform and `fiber doctor` output, and prints the issue link. |
+| `feedback [<prompt>] [-] [--session <id>]` | Writes a feedback report with the description, version, platform, `fiber doctor` output and diagnostics, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
@@ -180,6 +180,16 @@ a key is valid.
 `fiber feedback` takes its description as `fiber ask` takes its prompt
 ("Getting a prompt in"): the argument is the description, else stdin, and `-`
 is accepted only as the last positional.
+
+The report's Diagnostics section (`docs/state.md`, "What each part holds") is for
+one session. `--session <id>` names it: any session in Fiber home, from any
+project, by its full id, never a prefix. Without the flag it is the newest
+session in the current project, as `fiber continue` picks, and a project with
+none gets the hub's lines only. An id that is not `s_` and 16 lowercase hex
+digits is a usage error, exit 2. An id that names no session, a session
+whose log cannot be read, or a delegate fails with `session_not_found`, exit
+1, and writes no report. The Diagnostics section is in the saved file and
+never in the issue link, in either of its forms.
 
 **Setting up.** `fiber setup` asks, in this order, and each answer runs the
 command that already does that job:

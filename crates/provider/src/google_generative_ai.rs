@@ -11,6 +11,7 @@ use contract::provider::{ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value};
 
 pub use crate::call::Call;
+#[cfg(any(test, feature = "test-hooks"))]
 pub use crate::google_generative_ai_decode::decode;
 use crate::google_generative_ai_decode::decode_tracked;
 

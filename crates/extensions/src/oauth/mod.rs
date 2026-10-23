@@ -89,14 +89,6 @@ impl SystemBrowser {
             stderr: Mutex::new(Box::new(io::stderr())),
         }
     }
-
-    #[cfg(test)]
-    fn with_writer(program: impl Into<PathBuf>, writer: impl Write + Send + 'static) -> Self {
-        Self {
-            program: program.into(),
-            stderr: Mutex::new(Box::new(writer)),
-        }
-    }
 }
 
 impl Default for SystemBrowser {
