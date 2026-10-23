@@ -397,22 +397,6 @@ impl LuaExtension {
         self.hub.set_diagnostics(debug);
     }
 
-    /// The installed diagnostic sink, if any. Test-only: no public API
-    /// exposes it, and attachment is otherwise observable only through
-    /// HTTP observation.
-    #[cfg(test)]
-    pub(crate) fn hub_diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
-        self.hub.diagnostics()
-    }
-
-    /// Whether the hub lock is free right now. Test-only: the rendezvous
-    /// proof reads it while an observed worker waits past it. No public
-    /// API exposes the lock, and the ordering is otherwise unobservable.
-    #[cfg(test)]
-    pub(crate) fn hub_unlocked(&self) -> bool {
-        self.hub.try_lock().is_some()
-    }
-
     /// The clock this extension's deadlines read.
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.hub.clock()
@@ -750,18 +734,6 @@ impl LuaExtension {
         self.hub.wait_for_watchers_idle();
     }
 
-    /// Fires `hook` once when the drain's pre-replay wait parks with a
-    /// watcher delivery still queued or running: the test's proof the wait
-    /// engaged before it releases the parked delivery.
-    #[cfg(test)]
-    pub(crate) fn pause_at_drain_wait(&self, hook: Arc<dyn Fn() + Send + Sync>) {
-        self.hub.pause_at_windows(Arc::new(move |_, window| {
-            if matches!(window, hub::Window::DrainWait) {
-                hook();
-            }
-        }));
-    }
-
     /// The hub every waiter and the extension's thread share: what
     /// `SessionExtensions` reaches the delegate bindings through.
     pub(crate) fn hub(&self) -> &Hub {
@@ -777,14 +749,6 @@ impl LuaExtension {
             || shared.queue.iter().any(
                 |job| matches!(&job.target, Target::Watcher { index: queued } if *queued == index),
             )
-    }
-
-    /// Runs the hook `index` registered at `point`, in registration order
-    /// from 0, passing `arg`, and returns what its `run` returned as JSON.
-    #[cfg(test)]
-    pub(crate) fn hook(&self, point: &str, index: usize, arg: Value) -> Result<Value, Error> {
-        self.hook_with(point, index, arg, |value| Ok((value, false)))
-            .map(|(value, _, _)| value)
     }
 
     pub(crate) fn hook_with<T>(

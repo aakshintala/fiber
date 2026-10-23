@@ -106,25 +106,15 @@ impl Scan for SessionScan {
 }
 
 impl SessionScan {
-    /// Runs `query` on as many threads as `parallelism` allows.
+    /// Runs `query` on as many threads as `parallelism` allows. The
+    /// sessions are found first, on the calling thread; the workers then
+    /// read them, and the answer is merged in the order the sessions were
+    /// found.
     fn search(
         &self,
         query: &Query,
         cancel: &dyn Cancel,
         parallelism: io::Result<NonZeroUsize>,
-    ) -> Found {
-        self.search_spawning(query, cancel, parallelism, &workers::spawn)
-    }
-
-    /// Runs `query`, starting each worker thread with `spawn`. The sessions
-    /// are found first, on the calling thread; the workers then read them,
-    /// and the answer is merged in the order the sessions were found.
-    fn search_spawning(
-        &self,
-        query: &Query,
-        cancel: &dyn Cancel,
-        parallelism: io::Result<NonZeroUsize>,
-        spawn: &workers::Spawn<'_>,
     ) -> Found {
         if query.text.is_empty() || cancel.is_cancelled() {
             return Found::default();
@@ -158,7 +148,6 @@ impl SessionScan {
             query.limit,
             cancel,
             &|dir: &Path, out: &mut Collect| context.session(dir, out),
-            spawn,
         );
         for hits in searched.hits {
             out.merge(hits);
