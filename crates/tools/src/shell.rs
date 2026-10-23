@@ -45,6 +45,7 @@ mod cwd;
 mod entry;
 mod matches;
 mod syntax;
+mod wrap;
 
 mod sed;
 

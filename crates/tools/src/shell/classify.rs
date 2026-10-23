@@ -16,6 +16,7 @@ use super::cwd::Cwd;
 use super::entry::{self, Found};
 use super::read_only::{Command, EXACT};
 use super::syntax::{Redirect, Script, Simple, Stage, Word};
+use super::wrap::{self, Unwrapped};
 
 /// Effects of `command` run in `workdir`. A command the tree-sitter parse
 /// rejects, or any element not on the read-only list, is `executes` with no
@@ -172,47 +173,92 @@ fn stage_outcome(
         // allow-list.
         return Outcome::Executes;
     };
-    // An assignment prefix executes: no built-in entry blesses an
-    // assignment name, so `LC_ALL=C git status` and `FOO=1 ls` both do.
-    // The wrapper part reintroduces named blessings with its own tests.
+    // An assignment prefix, `env`, `timeout` and `xargs` unwrap to the
+    // inner command, which the same verdict classifies below; anything
+    // the wrappers refuse is `executes`.
+    let mut words: &[Word] = &simple.words;
+    let mut wrapped = false;
     if !simple.assignments.is_empty() {
-        return Outcome::Executes;
+        // A leading `NAME=value` prefix reads only for names on the fixed
+        // list; any other name makes the call `executes`.
+        if !wrap::assignments_allowed(&simple.assignments) {
+            return Outcome::Executes;
+        }
+        wrapped = true;
     }
-    // A `git` after any earlier `cd` is reviewed: the new directory can
-    // hold hooks or configuration the person never saw.
-    if saw_cd && is_git(simple) {
-        return Outcome::Executes;
+    let mut depth = 0;
+    loop {
+        match wrap::unwrap(words) {
+            Unwrapped::Plain => break,
+            Unwrapped::Refused => return Outcome::Executes,
+            Unwrapped::Inner(inner) => {
+                depth += 1;
+                if depth > wrap::MAX_WRAPPER_DEPTH {
+                    return Outcome::Executes;
+                }
+                words = inner;
+                wrapped = true;
+            }
+            Unwrapped::Xargs(inner) => {
+                depth += 1;
+                if depth > wrap::MAX_WRAPPER_DEPTH {
+                    return Outcome::Executes;
+                }
+                return xargs_outcome(inner, simple, dirs);
+            }
+        }
     }
-    // `cd <dir>` is a read-only step, and its directory is a path the
-    // call reads.
-    if is_cd(simple) {
+    // A wrapper around `cd` moves nothing the directory states track:
+    // the join sees only a leading `cd`, so the call is reviewed. A bare
+    // `cd` is a read-only step and declares its directory.
+    if words.first().is_some_and(|word| word.cooked == "cd") {
+        if wrapped {
+            return Outcome::Executes;
+        }
         return cd_outcome(simple, dirs);
     }
+    // A `git` after any earlier `cd` is reviewed, whatever wrapper leads
+    // it: the new directory can hold hooks or configuration the person
+    // never saw.
+    if saw_cd && is_git(words) {
+        return Outcome::Executes;
+    }
     // An exact form reads with no paths: `git status`, `git stash list`
-    // or `git branch --show-current`.
-    if EXACT.iter().any(|row| cooked_equals(&simple.words, row)) {
+    // or `git branch --show-current`, whatever wrapper leads it.
+    if EXACT.iter().any(|row| cooked_equals(words, row)) {
         return with_inputs(Outcome::Reads(Vec::new()), simple, dirs);
     }
     // `sed` has its own print-only grammar, not a table row.
-    if simple
-        .words
-        .first()
-        .is_some_and(|word| word.cooked == "sed")
-    {
-        let files = simple.words.iter().skip(1).map(|word| word.cooked.as_str());
+    if words.first().is_some_and(|word| word.cooked == "sed") {
+        let files = words.iter().skip(1).map(|word| word.cooked.as_str());
         let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
         };
         return with_inputs(path_tail(&files, dirs), simple, dirs);
     }
-    let verdict = match entry::find(&simple.words, configured) {
-        Found::Builtin(entry) => builtin_outcome(simple, entry, dirs),
+    let verdict = match entry::find(words, configured) {
+        Found::Builtin(entry) => builtin_outcome(words, entry, dirs),
         Found::Configured(flags, consumed) => {
-            entry::configured_outcome(flags, rest_after(&simple.words, consumed), dirs)
+            entry::configured_outcome(flags, rest_after(words, consumed), dirs)
         }
         Found::None => Outcome::Executes,
     };
     with_inputs(verdict, simple, dirs)
+}
+
+/// An `xargs` stage: the target must name one of the six read-only
+/// commands, classified by its own flags; anything else executes. Paths
+/// come from the target's operands, with the stage's input redirects.
+fn xargs_outcome(inner: &[Word], simple: &Simple, dirs: &[String]) -> Outcome {
+    let Some(entry) = inner
+        .first()
+        .and_then(|target| wrap::xargs_entry(&target.cooked))
+    else {
+        return Outcome::Executes;
+    };
+    let mut rest = inner.iter();
+    rest.next();
+    with_inputs(builtin_tail(rest, entry, dirs), simple, dirs)
 }
 
 /// Whether a stage runs `cd`: its first word is exactly `cd`.
@@ -220,10 +266,9 @@ fn is_cd(simple: &Simple) -> bool {
     simple.words.first().is_some_and(|word| word.cooked == "cd")
 }
 
-/// Whether a stage runs `git`: its first word's basename is `git`.
-fn is_git(simple: &Simple) -> bool {
-    simple
-        .words
+/// Whether a stage's words run `git`: the first word's basename is `git`.
+fn is_git(words: &[Word]) -> bool {
+    words
         .first()
         .is_some_and(|word| word.cooked.rsplit('/').next() == Some("git"))
 }
@@ -319,11 +364,22 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
 
 /// The built-in flag walk, kept from the hand lexer: flags by the table,
 /// `--` where the entry says so, any other `-` word an operand for `echo`,
-/// the first operand the pattern for `grep` and `rg`.
-fn builtin_outcome(simple: &Simple, entry: &Command, dirs: &[String]) -> Outcome {
-    // The built-in path words never reach the walk: `git status -s` walks
-    // from `-s`.
-    let mut words = rest_after(&simple.words, entry.name.split(' ').count());
+/// the first operand the pattern for `grep` and `rg`. The entry's path
+/// words never reach the walk: `git status -s` walks from `-s`.
+fn builtin_outcome(words: &[Word], entry: &Command, dirs: &[String]) -> Outcome {
+    builtin_tail(
+        rest_after(words, entry.name.split(' ').count()),
+        entry,
+        dirs,
+    )
+}
+
+/// The flag walk over the words past the command path.
+fn builtin_tail(
+    mut words: std::slice::Iter<'_, Word>,
+    entry: &Command,
+    dirs: &[String],
+) -> Outcome {
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;

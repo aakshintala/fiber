@@ -133,6 +133,13 @@ fn an_owned_name_is_never_consulted() {
             "/usr/bin/sed",
             vec!["-n"],
         ),
+        // A wrapper step is never consulted however configured: the
+        // classifier unwraps it itself, so no entry widens `xargs` past
+        // its six commands or `env` past its flag rule.
+        (vec!["xargs", "-0", "x"], "xargs", vec!["-0"]),
+        (vec!["env", "-i", "x"], "env", vec!["-i"]),
+        (vec!["timeout", "5", "x"], "timeout", Vec::new()),
+        (vec!["cd", "x"], "cd", Vec::new()),
     ] {
         let entries = [configured(name, &flags)];
         assert!(matches!(find(&ws(&words), &entries), Found::None), "{name}");
@@ -173,6 +180,11 @@ fn owned_covers_built_ins_sed_and_exact_paths() {
         "/bin/cat",
         "sed",
         "/usr/bin/sed",
+        "cd",
+        "/usr/bin/cd",
+        "env",
+        "timeout",
+        "xargs",
         "git status",
         "git status -s",
         "git stash list",
