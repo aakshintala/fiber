@@ -158,15 +158,22 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     });
     // Each spawn signals it reached the test's release before it
     // blocks, so the test waits for the spawns, never for a budget.
-    Deadline::after(WITHIN).recv_or_fail(&reached_one, "one reaches its spawn");
-    Deadline::after(WITHIN).recv_or_fail(&reached_two, "two reaches its spawn");
+    // One deadline for the whole wait (`docs/testing.md`, "Waits and
+    // timeouts"): the two receives are consecutive parts of one wait.
+    let wait = Deadline::after(WITHIN);
+    wait.recv_or_fail(&reached_one, "one reaches its spawn");
+    wait.recv_or_fail(&reached_two, "two reaches its spawn");
     release_one.send(()).expect("the one spawn is released");
     release_two.send(()).expect("the two spawn is released");
     let started = Deadline::after(WITHIN)
         .recv(&result)
         .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"));
     assert!(started.failed.is_empty());
+    // `docs/mcp.md:82`: tools are sorted by name.
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
+    // The infos run parallel to the sorted tools: `start` sorts the
+    // tools by name and unzips the infos from the same order
+    // (`docs/mcp.md:82`; `crates/mcp/src/start.rs:678-682`).
     assert_eq!(
         started
             .infos
