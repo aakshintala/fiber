@@ -27,8 +27,3 @@ pub(crate) fn failure(code: contract::ErrorCode, message: impl std::fmt::Display
         provider: None,
     }
 }
-
-/// A failure with `code` for the error `display` names.
-pub(crate) fn failed(code: contract::ErrorCode, display: impl std::fmt::Display) -> Failure {
-    failure(code, display.to_string())
-}

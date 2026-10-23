@@ -13,8 +13,8 @@ use contract::shapes::Failure;
 use extensions::Providers;
 
 use crate::connect::{Diagnostics, Here, connect, connect_observed};
+use crate::failure;
 use crate::lua_providers::Access;
-use crate::{failed, failure};
 
 /// The reviewer model's reference: `reviewer.model` when set, else the
 /// session provider's own `providers."<name>".reviewer_model`, else the
@@ -57,7 +57,7 @@ pub fn model<'a>(
     session: &extensions::Model<'_>,
 ) -> Result<Option<extensions::Model<'a>>, Failure> {
     reference(config, session)
-        .map(|typed| providers.resolve(&typed).map_err(|e| failed(e.code(), e)))
+        .map(|typed| providers.resolve(&typed).map_err(|e| failure(e.code(), e)))
         .transpose()
 }
 

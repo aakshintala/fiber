@@ -1,13 +1,5 @@
-//! Model-name resolution: the typed model against a registry and a naming
-//! list (`docs/model-routing.md`, "Naming a model"). An exact
-//! `provider/model` resolves as at startup, while a bare id counts every
-//! provider that names it, configured or not. A bare id tries the full
-//! typed id first, so a literal id ending in a thinking level matches
-//! before the suffix strips; only when nothing names the full id does the
-//! stripped id count. Every failure is the resolution's own message, which
-//! the caller wraps in its own rejection.
+//! Model-name resolution (`docs/model-routing.md`, "Naming a model").
 
-use super::scripted::START_ONLY;
 use super::{Model, Providers};
 
 #[cfg(test)]
@@ -47,20 +39,21 @@ impl Providers {
     /// matches before the suffix strips (`docs/model-routing.md`, "Naming
     /// a model": the exact match comes first, since OpenRouter ids contain
     /// colons); only when nothing names the full id does the stripped id
-    /// count. Every failure is the resolution's own message.
+    /// count. Every failure is the crate's `Error`, so the caller keeps
+    /// the typed failure across the crate boundary.
     pub fn resolve_named<'a>(
         &'a self,
         naming: &[(String, String)],
         typed: &str,
-    ) -> Result<Model<'a>, String> {
+    ) -> Result<Model<'a>, crate::Error> {
         let (rest, _) = Self::split_thinking(typed);
         if rest.contains('/') {
             // A scripted model is added to the registry only at start.
             return self.resolve(typed).map_err(|error| {
                 if rest.starts_with("scripted/") {
-                    START_ONLY.to_owned()
+                    crate::Error::ScriptedStartOnly
                 } else {
-                    error.to_string()
+                    error
                 }
             });
         }
@@ -95,7 +88,7 @@ impl Providers {
                 if matches.len() > 1 {
                     return Err(ambiguous(rest, &mut matches));
                 }
-                Err(error.to_string())
+                Err(error)
             }
         }
     }
@@ -133,7 +126,7 @@ fn resolve_literal<'a>(
     registry: &'a Providers,
     naming: &[(String, String)],
     typed: &str,
-) -> Option<Result<Model<'a>, String>> {
+) -> Option<Result<Model<'a>, crate::Error>> {
     let mut matches = named(naming, typed);
     // Check the exact provider/model first: bare resolution can discard an
     // unconfigured literal for suffix matches. Qualified resolution can
@@ -142,7 +135,7 @@ fn resolve_literal<'a>(
         && let Err(crate::Error::Unconfigured { message }) = registry.resolve(reference)
         && message.starts_with(&format!("The model `{reference}` "))
     {
-        return Some(Err(message));
+        return Some(Err(crate::Error::Unconfigured { message }));
     }
     match registry.resolve(typed) {
         // The registry's own exact-first order tries the full id before
@@ -179,12 +172,11 @@ fn resolve_literal<'a>(
 
 /// A bare id more than one provider names, in the shape `resolve_named`
 /// names it.
-fn ambiguous(id: &str, matches: &mut Vec<String>) -> String {
+fn ambiguous(id: &str, matches: &mut Vec<String>) -> crate::Error {
     matches.sort();
     matches.dedup();
-    format!(
-        "The model `{id}` is offered by more than one provider: {}. \
-         Name one as `provider/model`.",
-        matches.join(", ")
-    )
+    crate::Error::Ambiguous {
+        id: id.to_owned(),
+        matches: matches.clone(),
+    }
 }

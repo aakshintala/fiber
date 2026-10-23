@@ -676,7 +676,7 @@ pub(crate) fn prepare(
     let resolved = switching
         .registry
         .resolve_named(&switching.naming, &args.model)
-        .map_err(invalid)?;
+        .map_err(|error| invalid(error.to_string()))?;
     crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();
     let context_window = crate::settings::context_window(resolved.model, &reference)

@@ -12,11 +12,6 @@ use extensions::Providers;
 #[path = "placeholders_tests.rs"]
 mod tests;
 
-/// One placeholder lookup shared across discovery, filling and the
-/// background refresh: owning its hub answer, so the two session kinds
-/// the marker decides between pick different sources behind one binding.
-pub(crate) type Lookup = Box<dyn Fn(&str) -> Option<String>>;
-
 /// The lookup `routing::lua_providers::add_lua` fills placeholders from.
 /// A hub-spawned session carries the hub's marker
 /// (`hub::HUB_SESSION_MARKER`, set beside the startup snapshot): the
@@ -28,7 +23,15 @@ pub(crate) type Lookup = Box<dyn Fn(&str) -> Option<String>>;
 /// with `fiber models` (issue #2909). Decided when called, at the point
 /// `add_lua` decided before: after extensions load, before `add_session`;
 /// a hub-spawned session never queries the hub.
-pub(crate) fn lookup(home: &Path, providers: &Providers, clock: &dyn Clock) -> Lookup {
+#[allow(
+    clippy::type_complexity,
+    reason = "the `Lookup` alias is cut; the inline type is the whole interface"
+)]
+pub(crate) fn lookup(
+    home: &Path,
+    providers: &Providers,
+    clock: &dyn Clock,
+) -> Box<dyn Fn(&str) -> Option<String>> {
     if std::env::var_os(hub::HUB_SESSION_MARKER).is_some() {
         Box::new(|name: &str| std::env::var(name).ok())
     } else {

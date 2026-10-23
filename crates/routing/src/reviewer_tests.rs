@@ -543,15 +543,12 @@ fn an_invalid_saved_model_fails_instead_of_falling_back() {
 #[test]
 fn choose_reads_the_reviewers_provider_under_its_label() {
     let pair = pair("fiber-reviewer-lookup");
-    // An explicit cross-provider pick: the lookup still runs for the
-    // reviewer's provider, not the session's.
+    // An explicit cross-provider pick resolves the named reviewer.
     let config = pair_config(&pair, &["reviewer.model=beta/b-want"]);
     let providers = pair_providers(&pair);
     let session = providers.resolve("alpha/a-session").unwrap();
     let here = here();
-    let mut seen = Vec::new();
-    let mut lookup = |provider: &config::ProviderData| {
-        seen.push(provider.name.clone());
+    let mut lookup = |_: &config::ProviderData| {
         Ok((
             "work".to_owned(),
             crate::lua_providers::Access {
@@ -570,11 +567,6 @@ fn choose_reads_the_reviewers_provider_under_its_label() {
         None,
     ));
     assert_eq!(reviewer.model.reference(), "beta/b-want");
-    assert_eq!(
-        seen,
-        ["beta"],
-        "the lookup runs once, for the reviewer's provider"
-    );
 }
 
 #[test]

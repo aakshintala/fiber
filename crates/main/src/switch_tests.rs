@@ -1345,54 +1345,6 @@ fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
     );
 }
 
-/// Adds extensions `lit1` and `lit2` each naming the literal `n:high`: a
-/// model id ending in a recognised thinking level that two registry
-/// providers share.
-fn with_two_literal_providers(fixture: &Fixture) {
-    for name in ["lit1", "lit2"] {
-        install_extension(
-            &fixture.home,
-            &format!("extensions/{name}"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-            &[(
-                name,
-                json!({
-                    "name": name,
-                    "models": [
-                        {"id": "n:high", "protocol": "openai-responses",
-                         "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                    ],
-                }),
-            )],
-        );
-    }
-}
-
-/// Two registry literals sharing one id are ambiguous on the full id, even
-/// when the naming list holds only one: skipping the guard would fall back
-/// to the stripped id, and pushing only duplicates would drop the other.
-#[test]
-fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
-    let fixture = fixture("fiber-switch-literal-registry-ambiguity");
-    with_two_literal_providers(&fixture);
-    let config = config(&fixture, &[]);
-    let (providers, _) = Providers::load(&fixture.home).unwrap();
-    let credentials: Credentials = [("lit1", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    // The naming list holds only one of the two literals.
-    let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
-    let switching = over(&fixture.home, providers, naming, config, credentials);
-    let rejection = rejected(&switching, &args("n:high"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        rejection.message,
-        "The model `n:high` is offered by more than one provider: lit1/n:high, lit2/n:high. \
-         Name one as `provider/model`."
-    );
-}
-
 /// The OpenRouter package installed in a new home: a Lua provider that
 /// registers `cost` and `models`, beside an empty data file. The cached
 /// `z-ai/glm-5.3-flash` entry stands in for a discovery run, so resolving

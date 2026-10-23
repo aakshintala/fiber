@@ -14,7 +14,7 @@ use extensions::{CredentialPair, LuaProvider, Providers, SessionExtensions};
 use provider::LoginAdvice;
 use provider::redact::Secrets;
 
-use crate::failed;
+use crate::failure;
 
 /// The key a model's requests carry, or nothing when a Lua `credential()`
 /// supplies the token, which rides the signing seam instead; and what signs
@@ -79,7 +79,7 @@ pub fn add_lua(
     notices.extend(
         providers
             .fill_placeholders(config, lookup)
-            .map_err(|e| failed(e.code(), e))?,
+            .map_err(|e| failure(e.code(), e))?,
     );
     // Detached: nothing joins them, and `fiber ask` does not wait on them
     // to exit.
@@ -116,7 +116,7 @@ pub fn session_credential(
         Some(lua)
             if lua
                 .registers("credential")
-                .map_err(|e| failed(e.code(), e))? =>
+                .map_err(|e| failure(e.code(), e))? =>
         {
             lua.credential_token(&pair).map(|_| ()).map_err(|e| {
                 provider::Error::Sign(e).failure(
@@ -150,7 +150,7 @@ pub(crate) fn signer(
     pair: CredentialPair,
 ) -> Result<Option<Arc<dyn Signer>>, Failure> {
     match lua {
-        Some(lua) => lua.signer(pair).map_err(|e| failed(e.code(), e)),
+        Some(lua) => lua.signer(pair).map_err(|e| failure(e.code(), e)),
         None => Ok(None),
     }
 }

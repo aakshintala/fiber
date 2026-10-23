@@ -13,7 +13,7 @@ use config::{
 use contract::ThinkingLevel;
 use serde_json::Map;
 
-use crate::{Providers, START_ONLY};
+use crate::{Error, Providers, START_ONLY};
 
 /// A plain model `id` on the test protocol.
 fn model(id: &str) -> ModelData {
@@ -85,21 +85,21 @@ fn an_exact_provider_model_resolves() {
 #[test]
 fn a_scripted_model_missing_from_the_registry_gives_start_only() {
     let providers = registry(&[("fake", vec![model("m")])]);
-    assert_eq!(
-        providers.resolve_named(&[], "scripted/new.json"),
-        Err(START_ONLY.to_owned())
-    );
+    let error = providers
+        .resolve_named(&[], "scripted/new.json")
+        .unwrap_err();
+    assert!(matches!(error, Error::ScriptedStartOnly));
+    assert_eq!(error.to_string(), START_ONLY);
 }
 
 #[test]
 fn an_unknown_reference_gives_the_registry_message() {
     let providers = registry(&[("fake", vec![model("m")])]);
+    let error = providers.resolve_named(&[], "fake/nope").unwrap_err();
+    assert!(matches!(error, Error::UnknownModel { .. }));
     assert_eq!(
-        providers.resolve_named(&[], "fake/nope"),
-        Err(
-            "The provider `fake` has no model `nope`. Run `fiber models` and name one it lists."
-                .to_owned()
-        )
+        error.to_string(),
+        "The provider `fake` has no model `nope`. Run `fiber models` and name one it lists."
     );
 }
 
@@ -113,13 +113,12 @@ fn a_bare_id_one_provider_names_resolves() {
 #[test]
 fn a_bare_id_two_providers_share_is_ambiguous() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m")])]);
+    let error = providers.resolve_named(&[], "m").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
-        providers.resolve_named(&[], "m"),
-        Err(
-            "The model `m` is offered by more than one provider: fake/m, other/m. \
-             Name one as `provider/model`."
-                .to_owned()
-        )
+        error.to_string(),
+        "The model `m` is offered by more than one provider: fake/m, other/m. \
+         Name one as `provider/model`."
     );
 }
 
@@ -129,9 +128,11 @@ fn a_bare_id_only_the_naming_list_names_is_the_registry_error() {
     let naming = vec![("lua".to_owned(), "rm".to_owned())];
     // One naming-list match is not ambiguity: the message is the
     // registry's unknown-model error.
+    let error = providers.resolve_named(&naming, "rm").unwrap_err();
+    assert!(matches!(error, Error::ModelMissing { .. }));
     assert_eq!(
-        providers.resolve_named(&naming, "rm"),
-        Err("No installed model matches `rm`. Run `fiber models` to list them.".to_owned())
+        error.to_string(),
+        "No installed model matches `rm`. Run `fiber models` to list them."
     );
 }
 
@@ -153,13 +154,12 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
         ("fake".to_owned(), "n".to_owned()),
         ("lua".to_owned(), "n".to_owned()),
     ];
+    let error = providers.resolve_named(&naming, "n").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
-        providers.resolve_named(&naming, "n"),
-        Err(
-            "The model `n` is offered by more than one provider: fake/n, lua/n. \
-             Name one as `provider/model`."
-                .to_owned()
-        )
+        error.to_string(),
+        "The model `n` is offered by more than one provider: fake/n, lua/n. \
+         Name one as `provider/model`."
     );
 }
 
@@ -204,10 +204,9 @@ fn an_unconfigured_literal_reports_its_message_first() {
     // The stripped id is ambiguous on its own; the unconfigured literal
     // still wins on the full id.
     let naming = vec![("lit".to_owned(), "n:high".to_owned())];
-    assert_eq!(
-        providers.resolve_named(&naming, "n:high"),
-        Err(message.to_owned())
-    );
+    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    assert!(matches!(error, Error::Unconfigured { .. }));
+    assert_eq!(error.to_string(), message);
 }
 
 #[test]
@@ -218,13 +217,12 @@ fn two_naming_matches_for_a_literal_are_ambiguous_on_the_full_id() {
         ("lit".to_owned(), "n:high".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
+    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
-        providers.resolve_named(&naming, "n:high"),
-        Err(
-            "The model `n:high` is offered by more than one provider: lit/n:high, lua/n:high. \
-             Name one as `provider/model`."
-                .to_owned()
-        )
+        error.to_string(),
+        "The model `n:high` is offered by more than one provider: lit/n:high, lua/n:high. \
+         Name one as `provider/model`."
     );
 }
 
@@ -236,26 +234,24 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
     ]);
     // The naming list holds only one of the two literals.
     let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
+    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
-        providers.resolve_named(&naming, "n:high"),
-        Err(
-            "The model `n:high` is offered by more than one provider: lit1/n:high, lit2/n:high. \
-             Name one as `provider/model`."
-                .to_owned()
-        )
+        error.to_string(),
+        "The model `n:high` is offered by more than one provider: lit1/n:high, lit2/n:high. \
+         Name one as `provider/model`."
     );
 }
 
 #[test]
 fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m")])]);
+    let error = providers.resolve_named(&[], "m:high").unwrap_err();
+    assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
-        providers.resolve_named(&[], "m:high"),
-        Err(
-            "The model `m` is offered by more than one provider: fake/m, other/m. \
-             Name one as `provider/model`."
-                .to_owned()
-        )
+        error.to_string(),
+        "The model `m` is offered by more than one provider: fake/m, other/m. \
+         Name one as `provider/model`."
     );
 }
 

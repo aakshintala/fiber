@@ -415,6 +415,10 @@ pub enum Error {
         /// Each match, as `provider/model`.
         matches: Vec<String>,
     },
+    /// A switch to a `scripted/` model the session did not start with:
+    /// the registry a session switches within is fixed at start.
+    #[error("{}", crate::START_ONLY)]
+    ScriptedStartOnly,
     /// A Lua extension's code failed: a Lua error, its memory cap, or its
     /// entry script. Lua starts the message with the file and line.
     #[error("`{extension}`: {message}")]
@@ -627,6 +631,7 @@ impl Error {
             | Self::NoContextWindow { .. } => ErrorCode::NoModel,
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
+            Self::ScriptedStartOnly => ErrorCode::InvalidArguments,
             Self::Credential(_) => ErrorCode::CredentialFailed,
             Self::RefreshRejected { .. } | Self::Unattended { .. } | Self::LoginTimedOut { .. } => {
                 ErrorCode::AuthenticationFailed

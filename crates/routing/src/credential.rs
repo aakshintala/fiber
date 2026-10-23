@@ -7,7 +7,7 @@
 use config::{Config, ProviderData, Secret};
 use contract::shapes::Failure;
 
-use crate::failed;
+use crate::failure;
 
 /// The labels a starting session may take (`docs/model-routing.md`,
 /// "Which credential a session uses"): `asked`, `--credential` on a resume,
@@ -53,7 +53,7 @@ impl<'a> From<Option<&'a str>> for Labels<'a> {
 /// `credential_missing` for `label` on `provider`, listing `labels`
 /// (`config::Credentials::listed`, "none" when empty).
 pub fn no_label(provider: &str, label: &str, labels: &[String]) -> Failure {
-    failed(
+    failure(
         contract::ErrorCode::CredentialMissing,
         format!(
             "`{provider}` has no credential label `{label}`. The labels for `{provider}` are: {}",
@@ -80,7 +80,7 @@ pub fn session_credential(
         .credentials()
         .credential_with(provider, &label, run)
         .map(|read| read.secret)
-        .map_err(|e| failed(e.code(), e))?;
+        .map_err(|e| failure(e.code(), e))?;
     Ok((label, key))
 }
 
@@ -98,7 +98,7 @@ pub fn switch_credential(
     config
         .credentials()
         .credential_with(provider, label, run)
-        .map_err(|e| failed(e.code(), e))
+        .map_err(|e| failure(e.code(), e))
 }
 
 #[cfg(test)]
