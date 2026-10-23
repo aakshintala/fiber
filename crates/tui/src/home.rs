@@ -89,7 +89,9 @@ impl Spot {
 }
 
 /// A quit choice: leaving working sessions running, closing them all
-/// now, or staying.
+/// now, or staying. `CloseAll` and `Stay` double as the close-all
+/// question's confirm and cancel rows; `Leave` draws no row there and
+/// does nothing in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QuitChoice {
     /// Enter: leave them running.
@@ -937,6 +939,19 @@ pub(crate) fn quit_count(working: usize, elsewhere: usize) -> String {
         format!(", {elsewhere} also open elsewhere")
     };
     format!("{sessions}{elsewhere}")
+}
+
+/// The close-all question's count line: how many live top-level sessions
+/// it counted, of them how many work, and how many are also open
+/// elsewhere. The overlay draws it under its title (`docs/tui.md`,
+/// "Quit").
+pub(crate) fn close_all_count(sessions: usize, working: usize, elsewhere: usize) -> String {
+    let sessions = if sessions == 1 {
+        "1 session".to_owned()
+    } else {
+        format!("{sessions} sessions")
+    };
+    format!("{sessions}, {working} working, {elsewhere} open elsewhere")
 }
 
 /// A resume line on exit: the session's id and the command resuming

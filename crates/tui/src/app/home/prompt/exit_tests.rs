@@ -844,3 +844,598 @@ fn the_quit_question_takes_every_key_over_the_open_report() {
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::Quit);
     assert!(app.import_report_open());
 }
+
+/// Types `text` into the box and presses Enter, returning the effect.
+fn slash(app: &mut App, text: &str) -> Effect {
+    let clock = fakes::clock::FakeClock::new();
+    for ch in text.chars() {
+        assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
+    }
+    app.on_key(Key::Enter, clock.now())
+}
+
+/// A hub `command_accepted` for `id` with `result`.
+fn accepted(id: &str, result: Value) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            ("result".to_owned(), result),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+#[test]
+fn slash_close_all_on_home_opens_the_question_and_sends_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(app.quit_open());
+    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+}
+
+#[test]
+fn close_all_with_nothing_live_opens_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.notice(), Some("No sessions to close."));
+}
+
+#[test]
+fn close_all_with_the_link_down_opens_nothing_and_keeps_the_draft() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.disconnected();
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.draft(), "/close all");
+}
+
+#[test]
+fn quit_question_is_none_while_close_all_is_open() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert!(app.quit_open());
+    assert_eq!(app.quit_question(), None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    // Under the quit prompt the close-all question is none.
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.quit_question(), Some((1, 0)));
+}
+
+#[test]
+fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // The delete question opens on the exited row's stop.
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| {
+            home.sessions
+                .all()
+                .iter()
+                .find(|row| row.id.0 == "s_aaaaaaaaaaaaaaaa")
+                .map(|row| row.key)
+        })
+        .expect("exited row");
+    assert_eq!(app.home_click(crate::home::Spot::Stop(key)), Effect::None);
+    // Enter sends the delete; its ask waits for the hub.
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter deletes");
+    };
+    let delete = commands(lines)[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("delete id"))
+        .to_owned();
+    // `/close all` replaces the delete question; the delete ask survives.
+    assert_eq!(app.ask_close_all(), Effect::None);
+    assert!(app.quit_open());
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    // The hub accepts the delete: the row drops and recent is asked again.
+    let lines = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "recent");
+}
+
+/// A hub `command_rejected` for command `id`.
+fn rejected(id: &str, code: &str, message: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": id, "code": code, "message": message})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// Every listed row's line: what the feed and `recent` folded.
+fn listed(app: &App) -> Vec<String> {
+    app.home
+        .as_ref()
+        .map(|home| {
+            home.sessions
+                .all()
+                .iter()
+                .map(|row| crate::home::line(row, home.launch_project()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The outgoing lines' commands per session, sorted: what each session
+/// got, past the command ids.
+fn by_session(lines: Vec<Value>) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut map = std::collections::BTreeMap::new();
+    for line in lines {
+        map.entry(line["session_id"].as_str().unwrap_or_default().to_owned())
+            .or_insert_with(Vec::new)
+            .push(line["command"].as_str().unwrap_or_default().to_owned());
+    }
+    for commands in map.values_mut() {
+        commands.sort();
+    }
+    map
+}
+
+#[test]
+fn enter_closes_every_live_session_now_and_stays_home() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    // Each session gets one `close` with `now` and one `summary`
+    // subscribe, the ids distinct across them all.
+    let lines = commands(lines);
+    let ids: std::collections::HashSet<&str> = lines
+        .iter()
+        .map(|line| line["id"].as_str().unwrap_or_else(|| panic!("close id")))
+        .collect();
+    assert_eq!(ids.len(), 4);
+    let per_session = by_session(lines);
+    assert_eq!(per_session.len(), 2);
+    for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {
+        let got = per_session.get(session).cloned().unwrap_or_default();
+        assert_eq!(got, ["close", "subscribe"], "{session}");
+    }
+    // Nothing went to `closing`: the exit lines still name both.
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.questions.closing.is_empty())
+    );
+    let resumed = app.exit_lines().join("\n");
+    assert!(resumed.contains("s_aaaaaaaaaaaaaaaa"), "{resumed}");
+    assert!(resumed.contains("s_bbbbbbbbbbbbbbbb"), "{resumed}");
+    assert!(!app.quit_open());
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn esc_cancels_and_sends_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::Esc, clock.now()), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.close_all_question(), None);
+    assert_eq!(app.draft(), "/close all");
+}
+
+#[test]
+fn other_keys_and_ctrl_c_do_nothing_while_close_all_is_open() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    for key in [
+        Key::Char('x'),
+        Key::Char('c'),
+        Key::Up,
+        Key::Down,
+        Key::CtrlC,
+    ] {
+        assert_eq!(app.on_key(key, clock.now()), Effect::None);
+    }
+    assert!(app.quit_open());
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(app.draft(), "/close all");
+}
+
+#[test]
+fn a_refused_close_becomes_the_rows_note() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close" && line["session_id"] == "s_aaaaaaaaaaaaaaaa")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("close id"))
+        .to_owned();
+    assert!(app.on_line(rejected(&close, "busy", "Busy.")).is_empty());
+    assert_eq!(listed(&app)[0], "●  fix the parser  Busy.");
+    assert_eq!(app.notice(), Some("Busy."));
+}
+
+#[test]
+fn a_session_that_leaves_while_close_all_shows_gets_no_close() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    // The overlay never live-updates: it still names both sessions.
+    assert_eq!(app.close_all_question(), Some((2, 2, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["session_id"] == "s_bbbbbbbbbbbbbbbb")
+    );
+    assert_eq!(
+        by_session(lines)
+            .get("s_bbbbbbbbbbbbbbbb")
+            .cloned()
+            .unwrap_or_default(),
+        ["close", "subscribe"]
+    );
+}
+
+#[test]
+fn a_session_that_goes_live_while_close_all_shows_gets_no_close() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    // The overlay never live-updates: the new session is not counted.
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["session_id"] == "s_aaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn a_session_attached_then_left_after_attach_gets_no_close() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["session_id"] == "s_bbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
+fn enter_clears_the_draft_and_builds_the_lines_before_going_home() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    // The attached session holds nothing here, so it gets a subscribe
+    // line and a close; the lines exist before the trip home.
+    let lines = commands(lines);
+    let per_session = by_session(lines);
+    assert_eq!(
+        per_session
+            .get("s_aaaaaaaaaaaaaaaa")
+            .cloned()
+            .unwrap_or_default(),
+        ["close", "subscribe"]
+    );
+    assert_eq!(app.draft(), "");
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn a_session_that_is_idle_still_gets_a_close() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((2, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    let per_session = by_session(lines);
+    assert_eq!(
+        per_session
+            .get("s_bbbbbbbbbbbbbbbb")
+            .cloned()
+            .unwrap_or_default(),
+        ["close", "subscribe"]
+    );
+}
+
+#[test]
+fn an_unreadable_row_is_neither_counted_nor_closed() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    let mut envelope = live("s_bbbbbbbbbbbbbbbb", json!({"state": "streaming"}), 0, 0, 0);
+    if let Line::Session(status) = &mut envelope {
+        status.schema_version = contract::SCHEMA_VERSION + 1;
+    }
+    app.on_line(envelope);
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["session_id"] == "s_aaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn the_attached_session_with_no_row_counts_and_gets_a_close_and_the_terminal_goes_home() {
+    let mut app = home();
+    linked(&mut app);
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.phase = crate::app::Phase::Attached {
+        session: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        busy: true,
+    };
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(lines) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    let lines = commands(lines);
+    assert_eq!(
+        by_session(lines)
+            .get("s_aaaaaaaaaaaaaaaa")
+            .cloned()
+            .unwrap_or_default(),
+        ["close", "subscribe"]
+    );
+    assert_eq!(app.draft(), "");
+    assert!(app.session().is_none());
+}
+
+#[test]
+fn link_down_at_enter_closes_the_question_and_sends_nothing() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    app.disconnected();
+    let clock = fakes::clock::FakeClock::new();
+    assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(app.close_all_question(), None);
+}
+
+#[test]
+fn slash_quit_after_close_all_exits_without_asking_once_the_sessions_left() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Send(_) = app.on_key(Key::Enter, clock.now()) else {
+        panic!("Enter closes all");
+    };
+    // The closes are in flight but nothing counts as working, so quit
+    // asks nothing even before the hub's lines land.
+    assert_eq!(slash(&mut app, "/quit"), Effect::Quit);
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    app.on_line(left("s_bbbbbbbbbbbbbbbb", "exited"));
+    // A fresh draft after the answered quit: the hub's lines leave
+    // nothing working, so quit still asks nothing.
+    app.draft.clear();
+    assert_eq!(slash(&mut app, "/quit"), Effect::Quit);
+}
+
+#[test]
+fn the_close_all_count_reads_sessions_working_and_elsewhere() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "streaming"}),
+        2,
+        0,
+        0,
+    ));
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "idle"}),
+        1,
+        0,
+        0,
+    ));
+    app.on_line(live(
+        "s_cccccccccccccccc",
+        json!({"state": "idle"}),
+        0,
+        0,
+        0,
+    ));
+    // This connection holds the second session at `full`: one client
+    // less its own leaves none elsewhere.
+    let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    if let Some(home) = app.home.as_mut() {
+        home.subs
+            .sent("c_1".to_owned(), held, crate::home::Level::Full);
+        home.subs.answered("c_1", true);
+    }
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((3, 1, 1)));
+    assert_eq!(
+        crate::home::close_all_count(3, 1, 1),
+        "3 sessions, 1 working, 1 open elsewhere"
+    );
+}
+
+#[test]
+fn the_close_all_singular_session_reads_session() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((1, 1, 0)));
+    assert_eq!(
+        crate::home::close_all_count(1, 1, 0),
+        "1 session, 1 working, 0 open elsewhere"
+    );
+}
+
+#[test]
+fn the_close_all_count_holds_singular_below_and_plural_above_one() {
+    assert_eq!(
+        crate::home::close_all_count(0, 0, 0),
+        "0 sessions, 0 working, 0 open elsewhere"
+    );
+    assert_eq!(
+        crate::home::close_all_count(1, 0, 1),
+        "1 session, 0 working, 1 open elsewhere"
+    );
+    assert_eq!(
+        crate::home::close_all_count(2, 2, 2),
+        "2 sessions, 2 working, 2 open elsewhere"
+    );
+}
+
+#[test]
+fn the_close_all_elsewhere_boundary_holds_both_sides() {
+    let mut app = home();
+    linked(&mut app);
+    // Two clients past this connection's own `full` hold: elsewhere.
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        json!({"state": "streaming"}),
+        2,
+        0,
+        0,
+    ));
+    let held = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    if let Some(home) = app.home.as_mut() {
+        home.subs
+            .sent("c_1".to_owned(), held, crate::home::Level::Full);
+        home.subs.answered("c_1", true);
+    }
+    // One client is this connection's own hold: nowhere else.
+    app.on_line(live(
+        "s_bbbbbbbbbbbbbbbb",
+        json!({"state": "streaming"}),
+        1,
+        0,
+        0,
+    ));
+    let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    if let Some(home) = app.home.as_mut() {
+        home.subs
+            .sent("c_2".to_owned(), held, crate::home::Level::Full);
+        home.subs.answered("c_2", true);
+    }
+    assert_eq!(slash(&mut app, "/close all"), Effect::None);
+    assert_eq!(app.close_all_question(), Some((2, 2, 1)));
+}

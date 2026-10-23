@@ -262,9 +262,12 @@ impl App {
     /// Whether the quit question is open, on home or not: while it is,
     /// every key goes to it first.
     pub(crate) fn quit_open(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
+        self.home.as_ref().is_some_and(|home| {
+            matches!(
+                home.questions.prompt(),
+                Some(Prompt::Quit) | Some(Prompt::CloseAll { .. })
+            )
+        })
     }
 
     /// The session list's scroll offset: what the frame's window
@@ -319,8 +322,9 @@ impl App {
             // the question carries its head.
             Some(Prompt::Import) => (Some(import_head()), 0),
             // The quit question draws through the hint below, recomputed
-            // every frame.
-            Some(Prompt::Quit) | None => (None, 0),
+            // every frame; the close-all question draws as an overlay from
+            // the counts fixed when it opened.
+            Some(Prompt::Quit) | Some(Prompt::CloseAll { .. }) | None => (None, 0),
         };
         // The foot names each action by its first bound key, leaving
         // an unbound action's part out with its joiner; Ctrl+C cannot
@@ -819,7 +823,7 @@ impl App {
             && self.home.as_ref().is_some_and(|home| {
                 home.questions
                     .prompt()
-                    .is_some_and(|prompt| !matches!(prompt, Prompt::Quit))
+                    .is_some_and(|prompt| !matches!(prompt, Prompt::Quit | Prompt::CloseAll { .. }))
             })
     }
 
