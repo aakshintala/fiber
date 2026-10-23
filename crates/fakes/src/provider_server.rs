@@ -41,8 +41,7 @@ pub(crate) const CREDENTIAL_HEADERS: [&str; 6] = [
 /// the credential.
 pub fn fingerprint(value: &str) -> String {
     let hex = support::sha256_hex(value.as_bytes());
-    let prefix = hex.get(..8).unwrap_or(&hex);
-    format!("sha256:{prefix}")
+    format!("sha256:{}", &hex[..8])
 }
 
 /// One scripted response: a status, headers and the body bytes, sent as they

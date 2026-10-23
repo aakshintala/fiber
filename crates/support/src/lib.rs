@@ -26,7 +26,7 @@ pub mod stoppable;
 pub mod framing;
 
 /// Lowercase hex and SHA-256 as lowercase hex, each built into one `String`.
-pub mod hex;
+mod hex;
 
 /// Text on one line: control characters as spaces.
 pub mod text;

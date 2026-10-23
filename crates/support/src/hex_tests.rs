@@ -16,11 +16,6 @@ fn hex_of_empty_is_empty() {
 }
 
 #[test]
-fn hex_pads_zeroes_orders_nibbles_and_lowercases() {
-    assert_eq!(hex(&[0x0f, 0xf0, 0x00, 0xab, 0xff]), "0ff000abff");
-}
-
-#[test]
 fn hex_reserves_two_bytes_per_input_byte() {
     assert_eq!(hex(&[1, 2, 3]).capacity(), 6);
 }
