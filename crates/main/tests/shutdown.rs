@@ -675,13 +675,21 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
         |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
     // Never answers `initialize`. The trap is set before the pid line,
     // so the ready wait proves SIGTERM will be caught. The `read` runs
-    // in the background and the shell parks in `wait`, which has no gap
-    // between arming the trap and blocking: a TERM that lands while the
-    // `read` is starting still runs the trap, which kills the `read`
-    // and writes the marker. The parked server burns no CPU, and no
-    // `exec sleep` drops the trap. The trap kills the background `read`
-    // first, so no child outlives the group. Dropping the write end at
-    // the test's end (even on panic) releases the read if still parked.
+    // in the background and the shell parks in `wait`. The vulnerable
+    // window is after the FIFO open returns and before `read(2)` blocks,
+    // where a foreground `read` left TERM pending until the write end
+    // dropped; `wait` is interruptible there, so a TERM that lands while
+    // the `read` is starting still runs the trap, which kills the `read`
+    // (no child outlives the group) and writes the marker. The parked
+    // server burns no CPU, and no `exec sleep` drops the trap. Dropping
+    // the write end at the test's end (even on panic) releases the read
+    // if still parked.
+    // The counts below cite their promises: exit 143 (`docs/invocation.md`,
+    // "Three signals, one path"); no event lines (a signal before
+    // `fiber_started` writes no durable event: `docs/invocation.md`, "What
+    // is written"); no session log or directory (`docs/errors.md`, "Before
+    // a session exists"); no provider request (`docs/invocation.md`, "What
+    // happens, all at once": "No model request is made").
     // On the base commit the server gets only the bound's SIGKILL, so
     // the marker is never written and this fails there.
     let hold = setup.root.path().join("hold.fifo");
