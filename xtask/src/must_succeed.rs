@@ -360,9 +360,9 @@ fn split_top_level(args: &[TokenTree]) -> Vec<&[TokenTree]> {
         .collect()
 }
 
-/// The value in ms of `[path::]Duration::from_secs(N)` or `from_millis(N)`
-/// and nothing else. A path before `Duration`, such as `std::time::`, is
-/// allowed.
+/// The value in ms of `[::][path::]Duration::from_secs(N)` or `from_millis(N)`
+/// and nothing else. A path before `Duration`, such as `std::time::` or
+/// `::std::time::`, is allowed.
 fn duration_ms(tokens: &[TokenTree]) -> Option<u128> {
     let [path @ .., duration, c1, c2, from, TokenTree::Group(call)] = tokens else {
         return None;
@@ -374,6 +374,14 @@ fn duration_ms(tokens: &[TokenTree]) -> Option<u128> {
     {
         return None;
     }
+    let path = match path {
+        [root_a, root_b, rest @ ..]
+            if is_punct(Some(root_a), ':') && is_punct(Some(root_b), ':') =>
+        {
+            rest
+        }
+        _ => path,
+    };
     let path_is_segments = path.chunks(3).all(|segment| {
         matches!(segment, [TokenTree::Ident(_), a, b] if is_punct(Some(a), ':') && is_punct(Some(b), ':'))
     });

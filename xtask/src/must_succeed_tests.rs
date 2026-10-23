@@ -54,6 +54,23 @@ fn a_const_with_a_path_visibility_or_a_function_body_is_flagged() {
 }
 
 #[test]
+fn a_short_absolute_path_duration_is_flagged_at_each_site() {
+    assert!(flagged(
+        "const W: Duration = ::std::time::Duration::from_secs(5);"
+    ));
+    assert!(flagged(
+        "fn a() { Deadline::after(::std::time::Duration::from_secs(5)); }"
+    ));
+    assert!(flagged(
+        "fn a() { tcp.set_read_timeout(Some(::std::time::Duration::from_millis(1_500))); }"
+    ));
+    assert_eq!(
+        check("const W: Duration = ::std::time::Duration::from_secs(5);"),
+        ["crates/x/src/a_tests.rs:1: const W is 5 s, below MUST_SUCCEED_WITHIN (10 s)"]
+    );
+}
+
+#[test]
 fn a_const_of_another_type_or_shape_is_not_flagged() {
     assert!(!flagged("const W: u64 = 5;"));
     assert!(!flagged(
@@ -418,5 +435,11 @@ fn a_prefix_that_is_not_ident_double_colon_segments_is_not_a_path() {
     ));
     assert!(!flagged(
         "fn a() { Deadline::after(a:b Duration::from_secs(5)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(:::std::time::Duration::from_secs(5)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(::std:time::Duration::from_secs(5)); }"
     ));
 }
