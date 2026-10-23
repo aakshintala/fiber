@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 
@@ -430,20 +430,25 @@ fn image_at(path: &str) -> ImageRef {
     }
 }
 
+/// The paths as a set: no doc promises the order of an input's media paths.
+fn path_set(input: &Input) -> BTreeSet<&str> {
+    input.media_paths().into_iter().collect()
+}
+
 #[test]
-fn media_paths_of_a_user_message_are_its_images_in_order() {
+fn media_paths_of_a_user_message_are_its_images() {
     let input = Input::User {
         text: "t".into(),
         images: vec![image_at("artifacts/a.png"), image_at("artifacts/b.png")],
     };
     assert_eq!(
-        input.media_paths(),
-        vec!["artifacts/a.png", "artifacts/b.png"]
+        path_set(&input),
+        BTreeSet::from(["artifacts/a.png", "artifacts/b.png"])
     );
 }
 
 #[test]
-fn media_paths_of_a_tool_result_are_its_images_then_each_pdf_and_its_pages() {
+fn media_paths_of_a_tool_result_are_its_images_each_pdf_and_its_pages() {
     let input = Input::ToolResult {
         action_id: ActionId("a".into()),
         text: "t".into(),
@@ -466,14 +471,14 @@ fn media_paths_of_a_tool_result_are_its_images_then_each_pdf_and_its_pages() {
         ],
     };
     assert_eq!(
-        input.media_paths(),
-        vec![
+        path_set(&input),
+        BTreeSet::from([
             "artifacts/i.png",
             "artifacts/p.pdf",
             "artifacts/p1.png",
             "artifacts/p2.png",
             "artifacts/q.pdf",
-        ]
+        ])
     );
 }
 

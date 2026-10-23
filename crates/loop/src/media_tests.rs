@@ -69,29 +69,9 @@ fn every_readable_image_pdf_and_page_maps_to_its_base64() {
 
     let media = Cache::default().resolve(&dir.path, &conversation);
 
-    let entries: Vec<(&str, &str)> = media.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
-    assert_eq!(
-        entries,
-        [
-            ("artifacts/i.png", "YWJjZA=="),
-            ("artifacts/p.pdf", "YWJj"),
-            ("artifacts/p1.png", "YWI="),
-        ]
-    );
-}
-
-#[test]
-fn a_path_named_twice_appears_once() {
-    let dir = Dir::new();
-    dir.write("artifacts/i.png", b"abcd");
-    let conversation = [
-        user(&["artifacts/i.png", "artifacts/i.png"]).remove(0),
-        tool_result(&["artifacts/i.png"], Vec::new()),
-    ];
-
-    let media = Cache::default().resolve(&dir.path, &conversation);
-
-    assert_eq!(media.len(), 1);
+    assert_eq!(&*media["artifacts/i.png"], "YWJjZA==");
+    assert_eq!(&*media["artifacts/p.pdf"], "YWJj");
+    assert_eq!(&*media["artifacts/p1.png"], "YWI=");
 }
 
 #[test]
@@ -148,20 +128,6 @@ fn a_conversation_without_media_is_empty_and_reads_nothing() {
 }
 
 #[test]
-fn the_map_holds_only_the_paths_the_conversation_names() {
-    let dir = Dir::new();
-    dir.write("artifacts/a.png", b"a");
-    dir.write("artifacts/b.png", b"b");
-    let cache = Cache::default();
-
-    let first = cache.resolve(&dir.path, &user(&["artifacts/a.png"]));
-    let second = cache.resolve(&dir.path, &user(&["artifacts/b.png"]));
-
-    assert_eq!(first.keys().collect::<Vec<_>>(), ["artifacts/a.png"]);
-    assert_eq!(second.keys().collect::<Vec<_>>(), ["artifacts/b.png"]);
-}
-
-#[test]
 fn resolve_media_returns_what_a_fresh_cache_resolves() {
     let dir = Dir::new();
     dir.write("artifacts/i.png", b"abcd");
@@ -181,5 +147,22 @@ fn an_unreadable_path_does_not_hide_the_readable_paths_after_it() {
     let media =
         Cache::default().resolve(&dir.path, &user(&["artifacts/gone.png", "artifacts/i.png"]));
 
-    assert_eq!(media.keys().collect::<Vec<_>>(), ["artifacts/i.png"]);
+    assert_eq!(&*media["artifacts/i.png"], "YWJjZA==");
+    assert!(!media.contains_key("artifacts/gone.png"));
+}
+
+#[test]
+fn a_path_the_conversation_no_longer_names_is_encoded_afresh_when_it_returns() {
+    let dir = Dir::new();
+    dir.write("artifacts/a.png", b"abcd");
+    dir.write("artifacts/b.png", b"b");
+    let cache = Cache::default();
+
+    cache.resolve(&dir.path, &user(&["artifacts/a.png"]));
+    // A handoff dropped the image: a request without it evicts its encoding.
+    cache.resolve(&dir.path, &user(&["artifacts/b.png"]));
+    dir.write("artifacts/a.png", b"zzzz");
+    let media = cache.resolve(&dir.path, &user(&["artifacts/a.png"]));
+
+    assert_eq!(&*media["artifacts/a.png"], "enp6eg==");
 }

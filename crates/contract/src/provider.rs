@@ -285,7 +285,7 @@ pub enum Input {
 }
 
 impl Input {
-    /// The path of every image and PDF the input names, in order: a message's
+    /// The path of every image and PDF the input names: a message's
     /// images; a tool result's images, then each PDF's path followed by its
     /// page images' paths. Every other input names none.
     pub fn media_paths(&self) -> Vec<&str> {

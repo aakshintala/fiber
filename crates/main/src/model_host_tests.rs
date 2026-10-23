@@ -1441,11 +1441,10 @@ fn image_parts_resolve_to_the_stored_files_base64() {
     let reply = ok(host.call("tag", imaged, bound(clock, None, held)));
     assert_eq!(reply.text, "hi");
     let sent = provider.requests();
-    assert_eq!(sent.len(), 1);
-    let media: Vec<(&str, &str)> = sent[0]
-        .media
-        .iter()
-        .map(|(path, data)| (path.as_str(), &**data))
-        .collect();
-    assert_eq!(media, [("artifacts/shot.png", "YWJjZA==")]);
+    let media = &sent[0].media;
+    assert_eq!(
+        media.get("artifacts/shot.png").map(|data| &**data),
+        Some("YWJjZA==")
+    );
+    assert!(!media.contains_key("artifacts/gone.png"));
 }

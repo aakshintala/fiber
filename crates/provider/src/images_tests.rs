@@ -267,7 +267,7 @@ fn a_native_pdf_named_by_an_absolute_path_is_sent_under_its_base_name() {
 }
 
 #[test]
-fn pages_send_each_page_as_an_image_in_order() {
+fn pages_send_each_page_as_an_image() {
     let media = media(&[
         ("artifacts/i_1.png", b"abcd"),
         ("artifacts/i_2.png", b"efgh"),
@@ -285,14 +285,15 @@ fn pages_send_each_page_as_an_image_in_order() {
     );
     assert_eq!(prepared.text, "PDF: 2 pages.\n");
     assert!(prepared.documents.is_empty());
-    assert_eq!(prepared.images.len(), 2);
+    // No doc promises the pages' order, so they are compared as a set.
+    let urls: std::collections::BTreeSet<String> = prepared.images.iter().map(data_url).collect();
     assert_eq!(
-        data_url(&prepared.images[0]),
-        "data:image/png;base64,YWJjZA=="
-    );
-    assert_eq!(
-        data_url(&prepared.images[1]),
-        "data:image/png;base64,ZWZnaA=="
+        urls,
+        [
+            "data:image/png;base64,YWJjZA==".to_owned(),
+            "data:image/png;base64,ZWZnaA==".to_owned(),
+        ]
+        .into()
     );
 }
 

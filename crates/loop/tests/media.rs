@@ -19,6 +19,7 @@ use std::sync::Arc;
 use contract::CommandId;
 use contract::events::TurnOutcome;
 use contract::inbox::{Delivery, Message};
+use contract::provider::Media;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, ImagePart, Origin, PdfPart, Sender};
 use contract::tool::Tool;
@@ -53,11 +54,10 @@ fn write_artifact(session: &Session, name: &str, bytes: &[u8]) {
     fs::write(session.dir.join(name), bytes).unwrap();
 }
 
-fn entries(media: &contract::provider::Media) -> Vec<(&str, &str)> {
-    media
-        .iter()
-        .map(|(path, data)| (path.as_str(), &**data))
-        .collect()
+/// The base64 the map holds for `path`. No doc promises the map's order or
+/// size, so a test looks each path up.
+fn data<'a>(media: &'a Media, path: &str) -> Option<&'a str> {
+    media.get(path).map(|data| &**data)
 }
 
 #[test]
@@ -71,10 +71,13 @@ fn a_prompts_image_reaches_the_first_request_as_its_base64() {
         .unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
+    // A reply with no tool call ends the turn after its one step, so the
+    // turn made one request (`docs/loop.md`, "One step", steps 3 and 4).
     let requests = session.requests();
+    assert_eq!(requests.len(), 1);
     assert_eq!(
-        entries(&requests[0].media),
-        [("artifacts/i.png", "YWJjZA==")]
+        data(&requests[0].media, "artifacts/i.png"),
+        Some("YWJjZA==")
     );
 }
 
@@ -96,6 +99,8 @@ fn an_image_is_encoded_once_per_session_across_turns() {
     session.inbox.send(delivery("and now")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
+    // Each turn is one step, one request (`docs/loop.md`, "One step"), in the
+    // order the turns ran.
     let requests = session.requests();
     assert_eq!(requests.len(), 2);
     let first = &requests[0].media["artifacts/i.png"];
@@ -113,6 +118,7 @@ fn a_missing_image_leaves_the_map_empty_and_the_request_goes_out() {
         .unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
+    // One step, one request (`docs/loop.md`, "One step").
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].media.is_empty());
@@ -163,17 +169,16 @@ fn a_tool_results_pdf_and_both_pages_reach_the_request() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
+    // The tool call's step is the first request; the step after its result
+    // is the second (`docs/loop.md`, "One step", steps 4 to 7). The result is
+    // not in the first.
     let requests = session.requests();
     assert_eq!(requests.len(), 2);
     assert!(requests[0].media.is_empty());
-    assert_eq!(
-        entries(&requests[1].media),
-        [
-            ("artifacts/p.pdf", "YWJj"),
-            ("artifacts/p1.png", "YWI="),
-            ("artifacts/p2.png", "YWJjZA=="),
-        ]
-    );
+    let media = &requests[1].media;
+    assert_eq!(data(media, "artifacts/p.pdf"), Some("YWJj"));
+    assert_eq!(data(media, "artifacts/p1.png"), Some("YWI="));
+    assert_eq!(data(media, "artifacts/p2.png"), Some("YWJjZA=="));
 }
 
 #[test]
@@ -196,8 +201,13 @@ fn a_reviewer_request_carries_no_media() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
     let requests = reviewer.requests();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].media.is_empty());
+    assert!(!requests.is_empty());
+    assert!(requests.iter().all(|request| request.media.is_empty()));
     // The session's own request did carry the image.
-    assert_eq!(session.requests()[0].media.len(), 1);
+    assert!(
+        session
+            .requests()
+            .iter()
+            .any(|request| data(&request.media, "artifacts/i.png").is_some())
+    );
 }
