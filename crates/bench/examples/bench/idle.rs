@@ -365,7 +365,7 @@ fn seed(ctx: &Ctx<'_>, home: &Home, notes: &mut Vec<String>) -> Result<(), Strin
 /// which only the answer to its last startup command draws, and two
 /// readings in a row find every thread asleep with no counter moved.
 fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let home = Home::scripted(ctx.home.fiber(), SEED.script())?;
+    let home = ctx.home.child(SEED.script())?;
     busy::in_home(home, |home| {
         let ctx = Ctx {
             home,
