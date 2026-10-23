@@ -483,12 +483,7 @@ fn saved_line(artifacts: &Path, mime_type: &Option<String>, encoded: &Value) -> 
 /// The content-addressed file name for `bytes`: the first 16 hex digits
 /// of their SHA-256, so a repeated result rewrites the same file.
 fn artifact_name(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-    let hex: String = digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let hex = support::sha256_hex(bytes);
     format!("mcp-{}.bin", &hex[..16])
 }
 

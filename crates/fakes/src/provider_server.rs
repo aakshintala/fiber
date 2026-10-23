@@ -40,14 +40,8 @@ pub(crate) const CREDENTIAL_HEADERS: [&str; 6] = [
 /// of SHA-256 over `value`, so a recording can be asserted without holding
 /// the credential.
 pub fn fingerprint(value: &str) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, value.as_bytes());
-    let hex: String = digest
-        .as_ref()
-        .iter()
-        .take(4)
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("sha256:{hex}")
+    let hex = support::sha256_hex(value.as_bytes());
+    format!("sha256:{}", &hex[..8])
 }
 
 /// One scripted response: a status, headers and the body bytes, sent as they

@@ -9,8 +9,9 @@ use std::io::{self, Read as _, Write as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::Path;
 
-use ring::digest;
 use serde_json::Value;
+
+pub(crate) use support::sha256_hex;
 
 /// The open flags for a record: no symlink, and no wait for a FIFO's writer.
 // `O_NOFOLLOW` and `O_NONBLOCK` are distinct bits, so OR and XOR give the same
@@ -242,15 +243,6 @@ fn check_fault(fault: Fault) -> io::Result<()> {
             Ok(())
         }
     })
-}
-
-/// The lowercase hexadecimal SHA-256 of `bytes`.
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    digest::digest(&digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

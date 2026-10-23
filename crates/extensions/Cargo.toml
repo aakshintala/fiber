@@ -17,7 +17,7 @@ flate2.workspace = true
 similar.workspace = true
 thiserror.workspace = true
 mlua = { workspace = true, features = ["serde"] }
-# SHA-256 and HMAC-SHA256 for `host.sha256` and `host.hmac_sha256`.
+# HMAC-SHA256 for `host.hmac_sha256` and OAuth PKCE.
 ring.workspace = true
 rustix.workspace = true
 support = { path = "../support" }

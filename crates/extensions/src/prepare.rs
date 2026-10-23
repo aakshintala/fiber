@@ -16,6 +16,8 @@ use ureq::unversioned::resolver::DefaultResolver;
 
 use crate::Error;
 use crate::host::exec;
+#[cfg(test)]
+use support::hex;
 
 /// The largest binary Fiber downloads.
 // debt: a fixed 256 MiB cap; raise it when a real binary needs more.
@@ -50,7 +52,7 @@ pub(crate) fn prepare_binary(dir: &Path, manifest: &Manifest) -> Result<(), Erro
             why: format!("`{}` names no file", manifest.name),
         })?;
         let bytes = download(&manifest.name, &binary.url)?;
-        let got = hex(ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref());
+        let got = support::sha256_hex(&bytes);
         if !got.eq_ignore_ascii_case(binary.sha256.trim()) {
             return Err(Error::BinaryChecksum {
                 name: manifest.name.clone(),
@@ -209,10 +211,6 @@ fn download_with(
         .limit(MAX_BINARY)
         .read_to_vec()
         .map_err(|e| fail(e.to_string()))
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
