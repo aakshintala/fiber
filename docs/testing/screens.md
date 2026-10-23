@@ -74,6 +74,13 @@ mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no
 test-only switch (`docs/testing.md`, "Levels").
 
+A pointer event targets a row whose position the test has made final with a
+signal, not by matching rows drawn so far. A row that background data can
+still move, such as the panel while usage folds in, is clicked only after
+the test has seen the session event that carries the last such data, and
+the grid shows that event's effect. Adding one more "this row is drawn"
+condition to a wait is not a readiness signal.
+
 The driver reads the terminal on a thread from the first frame to end of
 file, and takes the markers it waits for over a channel, as `watch` in
 `crates/tui/src/pty_watch.rs` does. A reader that stops after a marker

@@ -111,6 +111,26 @@ impl Web {
     }
 }
 
+#[cfg(test)]
+impl Web {
+    /// A websocket that stays as drained as built, for the stop answer's
+    /// wait: nothing pumps it, so `drained` never flips on its own.
+    #[allow(clippy::unwrap_used, reason = "a test fake; a failure is the test's")]
+    pub(crate) fn never_drained(drained: bool) -> Arc<Web> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        Arc::new(Web {
+            sink: Mutex::new(Sink {
+                stream: server,
+                closed: false,
+            }),
+            control: stream,
+            drained: AtomicBool::new(drained),
+        })
+    }
+}
+
 /// Writes one close frame and marks the sink closed, once: every path that
 /// ends a connection sends its close through here.
 fn send_close(web: &Web, frame: &[u8]) {

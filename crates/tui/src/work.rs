@@ -25,7 +25,7 @@ pub struct Work {
     pub index_pages: usize,
     /// Turn summaries looked up to place a `usage_recorded` line.
     pub usage_summaries: usize,
-    /// Drawn pieces measured for their width in the format helpers:
+    /// Drawn pieces measured for their width in the text helpers:
     /// one per grapheme or control character `cut` or `wrap_joined`
     /// sized, including a cut's first rejected piece.
     pub grapheme_widths: usize,

@@ -28,6 +28,7 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
+  stop [--hub <name>]                       Shut down every running session, then the hub
   feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
@@ -561,6 +562,18 @@ Usage: fiber doctor
 
 Options:
   -h, --help  Print help
+```
+
+## fiber stop
+
+```text
+Shut down every running session, then the hub
+
+Usage: fiber stop [OPTIONS]
+
+Options:
+      --hub <name>  Use a hub from this client's list
+  -h, --help        Print help
 ```
 
 ## fiber feedback

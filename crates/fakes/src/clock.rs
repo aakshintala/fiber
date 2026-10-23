@@ -31,6 +31,15 @@ enum Select {
     Count(usize),
 }
 
+/// A test-only pause: the signal that the wait point was reached, the
+/// release the test sends, and whether it waits for a look with a held park.
+#[cfg(test)]
+type AdvancePause = (
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+    bool,
+);
+
 struct State {
     offset: Duration,
     parked: Vec<Parked>,
@@ -122,7 +131,7 @@ pub struct FakeClock {
     #[cfg(test)]
     mark_parked_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     #[cfg(test)]
-    advance_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    advance_pause: Mutex<Option<AdvancePause>>,
     #[cfg(test)]
     advance_pass_pause: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
@@ -543,7 +552,7 @@ impl FakeClock {
                 panic!("{report}");
             }
             #[cfg(test)]
-            self.advance_wait_checked();
+            self.advance_wait_checked(&state);
             let (guard, _) = self
                 .parked_cv
                 .wait_timeout(state, wait_for)
@@ -590,28 +599,50 @@ impl FakeClock {
     fn pause_next_advance_wait(
         &self,
     ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        self.arm_advance_wait(false)
+    }
+
+    /// [`Self::pause_next_advance_wait`], firing only on a look with a fresh
+    /// park held. Arm it before a park that a test waits on: looks before
+    /// that park pass it by, so it never holds the state lock while the
+    /// parker needs that lock.
+    #[cfg(test)]
+    fn pause_next_advance_wait_when_held(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        self.arm_advance_wait(true)
+    }
+
+    #[cfg(test)]
+    fn arm_advance_wait(
+        &self,
+        when_held: bool,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
         let (checked_tx, checked_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         *self
             .advance_pause
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx));
+            .unwrap_or_else(PoisonError::into_inner) = Some((checked_tx, release_rx, when_held));
         (checked_rx, release_tx)
     }
 
     /// The `advance_when_parked` wait point, called only while the wait
-    /// predicate holds: no watched match and no watched mismatch yet. Fires
-    /// once per arming; the pause mutex is released before the test signal
-    /// and release wait. A wrong park already held never reaches it, so a
-    /// test that arms it proves the helper waited before the park arrived.
+    /// predicate holds: no watched match and no watched mismatch yet, with
+    /// the state lock held. Fires once per arming; the pause mutex is
+    /// released before the test signal and release wait. A wrong park already
+    /// held never reaches it, so a test that arms it proves the helper waited
+    /// before the park arrived. A `when_held` arming also passes every look
+    /// with no fresh park held.
     #[cfg(test)]
-    fn advance_wait_checked(&self) {
+    fn advance_wait_checked(&self, state: &State) {
+        let held = state.parked.iter().any(|parked| fresh(state, parked));
         let pause = self
             .advance_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some((checked, release)) = pause {
+            .take_if(|(_, _, when_held)| held || !*when_held);
+        if let Some((checked, release, _)) = pause {
             let _sent = checked.send(());
             crate::deadline::Deadline::after(Duration::from_secs(5))
                 .recv(&release)

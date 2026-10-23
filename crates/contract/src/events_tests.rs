@@ -2039,6 +2039,21 @@ fn a_credential_switch_result_writes_and_reads_only_its_provider() {
 }
 
 #[test]
+fn a_sessions_stopped_result_round_trips_as_stop() {
+    let result = CommandResult::Stop {
+        sessions_stopped: 3,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        json!({"sessions_stopped": 3})
+    );
+    assert_eq!(
+        result_of(json!({"command_id": "c", "result": {"sessions_stopped": 3}})),
+        result
+    );
+}
+
+#[test]
 fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {"session_id": "s2"}})),

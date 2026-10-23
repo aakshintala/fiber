@@ -99,7 +99,7 @@ impl Seam {
         on: bool,
     ) -> Result<(), ConfigureError> {
         let config = self.load(workspace)?;
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         let owner = owner(group);
         let layer = match scope {
             SwitchScope::Project => config::SwitchLayer::Project,

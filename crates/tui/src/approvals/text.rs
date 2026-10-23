@@ -1,6 +1,6 @@
-//! The question panel's stateless text rows: cleaning model text, counting
-//! cells, moving a character cursor, and the words row shared by forms and
-//! one-question forms (`docs/tui.md`, "A question form").
+//! The question panel's stateless text rows: counting cells, moving a
+//! character cursor, and the words row shared by forms and one-question
+//! forms (`docs/tui.md`, "A question form").
 
 use crate::format::width as measure;
 
@@ -39,14 +39,6 @@ pub(super) fn move_caret(text: &str, caret: &mut usize, right: bool) {
 /// How many display cells `text` takes, as a screen column.
 pub(super) fn cells(text: &str) -> u16 {
     u16::try_from(measure(text)).unwrap_or(u16::MAX)
-}
-
-/// `text` with every control character as a space, so model text stays on
-/// its line and sends the terminal nothing.
-pub(super) fn clean(text: &str) -> String {
-    text.chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect()
 }
 
 #[cfg(test)]

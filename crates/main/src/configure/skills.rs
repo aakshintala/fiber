@@ -56,7 +56,7 @@ impl Seam {
         scope: SwitchScope,
         on: bool,
     ) -> Result<(), ConfigureError> {
-        let (_, project) = ::cli::project_of(&self.home, workspace).map_err(from_failure)?;
+        let project = self.project_key(workspace).map_err(from_failure)?;
         let layer = match scope {
             SwitchScope::Project => config::SwitchLayer::Project,
             SwitchScope::Everywhere => config::SwitchLayer::Global,
