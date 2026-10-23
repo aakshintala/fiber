@@ -8,13 +8,16 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use self::install::{error_row, install_row, outcome_rows};
 use super::overlay::{self, Place, Row};
 use crate::format::width as cells;
-use crate::model_picker::{Fresh, ModelRow, PickerView};
+use crate::model_picker::{Fresh, ModelRow, PickerView, Progress};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
 use crate::text::to_u16;
 use crate::theme::Role;
+
+mod install;
 
 /// The picker wraps at this content width before shrinking to what the
 /// wrapped rows need (`docs/tui.md`, "Look", "Overlays").
@@ -411,10 +414,13 @@ fn flats(view: &PickerView) -> Vec<Flat<'_>> {
         .collect()
 }
 
-/// The body rows the flat models from `start` to `end` take: each model
-/// two rows, three for a session-only choice, with a heading row above
-/// each provider's first shown model and a blank row between sections.
-fn rows_for(flats: &[Flat], start: usize, end: usize) -> usize {
+/// The body rows the items from `start` to `end` take. The items are the
+/// flat models and then the not-installed rows. A model takes two rows,
+/// three for a session-only choice, with a heading row above each
+/// provider's first shown model and a blank row between sections. A
+/// not-installed row takes one, two with its error, and the first in the
+/// window takes a blank row above it when anything precedes it there.
+fn rows_for(view: &PickerView, flats: &[Flat], start: usize, end: usize) -> usize {
     let mut rows = 0;
     // A window starting inside a provider continues it with no heading;
     // any other provider change opens one.
@@ -422,49 +428,71 @@ fn rows_for(flats: &[Flat], start: usize, end: usize) -> usize {
         .checked_sub(1)
         .and_then(|at| flats.get(at))
         .map(|flat| flat.provider);
-    for (at, flat) in flats.iter().enumerate().take(end).skip(start) {
-        let headed = before.is_none_or(|provider| provider != flat.provider);
-        before = Some(flat.provider);
-        if headed {
-            rows += if at == start { 1 } else { 2 };
+    for at in start..end {
+        if let Some(flat) = flats.get(at) {
+            let headed = before.is_none_or(|provider| provider != flat.provider);
+            before = Some(flat.provider);
+            if headed {
+                rows += if at == start { 1 } else { 2 };
+            }
+            rows += 2 + usize::from(flat.row.session_only);
+        } else if let Some(install) = view.installs.get(at.saturating_sub(flats.len())) {
+            if at == flats.len() && at > start {
+                rows += 1;
+            }
+            rows += 1 + usize::from(matches!(install.progress, Some(Progress::Failed(_))));
         }
-        rows += 2 + usize::from(flat.row.session_only);
     }
     rows
 }
 
-/// The flat models around the focused one that fit `fit` body rows: the
-/// window starts at the focused model and takes earlier models while
-/// they fit, then later ones, so the selection stays visible.
+/// The items around the focused one that fit `fit` body rows: the window
+/// starts at the focused item and takes earlier items while they fit,
+/// then later ones, so the focus stays visible.
 fn window(view: &PickerView, fit: usize) -> (usize, usize) {
     let flats = flats(view);
-    if flats.is_empty() {
+    let total = flats.len() + view.installs.len();
+    if total == 0 {
         return (0, 0);
     }
     let pos = flats
         .iter()
         .position(|flat| Some(flat.row.at) == view.focused)
+        .or_else(|| {
+            view.installs
+                .iter()
+                .position(|install| Some(install.at) == view.focused)
+                .map(|at| flats.len() + at)
+        })
         .unwrap_or(0)
-        .min(flats.len().saturating_sub(1));
+        .min(total.saturating_sub(1));
     let (mut start, mut end) = (pos, pos.saturating_add(1));
-    while start > 0 && rows_for(&flats, start.saturating_sub(1), end) <= fit {
-        start = start.saturating_sub(1);
+    // Iterators bound each walk by `total`, so no comparison mutant can spin.
+    for s in (0..pos).rev() {
+        if rows_for(view, &flats, s, end) > fit {
+            break;
+        }
+        start = s;
     }
-    while end < flats.len() && rows_for(&flats, start, end.saturating_add(1)) <= fit {
-        end = end.saturating_add(1);
+    for e in pos.saturating_add(2)..=total {
+        if rows_for(view, &flats, start, e) > fit {
+            break;
+        }
+        end = e;
     }
     (start, end)
 }
 
-/// The body rows available for the models: the area less the chrome,
-/// the filter and buttons rows above it, the status lines, and the
-/// no-match line.
+/// The body rows available for the items: the area less the chrome, the
+/// filter and buttons rows above it, the status lines, the no-match
+/// line, and the outcome lines under the list, which are not windowed.
 fn model_fit(view: &PickerView, height: u16) -> usize {
-    let reserved = 2 + view.status.len() + usize::from(view.no_match);
+    let reserved =
+        2 + view.status.len() + usize::from(view.no_match) + outcome_rows(&view.outcomes).len();
     usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
 }
 
-/// The page step over `view` at `height`: the windowed models, which
+/// The page step over `view` at `height`: the windowed items, which
 /// the list pages by less one.
 pub(crate) fn page_step(view: &PickerView, height: u16) -> usize {
     let (start, end) = window(view, model_fit(view, height));
@@ -516,7 +544,25 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         .checked_sub(1)
         .and_then(|at| flats.get(at))
         .map(|flat| flat.provider);
-    for (n, flat) in flats.iter().take(end).skip(start).enumerate() {
+    for (n, at) in (start..end).enumerate() {
+        let Some(flat) = flats.get(at) else {
+            if let Some(install) = view.installs.get(at.saturating_sub(flats.len())) {
+                // The first not-installed row in the window sits below a
+                // blank row when anything precedes it there.
+                if n > 0 && at == flats.len() {
+                    sections.push(Row {
+                        spans: Vec::new(),
+                        right: Vec::new(),
+                        targets: Vec::new(),
+                        barred: false,
+                    });
+                }
+                let focused = Some(install.at) == view.focused;
+                sections.push(install_row(install, focused, &view.spinner));
+                sections.extend(error_row(install));
+            }
+            continue;
+        };
         let headed = before.is_none_or(|provider| provider != flat.provider);
         before = Some(flat.provider);
         if headed && !(n == 0 && trim_heading) {
@@ -543,6 +589,7 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
             }
         }
     }
+    sections.extend(outcome_rows(&view.outcomes));
     if view.no_match {
         sections.push(dim_row("No models match".to_owned()));
     }

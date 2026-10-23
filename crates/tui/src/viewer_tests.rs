@@ -55,6 +55,7 @@ fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
