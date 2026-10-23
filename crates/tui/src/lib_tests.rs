@@ -244,21 +244,6 @@ pub(super) fn once(hub: UnixStream, hello: contract::HubLine) -> crate::Connect 
     })
 }
 
-/// Runs `work` on a thread and returns its result, failing after
-/// [`DEADLINE`] with `what`: one deadline however many reads it makes.
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-within".to_owned())
-        .spawn(move || done.send(work()).unwrap_or(()))
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(result) => result,
-        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
-    }
-}
-
 /// Reads one command line the loop wrote to the hub, with one deadline,
 /// and hands the reader back.
 #[track_caller]
@@ -266,7 +251,7 @@ pub(super) fn command(
     mut reader: BufReader<UnixStream>,
     what: &str,
 ) -> (BufReader<UnixStream>, serde_json::Value) {
-    let (reader, line) = within(what, move || {
+    let (reader, line) = fakes::within(what, Deadline::after(DEADLINE), move || {
         let mut line = String::new();
         let read = reader.read_line(&mut line);
         (reader, read.map(|_| line))
@@ -1251,7 +1236,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
         .try_clone()
         .unwrap_or_else(|err| panic!("dup: {err}"));
     // The pause inside blocks: the loop runs on a thread, with a deadline.
-    let (lp, code, seen) = within("the hand-over", move || {
+    let (lp, code, seen) = fakes::within("the hand-over", Deadline::after(DEADLINE), move || {
         let mut seen = None;
         lp.write_title();
         let code = lp.hand_over(|| {
@@ -1260,7 +1245,7 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
             // A line typed now goes to the program, not to the paused reader.
             main.write_all(b"typed\n")
                 .unwrap_or_else(|err| panic!("write: {err}"));
-            let line = within("the program's read", move || {
+            let line = fakes::within("the program's read", Deadline::after(DEADLINE), move || {
                 let mut line = String::new();
                 BufReader::new(slave).read_line(&mut line).map(|_| line)
             });
@@ -1373,7 +1358,7 @@ fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
 /// and the draft.
 #[track_caller]
 fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
-    within("the loop", move || {
+    fakes::within("the loop", Deadline::after(DEADLINE), move || {
         let code = feed(&mut lp, inputs);
         (code, lp.app.draft())
     })
@@ -1556,7 +1541,7 @@ fn ctrl_g_that_cannot_take_the_terminal_back_quits_with_one() {
 fn ctrl_g_with_no_editor_says_so_and_the_loop_reads_on() {
     let (lp, _) = new_loop(TestBackend::new(60, 12), None);
     let inputs = ["a", "\x07", "!"].map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()));
-    let (lp, code) = within("the loop", move || {
+    let (lp, code) = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         let mut lp = lp;
         let code = feed(&mut lp, inputs.into());
         (lp, code)
@@ -2045,26 +2030,27 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     // All four reads run under one deadline: the far end reads the close
     // lines the quit question sent.
     let hub = BufReader::new(held);
-    let (feed, recent, subscribe, close) = within("the close commands", move || {
-        let mut hub = hub;
-        let mut lines = Vec::new();
-        for _ in 0..4 {
-            let mut line = String::new();
-            hub.read_line(&mut line)
-                .unwrap_or_else(|err| panic!("read: {err}"));
-            lines.push(
-                serde_json::from_str::<serde_json::Value>(&line)
-                    .unwrap_or_else(|err| panic!("{line:?}: {err}")),
-            );
-        }
-        let mut lines = lines.into_iter();
-        (
-            lines.next().expect("the feed command"),
-            lines.next().expect("the recent command"),
-            lines.next().expect("the subscribe command"),
-            lines.next().expect("the close command"),
-        )
-    });
+    let (feed, recent, subscribe, close) =
+        fakes::within("the close commands", Deadline::after(DEADLINE), move || {
+            let mut hub = hub;
+            let mut lines = Vec::new();
+            for _ in 0..4 {
+                let mut line = String::new();
+                hub.read_line(&mut line)
+                    .unwrap_or_else(|err| panic!("read: {err}"));
+                lines.push(
+                    serde_json::from_str::<serde_json::Value>(&line)
+                        .unwrap_or_else(|err| panic!("{line:?}: {err}")),
+                );
+            }
+            let mut lines = lines.into_iter();
+            (
+                lines.next().expect("the feed command"),
+                lines.next().expect("the recent command"),
+                lines.next().expect("the subscribe command"),
+                lines.next().expect("the close command"),
+            )
+        });
     assert_eq!(feed["command"], "feed");
     assert_eq!(recent["command"], "recent");
     assert_eq!(subscribe["command"], "subscribe");
@@ -2201,7 +2187,7 @@ fn git(dir: &Path, args: &[&str]) {
     let dir = dir.to_path_buf();
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
     let what = format!("git {}", args.join(" "));
-    let status = within(&what, move || {
+    let status = fakes::within(&what, Deadline::after(DEADLINE), move || {
         std::process::Command::new("git")
             .arg("-C")
             .arg(&dir)

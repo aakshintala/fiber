@@ -15,21 +15,6 @@ use crate::home::ProjectKey;
 /// How long the test waits for a thread before failing.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-#[track_caller]
-fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        while !pred() {
-            thread::yield_now();
-        }
-        done.send(()).unwrap();
-    });
-    assert!(
-        Deadline::after(DEADLINE).recv(&finished).is_ok(),
-        "waited {DEADLINE:?} for {what}"
-    );
-}
-
 #[test]
 fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
     let dir = TempDir::new("fiber-write-lock");
@@ -60,9 +45,11 @@ fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
         Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
         "waited {DEADLINE:?} for the second update to reach the file's lock"
     );
-    wait_until("the second update to be waiting on the file's lock", || {
-        waiting() == 1
-    });
+    fakes::wait_until(
+        "the second update to be waiting on the file's lock",
+        Deadline::after(DEADLINE),
+        || waiting() == 1,
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the second update finished while the file was locked"
@@ -104,9 +91,11 @@ fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
         Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
         "waited {DEADLINE:?} for the remove to reach the file's lock"
     );
-    wait_until("the remove to be waiting on the file's lock", || {
-        waiting() == 1
-    });
+    fakes::wait_until(
+        "the remove to be waiting on the file's lock",
+        Deadline::after(DEADLINE),
+        || waiting() == 1,
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the remove finished while the file was locked"
@@ -585,9 +574,11 @@ fn replace_global_waits_for_the_lock_then_rejects_a_concurrent_non_object() {
         Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
         "waited {DEADLINE:?} for the replace to reach the file's lock"
     );
-    wait_until("the replace to be waiting on the file's lock", || {
-        waiting() == 1
-    });
+    fakes::wait_until(
+        "the replace to be waiting on the file's lock",
+        Deadline::after(DEADLINE),
+        || waiting() == 1,
+    );
     assert!(
         done_rx.try_recv().is_err(),
         "the replace finished while the file was locked"
