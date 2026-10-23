@@ -22,7 +22,6 @@ use log::Log;
 use super::{Decision, Retry};
 
 const RETRY_DELAY: Duration = Duration::from_secs(2);
-const TURN_WAIT_DEADLINE: Duration = Duration::from_secs(5);
 
 fn failure(code: ErrorCode) -> Failure {
     Failure {
@@ -293,15 +292,14 @@ fn a_saturated_asked_wait_fails_at_once_whatever_the_cap() {
 
 #[test]
 fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
-    const DEADLINE: Duration = Duration::from_secs(5);
     const PARTIAL_ADVANCE: Duration = Duration::from_secs(1);
     // The wrapper advances on the first `now()` that sees `retry_scheduled`
     // on its own log watcher: after the deadline read in fixed production, so
     // `wait_retry`'s own check releases at once; a regressed read after the
     // line would advance first and push its deadline a full delay out.
     let mut full = RetryRun::start(RETRY_DELAY);
-    full.wait_for_retry_scheduled(DEADLINE);
-    full.wait_for_retry_started(DEADLINE);
+    full.wait_for_retry_scheduled(fakes::MUST_SUCCEED_WITHIN);
+    full.wait_for_retry_started(fakes::MUST_SUCCEED_WITHIN);
     assert_eq!(
         full.clock.now(),
         full.origin + RETRY_DELAY,
@@ -312,11 +310,11 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
     // A smaller advance before the park leaves the retry parked at its
     // deadline; only the later remainder releases it.
     let mut partial = RetryRun::start(PARTIAL_ADVANCE);
-    partial.wait_for_retry_scheduled(DEADLINE);
+    partial.wait_for_retry_scheduled(fakes::MUST_SUCCEED_WITHIN);
     assert!(
         partial.clock.await_parked(
             partial.origin + RETRY_DELAY,
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the retry stays parked at its fixed deadline"
     );
@@ -337,9 +335,9 @@ fn advancing_on_retry_scheduled_does_not_stretch_the_retry_deadline() {
         Some(partial.origin + RETRY_DELAY),
         None,
         remaining,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    partial.wait_for_retry_started(DEADLINE);
+    partial.wait_for_retry_started(fakes::MUST_SUCCEED_WITHIN);
     partial.finish();
 }
 
@@ -507,9 +505,9 @@ impl RetryRun {
     #[track_caller]
     fn finish(self) {
         assert_eq!(
-            Deadline::after(TURN_WAIT_DEADLINE)
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&self.turn)
-                .expect("the turn completed within TURN_WAIT_DEADLINE")
+                .expect("the turn completed within the must-succeed bound")
                 .unwrap(),
             Some(contract::events::TurnOutcome::Completed)
         );
