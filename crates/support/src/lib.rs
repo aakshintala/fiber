@@ -1,6 +1,6 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
-//! process clock and the clock-parked wait, the process-group guard, the
-//! poison-ignoring `lock`, the admission lock, the stoppable read, the line
+//! process clock and the clock-parked wait, the cancel signal, the process-group
+//! guard, the poison-ignoring `lock`, the admission lock, the stoppable read, the line
 //! framing, lowercase hex and SHA-256, the `mint` id, and the scrubbed `git`
 //! command builder (`docs/architecture.md`, "The modules").
 
@@ -8,6 +8,10 @@ use std::sync::{Mutex, MutexGuard};
 
 /// The admission lock: a door that admits until it is closed, once and for good.
 pub mod admission;
+
+/// The cancel signal a call watches, and the `Cancel` trait behind it
+/// (`docs/tools.md`, "Cancellation").
+pub mod cancel;
 
 /// The clock seam, the process clock and the clock-parked wait
 /// (`docs/testing.md`, "Values that change every run").
