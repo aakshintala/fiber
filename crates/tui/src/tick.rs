@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use support::clock::park;
 
 use crate::Input;
 
@@ -148,31 +149,8 @@ impl Ticker {
                     gate = self.lock();
                 }
                 Step::Until(at) => {
-                    // The lock is held into `wait_until`, so a wake
-                    // blocks on it until the condvar wait releases it,
-                    // and is never missed.
-                    let mut slot = Some(gate);
-                    clock.wait_until(Some(at), &mut |bound| {
-                        let Some(held) = slot.take() else {
-                            return;
-                        };
-                        slot = Some(match bound {
-                            Some(bound) => {
-                                self.changed
-                                    .wait_timeout(held, bound)
-                                    .unwrap_or_else(PoisonError::into_inner)
-                                    .0
-                            }
-                            None => self
-                                .changed
-                                .wait(held)
-                                .unwrap_or_else(PoisonError::into_inner),
-                        });
-                    });
-                    gate = match slot {
-                        Some(held) => held,
-                        None => self.lock(),
-                    };
+                    gate = park(clock, Some(at), None, &self.changed, gate, |_| false)
+                        .unwrap_or_else(|| self.lock());
                 }
             }
         }

@@ -29,7 +29,7 @@ pub(crate) fn valid(url: &str) -> bool {
 }
 
 /// The program that opens a URL: none over SSH, else `open`, else
-/// `xdg-open`, else none. It runs as [`crate::clipboard::pipe`] runs a
+/// `xdg-open`, else none. It runs as [`crate::helper::spawn_detached`] runs a
 /// copy: its own thread and process group, never a shell, never waited on.
 pub(crate) fn command(
     env: impl Fn(&str) -> Option<OsString>,

@@ -9,6 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use support::clock::park;
 use support::stoppable::Stop;
 
 /// The permit between the loop and the hub thread.
@@ -131,30 +132,8 @@ impl Retry {
             if clock.now() >= until {
                 return true;
             }
-            // The lock is held into `wait_until`, so a wake blocks on it
-            // until the condvar wait releases it, and is never missed.
-            let mut slot = Some(gate);
-            clock.wait_until(Some(until), &mut |bound| {
-                let Some(held) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(bound) => {
-                        self.changed
-                            .wait_timeout(held, bound)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => self
-                        .changed
-                        .wait(held)
-                        .unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-            gate = match slot {
-                Some(held) => held,
-                None => self.lock(),
-            };
+            gate = park(clock, Some(until), None, &self.changed, gate, |_| false)
+                .unwrap_or_else(|| self.lock());
         }
     }
 

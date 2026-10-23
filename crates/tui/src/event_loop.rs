@@ -503,7 +503,12 @@ impl<B: Backend> Loop<B> {
             match effect {
                 Effect::None => {}
                 Effect::Copy(text) => {
-                    clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+                    clipboard::copy(
+                        Some(&self.tty),
+                        self.programs.copy.as_deref(),
+                        text,
+                        &self.clock,
+                    );
                 }
                 Effect::OpenLink(url) => self.open_link(url),
                 Effect::Send(lines) => self.hub.send(&lines, &mut self.app),
@@ -703,10 +708,20 @@ impl<B: Backend> Loop<B> {
         // A selection's copy waiting on dropped pages runs once they load,
         // and a `/copy` waiting on an opening pass once the pass ends.
         if let Some(text) = self.app.take_copy() {
-            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+            clipboard::copy(
+                Some(&self.tty),
+                self.programs.copy.as_deref(),
+                text,
+                &self.clock,
+            );
         }
         if let Some(text) = self.app.take_owed_copy() {
-            clipboard::copy(Some(&self.tty), self.programs.copy.as_deref(), text);
+            clipboard::copy(
+                Some(&self.tty),
+                self.programs.copy.as_deref(),
+                text,
+                &self.clock,
+            );
         }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
@@ -759,6 +774,7 @@ impl<B: Backend> Loop<B> {
                 &self.programs.images_dir,
                 view,
                 &self.files_out,
+                &self.clock,
             );
         }
     }
@@ -891,7 +907,11 @@ impl<B: Backend> Loop<B> {
         if let Some(argv) = self.programs.open.clone() {
             let mut argv = argv;
             argv.push(url);
-            drop(clipboard::pipe(argv, String::new()));
+            drop(crate::helper::spawn_detached(
+                argv,
+                None,
+                Arc::clone(&self.clock),
+            ));
         }
     }
 

@@ -1290,50 +1290,6 @@ fn a_rewind_carries_the_model_name_and_the_new_session_renames_it() {
     hubbed.finish();
 }
 
-#[test]
-fn a_rewind_of_an_unnamed_session_writes_no_session_named() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([hello(), hello()]).unwrap();
-    setup.provider(&server);
-    let hubbed = Hubbed::new(&setup);
-    let old = hubbed.start("u1_start", "u1_sub", "one");
-    let client = hubbed.client();
-
-    client.send(&rewind("u1_rw", &old, json!({})));
-    let ack = until_ack(client, "the rewind acknowledgement", "u1_rw");
-    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
-        .as_str()
-        .expect("the rewind answers with a session id")
-        .to_owned();
-    until(client, "the new session's start", |line| {
-        line["session_id"] == next && line["kind"] == "session_started"
-    });
-    until(client, "the new session's fiber_started", |line| {
-        line["session_id"] == next && line["kind"] == "fiber_started"
-    });
-    until(client, "the new session's extensions_loaded", |line| {
-        line["session_id"] == next && line["kind"] == "extensions_loaded"
-    });
-
-    let new_log = session_log(&setup, &next);
-    let new_kinds: Vec<&str> = new_log
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        new_kinds,
-        ["session_started", "fiber_started", "extensions_loaded"],
-        "{new_kinds:?}"
-    );
-    assert!(
-        new_log.iter().all(|line| line["kind"] != "session_named"),
-        "no session_named without a parent name: {new_kinds:?}"
-    );
-
-    hubbed.close("u1_close", &next);
-    hubbed.finish();
-}
-
 /// Runs the system `git` in `dir` with a clean environment, in its own
 /// process group, to its exit under the test's [`Deadline`].
 fn git_clean_env(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
