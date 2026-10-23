@@ -1351,7 +1351,13 @@ impl support::History {
         let looped = self.resume_headless(Vec::new());
         let outcome = self.run(looped, "again");
         assert_eq!(outcome, contract::events::TurnOutcome::Completed);
-        let mut conversation = self.provider.requests().pop().unwrap().conversation;
+        let mut conversation = self
+            .provider
+            .requests()
+            .pop()
+            .unwrap()
+            .conversation
+            .to_vec();
         assert_eq!(
             conversation.pop(),
             Some(Input::User {
@@ -1497,7 +1503,7 @@ fn an_open_batch_gets_no_fixed_result() {
         ]
     );
     assert_eq!(calls, ["a_1", "a_2"]);
-    for input in conversation {
+    for input in conversation.iter() {
         if let Input::ToolResult { text, .. } = input {
             assert!(
                 !text.contains("never ran") && !text.contains("unknown"),
@@ -3079,7 +3085,7 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     );
     // A later resume renders the same conversation from the log.
     let rebuilt = history.rebuilt();
-    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
+    assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
 }
 
 #[test]
@@ -3121,7 +3127,7 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
     let rebuilt = history.rebuilt();
-    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
+    assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
     // The rebuild puts the opening message at index 0, so the a_1 call is
     // followed directly by its result, and the notice follows the result.
     let call = conversation
@@ -3171,7 +3177,7 @@ fn resume_conversation(history: &mut History, prompt: &str) -> Vec<Input> {
         .last()
         .unwrap()
         .conversation
-        .clone()
+        .to_vec()
 }
 
 #[test]

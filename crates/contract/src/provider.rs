@@ -115,11 +115,13 @@ pub struct ModelRequest {
     /// (`docs/prompt-cache.md`, "Cache markers and keys" and "Rules for other
     /// areas"). The caller builds it.
     pub cache_key: String,
-    /// The conversation, in log order. Its builder keeps every
+    /// The conversation, in log order, held as an `Arc<[Input]>`: a step
+    /// copies the conversation once. Its builder keeps every
     /// [`Input::ToolSearchResult`]'s `loaded` non-empty, with each name a tool
     /// the request sends deferred. None appears when the request's provider
     /// does not defer ([`Provider::defers`] is false). Protocols rely on this.
-    pub conversation: Vec<Input>,
+    #[serde(with = "arc_conversation")]
+    pub conversation: Arc<[Input]>,
     /// The tools as a rewound session's parent sent them, in that order:
     /// a rewound session's first request sends these verbatim, so it
     /// matches its parent's bytes (`docs/events.md`, "Rewind"). `None`
@@ -500,6 +502,28 @@ impl CallError {
             CallError::Failed { usage, .. } => usage,
             CallError::Cancelled { usage } => usage,
         }
+    }
+}
+
+/// Serde for the shared conversation: the wire form is the same JSON
+/// array as the `Vec<Input>` form.
+mod arc_conversation {
+    use std::sync::Arc;
+
+    use super::Input;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        conversation: &Arc<[Input]>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        <[Input]>::serialize(conversation, serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Arc<[Input]>, D::Error> {
+        Ok(Arc::from(Vec::<Input>::deserialize(deserializer)?))
     }
 }
 

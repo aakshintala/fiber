@@ -440,7 +440,7 @@ fn sized_request(conversation: Vec<Input>) -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation,
+        conversation: conversation.into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,

@@ -491,7 +491,7 @@ fn an_unreadable_verdict_is_asked_for_once_more() {
     // The re-ask never quotes the reply: no text of the first reply
     // reaches the second request's system prompt or any of its items.
     assert!(!requests[1].system_prompt.contains("ZQX-UNREAD"));
-    for input in &requests[1].conversation {
+    for input in requests[1].conversation.iter() {
         assert!(!format!("{input:?}").contains("ZQX-UNREAD"));
     }
     assert_eq!(session.requests().len(), 2);

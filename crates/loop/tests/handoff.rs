@@ -2485,7 +2485,7 @@ fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
 
     // The conversation the overflowing request held, the results unmoved.
     let requests = session.requests();
-    assert_eq!(session.rebuilt(), requests[1].conversation);
+    assert_eq!(session.rebuilt(), &requests[1].conversation[..]);
 }
 
 #[test]

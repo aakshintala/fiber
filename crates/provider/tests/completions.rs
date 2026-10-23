@@ -47,7 +47,8 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     let ep = endpoint(&server);
     let model = ep.reference();
     let mut req = request();
-    req.conversation.push(Input::ToolCall {
+    let mut conversation = req.conversation.to_vec();
+    conversation.push(Input::ToolCall {
         action_id: ActionId("a_1".into()),
         model: model.clone(),
         call: ToolCallRequested {
@@ -59,20 +60,23 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
             provider_item: None,
         },
     });
-    req.conversation.push(Input::ToolSearchResult {
+    conversation.push(Input::ToolSearchResult {
         action_id: ActionId("a_1".into()),
         loaded: vec!["a".into(), "b".into()],
     });
+    req.conversation = conversation.into();
 
     let protocol = Completions::new(ep.clone());
     run(protocol.call(&req)).0.unwrap();
-    req.conversation[2] = Input::ToolResult {
+    let mut conversation = req.conversation.to_vec();
+    conversation[2] = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "Loaded: a, b.".into(),
         is_error: false,
         images: vec![],
         pdfs: vec![],
     };
+    req.conversation = conversation.into();
     run(protocol.call(&req)).0.unwrap();
     let requests = server.requests();
     let pair = &requests[requests.len() - 2..];
@@ -374,10 +378,11 @@ fn request() -> ModelRequest {
         tools: vec![weather_tool(), loose_tool()],
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "s_root".into(),
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..harness::request()
     }
 }
@@ -792,7 +797,7 @@ fn markers() -> Endpoint {
 fn declared_cache_markers_go_on_the_system_prompt_the_previous_end_and_the_new_end() {
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation: four_turn_conversation(),
+        conversation: (four_turn_conversation()).into(),
         previous_end: Some(3),
         sent_tools: None,
         cache_lifetime: CacheLifetime::OneHour,
@@ -855,7 +860,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         }
     );
 
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Reasoning {
             model: "openai/gpt-6-luna".into(),
@@ -901,7 +906,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     send(
         endpoint(&server),
         &ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             ..request()
         },
     );
@@ -1102,13 +1107,13 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
         text: "hm".into(),
         provider_item: Some(json!({"reasoning_content": "hm"})),
     };
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([call("a"), call("b"), result("a"), result("b"), reasoning]);
     let server = ProviderServer::start([completed_reply()]).unwrap();
     send(
         endpoint(&server),
         &ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             ..request()
         },
     );
@@ -1469,7 +1474,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
         send(
             endpoint(&server),
             &ModelRequest {
-                conversation: conversation(is_error),
+                conversation: (conversation(is_error)).into(),
                 ..request()
             },
         );
@@ -1553,7 +1558,7 @@ fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
         vec![png_ref("artifacts/i_1.png")],
     ));
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1627,7 +1632,7 @@ fn a_tool_results_pdf_pages_go_in_a_user_message_after_the_tool_message() {
         ),
     );
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1654,7 +1659,7 @@ fn a_pdf_without_pages_adds_no_user_message() {
     let session = image_session();
     let conversation = pdf_turn("a_1", "call_1", pdf_ref("artifacts/p_1.pdf", None));
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1702,7 +1707,7 @@ fn pdf_pages_from_parallel_results_share_one_user_message_in_order() {
         second[1].clone(),
     ];
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1762,7 +1767,7 @@ fn a_rewound_child_sends_its_parent_pdf_pages_as_the_same_bytes() {
     send(
         endpoint.clone(),
         &ModelRequest {
-            conversation: conversation(true),
+            conversation: (conversation(true)).into(),
             session_dir: parent.clone(),
             ..request()
         },
@@ -1770,7 +1775,7 @@ fn a_rewound_child_sends_its_parent_pdf_pages_as_the_same_bytes() {
     send(
         endpoint,
         &ModelRequest {
-            conversation: conversation(false),
+            conversation: (conversation(false)).into(),
             session_dir: child,
             ..request()
         },
@@ -1804,7 +1809,7 @@ fn images_from_parallel_results_share_one_user_message_in_order() {
         second[1].clone(),
     ];
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1844,7 +1849,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
         images: Vec::new(),
     });
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1880,7 +1885,7 @@ fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
         vec![png_ref("artifacts/i_1.png")],
     ));
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1929,7 +1934,7 @@ fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
                 ..markers()
             },
             &ModelRequest {
-                conversation: conversation.clone(),
+                conversation: (conversation.clone()).into(),
                 session_dir: session.path().to_path_buf(),
                 previous_end,
                 cache_lifetime: CacheLifetime::OneHour,
@@ -1981,7 +1986,7 @@ fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
             ..markers()
         },
         &ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             session_dir: session.path().to_path_buf(),
             previous_end: Some(3),
             sent_tools: None,
@@ -2145,7 +2150,7 @@ fn user_message(server: &ProviderServer) -> Value {
 fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
     let session = image_session();
     let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2444,12 +2449,13 @@ fn live_openrouter_web_search_completes_a_turn() {
     };
     let request = ModelRequest {
         tools: vec![hosted_search_tool()],
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "Search the web: what is the latest stable version of the Rust \
                      compiler? Answer in one sentence and cite the source."
                 .into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..request()
     };
     let (done, finished) = std::sync::mpsc::channel();

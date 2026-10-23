@@ -911,7 +911,7 @@ fn scrub(text: &str, homes: &[String]) -> String {
 /// The conversation with this run's paths and action ids removed, so two
 /// runs can be compared. Job lines render nothing, so they must not appear.
 fn scrubbed(request: &ModelRequest, homes: &[String]) -> (Option<usize>, Vec<Input>) {
-    let mut conversation = request.conversation.clone();
+    let mut conversation = request.conversation.to_vec();
     for input in &mut conversation {
         match input {
             Input::User { text, .. } => *text = scrub(text, homes),
