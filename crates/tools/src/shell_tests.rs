@@ -273,13 +273,12 @@ fn assert_closed(effects: &contract::tool::Effects) {
 fn a_listed_command_reads_and_names_its_subject() {
     let dir = fakes::TempDir::new("fiber-shell-effects");
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
-    let root = dir.path().to_str().unwrap().to_owned();
     let git = effects(&shell, "git status");
     assert_eq!(git.declared.effects, vec![Effect::Reads]);
     assert!(git.declared.reversible);
     assert_eq!(git.subject.as_deref(), Some("git status"));
     assert_eq!(git.prefix.as_deref(), Some("git status"));
-    assert_eq!(git.declared.paths, Some(vec![root]));
+    assert!(git.declared.paths.is_none());
 }
 
 #[test]
@@ -373,7 +372,7 @@ fn paths_are_absolute_operands_and_the_workdir_when_there_are_none() {
     assert!(both.prefix.is_none());
     assert_eq!(
         both.declared.paths,
-        Some(vec![src.to_str().unwrap().to_owned(), root])
+        Some(vec![src.to_str().unwrap().to_owned()])
     );
     let sub = dir.path().join("sub");
     std::fs::create_dir(&sub).unwrap();
