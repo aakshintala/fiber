@@ -6066,3 +6066,284 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
         );
     }
 }
+
+#[test]
+fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    fs::write(setup.workspace().join("note.txt"), "the note\n").unwrap();
+    // The parent spawns, then stalls on the receipt: the stall holds the
+    // turn open, so no live copy can land while the child records below.
+    let parent = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("p_allow", "allow"), cusage_id("p_allow", 0.0)]);
+            }
+            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => cstream(&[
+                    ccall_id(
+                        "p_spawn",
+                        "delegate_spawn",
+                        &json!({"description": "scan", "prompt": "say hello", "model": "fiber:pb/m"}),
+                    ),
+                    cusage_id("p_spawn", 0.0),
+                ]),
+                _ => stall(),
+            }
+        }
+    })
+    .unwrap();
+    // The child reads three times, then stalls mid-turn: three generations
+    // are recorded to its log, and the turn never finishes them.
+    let child = ProviderServer::start_responding({
+        let stage = std::sync::atomic::AtomicUsize::new(0);
+        move |request: &Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if !text.contains(r#""tools":[{"#) {
+                return cstream(&[ctext_id("c_allow", "allow"), cusage_id("c_allow", 0.0)]);
+            }
+            match stage.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => cstream(&[
+                    ccall_id("c_1", "read", &json!({"path": "note.txt"})),
+                    cusage_id("c_1", 0.02),
+                ]),
+                1 => cstream(&[
+                    ccall_id("c_2", "read", &json!({"path": "note.txt"})),
+                    cusage_id("c_2", 0.02),
+                ]),
+                2 => cstream(&[
+                    ccall_id("c_3", "read", &json!({"path": "note.txt"})),
+                    cusage_id("c_3", 0.02),
+                ]),
+                _ => stall(),
+            }
+        }
+    })
+    .unwrap();
+    providers_url(&setup, &parent.url(), &child.url(), "openai-completions");
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    // Held until each side parks: the parent stalls on the receipt before
+    // the child records anything, whatever the scheduling.
+    parent.hold();
+    child.hold();
+    let id = doors::mint("s_");
+    let mut running = Running::start(
+        &setup,
+        &id,
+        &["--model", "pa/m", "--prompt", "scan the tree"],
+    );
+    assert!(
+        parent.await_requests(1, setup.deadline),
+        "the spawn call was requested"
+    );
+    parent.release_one();
+    assert!(
+        parent.await_requests(2, setup.deadline),
+        "the verdict was requested"
+    );
+    parent.release_one();
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the turn stalled on the receipt"
+    );
+    parent.release();
+    // The parent is blocked in its stall: the child now records three
+    // generations no live copy can meet, then stalls its fourth call.
+    child.release();
+    assert!(
+        child.await_requests(4, setup.deadline),
+        "the child recorded three reads and stalled"
+    );
+    let started = running.wait_line("the delegate start", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let delegate = started.last().unwrap();
+    let job_id = delegate["payload"]["job_id"].as_str().unwrap().to_owned();
+    let child_id = delegate["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The kill-to-backfilled window runs under MUST_SUCCEED_WITHIN: the
+    // child's hangup shutdown fits SHUTDOWN_BOUND, and the bound below
+    // leaves shutdown plus observation slack on top of it.
+    assert!(
+        fakes::MUST_SUCCEED_WITHIN
+            >= doors::SHUTDOWN_BOUND + Duration::from_secs(2) + Duration::from_secs(2),
+        "the success bound clears the shutdown bound with slack to spare"
+    );
+    let bound = support::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    // Subscribed before the kill: the child's exit is awaited on this
+    // socket, so a shutdown that beats a later subscription cannot hide
+    // the exit line.
+    let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
+    subscribe(&child_socket);
+    // The parent is gone however it died: SIGKILL to its group, which the
+    // child left when it became its own leader. The remaining deadline
+    // from here is the kill-to-backfilled window the resume asserts on.
+    let killing = setup.deadline.left();
+    support::kill_group(setup.deadline, running.group, "KILL").unwrap();
+    let (status, _, _) = running.wait();
+    assert_eq!(status.code(), None);
+    // End of file on the lifeline is a hangup: the child shuts down with
+    // 129 within the bound, releasing its session lock.
+    let lines = support::until(&child_socket, "the child's exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    let exited = lines.last().unwrap();
+    assert_eq!(exited["payload"]["exit_code"], 129);
+
+    // The resume marks the orphan, then backfills every unseen record
+    // after the marking: the copies arrive in delegate-log order, each
+    // naming the child as the originator. The close below only answers
+    // once the resume (marking plus backfill) is done serving, so the
+    // log then holds everything the resume wrote.
+    let mut resumed = Running::start(&setup, &id, &["--resume"]);
+    resumed.wait_line("the orphan marking", |line| {
+        line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id
+    });
+    let backfilled = resumed.wait_line("the backfilled copies", |line| {
+        line["kind"] == "usage_recorded"
+            && line["payload"]["origin_session_id"] == child_id
+            && line["payload"]["generation_id"] == "c_3"
+    });
+    // The kill-to-backfilled window fits MUST_SUCCEED_WITHIN: the
+    // shutdown leg above ran under the success bound already, and this
+    // pins the whole window against it.
+    let consumed = killing
+        .checked_sub(setup.deadline.left())
+        .expect("the deadline only shrinks");
+    assert!(
+        consumed < fakes::MUST_SUCCEED_WITHIN,
+        "kill to backfilled takes {consumed:?}, within {:?}",
+        fakes::MUST_SUCCEED_WITHIN,
+    );
+    let copies: Vec<_> = backfilled
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && line["payload"]["origin_session_id"] == child_id
+        })
+        .collect();
+    assert_eq!(
+        copies.len(),
+        3,
+        "the three reads arrive in order: {copies:?}"
+    );
+    assert_eq!(copies[0]["payload"]["generation_id"], "c_1");
+    assert_eq!(copies[1]["payload"]["generation_id"], "c_2");
+    assert_eq!(copies[2]["payload"]["generation_id"], "c_3");
+    let client = resumed.connect(&setup);
+    subscribe(&client);
+    close_now(&client);
+    let _tail = support::until_close(&client);
+    drop(client);
+    let (status, out, stderr) = resumed.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+
+    // The child's own log is the expectation: every `usage_recorded` it
+    // holds, in order, is a missing source occurrence the parent never
+    // saw live. The child ends with its hangup exit.
+    let child_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&child_id)
+            .join("events.jsonl"),
+    );
+    let exited = child_lines.last().unwrap().clone();
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 129);
+    let recorded: Vec<(String, Value)> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .map(|line| {
+            (
+                line["payload"]["generation_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                line["payload"]["cost"].clone(),
+            )
+        })
+        .collect();
+    assert!(
+        recorded.len() >= 3,
+        "the child recorded its three reads: {recorded:?}"
+    );
+    assert_eq!(
+        &recorded[..3],
+        &[
+            ("c_1".to_owned(), json!(0.02)),
+            ("c_2".to_owned(), json!(0.02)),
+            ("c_3".to_owned(), json!(0.02)),
+        ]
+    );
+
+    // The log pins the order the resume wrote: the orphan marking first,
+    // then exactly the child's records, and no copy before the marking,
+    // so none arrived live while the parent was stalled.
+    let parent_lines = read_lines(
+        &sessions_in(&setup.home(), &setup.workspace())
+            .join(&id)
+            .join("events.jsonl"),
+    );
+    let at = parent_lines
+        .iter()
+        .position(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
+        .expect("the orphan marking stands in the log");
+    let ends: Vec<_> = parent_lines
+        .iter()
+        .filter(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
+        .collect();
+    assert_eq!(ends.len(), 1, "one end for the job: {ends:?}");
+    assert_eq!(ends[0]["payload"]["status"], "failed");
+    assert_eq!(ends[0]["payload"]["error"]["code"], "orphaned");
+    let logged: Vec<(String, Value)> = parent_lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && line["payload"]["origin_session_id"] == child_id
+        })
+        .map(|line| {
+            (
+                line["payload"]["generation_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                line["payload"]["cost"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(logged, recorded, "exactly the missing records");
+    for line in parent_lines.iter().take(at) {
+        assert!(
+            !(line["kind"] == "usage_recorded" && line["payload"]["origin_session_id"] == child_id),
+            "no live copy before the marking: {line:?}"
+        );
+    }
+    // The resume reports exactly the appended lines: the marking, then
+    // the copies in delegate-log order.
+    let mut stream = out.into_iter().filter(|line| {
+        (line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
+            || (line["kind"] == "usage_recorded"
+                && line["payload"]["origin_session_id"] == child_id)
+    });
+    let first = stream.next().expect("the marking is reported");
+    assert_eq!(first["kind"], "job_completed");
+    let reported: Vec<String> = stream
+        .map(|line| {
+            line["payload"]["generation_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        recorded
+            .iter()
+            .map(|(generation, _)| generation.clone())
+            .collect::<Vec<_>>(),
+        "the resume reports exactly the appended lines"
+    );
+}
