@@ -168,6 +168,10 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         "xtask/src/rules_tests.rs",
         "held by #3185; CURSOR_PROBE_WITHIN to MUST_SUCCEED_WITHIN after it lands",
     ),
+    held(
+        "crates/provider/tests/decode_jig.rs",
+        "held by #3194; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.

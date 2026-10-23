@@ -9,7 +9,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -20,8 +19,8 @@ use std::time::Duration;
 use fakes::Deadline;
 
 /// How long the decode jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total); with the 10s watchdog stand-down
-/// the deadlines sum to 30s, so 120s is at least twice them:
+/// test after a 30s period times 4 (120s total); with the 5s watchdog stand-down
+/// the deadlines sum to 25s, so 120s is at least twice them:
 /// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
 /// at least twice the test's own deadlines, so a hang reports which wait
 /// expired.
@@ -59,7 +58,7 @@ fn decode(file: &Path) -> Output {
         .recv(&finished)
         .expect("the decode jig finished")
         .unwrap();
-    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
+    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
     output
 }
 
