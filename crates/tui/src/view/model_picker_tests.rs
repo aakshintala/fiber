@@ -1189,3 +1189,18 @@ fn a_short_overlay_keeps_the_focused_model_row() {
         }
     }
 }
+
+#[test]
+fn the_window_extends_upward_to_exactly_the_rows_that_fit() {
+    let mut app = choosing(160, 48);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..2 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    // `m2` continues its provider with no heading and `z1` opens one:
+    // 2 + 2 + 2 is six rows, exactly what fits, so `m2` stays in.
+    assert_eq!(window(&view, 6), (1, 3));
+    // One row fewer drops `m2`.
+    assert_eq!(window(&view, 5), (2, 4));
+}
