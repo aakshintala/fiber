@@ -552,6 +552,8 @@ fn a_step_hands_the_provider_and_the_warm_hold_one_conversation() {
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
     let requests = world.provider.requests();
+    // One step is one round-trip to the model (`docs/loop.md`, "One step"),
+    // so the completed single-step turn sent exactly one request.
     assert_eq!(requests.len(), 1);
     let held = world
         .looped

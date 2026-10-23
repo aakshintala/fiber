@@ -359,7 +359,7 @@ impl Seam {
         let line = json!({
             "handoff": seq,
             "system_prompt": request.system_prompt,
-            "messages": request.conversation.to_vec(),
+            "messages": &request.conversation[..],
         });
         let text = serde_json::to_string(&line).unwrap_or_else(|_| "{}".to_owned());
         if self.emit(&text).is_err() {
@@ -1010,8 +1010,8 @@ impl Driver {
         let line = json!({
             "id": id.0,
             "stages": [
-                {"stage": 1, "system_prompt": first.system_prompt, "messages": first.conversation.to_vec()},
-                {"stage": 2, "system_prompt": second.system_prompt, "messages": second.conversation.to_vec()},
+                {"stage": 1, "system_prompt": first.system_prompt, "messages": &first.conversation[..]},
+                {"stage": 2, "system_prompt": second.system_prompt, "messages": &second.conversation[..]},
             ],
         });
         self.emit(&line)

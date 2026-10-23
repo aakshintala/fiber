@@ -688,7 +688,7 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
     let logged = serde_json::to_string(&lines).unwrap();
     assert!(!logged.contains("MARKER"), "{logged}");
     for request in &session.requests() {
-        let text = serde_json::to_string(&request.conversation.to_vec()).unwrap();
+        let text = serde_json::to_string(&request.conversation[..]).unwrap();
         assert!(!text.contains("MARKER"), "{text}");
     }
 }
@@ -760,7 +760,7 @@ fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
     let logged = serde_json::to_string(&lines).unwrap();
     assert!(!logged.contains("MARKER"), "{logged}");
     for request in &session.requests() {
-        let text = serde_json::to_string(&request.conversation.to_vec()).unwrap();
+        let text = serde_json::to_string(&request.conversation[..]).unwrap();
         assert!(!text.contains("MARKER"), "{text}");
     }
 }
