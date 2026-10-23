@@ -141,13 +141,9 @@ fn stage_outcome(stage: &Stage, workdir: &Path, configured: &[(String, Vec<Strin
     };
     // An assignment prefix executes: no built-in entry blesses an
     // assignment name, so `LC_ALL=C git status` and `FOO=1 ls` both do.
+    // The wrapper part reintroduces named blessings with its own tests.
     if !simple.assignments.is_empty() {
-        let Found::Builtin(entry) = entry::find(&simple.words, configured) else {
-            return Outcome::Executes;
-        };
-        if !assignments_allowed(&simple.assignments, entry) {
-            return Outcome::Executes;
-        }
+        return Outcome::Executes;
     }
     // An exact form reads with no paths: `git status`, `git stash list`
     // or `git branch --show-current`.
@@ -211,17 +207,6 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
         rest.next();
     }
     rest
-}
-
-/// Whether a stage's leading assignments may stand: every name takes a
-/// value in the built-in entry. None does today, so any prefix executes.
-fn assignments_allowed(assignments: &[(String, String)], entry: &Command) -> bool {
-    assignments.iter().all(|(name, _)| {
-        entry
-            .flags
-            .iter()
-            .any(|flag| flag.takes_value && flag.spelling == name.as_str())
-    })
 }
 
 /// The built-in flag walk, kept from the hand lexer: flags by the table,
