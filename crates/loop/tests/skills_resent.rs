@@ -688,7 +688,7 @@ fn a_skill_file_that_became_a_link_into_the_credentials_directory_is_not_sent() 
     let logged = serde_json::to_string(&lines).unwrap();
     assert!(!logged.contains("MARKER"), "{logged}");
     for request in &session.requests() {
-        let text = serde_json::to_string(&request.conversation).unwrap();
+        let text = serde_json::to_string(&request.conversation.to_vec()).unwrap();
         assert!(!text.contains("MARKER"), "{text}");
     }
 }
@@ -760,7 +760,7 @@ fn a_skill_the_permission_layer_refuses_is_left_out_with_a_notice() {
     let logged = serde_json::to_string(&lines).unwrap();
     assert!(!logged.contains("MARKER"), "{logged}");
     for request in &session.requests() {
-        let text = serde_json::to_string(&request.conversation).unwrap();
+        let text = serde_json::to_string(&request.conversation.to_vec()).unwrap();
         assert!(!text.contains("MARKER"), "{text}");
     }
 }
@@ -787,10 +787,7 @@ fn a_resume_renders_the_same_bytes() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let requests = session.requests();
     assert_eq!(requests.len(), 4);
-    assert_eq!(
-        &requests[3].conversation[..recorded.len()],
-        recorded.as_slice()
-    );
+    assert_eq!(&requests[3].conversation[..recorded.len()], &recorded[..]);
 }
 
 #[test]
@@ -826,7 +823,7 @@ fn the_session_start_context_stays_between_the_opening_and_the_input() {
     let outcome = session.turn();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let requests = session.requests();
-    assert_eq!(&requests[3].conversation[..live.len()], live.as_slice());
+    assert_eq!(&requests[3].conversation[..live.len()], &live[..]);
 }
 
 /// A handoff sent while the loop is idle starts its own turn; each turn ends
@@ -901,7 +898,7 @@ fn a_skill_sent_again_is_sent_at_the_next_handoff_until_its_file_is_gone() {
     assert_eq!(resend_notices(&lines).len(), 1);
     // The last request carries alpha and no beta.
     let requests = session.requests();
-    let texts = user_texts(requests.last().unwrap().conversation.as_slice());
+    let texts = user_texts(&requests.last().unwrap().conversation);
     assert!(texts.iter().any(|text| text.contains("Alpha body")));
     assert!(
         !texts.iter().any(|text| text.contains("Beta body")),
@@ -1005,10 +1002,7 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
     assert_eq!(of_kind(&lines, "skills_resent").len(), 1);
     let requests = provider.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        &requests[0].conversation[..recorded.len()],
-        recorded.as_slice()
-    );
+    assert_eq!(&requests[0].conversation[..recorded.len()], &recorded[..]);
     assert_eq!(*requests[0].conversation.last().unwrap(), user("again"));
 }
 
@@ -1074,7 +1068,7 @@ fn a_crash_after_skills_resent_writes_only_the_opening() {
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
     assert_eq!(conversation.len(), 6);
-    assert_eq!(&conversation[..recorded.len()], recorded.as_slice());
+    assert_eq!(&conversation[..recorded.len()], &recorded[..]);
     assert_eq!(*conversation.last().unwrap(), user("again"));
 }
 
@@ -1121,7 +1115,7 @@ fn a_provider_run_record_carrying_a_skill_is_not_a_load() {
     let outcome = session.turn();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let requests = session.requests();
-    assert_eq!(&requests[3].conversation[..live.len()], live.as_slice());
+    assert_eq!(&requests[3].conversation[..live.len()], &live[..]);
 }
 
 /// A reply carrying a hosted web search whose completion names the alpha

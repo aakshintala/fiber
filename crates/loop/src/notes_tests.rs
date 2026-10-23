@@ -172,7 +172,7 @@ fn idle_notes_send_only_evidence_and_write_usage_before_answering() {
             .system_prompt
             .contains(Topic::SourceControl.covers())
     );
-    assert_eq!(request.conversation, vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [answer] | person answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
+    assert_eq!(&request.conversation[..], vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [answer] | person answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
     let lines = new_lines(&log, before);
     assert_eq!(
         lines.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
@@ -196,7 +196,7 @@ fn blank_answers_and_earlier_lines_do_not_enter_the_request() {
         };
         assert_eq!(evidence.len(), 1);
         assert_eq!(
-            provider.requests()[0].conversation,
+            &provider.requests()[0].conversation[..],
             vec![Input::User {
                 text: "Evidence:\n1 [files] | remote evidence\n\nEarlier lines:\n- earlier line\n"
                     .into(),
@@ -577,7 +577,7 @@ fn notes_number_each_kind_in_evidence_order_and_answer_last() {
     );
     assert_eq!(proposed[0].cites(), [2]);
     assert!(error.is_none());
-    assert_eq!(provider.requests()[0].conversation, vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [session] | 1 escalation answered allow for `p`\n3 [answer] | answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
+    assert_eq!(&provider.requests()[0].conversation[..], vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [session] | 1 escalation answered allow for `p`\n3 [answer] | answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
 }
 
 #[test]

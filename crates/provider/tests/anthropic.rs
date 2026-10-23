@@ -158,7 +158,7 @@ fn a_tool_search_result_is_sent_as_tool_references_in_loaded_order() {
     let model = ep.reference();
     let protocol = Messages::new(ep);
     let mut req = request();
-    req.conversation = search_conversation(&model, found("a_1", &["b", "a"]), true);
+    req.conversation = (search_conversation(&model, found("a_1", &["b", "a"]), true)).into();
     run(protocol.call(&req)).0.unwrap();
     // The same request again sends the same bytes.
     run(protocol.call(&req)).0.unwrap();
@@ -190,7 +190,7 @@ fn a_tool_search_result_is_sent_as_tool_references_in_loaded_order() {
         })
     );
     // The names keep the order `loaded` has.
-    req.conversation = search_conversation(&model, found("a_1", &["a", "b"]), true);
+    req.conversation = (search_conversation(&model, found("a_1", &["a", "b"]), true)).into();
     run(protocol.call(&req)).0.unwrap();
     assert_eq!(
         sent_body(&server, 2)["messages"][2]["content"][0]["content"],
@@ -204,7 +204,7 @@ fn the_cache_marker_lands_on_a_last_tool_search_result() {
     let ep = endpoint(&server);
     let model = ep.reference();
     let mut req = request();
-    req.conversation = search_conversation(&model, found("a_1", &["a", "b"]), false);
+    req.conversation = (search_conversation(&model, found("a_1", &["a", "b"]), false)).into();
     run(Messages::new(ep).call(&req)).0.unwrap();
     let body = sent_body(&server, 0);
     let content = body["messages"][2]["content"].as_array().unwrap().clone();
@@ -234,8 +234,10 @@ fn a_tool_search_result_uses_the_providers_call_id() {
     if let Input::ToolCall { call, .. } = &mut call {
         call.provider_id = Some(ProviderCallId("toolu_9".into()));
     }
-    req.conversation.push(call);
-    req.conversation.push(found("a_1", &["a"]));
+    let mut conversation = req.conversation.to_vec();
+    conversation.push(call);
+    conversation.push(found("a_1", &["a"]));
+    req.conversation = conversation.into();
     run(Messages::new(ep).call(&req)).0.unwrap();
     let body = sent_body(&server, 0);
     assert_eq!(body["messages"][1]["content"][0]["id"], "toolu_9");
@@ -440,10 +442,11 @@ fn request() -> ModelRequest {
     ModelRequest {
         tools: vec![weather_tool()],
         cache_lifetime: CacheLifetime::FiveMinutes,
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..harness::request()
     }
 }
@@ -755,7 +758,7 @@ fn a_call_with_no_input_text_is_sent_back_as_an_empty_object() {
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             Input::ToolCall {
                 action_id: ActionId("a_1".into()),
                 call: call.clone(),
@@ -768,7 +771,8 @@ fn a_call_with_no_input_text_is_sent_back_as_an_empty_object() {
                 is_error: false,
                 images: Vec::new(),
             },
-        ],
+        ])
+        .into(),
         ..request()
     };
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
@@ -1123,7 +1127,7 @@ fn four_turn_conversation() -> Vec<Input> {
 fn the_previous_end_marker_lands_on_the_boundary_it_names() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation: four_turn_conversation(),
+        conversation: (four_turn_conversation()).into(),
         previous_end: Some(2),
         sent_tools: None,
         cache_lifetime: CacheLifetime::OneHour,
@@ -1169,7 +1173,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         panic!("{:?}", reply.actions);
     };
 
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Reasoning {
             model: "openai/gpt-6-luna".into(),
@@ -1208,7 +1212,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     ]);
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
@@ -1391,11 +1395,13 @@ fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
 fn an_empty_reply_text_is_not_sent() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();
-    request.conversation.push(Input::Assistant {
+    let mut conversation = request.conversation.to_vec();
+    conversation.push(Input::Assistant {
         model: "anthropic/claude-sonnet-5-5".into(),
         text: String::new(),
         provider_item: None,
     });
+    request.conversation = conversation.into();
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
         .unwrap();
@@ -1429,7 +1435,8 @@ fn redacted_thinking_is_kept_and_sent_back_unchanged() {
 
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();
-    request.conversation.extend([
+    let mut conversation = request.conversation.to_vec();
+    conversation.extend([
         Input::Reasoning {
             model: "anthropic/claude-sonnet-5-5".into(),
             text: String::new(),
@@ -1441,6 +1448,7 @@ fn redacted_thinking_is_kept_and_sent_back_unchanged() {
             provider_item: None,
         },
     ]);
+    request.conversation = conversation.into();
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
         .unwrap();
@@ -1501,7 +1509,8 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();
     request.previous_end = Some(2);
-    request.conversation.extend([
+    let mut conversation = request.conversation.to_vec();
+    conversation.extend([
         Input::Assistant {
             model: "anthropic/claude-sonnet-5-5".into(),
             text: "A".into(),
@@ -1525,6 +1534,7 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
             provider_item: None,
         },
     ]);
+    request.conversation = conversation.into();
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
         .unwrap();
@@ -1628,7 +1638,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
     let block = |is_error: bool| {
         let server = ProviderServer::start([completed_reply()]).unwrap();
         let request = ModelRequest {
-            conversation: conversation(is_error),
+            conversation: (conversation(is_error)).into(),
             ..request()
         };
         run(Box::new(Messages::new(endpoint(&server)).request(&request)))
@@ -1702,7 +1712,7 @@ fn a_stored_image_is_sent_inside_the_tool_result_after_its_text() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1730,7 +1740,7 @@ fn a_failed_result_with_an_image_still_sets_is_error() {
     let session = fakes::TempDir::new("fiber-anthropic-request-image");
     std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(true, vec![png_ref("i.png")]),
+        conversation: (image_conversation(true, vec![png_ref("i.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1747,7 +1757,7 @@ fn a_failed_result_with_an_image_still_sets_is_error() {
 fn an_image_that_cannot_be_read_is_named_in_the_text_and_not_sent() {
     let session = fakes::TempDir::new("fiber-anthropic-request-image");
     let request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("artifacts/gone.png")]),
+        conversation: (image_conversation(false, vec![png_ref("artifacts/gone.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1770,7 +1780,7 @@ fn a_resume_sends_the_same_bytes() {
     )
     .unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("i.png")]),
+        conversation: (image_conversation(false, vec![png_ref("i.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1789,12 +1799,12 @@ fn a_rewound_child_sends_its_parent_image_as_the_same_bytes() {
     std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
     let absolute = parent.join("artifacts/i_1.png").display().to_string();
     let parent_request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: parent,
         ..request()
     };
     let child_request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref(&absolute)]),
+        conversation: (image_conversation(false, vec![png_ref(&absolute)])).into(),
         session_dir: child,
         ..request()
     };
@@ -1845,7 +1855,7 @@ fn a_stored_pdf_is_sent_inside_the_tool_result_as_a_document() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: pdf_conversation(pdf_ref("artifacts/p_1.pdf", None)),
+        conversation: (pdf_conversation(pdf_ref("artifacts/p_1.pdf", None))).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -1881,24 +1891,26 @@ fn a_rewound_child_sends_its_parent_pdf_as_the_same_bytes() {
     std::fs::write(parent.join("artifacts/i_2.png"), b"abcd").unwrap();
     let absolute = |name: &str| parent.join(name).display().to_string();
     let parent_request = ModelRequest {
-        conversation: pdf_conversation(pdf_ref(
+        conversation: (pdf_conversation(pdf_ref(
             "artifacts/p_1.pdf",
             Some(vec![
                 png_ref("artifacts/i_1.png"),
                 png_ref("artifacts/i_2.png"),
             ]),
-        )),
+        )))
+        .into(),
         session_dir: parent.clone(),
         ..request()
     };
     let child_request = ModelRequest {
-        conversation: pdf_conversation(pdf_ref(
+        conversation: (pdf_conversation(pdf_ref(
             &absolute("artifacts/p_1.pdf"),
             Some(vec![
                 png_ref(&absolute("artifacts/i_1.png")),
                 png_ref(&absolute("artifacts/i_2.png")),
             ]),
-        )),
+        )))
+        .into(),
         session_dir: child,
         ..request()
     };
@@ -1910,7 +1922,7 @@ fn a_rewound_child_sends_its_parent_pdf_as_the_same_bytes() {
 #[test]
 fn a_result_without_an_image_keeps_a_string_content() {
     let request = ModelRequest {
-        conversation: image_conversation(false, Vec::new()),
+        conversation: (image_conversation(false, Vec::new())).into(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1929,7 +1941,7 @@ fn a_text_only_model_gets_no_image_part_and_the_result_says_so() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2414,7 +2426,7 @@ fn a_hosted_tool_is_sent_as_its_type_and_name_and_takes_no_strict_slot() {
 }
 
 fn hosted_conversation(model: &str) -> Vec<Input> {
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Assistant {
             model: model.into(),
@@ -2446,7 +2458,7 @@ fn hosted_conversation(model: &str) -> Vec<Input> {
 fn sent_messages(conversation: Vec<Input>) -> Value {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
@@ -2497,7 +2509,7 @@ fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
     // adds to a hosted block, not which boundary put it there.
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         previous_end: Some(3),
         ..request()
     };
@@ -2521,7 +2533,7 @@ fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
 fn a_trailing_paused_block_is_sent_with_no_cache_marker() {
     let block = json!({"type": "server_tool_use", "id": "srvtoolu_01",
         "name": "web_search", "input": {"query": "rust 1.90"}});
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.push(Input::Assistant {
         model: "anthropic/claude-sonnet-5-5".into(),
         text: String::new(),
@@ -2539,7 +2551,7 @@ fn a_trailing_paused_block_is_sent_with_no_cache_marker() {
 #[test]
 fn a_trailing_thinking_block_is_sent_with_no_cache_marker() {
     let block = json!({"type": "thinking", "thinking": "hmm", "signature": "sig"});
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.push(Input::Reasoning {
         model: "anthropic/claude-sonnet-5-5".into(),
         text: "hmm".into(),
@@ -2639,7 +2651,8 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
     // unchanged, in order, in the assistant message.
     let reference = "anthropic/claude-sonnet-5-5".to_owned();
     let mut next = request();
-    next.conversation.extend([
+    let mut conversation = next.conversation.to_vec();
+    conversation.extend([
         Input::Assistant {
             model: reference.clone(),
             text: String::new(),
@@ -2655,6 +2668,7 @@ fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
             images: Vec::new(),
         },
     ]);
+    next.conversation = conversation.into();
     let (second, _) = run(provider.call(&next));
     second.unwrap();
     let sent = sent_body(&server, 1);
@@ -2707,7 +2721,7 @@ fn a_users_image_is_sent_as_image_blocks_after_the_text() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2732,7 +2746,7 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             Input::User {
                 text: "look".into(),
                 images: vec![png_ref("artifacts/i_1.png")],
@@ -2741,7 +2755,8 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
                 text: "again".into(),
                 images: Vec::new(),
             },
-        ],
+        ])
+        .into(),
         previous_end: Some(1),
         sent_tools: None,
         session_dir: session.path().to_path_buf(),

@@ -249,7 +249,7 @@ fn the_inner_result_is_logged_before_the_outer_and_only_the_outer_reaches_the_pr
     assert!(matches!(calls[0], Input::ToolCall { call, .. } if call.name == "outer"));
     assert!(matches!(calls[1], Input::ToolResult { text, .. } if text.contains("inner answer")));
     assert!(
-        !serde_json::to_string(&requests[1].conversation)
+        !serde_json::to_string(&requests[1].conversation.to_vec())
             .unwrap()
             .contains(&id.0)
     );
@@ -1744,7 +1744,7 @@ fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_han
         "inner-skill"
     );
     assert!(
-        !serde_json::to_string(&session.requests()[1].conversation)
+        !serde_json::to_string(&session.requests()[1].conversation.to_vec())
             .unwrap()
             .contains("inner-skill")
     );

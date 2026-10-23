@@ -320,7 +320,7 @@ fn a_forks_first_request_is_the_parents_through_its_history_then_its_first_turn(
     assert_eq!(first.previous_end, parent.previous_end);
     assert_eq!(first.cache_key, "s_test");
     let k = parent.conversation.len();
-    assert_eq!(first.conversation[..k], parent.conversation);
+    assert_eq!(first.conversation[..k], parent.conversation[..]);
     assert_eq!(first.conversation.len(), k + 1);
     assert_eq!(user(&first.conversation[k]), task());
     assert_eq!(
@@ -380,7 +380,7 @@ fn a_session_start_context_sits_between_the_prefix_and_fork_task() {
     let parent = &session.provider.requests()[2];
     let first = &provider.requests()[0];
     let k = parent.conversation.len();
-    assert_eq!(first.conversation[..k], parent.conversation);
+    assert_eq!(first.conversation[..k], parent.conversation[..]);
     assert_eq!(first.conversation.len(), k + 2);
     assert_eq!(user(&first.conversation[k]), "hook says hi");
     assert_eq!(user(&first.conversation[k + 1]), task());
@@ -494,7 +494,7 @@ fn a_before_message_replacement_replaces_the_fork_task() {
     let first = &requests[0];
     let parent = &session.provider.requests()[2];
     let k = parent.conversation.len();
-    assert_eq!(first.conversation[..k], parent.conversation);
+    assert_eq!(first.conversation[..k], parent.conversation[..]);
     assert_eq!(first.conversation.len(), k + 1);
     assert_eq!(user(&first.conversation[k]), "replaced task");
     let lines = log::read(&dir).unwrap();
