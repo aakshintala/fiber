@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use contract::clock::Clock;
 use mlua::serde::SerializeOptions;
@@ -14,7 +14,8 @@ use mlua::{
 };
 use serde_json::Value;
 
-use crate::lua::{Deadline, LOAD_TIMEOUT, MEMORY_CAP};
+use crate::Error;
+use crate::lua::{Deadline, LOAD_TIMEOUT, MEMORY_CAP, message};
 
 /// The slot names that stand alone (`docs/tui.md`, "The slots").
 pub(crate) const SLOT_NAMES: [&str; 20] = [
@@ -74,29 +75,6 @@ pub struct Span {
     pub link: Option<String>,
     /// The id of the span's click target.
     pub click: Option<String>,
-}
-
-/// Why a TUI extension's VM did not answer.
-#[derive(Debug, thiserror::Error)]
-pub enum TuiError {
-    /// The script or a callback raised a Lua error.
-    #[error("{0}")]
-    Lua(String),
-    /// A callback passed its declared timeout.
-    #[error("the callback passed its timeout")]
-    Timeout,
-    /// An earlier timeout switched the VM off.
-    #[error("the extension is switched off until /reload")]
-    Off,
-    /// The extension registered no such slot.
-    #[error("the extension registers no slot `{0}`")]
-    NoSlot(String),
-    /// A renderer returned the wrong shape, or was given one.
-    #[error("wrong shape: {0}")]
-    Shape(String),
-    /// `fiber.slot` refused a registration.
-    #[error("{0}")]
-    Registration(String),
 }
 
 /// The Lua half of the host's globals: `coroutine.create` and `coroutine.wrap`
@@ -191,7 +169,7 @@ impl TuiVm {
     /// Runs `source`, the extension `name`'s entry script, and returns the VM
     /// holding the slots it registered. `fiber.slot` works only while the
     /// script runs.
-    pub fn load(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, TuiError> {
+    pub fn load(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, Error> {
         let lua = Lua::new_with(
             // table, string, math, utf8 and coroutine: Lua's safe set, which
             // leaves out debug, less its I/O and module loader. `require` is
@@ -239,15 +217,14 @@ impl TuiVm {
             .map_err(lua_error)?;
         let thread = lua.create_thread(script).map_err(lua_error)?;
         deadline.arm(&thread).map_err(lua_error)?;
-        let limit = Limit::after(clock.as_ref(), LOAD_TIMEOUT);
-        deadline.restore(limit.at);
-        let ran = limit.resume(&thread, (), "the script makes no host call");
+        deadline.restore(clock.now().checked_add(LOAD_TIMEOUT));
+        let ran = resume(&deadline, &thread, (), "the script makes no host call");
         deadline.restore(None);
         loading.set(false);
         let refusal = violations.raw_get::<Option<String>>(1).map_err(lua_error)?;
         match (ran, refusal) {
-            (Err(TuiError::Timeout), _) => return Err(TuiError::Timeout),
-            (_, Some(message)) => return Err(TuiError::Registration(message)),
+            (Err(Error::TuiTimeout), _) => return Err(Error::TuiTimeout),
+            (_, Some(message)) => return Err(Error::TuiRegistration(message)),
             (Err(error), None) => return Err(error),
             (Ok(_), None) => {}
         }
@@ -270,7 +247,8 @@ impl TuiVm {
     }
 
     /// Each registered slot and its declared timeout, by name.
-    pub fn slots(&self) -> Vec<(String, Duration)> {
+    #[cfg(test)]
+    pub(crate) fn slots(&self) -> BTreeMap<String, Duration> {
         self.slots
             .iter()
             .map(|(name, slot)| (name.clone(), slot.timeout))
@@ -282,7 +260,7 @@ impl TuiVm {
     /// `session_id` set to the argument, and the width. `builtin(input, width)`
     /// in Lua returns what `builtin` returns for the original `input`.
     ///
-    /// A timeout switches the VM off: every later call is [`TuiError::Off`].
+    /// A timeout switches the VM off: every later call is [`Error::TuiOff`].
     /// The caller decides the fallback.
     pub fn call(
         &mut self,
@@ -291,15 +269,15 @@ impl TuiVm {
         input: &Value,
         width: u16,
         builtin: &dyn Fn(&Value, u16) -> Vec<Vec<Span>>,
-    ) -> Result<Vec<Vec<Span>>, TuiError> {
+    ) -> Result<Vec<Vec<Span>>, Error> {
         if self.off {
-            return Err(TuiError::Off);
+            return Err(Error::TuiOff);
         }
         let Some(registered) = self.slots.get(slot) else {
-            return Err(TuiError::NoSlot(slot.to_owned()));
+            return Err(Error::TuiNoSlot(slot.to_owned()));
         };
         let Some(object) = input.as_object() else {
-            return Err(TuiError::Shape("input must be an object".to_owned()));
+            return Err(Error::TuiShape("input must be an object".to_owned()));
         };
         let mut object = object.clone();
         object.insert(
@@ -316,7 +294,9 @@ impl TuiVm {
             .to_value_with(&Value::Object(object), options)
             .map_err(lua_error)?;
         let render = registered.render.clone();
-        let limit = Limit::after(self.clock.as_ref(), registered.timeout);
+        // `None` when the timeout is too large to add to an `Instant`: such a
+        // callback is never cut off.
+        let at = self.clock.now().checked_add(registered.timeout);
         let globals = self.lua.globals();
         let result = self.lua.scope(|scope| {
             let host = scope.create_function(|lua, (_, wide): (mlua::Value, Option<u16>)| {
@@ -325,14 +305,18 @@ impl TuiVm {
             globals.raw_set("builtin", host)?;
             let thread = self.lua.create_thread(render)?;
             self.deadline.arm(&thread)?;
-            self.deadline.restore(limit.at);
-            let lines = limit
-                .resume(&thread, (arg, width), "a renderer makes no host call")
-                .and_then(|returned| lines_from(&returned));
+            self.deadline.restore(at);
+            let lines = resume(
+                &self.deadline,
+                &thread,
+                (arg, width),
+                "a renderer makes no host call",
+            )
+            .and_then(|returned| lines_from(&returned));
             // The conversion ran no Lua, but a finish is late when the clock
             // says so, whichever path it took.
-            Ok(if limit.passed() {
-                Err(TuiError::Timeout)
+            Ok(if self.deadline.passed() {
+                Err(Error::TuiTimeout)
             } else {
                 lines
             })
@@ -343,80 +327,47 @@ impl TuiVm {
             .raw_set("builtin", mlua::Value::Nil)
             .map_err(lua_error)?;
         let result = result.map_err(lua_error)?;
-        if matches!(result, Err(TuiError::Timeout)) {
+        if matches!(result, Err(Error::TuiTimeout)) {
             self.off = true;
         }
         result
     }
 }
 
-/// Where a callback's deadline falls on the VM's clock. Lua errors, a late
-/// return and a yield are all read against it.
-struct Limit<'a> {
-    clock: &'a dyn Clock,
-    /// `None` when the timeout is too large to add to an `Instant`: such a
-    /// callback is never cut off.
-    at: Option<Instant>,
-}
-
-impl<'a> Limit<'a> {
-    fn after(clock: &'a dyn Clock, timeout: Duration) -> Self {
-        Self {
-            clock,
-            at: clock.now().checked_add(timeout),
-        }
+/// Runs `thread` once and returns its first value. Past `deadline` the result
+/// is a timeout, whatever came back, a finish after it included.
+// debt: a C call Lua cannot interrupt (a `__gc` finalizer, a backtracking
+// `string.find`) freezes the terminal, since no second thread can abandon
+// the VM; revisit when Part 3 measures a freeze, or when a TUI extension
+// may run untrusted Lua.
+fn resume(
+    deadline: &Deadline,
+    thread: &Thread,
+    args: impl IntoLuaMulti,
+    yielded: &str,
+) -> Result<mlua::Value, Error> {
+    let returned = thread.resume::<MultiValue>(args);
+    if deadline.passed() {
+        return Err(Error::TuiTimeout);
     }
-
-    fn passed(&self) -> bool {
-        self.at.is_some_and(|at| self.clock.now() >= at)
+    let values = returned.map_err(lua_error)?;
+    if thread.is_resumable() {
+        return Err(Error::TuiLua(yielded.to_owned()));
     }
-
-    /// Runs `thread` once and returns its first value. Past the deadline the
-    /// result is a timeout, whatever came back, a finish after it included.
-    // debt: a C call Lua cannot interrupt (a `__gc` finalizer, a backtracking
-    // `string.find`) freezes the terminal, since no second thread can abandon
-    // the VM; revisit when Part 3 measures a freeze, or when a TUI extension
-    // may run untrusted Lua.
-    fn resume(
-        &self,
-        thread: &Thread,
-        args: impl IntoLuaMulti,
-        yielded: &str,
-    ) -> Result<mlua::Value, TuiError> {
-        let returned = thread.resume::<MultiValue>(args);
-        if self.passed() {
-            return Err(TuiError::Timeout);
-        }
-        let values = returned.map_err(lua_error)?;
-        if thread.is_resumable() {
-            return Err(TuiError::Lua(yielded.to_owned()));
-        }
-        Ok(values.into_iter().next().unwrap_or(mlua::Value::Nil))
-    }
+    Ok(values.into_iter().next().unwrap_or(mlua::Value::Nil))
 }
 
-/// The message a person reads for a Lua error: its first line, without mlua's
-/// traceback.
-fn message(e: &mlua::Error) -> String {
-    let text = if let mlua::Error::RuntimeError(m) | mlua::Error::MemoryError(m) = e {
-        m.clone()
-    } else {
-        e.to_string()
-    };
-    text.lines().next().unwrap_or_default().to_owned()
+fn lua_error(e: mlua::Error) -> Error {
+    Error::TuiLua(message(&e))
 }
 
-fn lua_error(e: mlua::Error) -> TuiError {
-    TuiError::Lua(message(&e))
-}
-
-fn shape(what: impl Into<String>) -> TuiError {
-    TuiError::Shape(what.into())
+fn shape(what: impl Into<String>) -> Error {
+    Error::TuiShape(what.into())
 }
 
 /// The lines a renderer returned. It reads with raw gets and raw lengths, so
 /// no metamethod runs and the conversion cannot hang or call out.
-fn lines_from(returned: &mlua::Value) -> Result<Vec<Vec<Span>>, TuiError> {
+fn lines_from(returned: &mlua::Value) -> Result<Vec<Vec<Span>>, Error> {
     let mlua::Value::Table(lines) = returned else {
         return Err(shape("a renderer returns a list of lines"));
     };
@@ -439,7 +390,7 @@ fn lines_from(returned: &mlua::Value) -> Result<Vec<Vec<Span>>, TuiError> {
     Ok(out)
 }
 
-fn span_from(span: &Table, line: usize, index: usize) -> Result<Span, TuiError> {
+fn span_from(span: &Table, line: usize, index: usize) -> Result<Span, Error> {
     let at = format!("span {index} of line {line}");
     let text =
         text_field(span, "text", &at)?.ok_or_else(|| shape(format!("{at} has no `text`")))?;
@@ -456,7 +407,7 @@ fn span_from(span: &Table, line: usize, index: usize) -> Result<Span, TuiError> 
     })
 }
 
-fn text_field(span: &Table, key: &str, at: &str) -> Result<Option<String>, TuiError> {
+fn text_field(span: &Table, key: &str, at: &str) -> Result<Option<String>, Error> {
     let value: mlua::Value = span.raw_get(key).map_err(lua_error)?;
     if value.is_nil() {
         return Ok(None);
@@ -469,7 +420,7 @@ fn text_field(span: &Table, key: &str, at: &str) -> Result<Option<String>, TuiEr
         .map_err(|_| shape(format!("`{key}` of {at} is not valid UTF-8")))
 }
 
-fn flag(span: &Table, key: &str, at: &str) -> Result<bool, TuiError> {
+fn flag(span: &Table, key: &str, at: &str) -> Result<bool, Error> {
     let value: mlua::Value = span.raw_get(key).map_err(lua_error)?;
     if value.is_nil() {
         return Ok(false);

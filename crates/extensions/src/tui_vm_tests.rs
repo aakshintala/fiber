@@ -2,14 +2,15 @@
 #![allow(clippy::expect_used, reason = "test code; a failure is the test's")]
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use crate::tui_vm::{SLOT_NAMES, SLOT_PREFIXES, Span, TuiError, TuiVm};
+use crate::tui_vm::{SLOT_NAMES, SLOT_PREFIXES, Span, TuiVm};
+use crate::{Error, ErrorCode};
 
 const MS: Duration = Duration::from_millis(1);
 
@@ -31,7 +32,7 @@ fn none(_: &Value, _: u16) -> Vec<Vec<Span>> {
     Vec::new()
 }
 
-fn call(vm: &mut TuiVm, input: &Value) -> Result<Vec<Vec<Span>>, TuiError> {
+fn call(vm: &mut TuiVm, input: &Value) -> Result<Vec<Vec<Span>>, Error> {
     vm.call("notice", "s1", input, 80, &none)
 }
 
@@ -41,7 +42,7 @@ fn call_advancing(
     vm: &mut TuiVm,
     clock: &FakeClock,
     by: Duration,
-) -> Result<Vec<Vec<Span>>, TuiError> {
+) -> Result<Vec<Vec<Span>>, Error> {
     let advance = |_: &Value, _: u16| {
         clock.advance(by);
         Vec::new()
@@ -109,10 +110,10 @@ fn the_slots_are_listed_with_their_timeouts() {
     );
     assert_eq!(
         vm.slots(),
-        vec![
+        BTreeMap::from([
             ("card:jobs".to_owned(), 250 * MS),
             ("notice".to_owned(), 100 * MS),
-        ]
+        ])
     );
 }
 
@@ -120,9 +121,9 @@ fn the_slots_are_listed_with_their_timeouts() {
 fn a_loop_past_the_timeout_is_cut_off_and_switches_the_vm_off() {
     let (clock, mut vm) = notice("builtin() while true do end");
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
     let later = call(&mut vm, &json!({}));
-    assert!(matches!(later, Err(TuiError::Off)), "{later:?}");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
 }
 
 #[test]
@@ -130,14 +131,14 @@ fn a_pcall_cannot_swallow_the_timeout() {
     let (clock, mut vm) =
         notice("builtin() pcall(function() while true do end end) while true do end");
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
 fn a_wrapped_coroutine_is_cut_off() {
     let (clock, mut vm) = notice("builtin() coroutine.wrap(function() while true do end end)()");
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
@@ -146,7 +147,7 @@ fn a_pcall_cannot_swallow_a_wrapped_timeout() {
         "builtin() pcall(coroutine.wrap(function() while true do end end)) while true do end",
     );
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
@@ -156,16 +157,16 @@ fn a_created_coroutine_is_cut_off() {
          coroutine.resume(co) while true do end",
     );
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
 fn a_render_that_finishes_after_its_deadline_is_a_timeout() {
     let (clock, mut vm) = notice("builtin() return { { { text = 'late' } } }");
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
     let later = call(&mut vm, &json!({}));
-    assert!(matches!(later, Err(TuiError::Off)), "{later:?}");
+    assert!(matches!(later, Err(Error::TuiOff)), "{later:?}");
 }
 
 #[test]
@@ -175,34 +176,34 @@ fn the_deadline_is_exactly_the_declared_timeout() {
     assert_eq!(text(&before.unwrap()), "ok");
     // The clock stands 99 ms in; the next call's deadline is 100 ms from there.
     let at = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(at, Err(TuiError::Timeout)), "{at:?}");
+    assert!(matches!(at, Err(Error::TuiTimeout)), "{at:?}");
 }
 
 #[test]
 fn one_millisecond_past_the_deadline_is_a_timeout() {
     let (clock, mut vm) = notice("builtin() return { { { text = 'ok' } } }");
     let result = call_advancing(&mut vm, &clock, 101 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
 fn a_render_that_yields_after_its_deadline_is_a_timeout() {
     let (clock, mut vm) = notice("builtin() coroutine.yield({})");
     let result = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(result, Err(TuiError::Timeout)), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiTimeout)), "{result:?}");
 }
 
 #[test]
 fn a_render_that_yields_is_a_lua_error() {
     let (_, mut vm) = notice("coroutine.yield({ { { text = 'yielded' } } })");
     let result = call(&mut vm, &json!({}));
-    let Err(TuiError::Lua(message)) = result else {
+    let Err(Error::TuiLua(message)) = result else {
         panic!("expected a Lua error, got {result:?}");
     };
     assert!(message.contains("no host call"), "{message}");
     // A yield is an error, not a timeout: the VM stays on.
     let again = call(&mut vm, &json!({}));
-    assert!(matches!(again, Err(TuiError::Lua(_))), "{again:?}");
+    assert!(matches!(again, Err(Error::TuiLua(_))), "{again:?}");
 }
 
 #[test]
@@ -210,7 +211,7 @@ fn a_lua_error_carries_its_message_and_leaves_the_vm_on() {
     let (_, mut vm) =
         notice("if input.fail then error('x marks') end return { { { text = 'ok' } } }");
     let result = call(&mut vm, &json!({ "fail": true }));
-    let Err(TuiError::Lua(message)) = result else {
+    let Err(Error::TuiLua(message)) = result else {
         panic!("expected a Lua error, got {result:?}");
     };
     assert!(message.contains("x marks"), "{message}");
@@ -253,7 +254,7 @@ fn the_base_library_has_no_io_and_no_require() {
 #[test]
 fn require_is_a_lua_error() {
     let (_, mut vm) = notice("require('x')");
-    assert!(matches!(call(&mut vm, &json!({})), Err(TuiError::Lua(_))));
+    assert!(matches!(call(&mut vm, &json!({})), Err(Error::TuiLua(_))));
 }
 
 #[test]
@@ -261,15 +262,15 @@ fn off_wins_over_no_slot_and_no_slot_over_shape() {
     let (clock, mut vm) = notice("builtin() while true do end");
     // An absent slot with a non-object input: no slot comes before shape.
     let missing = vm.call("home", "s1", &json!([1]), 80, &none);
-    assert!(matches!(missing, Err(TuiError::NoSlot(name)) if name == "home"));
+    assert!(matches!(missing, Err(Error::TuiNoSlot(name)) if name == "home"));
     // A registered slot with a non-object input: shape.
     let shape = vm.call("notice", "s1", &json!([1]), 80, &none);
-    assert!(matches!(shape, Err(TuiError::Shape(_))), "{shape:?}");
+    assert!(matches!(shape, Err(Error::TuiShape(_))), "{shape:?}");
     let timed_out = call_advancing(&mut vm, &clock, 100 * MS);
-    assert!(matches!(timed_out, Err(TuiError::Timeout)));
+    assert!(matches!(timed_out, Err(Error::TuiTimeout)));
     // Off now answers first, for an absent slot and a non-object input.
     let off = vm.call("home", "s1", &json!([1]), 80, &none);
-    assert!(matches!(off, Err(TuiError::Off)), "{off:?}");
+    assert!(matches!(off, Err(Error::TuiOff)), "{off:?}");
 }
 
 #[test]
@@ -293,7 +294,7 @@ fn two_vms_do_not_share_globals() {
 fn refused(source: &str) -> String {
     let clock = FakeClock::new();
     match TuiVm::load("test", source, clock) {
-        Err(TuiError::Registration(message)) => message,
+        Err(Error::TuiRegistration(message)) => message,
         other => panic!("expected a registration refusal, got {other:?}"),
     }
 }
@@ -316,7 +317,7 @@ fn a_timeout_must_be_a_positive_whole_number() {
         assert!(message.contains("timeout"), "{bad}: {message}");
     }
     let (_, vm) = vm("fiber.slot('notice', { timeout = 1, render = function() end })");
-    assert_eq!(vm.slots(), vec![("notice".to_owned(), MS)]);
+    assert_eq!(vm.slots(), BTreeMap::from([("notice".to_owned(), MS)]));
 }
 
 #[test]
@@ -341,7 +342,7 @@ fn a_prefixed_slot_needs_a_suffix() {
         let (_, vm) = vm(&format!(
             "fiber.slot('{prefix}x', {{ timeout = 100, render = function() end }})"
         ));
-        assert_eq!(vm.slots().len(), 1);
+        assert!(vm.slots().contains_key(&format!("{prefix}x")));
     }
 }
 
@@ -358,8 +359,8 @@ fn a_duplicate_slot_is_refused_by_name() {
 fn fiber_slot_after_load_is_a_lua_error() {
     let (_, mut vm) = notice("fiber.slot('home', { timeout = 100, render = function() end })");
     let result = call(&mut vm, &json!({}));
-    assert!(matches!(result, Err(TuiError::Lua(_))), "{result:?}");
-    assert_eq!(vm.slots().len(), 1);
+    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
+    assert!(!vm.slots().contains_key("home"));
 }
 
 #[test]
@@ -377,14 +378,14 @@ fn animate_is_accepted() {
         "fiber.slot('notice', { timeout = 100, animate = { interval_ms = 80 }, \
                       render = function() end })",
     );
-    assert_eq!(vm.slots().len(), 1);
+    assert!(vm.slots().contains_key("notice"));
 }
 
 #[test]
 fn a_script_error_is_a_lua_error_naming_the_cause() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "error('broken script')", clock);
-    let Err(TuiError::Lua(message)) = result else {
+    let Err(Error::TuiLua(message)) = result else {
         panic!("expected a Lua error, got {result:?}");
     };
     assert!(message.contains("broken script"), "{message}");
@@ -394,14 +395,14 @@ fn a_script_error_is_a_lua_error_naming_the_cause() {
 fn a_syntax_error_is_a_lua_error() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "fiber.slot(", clock);
-    assert!(matches!(result, Err(TuiError::Lua(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
 }
 
 #[test]
 fn a_script_that_yields_is_a_lua_error() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "coroutine.yield()", clock);
-    assert!(matches!(result, Err(TuiError::Lua(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
 }
 
 #[test]
@@ -417,7 +418,7 @@ fn a_non_object_input_is_a_shape_and_runs_no_render() {
     let (_, mut vm) = notice("error('ran')");
     for input in [json!([1]), json!("x"), json!(null), json!(3)] {
         let result = call(&mut vm, &input);
-        let Err(TuiError::Shape(message)) = result else {
+        let Err(Error::TuiShape(message)) = result else {
             panic!("expected a shape error for {input}, got {result:?}");
         };
         assert!(message.contains("object"), "{message}");
@@ -509,7 +510,7 @@ fn builtin_expires_when_the_call_ends() {
 fn an_unregistered_slot_has_no_slot() {
     let (_, mut vm) = notice("return {}");
     let result = vm.call("reply", "s1", &json!({}), 80, &none);
-    assert!(matches!(result, Err(TuiError::NoSlot(name)) if name == "reply"));
+    assert!(matches!(result, Err(Error::TuiNoSlot(name)) if name == "reply"));
 }
 
 #[test]
@@ -533,20 +534,20 @@ fn a_wrong_shape_is_named() {
     for (body, field) in cases {
         let (_, mut vm) = notice(body);
         let result = call(&mut vm, &json!({}));
-        let Err(TuiError::Shape(message)) = result else {
+        let Err(Error::TuiShape(message)) = result else {
             panic!("`{body}`: expected a shape error, got {result:?}");
         };
         assert!(message.contains(field), "`{body}`: {message}");
         // A wrong shape leaves the VM on.
         let again = call(&mut vm, &json!({}));
-        assert!(matches!(again, Err(TuiError::Shape(_))), "{again:?}");
+        assert!(matches!(again, Err(Error::TuiShape(_))), "{again:?}");
     }
 }
 
 #[test]
 fn a_span_with_no_text_is_a_shape() {
     let (_, mut vm) = notice("return { { { fg = 'success' } } }");
-    assert!(matches!(call(&mut vm, &json!({})), Err(TuiError::Shape(_))));
+    assert!(matches!(call(&mut vm, &json!({})), Err(Error::TuiShape(_))));
 }
 
 #[test]
@@ -573,4 +574,21 @@ fn the_slot_table_in_the_doc_is_the_slot_set_in_the_code() {
         .collect();
     assert_eq!(fixed, own_fixed);
     assert_eq!(prefixed, own_prefixed);
+}
+
+#[test]
+fn every_failure_a_vm_reports_is_an_extension_failure() {
+    let (clock, mut vm) = notice("builtin({}) return {}");
+    let mut errors = vec![
+        TuiVm::load("test", "error('x')", FakeClock::new()).unwrap_err(),
+        TuiVm::load("test", "fiber.slot('banner', {})", FakeClock::new()).unwrap_err(),
+        vm.call("home", "s1", &json!({}), 80, &none).unwrap_err(),
+        vm.call("notice", "s1", &json!(1), 80, &none).unwrap_err(),
+        call_advancing(&mut vm, &clock, 100 * MS).unwrap_err(),
+    ];
+    errors.push(call(&mut vm, &json!({})).unwrap_err());
+    assert_eq!(errors.len(), 6);
+    for error in errors {
+        assert_eq!(error.code(), ErrorCode::ExtensionFailed, "{error:?}");
+    }
 }

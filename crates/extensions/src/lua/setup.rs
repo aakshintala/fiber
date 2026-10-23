@@ -263,7 +263,7 @@ pub(super) fn load_file(
 
 /// The message a person reads for a Lua error: its first line, which Lua
 /// starts with the file and line, without mlua's traceback.
-pub(super) fn message(e: &mlua::Error) -> String {
+pub(crate) fn message(e: &mlua::Error) -> String {
     let text = if let mlua::Error::RuntimeError(m) | mlua::Error::MemoryError(m) = e {
         m.clone()
     } else {
@@ -314,7 +314,7 @@ impl Deadline {
     }
 
     /// Whether the deadline has passed or the interrupt is raised.
-    pub(super) fn passed(&self) -> bool {
+    pub(crate) fn passed(&self) -> bool {
         self.interrupt.load(Ordering::SeqCst)
             || self.at.get().is_some_and(|at| self.clock.now() >= at)
     }
