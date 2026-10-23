@@ -14,15 +14,14 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock as _;
-use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 use super::ExecRequest;
 use super::resolve_in_package;
 use support::group::{self, DRAIN, GROUP_POLL};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
-const DRAIN_BOUNDARY_DEADLINE: Duration = Duration::from_secs(4);
 
 /// Whether the group still holds a process: `kill -0` starts no process,
 /// so it runs directly.
@@ -964,7 +963,7 @@ fn stop_pid_reaps_an_exited_child_without_signalling() {
     .expect("the exited child's pid is not zero");
     fakes::within(
         "the exited child",
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             rustix::process::waitid(
                 WaitId::Pid(pid),
@@ -1058,7 +1057,7 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     clock
         .mark_parked(drain_until, fakes::Deadline::after(DEADLINE))
         .expect("waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain");
-    Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&stdout_read_rx)
         .expect("waited for stdout to be read before the drain bound");
     let unanswered_before_advance = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
@@ -1135,11 +1134,11 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         let (_cancel, done) = spawn(req, Arc::clone(&clock), Some(deadline));
         // The reap starts the 2 s drain on the fake clock.
         clock
-            .mark_parked(drain_until, fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE))
+            .mark_parked(drain_until, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
             .unwrap_or_else(|| {
-                panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})")
+                panic!("waited {MUST_SUCCEED_WITHIN:?} for the pid-mode run to park for the 2 s drain ({case})")
             });
-        Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&stdout_read_rx)
             .unwrap_or_else(|_| {
                 panic!("waited for stdout to be read before the drain bound ({case})")
@@ -1161,9 +1160,9 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             clock.await_parked_since(
                 &mark,
                 Some(drain_until),
-                fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE)
+                fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             ),
-            "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to keep draining ({case})"
+            "waited {MUST_SUCCEED_WITHIN:?} for the pid-mode run to keep draining ({case})"
         );
         let unanswered_before_bound = matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty));
 
@@ -1171,7 +1170,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         // exactly at, and just after it. Do not jump past the bound before
         // observing the result.
         clock.advance_when_parked(Some(drain_until), None, step, &Deadline::after(DEADLINE));
-        let outcome = Deadline::after(DRAIN_BOUNDARY_DEADLINE).recv(&done);
+        let outcome = Deadline::after(MUST_SUCCEED_WITHIN).recv(&done);
         // The holder keeps the pipe whether the wait ended or not: kill it
         // by its pid file before asserting, so no `sleep` outlives the test.
         let holder: Option<u32> = std::fs::read_to_string(&holder_file)
@@ -1182,7 +1181,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         }
         let ran = outcome
             .unwrap_or_else(|_| {
-                panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the drained run ({case})")
+                panic!("waited {MUST_SUCCEED_WITHIN:?} for the drained run ({case})")
             })
             .unwrap_or_else(|err| panic!("the drained run returns ({case}): {}", err.message));
         assert_eq!(
@@ -1194,7 +1193,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         assert!(!ran.timed_out, "no stop started, so no timeout ({case})");
         let holder = holder.expect("the script wrote its holder's pid");
         assert!(
-            fakes::pids_exit(&[holder], fakes::Deadline::after(DRAIN_BOUNDARY_DEADLINE)),
+            fakes::pids_exit(&[holder], fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
             "the holder is gone ({case})"
         );
         assert!(

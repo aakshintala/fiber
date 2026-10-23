@@ -19,9 +19,6 @@ use serde_json::json;
 use crate::test_support::{Inner, request};
 use crate::{Error, LuaExtension, LuaProvider};
 
-/// How long a test waits for one call.
-const WAIT: Duration = Duration::from_secs(5);
-
 /// The hub's wait past a callback's own timeout before it gives up on the
 /// callback's thread.
 const GRACE: Duration = Duration::from_secs(1);
@@ -143,13 +140,13 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
     std::thread::spawn(move || {
         tx.send(provider.cost(&GenerationId("gen-1".into()), "http://h/v1", None))
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the callback to pass its clock check");
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(50) + GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "waited for the caller to park at the grace"
     );
@@ -157,9 +154,9 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
         Some(asked + Duration::from_millis(50) + GRACE),
         None,
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&result)
         .expect("waited for the spinning callback")
         .unwrap_err();

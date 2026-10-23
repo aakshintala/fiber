@@ -20,13 +20,8 @@ use contract::shapes::{Failure, Tokens};
 use contract::{CommandId, ErrorCode, GenerationId};
 use extensions::SessionExtensions;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Deadline, NoLock};
+use fakes::{CancelToken, Deadline, MUST_SUCCEED_WITHIN, NoLock};
 use serde_json::{Map, json};
-
-/// How long a test waits for one delivery before failing. A callback that
-/// is stopped returns on the fake clock, so this fires only when one is
-/// never stopped.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A recorded `host.model` call: who asked and what for.
 #[derive(Debug)]
@@ -189,7 +184,7 @@ fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the extensions to load"),
     )
@@ -211,10 +206,10 @@ fn run(session: &Arc<SessionExtensions>, name: &str) {
 #[allow(clippy::panic, reason = "a test helper; a missing line is the test's")]
 #[track_caller]
 fn next_log(inbox: &mpsc::Receiver<Delivery>, what: &str) -> String {
-    match Deadline::after(WAIT).recv(inbox) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(inbox) {
         Ok(Delivery::ExtensionLog(log)) => log.message,
         Ok(other) => panic!("expected {what}, got {other:?}"),
-        Err(_) => panic!("waited {WAIT:?} for {what}"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
     }
 }
 
@@ -222,10 +217,10 @@ fn next_log(inbox: &mpsc::Receiver<Delivery>, what: &str) -> String {
 #[allow(clippy::panic, reason = "a test helper; a missing line is the test's")]
 #[track_caller]
 fn next_usage(inbox: &mpsc::Receiver<Delivery>, what: &str) -> UsageRecorded {
-    match Deadline::after(WAIT).recv(inbox) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(inbox) {
         Ok(Delivery::ExtensionUsage(line)) => line,
         Ok(other) => panic!("expected {what}, got {other:?}"),
-        Err(_) => panic!("waited {WAIT:?} for {what}"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
     }
 }
 
@@ -331,7 +326,7 @@ end, { timeout = 1000 })
         Some(due),
         None,
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
         next_log(&inbox_rx, "the timer's model result"),
@@ -368,7 +363,7 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     let (log, emitted) = fakes::EventLog::channel();
     session.emit_to(Arc::new(log) as Arc<dyn contract::emit::Emit>);
     run(&session, "go");
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered_rx)
         .expect("waited for the fake to enter the call");
     // The fake is inside `call` and the callback is parked: the
@@ -382,12 +377,12 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
     let grace = deadline + Duration::from_secs(1);
     assert!(
         clock
-            .mark_parked(grace, fakes::Deadline::after(WAIT))
+            .mark_parked(grace, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
             .is_some(),
-        "waited {WAIT:?} for the waiter to park at deadline plus grace",
+        "waited {MUST_SUCCEED_WITHIN:?} for the waiter to park at deadline plus grace",
     );
     let scheduler = clock
-        .mark_parked(deadline, fakes::Deadline::after(WAIT))
+        .mark_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("waited for the scheduler to park at the callback deadline")
         .threads();
     assert_eq!(
@@ -399,9 +394,9 @@ fn a_timed_out_callback_drops_the_late_reply_but_keeps_the_lines() {
         Some(deadline),
         Some(scheduler[0]),
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let noticed = Deadline::after(WAIT)
+    let noticed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&emitted)
         .expect("waited for the timeout notice");
     let Event::Notice(notice) = noticed else {

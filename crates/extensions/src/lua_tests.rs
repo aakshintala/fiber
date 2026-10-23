@@ -9,9 +9,6 @@ use fakes::clock::FakeClock;
 use super::hub::{Progress, Run, Unsent};
 use super::*;
 
-/// Wall-clock bound on a wait for the VM, a server, or a thread.
-const WAIT: Duration = Duration::from_secs(5);
-
 /// Bound on a wait for the hub's state, a held request to reach its server,
 /// or the extension thread to quit.
 const WAIT_UNTIL: Duration = fakes::MUST_SUCCEED_WITHIN;
@@ -100,7 +97,8 @@ fn registration_from_a_deferred_timer_never_makes_a_command_callable() {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         ext.commands().unwrap();
-        Deadline::after(WAIT).recv_or_fail(&ready_rx, "timer completed its registration attempt");
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&ready_rx, "timer completed its registration attempt");
         let probe = ext.command("probe", "");
         let late = ext.command("late", "");
         tx.send((probe, late)).unwrap();
@@ -225,11 +223,15 @@ fn provider_load_race(completion_first: bool) {
     let asked = clock.now();
     let abandon_at = asked + LOAD_TIMEOUT + GRACE;
     let caller_thread = thread::spawn(move || result_tx.send(caller.provider_functions("p")));
-    Deadline::after(WAIT).recv_or_fail(&held_rx, "provider held in read");
-    assert!(clock.await_parked(abandon_at, fakes::Deadline::after(WAIT)));
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&held_rx, "provider held in read");
+    assert!(clock.await_parked(
+        abandon_at,
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
     if completion_first {
         release_tx.send(()).unwrap();
-        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "load result recorded before abandonment");
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&recorded_rx, "load result recorded before abandonment");
         let (advanced_tx, advanced_rx) = mpsc::channel();
         let advance_clock = Arc::clone(&clock);
         let caller_id = caller_thread.thread().id();
@@ -238,15 +240,17 @@ fn provider_load_race(completion_first: bool) {
                 Some(abandon_at),
                 Some(caller_id),
                 LOAD_TIMEOUT + GRACE,
-                &Deadline::after(WAIT),
+                &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
             );
             advanced_tx.send(()).unwrap();
         });
-        Deadline::after(WAIT).recv_or_fail(&moved_rx, "clock moved before hub wake");
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&moved_rx, "clock moved before hub wake");
         resume_tx.send(()).unwrap();
-        Deadline::after(WAIT).recv_or_fail(&advanced_rx, "clock advance completed");
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&advanced_rx, "clock advance completed");
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&result_rx, "completed load result")
                 .unwrap(),
             Vec::<String>::new()
@@ -257,21 +261,23 @@ fn provider_load_race(completion_first: bool) {
             Some(abandon_at),
             Some(caller_thread.thread().id()),
             LOAD_TIMEOUT + GRACE,
-            &Deadline::after(WAIT),
+            &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         );
-        let err = Deadline::after(WAIT)
+        let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&result_rx, "abandonment before recording")
             .unwrap_err();
         assert!(matches!(err, Error::Abandoned { callback, .. } if callback == "providers/p.lua"));
         release_tx.send(()).unwrap();
-        Deadline::after(WAIT).recv_or_fail(&recorded_rx, "late load result dropped");
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&recorded_rx, "late load result dropped");
         resume_tx.send(()).unwrap();
         assert!(!ext.is_running());
         let (retry_tx, retry_rx) = mpsc::channel();
         let retry = Arc::clone(&ext);
         thread::spawn(move || retry_tx.send(retry.provider_functions("p")));
         assert!(matches!(
-            Deadline::after(WAIT).recv_or_fail(&retry_rx, "abandonment stays final"),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                .recv_or_fail(&retry_rx, "abandonment stays final"),
             Err(Error::Abandoned { .. })
         ));
     }
@@ -579,20 +585,20 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
         }
         woke_tx.send(()).unwrap();
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&waiting_rx)
         .expect("waited for the other waiter to take the lock");
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     thread::spawn(move || done_tx.send(caller.provider_functions("fixture")));
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("provider_functions never returned")
         .unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     // A hang guard only: without the wake the waiter never returns.
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&woke_rx)
         .expect("the other waiter was never woken");
 }
@@ -616,7 +622,7 @@ fn dropping_the_extension_stops_it() {
         }
     });
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("waited for echo")
             .unwrap(),
@@ -827,7 +833,7 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     let clock = FakeClock::new();
     let (hub, spin, done) = serve_after(dir.path(), "spin", &clock);
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for spin to pass its clock check");
     assert!(until(&hub, |s| matches!(
@@ -922,7 +928,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     );
     run("queued", |e| e.command("queued", "").map(Value::String));
     let sign = run("sign", |e| e.provider_call("p", "sign", Value::Null));
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for sign to pass its clock check");
     let abandon = asked + Duration::from_millis(50) + GRACE;
@@ -934,11 +940,11 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         Some(abandon),
         Some(sign),
         Duration::from_millis(50) + GRACE,
-        &Deadline::after(WAIT),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let mut seen = BTreeMap::new();
     // One deadline for the whole wait: the loop drains one stream.
-    let wait = Deadline::after(WAIT);
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     for _ in 0..4 {
         let (what, result) = wait.recv(&rx).expect("waited for a waiter to return");
         seen.insert(what, result.unwrap_err());
@@ -1735,7 +1741,7 @@ fn a_withheld_hook_completion_passes_other_traffic() {
     let quick_caller = Arc::clone(&ext);
     thread::spawn(move || quick_tx.send(quick_caller.command("quick", "")));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&quick_rx)
             .expect("waited for the quick command")
             .unwrap(),
@@ -1745,7 +1751,7 @@ fn a_withheld_hook_completion_passes_other_traffic() {
     let after_caller = Arc::clone(&ext);
     thread::spawn(move || after_tx.send(after_caller.hook("after_tool", 0, serde_json::json!({}))));
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&after_rx)
             .expect("waited for the after_tool hook")
             .is_ok()
@@ -1756,7 +1762,7 @@ fn a_withheld_hook_completion_passes_other_traffic() {
         before_tx.send(before_caller.hook("before_message", 0, serde_json::json!({})))
     });
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&before_rx)
             .expect("waited for the before_message hook")
             .is_ok()
@@ -1799,7 +1805,7 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     // Withhold the worker's completion past the answer wait below.
     let (hold_tx, hold_rx) = mpsc::channel();
     super::schedule::withhold_hook_completion("fiber.test/withheld", "before_message", hold_rx);
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the hook to start");
     // The worker runs the hook, past the arming of its deadline: the signal
@@ -1819,16 +1825,20 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     let timeout_at = clock.origin() + Duration::from_millis(50);
     let caller_id = caller_thread.thread().id();
     assert!(
-        clock.await_thread_parked(caller_id, Some(timeout_at), fakes::Deadline::after(WAIT)),
+        clock.await_thread_parked(
+            caller_id,
+            Some(timeout_at),
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "waited for the caller to park at its timeout"
     );
     clock.advance_when_parked(
         Some(timeout_at),
         Some(caller_id),
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
         .unwrap_err();
@@ -1847,7 +1857,7 @@ fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped_while_its_comp
     thread::spawn(move || {
         again_tx.send(again_caller.hook("before_message", 0, serde_json::json!({})))
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&again_rx)
         .expect("waited for the hook to run again after its timeout")
         .unwrap();
@@ -1882,7 +1892,7 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     let caller_thread = thread::spawn(move || tx.send(caller.command("spin", "")));
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the command to start");
     // The worker runs the command, past the arming of its deadline: the
@@ -1902,16 +1912,20 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     let timeout_at = clock.origin() + Duration::from_millis(50);
     let caller_id = caller_thread.thread().id();
     assert!(
-        clock.await_thread_parked(caller_id, Some(timeout_at), fakes::Deadline::after(WAIT)),
+        clock.await_thread_parked(
+            caller_id,
+            Some(timeout_at),
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "waited for the caller to park at its timeout"
     );
     clock.advance_when_parked(
         Some(timeout_at),
         Some(caller_id),
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the timeout answer without the worker's delivery")
         .unwrap_err();
@@ -1929,7 +1943,7 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
     let again_caller = Arc::clone(&ext);
     thread::spawn(move || again_tx.send(again_caller.command("echo", "alive")));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&again_rx)
             .expect("waited for the next command after the timeout")
             .unwrap(),
@@ -1938,7 +1952,7 @@ fn a_running_command_past_its_timeout_is_answered_while_its_completion_is_withhe
 }
 
 /// The watchers one entry script registered, loaded on a thread under
-/// [`WAIT`]: the fake clock never ends a wait the runtime does not end
+/// [`fakes::MUST_SUCCEED_WITHIN`]: the fake clock never ends a wait the runtime does not end
 /// itself.
 #[track_caller]
 fn watchers_result(init: &str) -> Result<DeclaredWatchers, Error> {
@@ -1950,7 +1964,7 @@ fn watchers_result(init: &str) -> Result<DeclaredWatchers, Error> {
         tx.send(result).unwrap();
         drop(dir);
     });
-    Deadline::after(WAIT).recv_or_fail(&rx, "watch registration result")
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "watch registration result")
 }
 
 /// One `host.status` line per watcher run, in run order: the fake emitter
@@ -2118,7 +2132,7 @@ fn a_watcher_job_serves_its_declared_timeout() {
     }
     ext.hub.notify();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the watcher to run"),
         "watcher-ran"
@@ -2146,7 +2160,7 @@ fn a_watcher_job_serves_its_declared_timeout() {
         "waited for the unregistered watcher to be refused"
     );
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&boot_rx)
             .expect("waited for the registration")
             .is_ok()
@@ -2230,13 +2244,13 @@ fn a_hook_queued_behind_a_parked_watcher_does_not_start() {
     }
     server.release();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the watcher to run"),
         "watcher-ran"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the hook to run"),
         "hook-ran"
@@ -2317,13 +2331,13 @@ fn a_watcher_queued_behind_a_parked_hook_does_not_start() {
     }
     server.release();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the hook to run"),
         "hook-ran"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the watcher to run"),
         "watcher-ran"
@@ -2368,7 +2382,7 @@ fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
     }
     ext.hub.notify();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the first watcher to run"),
         "watcher-zero"
@@ -2425,26 +2439,26 @@ fn a_parked_watcher_holds_a_hook_a_later_watcher_and_a_command() {
     drop(hold_tx);
     super::schedule::release_hook_completion();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&command_rx)
             .expect("waited for the command to run")
             .unwrap(),
         "later"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the hook's line"),
         "hook-ran"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the later watcher's line"),
         "watcher-one"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&status_rx)
             .expect("waited for the command's line"),
         "command-ran"
