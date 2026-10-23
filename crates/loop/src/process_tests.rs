@@ -22,7 +22,7 @@ use contract::shapes::{
 use contract::{ActionId, CommandId, ErrorCode, GenerationId, RequestId, SessionId, TurnId};
 use serde_json::Value;
 
-use super::{Summary, fiber_exited, fiber_started};
+use super::{Summary, fiber_exited, fiber_started, write_exit};
 
 /// A session log in a temporary directory, removed on drop. The summary is
 /// folded beside the log: every appended line is observed, resetting at
@@ -1113,10 +1113,91 @@ fn a_raw_interaction_names_an_extension_ask_only_when_extension_is_a_string() {
 /// A line that cannot be encoded fails the run, and the exit reports it:
 /// `log::Error::Encode` is `log_corrupt` (`docs/errors.md`, `log_corrupt`:
 /// "a log line that cannot be encoded"). No event can fail encoding from
-/// data, and no write failure is injectable into `Log::append` without a
-/// seam, so the mapping is the level this is pinned at.
+/// data, so the mapping is the level this is pinned at; the next two tests
+/// pin that `write_exit` returns the failed append.
 #[test]
 fn an_encode_failure_is_log_corrupt() {
     let encode = log::Error::Encode(serde_json::from_str::<u8>("x").unwrap_err());
     assert_eq!(crate::Error::from(encode).code(), ErrorCode::LogCorrupt);
+}
+
+/// The kinds `write_exit` tried to append to a fake log whose append fails
+/// for the events `fails` picks, and what it returned.
+fn exit_over_failing_append(
+    summary: &Summary,
+    fails: impl Fn(&Event) -> bool,
+) -> (Vec<&'static str>, Result<super::Exited, crate::Error>) {
+    let tried = std::cell::RefCell::new(Vec::new());
+    let append = |event: &Event| {
+        tried
+            .borrow_mut()
+            .push(if matches!(event, Event::FiberExited(_)) {
+                "fiber_exited"
+            } else if matches!(event, Event::InteractionResolved(_)) {
+                "interaction_resolved"
+            } else {
+                "other"
+            });
+        if fails(event) {
+            return Err(log::Error::Poisoned {
+                session: "s_1".into(),
+                cause: "a failed write".into(),
+            });
+        }
+        Ok(())
+    };
+    let result = write_exit(&append, summary, Ok(()), true, None);
+    (tried.into_inner(), result)
+}
+
+#[test]
+fn a_failed_exit_append_is_returned_and_writes_no_exit_line() {
+    let (tried, result) = exit_over_failing_append(&Summary::default(), |event| {
+        matches!(event, Event::FiberExited(_))
+    });
+
+    let error = result.err().expect("the failed append is returned");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(error, crate::Error::Log(log::Error::Poisoned { .. })),
+        "{error:?}"
+    );
+    assert_eq!(tried, ["fiber_exited"]);
+}
+
+#[test]
+fn a_failed_decline_is_returned_before_any_exit_line() {
+    let mut summary = Summary::default();
+    summary.observe(&asked("r_1"), None);
+    summary.observe(&asked("r_2"), None);
+
+    let (tried, result) = exit_over_failing_append(&summary, |event| {
+        matches!(event, Event::InteractionResolved(_))
+    });
+
+    assert_eq!(result.err().map(|e| e.code()), Some(ErrorCode::IoFailed));
+    // The first decline failed, so the second and the exit line are not tried.
+    assert_eq!(tried, ["interaction_resolved"]);
+}
+
+/// A cost is summed as the log reads it back, not as the loop held it:
+/// serde_json's float parse of the second cost's text differs from the `f64`
+/// in the last digit, and `fiber_exited.usage.cost` keeps the sum the old
+/// fold made from the lines (`5.3199999999999985e-5`; the held costs add up
+/// to `5.319999999999999e-5`).
+#[test]
+fn a_cost_is_summed_as_the_log_reads_it_back() {
+    let mut session = Session::new();
+    session.append(&usage("g1", 1, Some(7e-7), None), Some("a_1"));
+    session.append(
+        &usage("g2", 1, Some(5.2499999999999995e-5), None),
+        Some("a_2"),
+    );
+
+    let (_, exited) = session.exit(Ok(()));
+
+    assert_eq!(
+        exited["usage"]["cost"].as_f64(),
+        Some(5.3199999999999985e-5)
+    );
 }

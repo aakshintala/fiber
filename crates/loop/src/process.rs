@@ -170,7 +170,16 @@ impl Summary {
             self.error = turn.error.clone();
             self.questions = turn.questions.clone();
         } else if let Event::UsageRecorded(recorded) = event {
-            self.ledger.record(recorded);
+            // The cost as the log reads it back: serde_json's float parse is
+            // not exact, so `fiber_exited.usage.cost` stays the bytes it
+            // was when it was folded from the log. A cost that does not
+            // encode as a number reads back `null`.
+            let mut line = recorded.clone();
+            line.cost = serde_json::to_string(&line.cost)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .flatten();
+            self.ledger.record(&line);
         }
     }
 
@@ -251,6 +260,21 @@ pub fn fiber_exited(
     one_turn: bool,
     signal: Option<i32>,
 ) -> Result<Exited, Error> {
+    let append = |event: &Event| log.append(event, None, None).map(drop);
+    write_exit(&append, summary, ran, one_turn, signal)
+}
+
+/// `fiber_exited` over `append`, which writes one line to the log. A failed
+/// append is returned as it came: the lines after it are not written. A
+/// test fails `append` here, because a `Log` cannot be made to fail a write
+/// from outside the `log` crate.
+fn write_exit(
+    append: &dyn Fn(&Event) -> Result<(), log::Error>,
+    summary: &Summary,
+    ran: Result<(), Failure>,
+    one_turn: bool,
+    signal: Option<i32>,
+) -> Result<Exited, Error> {
     // A rewound session's last line is `rewound`, which closes the process
     // boundary as `fiber_exited` does: nothing more is written, and open
     // extension asks are left as they are (`docs/events.md`, "Rewind").
@@ -275,7 +299,7 @@ pub fn fiber_exited(
             summary.final_message.clone(),
         ),
     };
-    decline_extension_asks(log, &summary.open_extension)?;
+    decline_extension_asks(append, &summary.open_extension)?;
     let exited = Event::FiberExited(FiberExited {
         exit_code,
         usage: summary.ledger.usage(),
@@ -284,7 +308,7 @@ pub fn fiber_exited(
         suspended_on: summary.suspended_on(signal.is_some()),
         questions: summary.questions.clone(),
     });
-    log.append(&exited, None, None)?;
+    append(&exited)?;
     Ok(Exited {
         code: exit_code,
         error,
@@ -294,14 +318,17 @@ pub fn fiber_exited(
 /// Declines every still-open extension ask with `by: fiber`, in log order,
 /// before `fiber_exited`'s own line. A resumed session's status never waits
 /// on a question no callback holds.
-fn decline_extension_asks(log: &Log, open: &[RequestId]) -> Result<(), Error> {
+fn decline_extension_asks(
+    append: &dyn Fn(&Event) -> Result<(), log::Error>,
+    open: &[RequestId],
+) -> Result<(), Error> {
     for request_id in open {
         let resolved = Event::InteractionResolved(InteractionResolved {
             request_id: request_id.clone(),
             by: ResolvedBy::Fiber,
             answer: Answer::Declined { declined: True },
         });
-        log.append(&resolved, None, None)?;
+        append(&resolved)?;
     }
     Ok(())
 }
