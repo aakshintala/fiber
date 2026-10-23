@@ -8,6 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -219,16 +220,13 @@ fn lock_wait_in(home: &Path) -> std::sync::mpsc::Receiver<Result<Lock, StartErro
     done_rx
 }
 
-/// How long a wait that must succeed may take, in wall time.
-const WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// How long the test watches a wait that must not finish.
 const STILL: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[test]
 fn lock_wait_on_a_free_run_returns_the_lock_at_once() {
     let temp = Temp::new();
-    let held = Deadline::after(WITHIN)
+    let held = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&lock_wait_in(&temp.dir))
         .expect("a free lock is taken before the deadline")
         .unwrap();
@@ -247,7 +245,7 @@ fn lock_wait_blocks_while_another_holds_the_lock_and_takes_it_on_release() {
         "lock_wait returned while another held the lock"
     );
     drop(first);
-    let held = Deadline::after(WITHIN)
+    let held = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("lock_wait takes the lock once it is released")
         .unwrap();

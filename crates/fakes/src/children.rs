@@ -22,9 +22,6 @@ use std::time::Duration;
 use crate::deadline::Deadline;
 use crate::{MUST_SUCCEED_WITHIN, Watchdog, group_empties, kill_group};
 
-/// How long [`Ready::new`] waits for its reader to open the FIFO.
-const OPEN_DEADLINE: Duration = Duration::from_secs(5);
-
 enum Line {
     Text(String),
     End,
@@ -47,7 +44,7 @@ impl Ready {
     pub fn new(dir: &Path) -> Self {
         let path = dir.join("ready.fifo");
         crate::fifo(&path);
-        Self::at(&path, &|| OPEN_DEADLINE)
+        Self::at(&path, &|| MUST_SUCCEED_WITHIN)
     }
 
     /// Starts reading the existing FIFO `fifo`, as [`Ready::new`] does after

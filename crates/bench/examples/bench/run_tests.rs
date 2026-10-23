@@ -1,3 +1,4 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -14,9 +15,6 @@ use super::{Proc, Startup, System, command, parse_line, run_to_end};
 
 /// The wall-clock bound on each test below that runs a child.
 const WALL: Duration = Duration::from_secs(30);
-
-/// How long a ready line from a test's child may take.
-const READY: Duration = Duration::from_secs(5);
 
 const PROXIES: [&str; 8] = [
     "HTTP_PROXY",
@@ -165,7 +163,7 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         "{err}"
     );
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
-    watchdog.stand_down(fakes::Deadline::after(READY));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// Waits for the child's two ready lines under one shared deadline.
@@ -178,7 +176,7 @@ fn wait_for_both_lines(ready: &std::sync::Mutex<Option<Ready>>) {
     if let Some(ready) = ready {
         // One deadline for both lines: a scoped thread reads them.
         let (tx, rx) = std::sync::mpsc::channel();
-        let deadline = Deadline::after(READY);
+        let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
         std::thread::scope(|scope| {
             let deadline = &deadline;
             scope.spawn(move || {
@@ -288,9 +286,9 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     fakes::kill_matching(&marker).unwrap();
     assert!(fakes::matching_exits(
         &marker,
-        fakes::Deadline::after(READY)
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
     ));
-    watchdog.stand_down(fakes::Deadline::after(READY));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// A clock whose second `now` read, the deadline read in `eof_once`, waits
@@ -370,9 +368,9 @@ fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging
     fakes::kill_matching(&marker).unwrap();
     assert!(fakes::matching_exits(
         &marker,
-        fakes::Deadline::after(READY)
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
     ));
-    watchdog.stand_down(fakes::Deadline::after(READY));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         clock.passed(),
         "the deadline was read before the holder left the group"
@@ -391,11 +389,11 @@ fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let proc = Proc::spawn(&mut command, &System).unwrap();
-    let group = ready.wait(fakes::Deadline::after(READY))[0];
+    let group = ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN))[0];
     assert_eq!(group, proc.pid());
     // The descendant ignores SIGTERM and holds the group after its leader
     // exits; it is up once its pid is written.
-    ready.wait(fakes::Deadline::after(READY));
+    ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     let err = fakes::within("the stop", Deadline::after(WALL), move || {
         proc.stop(&System)
     })
@@ -434,7 +432,7 @@ impl Clock for AfterEof {
             self.ready
                 .lock()
                 .unwrap()
-                .wait(fakes::Deadline::after(READY));
+                .wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
         }
         self.inner.sleep(d);
     }
@@ -548,7 +546,7 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     .unwrap_err();
     assert_eq!(err, "timed out waiting for the sleeper");
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
-    watchdog.stand_down(fakes::Deadline::after(READY));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// A fake clock that removes `hold` on the sleep after the old exit bound
@@ -621,7 +619,7 @@ fn waiting_for_a_process_to_exit_outlasts_fake_time_that_runs_ahead_of_it() {
     command.stdin(Stdio::null()).stdout(Stdio::null());
     let exited = fakes::within("the exit wait", Deadline::after(WALL), move || {
         let mut proc = Proc::spawn(&mut command, &clock).unwrap();
-        ready.wait(fakes::Deadline::after(READY));
+        ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
         let exited = proc.exits(&clock, WALL).unwrap();
         proc.stop(&System).unwrap();
         exited

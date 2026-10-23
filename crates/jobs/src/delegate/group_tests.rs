@@ -9,6 +9,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -20,9 +21,6 @@ use fakes::{Watchdog, group_empties, kill_group, within};
 use support::group::Listing;
 
 use super::{listed, reap_locked, retire_if_empty, signal};
-
-/// How long a test waits on a child before it fails.
-const DEADLINE: Duration = Duration::from_secs(3);
 
 /// A group that holds `sleep 60`, listed through the shared spawn. Its
 /// stdio is null, so even a child that outlives the test holds no harness
@@ -49,10 +47,10 @@ fn a_spawned_group_is_listed() {
     assert!(support::group::alive(pgid));
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
-/// Reaps `child` on its own thread, at most `DEADLINE` of wall clock:
+/// Reaps `child` on its own thread, at most `MUST_SUCCEED_WITHIN` of wall clock:
 /// the caller cannot block on it, or a child that ignores the signal
 /// would hang the test instead of failing it.
 #[track_caller]
@@ -61,9 +59,9 @@ fn reap(mut child: std::process::Child, signal: &str) -> std::process::ExitStatu
     thread::spawn(move || {
         let _sent = done.send(child.wait());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&waited)
-        .unwrap_or_else(|_| panic!("{signal} did not end the child within {DEADLINE:?}"))
+        .unwrap_or_else(|_| panic!("{signal} did not end the child within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap_or_else(|source| panic!("waiting the child failed: {source}"))
 }
 
@@ -76,10 +74,10 @@ fn a_live_group_gets_sigterm() {
     // kill(-pgid, 0), so the group reads occupied until it is reaped.
     assert_eq!(reap(child, "SIGTERM").signal(), Some(15));
     assert!(
-        group_empties(pgid, fakes::Deadline::after(DEADLINE)),
+        group_empties(pgid, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "SIGTERM emptied the group"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -89,14 +87,17 @@ fn a_reaped_group_whose_members_are_gone_leaves_the_list() {
     let mut listing = Some(listing);
     child.kill().unwrap();
     child.wait().unwrap();
-    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
+    assert!(group_empties(
+        pgid,
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+    ));
     assert!(retire_if_empty(&mut listing));
     assert!(listing.is_none(), "the token is gone with its entry");
     assert!(!listed(pgid));
     // Retired, a signal to it is a no-op: the id may already belong to
     // someone else.
     assert!(!signal(pgid, rustix::process::Signal::KILL));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -134,7 +135,7 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
     let watchdog = Watchdog::group(pgid);
     let member: u32 = within(
         "the member writes its pid",
-        Deadline::after(DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 let Ok(text) = std::fs::read_to_string(&pidfile) else {
@@ -157,14 +158,17 @@ fn a_reaped_leader_with_a_surviving_member_kills_it_and_stays_listed() {
         "with a member surviving the group stays listed"
     );
     assert!(
-        fakes::pids_exit(&[member], fakes::Deadline::after(DEADLINE)),
+        fakes::pids_exit(&[member], fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the surviving member got SIGKILL"
     );
-    assert!(group_empties(pgid, fakes::Deadline::after(DEADLINE)));
+    assert!(group_empties(
+        pgid,
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+    ));
     assert!(retire_if_empty(&mut listing));
     assert!(!listed(pgid));
     // The watchdog finds nothing left to kill.
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -183,7 +187,7 @@ fn an_unlisted_live_group_is_not_signalled() {
     assert!(kill_group(pgid, "0").unwrap(), "nothing was sent");
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -220,11 +224,11 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
         "the reap did not run under the held lock"
     );
     drop(held);
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&waited)
         .expect("the reap ran");
     assert!(!listed(pid), "the empty group retired under the lock");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// Whether `pid` has exited without being reaped: `waitid` with `NOWAIT`
@@ -232,22 +236,26 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
 #[track_caller]
 fn wait_for_exit(pid: u32) {
     use rustix::process::{Pid, WaitId, WaitIdOptions};
-    within("the leader exits", Deadline::after(DEADLINE), move || {
-        let id = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
-        loop {
-            let seen = rustix::process::waitid(
-                WaitId::Pid(id),
-                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-            )
-            .ok()
-            .flatten()
-            .is_some();
-            if seen {
-                return;
+    within(
+        "the leader exits",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            let id = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+            loop {
+                let seen = rustix::process::waitid(
+                    WaitId::Pid(id),
+                    WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+                )
+                .ok()
+                .flatten()
+                .is_some();
+                if seen {
+                    return;
+                }
+                thread::yield_now();
             }
-            thread::yield_now();
-        }
-    });
+        },
+    );
 }
 
 #[test]
@@ -265,5 +273,5 @@ fn a_listed_group_with_a_member_is_not_retired() {
     assert!(!retire_if_empty(&mut none));
     child.kill().unwrap();
     child.wait().unwrap();
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }

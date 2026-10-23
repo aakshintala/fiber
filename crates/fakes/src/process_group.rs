@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
+use crate::MUST_SUCCEED_WITHIN;
 use crate::deadline::Deadline;
 
 /// The shell script of a watchdog: `sh -c WATCHDOG_SCRIPT watchdog <group>`.
@@ -243,16 +244,17 @@ pub(crate) fn pattern(text: &str) -> String {
     escaped
 }
 
-/// How long [`matching`] waits on the wall clock for `pgrep` to list and
-/// exit. A listing takes milliseconds; the bound only reports a hung one.
-const PGREP_DEADLINE: Duration = Duration::from_secs(5);
+/// How long [`command_line`] waits for its `ps` when a diagnostic names a
+/// holder. Once the test has failed, a hung `ps` must not add a must-succeed
+/// interval per holder, so this is the one short bound here, best-effort.
+const COMMAND_LINE_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The pids of the processes whose command line contains `text`.
 ///
 /// # Errors
 ///
 /// When `pgrep` cannot be run or fails, or has not exited within
-/// [`PGREP_DEADLINE`] (`TimedOut`; the `pgrep` is killed).
+/// [`MUST_SUCCEED_WITHIN`] (`TimedOut`; the `pgrep` is killed).
 ///
 /// # Panics
 ///
@@ -270,7 +272,7 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let (status, stdout) = bounded(pgrep, "pgrep", PGREP_DEADLINE)?;
+    let (status, stdout) = bounded(pgrep, "pgrep", MUST_SUCCEED_WITHIN)?;
     // 1 is "no process matched".
     match status.code() {
         Some(0 | 1) => {}
@@ -486,7 +488,7 @@ fn read_lookup(child: Child, what: &str, deadline: Duration) -> String {
 /// [`matching`]'s `pgrep`: a hung `ps` is killed, never waited out.
 fn command_line(pid: u32) -> String {
     match spawn_lookup("ps", &["-o", "args=", "-p", &pid.to_string()]) {
-        Ok(child) => read_lookup(child, "ps", PGREP_DEADLINE),
+        Ok(child) => read_lookup(child, "ps", COMMAND_LINE_DIAGNOSTIC_TIMEOUT),
         Err(_) => GONE_ARGS.to_owned(),
     }
 }

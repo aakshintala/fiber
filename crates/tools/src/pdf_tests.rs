@@ -2,6 +2,7 @@
 //! child call and render loop. The `fiber` child and `pdftoppm` are both
 //! `/bin/sh` scripts, so `tools` links no PDF code.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,10 +20,6 @@ use super::page_range;
 use super::{PDF_MAX_BYTES, pdf_over_cap};
 use crate::Files;
 use crate::error::PdfError;
-
-/// How long a cancel test waits for the renderer to start, and for the call
-/// to end after the cancel. A wait that reaches it fails the test.
-const LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 const PDF: &[u8] = b"%PDF-1.4 a test pdf";
 
@@ -613,13 +610,13 @@ printf 'fakepng' > "$root.png""#,
             &cancel,
         )));
     });
-    ready.wait(fakes::Deadline::after(LIMIT));
+    ready.wait(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         done_rx.try_recv().is_err(),
         "the call ended before the cancel"
     );
     flag.store(true, Ordering::SeqCst);
-    let output = Deadline::after(LIMIT)
+    let output = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the call ends");
     assert_eq!(code(&output), None);

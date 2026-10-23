@@ -411,6 +411,7 @@ fn the_browser_shows_the_url_and_code_through_the_login_show() {
 
 #[cfg(test)]
 mod browser {
+    use fakes::MUST_SUCCEED_WITHIN;
     use std::fs;
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -429,7 +430,6 @@ mod browser {
     use extensions::Browser;
 
     const WAIT: Duration = Duration::from_secs(10);
-    const BROWSER_WAIT: Duration = Duration::from_secs(4);
     const ACCOUNT: &str = "acct_1";
     const EMAIL: &str = "alice@example.com";
 
@@ -553,7 +553,7 @@ mod browser {
         let target = target.to_owned();
         fakes::within(
             "the callback to listen",
-            Deadline::after(BROWSER_WAIT),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || {
                 loop {
                     match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
@@ -640,7 +640,7 @@ mod browser {
         thread::spawn(move || match done.send(login.run()) {
             Ok(()) | Err(_) => {}
         });
-        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        let url = await_opened(&opened, &Deadline::after(MUST_SUCCEED_WITHIN));
         assert_eq!(
             port_of(&url),
             browser.port(),
@@ -709,7 +709,7 @@ mod browser {
         thread::spawn(move || match done.send(running.run()) {
             Ok(()) | Err(_) => {}
         });
-        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        let url = await_opened(&opened, &Deadline::after(MUST_SUCCEED_WITHIN));
         let callback_port = port_of(&url);
         assert_eq!(
             callback_port,
@@ -718,7 +718,7 @@ mod browser {
         );
         // Taken, so `listen` bound: cancelling now ends the wait instead
         // of racing its start, which would leave the held listener behind.
-        Deadline::after(BROWSER_WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv_or_fail(&taken, "the package to take the callback listener");
         login.cancel();
         let result = Deadline::after(WAIT)
@@ -731,7 +731,7 @@ mod browser {
         drop(server);
         fakes::within(
             "the callback port to bind again",
-            Deadline::after(BROWSER_WAIT),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || {
                 loop {
                     if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
@@ -791,7 +791,7 @@ mod browser {
         thread::spawn(move || match done.send(login.run()) {
             Ok(()) | Err(_) => {}
         });
-        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        let url = await_opened(&opened, &Deadline::after(MUST_SUCCEED_WITHIN));
         assert_eq!(
             port_of(&url),
             port,

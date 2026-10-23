@@ -9,9 +9,9 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::clock::Clock as _;
 use contract::clock::Wake;
@@ -25,9 +25,6 @@ use log::Log;
 use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
 use fakes::Deadline;
-
-/// Bound on every wait in this test: the raise park and the answer receive.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// Rules that hold nothing.
 struct Still;
@@ -152,7 +149,7 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     // park on it waits unbounded in real time; the process clock hands the
     // real bound.
     let clock = fakes::clock::SystemClock;
-    let deadline = clock.now() + DEADLINE;
+    let deadline = clock.now() + MUST_SUCCEED_WITHIN;
     wake.park(&clock, Some(deadline));
     assert!(
         format!("{:?}", stream.asking()).contains("\"raised\""),
@@ -175,7 +172,7 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     assert_eq!(resolved.payload["declined"], true);
     assert!(stream.asking().pending().is_none());
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&answer_rx)
             .expect("the cancel declined the ask"),
         Answered::NoAnswer

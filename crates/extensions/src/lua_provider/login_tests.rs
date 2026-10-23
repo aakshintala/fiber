@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::{Arc, Mutex, mpsc};
@@ -404,8 +405,6 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
 
 #[test]
 fn a_login_started_after_stop_runs_no_credential() {
-    use std::time::Duration;
-    const WAIT: Duration = Duration::from_secs(4);
     // Held, never released: the stopped login never binds, so the port
     // only names it, and freeing it at the end proves nothing listened.
     let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -431,9 +430,11 @@ fn a_login_started_after_stop_runs_no_credential() {
             Ok(()) | Err(_) => {}
         },
     );
-    let error = Deadline::after(WAIT)
+    let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
-        .unwrap_or_else(|_| panic!("the login after stop did not return within {WAIT:?}"))
+        .unwrap_or_else(|_| {
+            panic!("the login after stop did not return within {MUST_SUCCEED_WITHIN:?}")
+        })
         .unwrap_err();
     drop(held);
     assert!(

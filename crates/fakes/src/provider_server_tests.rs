@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
@@ -17,6 +18,9 @@ use contract::clock::Wake;
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 const STATUS_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
+
+/// How long the stalled connection is read for when nothing arrives.
+const ABSENT: Duration = Duration::from_secs(1);
 
 #[test]
 fn a_dropped_connection_records_the_request_and_answers_nothing() {
@@ -106,7 +110,7 @@ fn get_on(addr: SocketAddr, name: &'static str, tx: mpsc::Sender<(&'static str, 
 fn hold_from_answers_earlier_requests_and_holds_the_rest_until_release() {
     let server =
         ProviderServer::start([Response::stream(b"one"), Response::stream(b"two")]).unwrap();
-    server.hold_from(2, Duration::from_secs(5));
+    server.hold_from(2, MUST_SUCCEED_WITHIN);
     let (tx, rx) = mpsc::channel();
     get_on(server.addr, "a", tx.clone());
     let (name, body) = Deadline::after(READ_WITHIN)
@@ -339,9 +343,7 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
     assert_eq!(server.requests().len(), 1);
     // The rest of the declared body never arrives while the client holds.
     // Nothing arrives, so the read runs out its bound: a short one.
-    stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    stream.set_read_timeout(Some(ABSENT)).unwrap();
     let mut one = [0u8; 1];
     let held = reader.read_exact(&mut one);
     assert!(held.is_err(), "the connection is held past its prefix");
@@ -458,13 +460,8 @@ fn stalled_client(addr: SocketAddr) -> (TcpStream, std::io::BufReader<TcpStream>
     (stream, reader)
 }
 
-/// How long an already-satisfied wait may take to answer: it returns at
-/// once, so this bound fails a mutant that waits out its `within` before
-/// the mutation run's own per-test timeout does.
-const SATISFIED_WITHIN: Duration = Duration::from_secs(5);
-
 /// Runs one wait on its own thread and receives its answer within
-/// `SATISFIED_WITHIN`, so a wait that never ends fails the test instead of
+/// `MUST_SUCCEED_WITHIN`, so a wait that never ends fails the test instead of
 /// hanging it.
 fn answered_within(
     server: &Arc<ProviderServer>,
@@ -473,9 +470,9 @@ fn answered_within(
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
     thread::spawn(move || tx.send(wait(&server)).unwrap());
-    Deadline::after(SATISFIED_WITHIN)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("the wait returns within {SATISFIED_WITHIN:?}"))
+        .unwrap_or_else(|_| panic!("the wait returns within {MUST_SUCCEED_WITHIN:?}"))
 }
 
 #[test]

@@ -8,9 +8,9 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::emit::Emit;
 use contract::events::{CallStatus, Notice, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
@@ -31,8 +31,6 @@ use log::Log;
 use serde_json::{Map, Value, json};
 
 use crate::{Loop, Model, TurnCancel};
-
-const TURN_DEADLINE: Duration = Duration::from_secs(5);
 
 /// What a hook was shown, owned.
 #[derive(Debug, Clone, PartialEq)]
@@ -430,7 +428,7 @@ fn run_in(
     thread::spawn(move || {
         let _sent = done_tx.send(looped.turn());
     });
-    let turn = Deadline::after(TURN_DEADLINE)
+    let turn = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the turn ended");
     drop(inbox);
@@ -439,7 +437,7 @@ fn run_in(
     // too.
     let streamed = fakes::within(
         "a turn_completed line or the log's end",
-        Deadline::after(TURN_DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
@@ -452,7 +450,7 @@ fn run_in(
             streamed
         },
     );
-    watchdog.stand_down(fakes::Deadline::after(TURN_DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     let session = home.path().join("s_test");
     Ran {
         turn,
@@ -1188,7 +1186,7 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     drop(log);
     let streamed = fakes::within(
         "the log's remaining lines (extensions)",
-        Deadline::after(TURN_DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let mut streamed = Vec::new();
             loop {
@@ -1241,7 +1239,7 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     drop(log);
     let streamed = fakes::within(
         "the log's remaining lines (MCP servers)",
-        Deadline::after(TURN_DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let mut streamed = Vec::new();
             loop {

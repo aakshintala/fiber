@@ -2,11 +2,11 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use common::{Setup, install, write};
 use config::{Config, ProjectKey, Sources};
@@ -23,8 +23,6 @@ use fakes::ProviderServer;
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::json;
-
-const WAIT: Duration = Duration::from_secs(5);
 
 struct Attended;
 #[allow(
@@ -80,7 +78,7 @@ fn oauth_script_reaches_pkce_open_show_and_callback_without_external_work() {
     let worker = std::thread::spawn(move || {
         drop(sent.send(extension.command("oauth", "")));
     });
-    let returned = Deadline::after(WAIT)
+    let returned = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&received)
         .expect("scripted OAuth command returns")
         .unwrap();
@@ -220,7 +218,7 @@ fiber.provider("host-script", {{ models = {{
             SessionExtensions::load(&home, &config, FakeClock::new(), locks, Some(host_script));
         let _sent = loaded_tx.send(loaded);
     });
-    let extensions = Deadline::after(WAIT)
+    let extensions = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&loaded_rx)
         .expect("waited for the scripted extension to load");
     let (inbox_tx, inbox_rx) = mpsc::channel();
@@ -235,14 +233,14 @@ fiber.provider("host-script", {{ models = {{
     std::thread::spawn(move || {
         let _sent = models_tx.send(provider.models(&ModelsArg::default()));
     });
-    let models = Deadline::after(WAIT)
+    let models = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&models_rx)
         .expect("waited for scripted host calls")
         .unwrap();
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "201:entry|200:models|7:out:err");
 
-    let delivery = Deadline::after(WAIT)
+    let delivery = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&inbox_rx)
         .expect("waited for the scripted exec delivery");
     let Delivery::ExtensionExec(event) = delivery else {
@@ -287,7 +285,7 @@ fn an_unscripted_http_call_fails_in_lua_and_is_reported_as_a_miss() {
     std::thread::spawn(move || {
         let _sent = result_tx.send(extension.command("fetch", ""));
     });
-    let error = Deadline::after(WAIT)
+    let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&result_rx)
         .expect("waited for unscripted host.http to fail")
         .unwrap_err();
@@ -340,7 +338,7 @@ fn a_mismatched_env_fails_the_scripted_exec() {
     std::thread::spawn(move || {
         let _sent = result_tx.send(extension.command("run", ""));
     });
-    let error = Deadline::after(WAIT)
+    let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&result_rx)
         .expect("waited for mismatched scripted env to fail")
         .unwrap_err();

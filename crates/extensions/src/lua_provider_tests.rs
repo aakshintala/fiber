@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::{Arc, mpsc};
@@ -17,8 +18,6 @@ use crate::{
     CredentialPair, LuaExtension, ModelsArg,
     lua_provider::{LuaProvider, LuaSigner, UsedState, parse_credential_headers, redact_values},
 };
-
-const WAIT: Duration = Duration::from_secs(5);
 
 #[test]
 fn redaction_replaces_each_non_empty_call_value() {
@@ -326,7 +325,7 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
         drop(sent.send(other.token(&other_pair)));
     });
     assert!(
-        tokens.await_requests(1, Deadline::after(WAIT)),
+        tokens.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "fetch reaches the held server"
     );
     assert!(!provider.await_idle(&pair, Duration::ZERO));
@@ -337,14 +336,14 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
     let idle_pair = pair.clone();
     let (sent, idle) = mpsc::channel();
     let waiter = std::thread::spawn(move || {
-        let _sent = sent.send(idle_provider.await_idle(&idle_pair, WAIT));
+        let _sent = sent.send(idle_provider.await_idle(&idle_pair, MUST_SUCCEED_WITHIN));
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&parked_rx)
         .expect("idle waiter reaches its condition wait");
     tokens.release();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&received)
             .unwrap()
             .unwrap()
@@ -352,7 +351,7 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
         "tok-idle"
     );
     assert!(
-        Deadline::after(Duration::from_secs(1))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&idle)
             .expect("fetch completion wakes the idle waiter")
     );
@@ -416,7 +415,7 @@ fn a_second_token_waits_for_the_fetch_in_flight() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, Deadline::after(WAIT)),
+        tokens.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -426,17 +425,17 @@ fn a_second_token_waits_for_the_fetch_in_flight() {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
     // The second caller reached its wait before the first fetch lands.
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&wait_rx)
-        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+        .unwrap_or_else(|_| panic!("the second caller waits within {MUST_SUCCEED_WITHIN:?}"));
     tokens.release();
-    let first = Deadline::after(WAIT)
+    let first = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&first_rx)
-        .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the first token returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
-    let second = Deadline::after(WAIT)
+    let second = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
-        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the second token returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
     assert_eq!(first.expose(), "tok-1");
     assert_eq!(second.expose(), "tok-1");
@@ -467,7 +466,7 @@ fn a_waiter_woken_by_a_failure_fetches_for_itself() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, Deadline::after(WAIT)),
+        tokens.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the first fetch reaches the server"
     );
     let (second_tx, second_rx) = mpsc::channel();
@@ -477,20 +476,20 @@ fn a_waiter_woken_by_a_failure_fetches_for_itself() {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
     // The second caller reached its wait before the first fetch lands.
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&wait_rx)
-        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+        .unwrap_or_else(|_| panic!("the second caller waits within {MUST_SUCCEED_WITHIN:?}"));
     tokens.release();
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&first_rx)
-            .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+            .unwrap_or_else(|_| panic!("the first token returns within {MUST_SUCCEED_WITHIN:?}"))
             .is_err(),
         "the held fetch fails"
     );
-    let second = Deadline::after(WAIT)
+    let second = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
-        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the second token returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
     assert_eq!(second.expose(), "tok-2");
     assert_eq!(
@@ -530,7 +529,7 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = first_tx.send(first_provider.token(&first_pair));
     });
     assert!(
-        tokens.await_requests(1, Deadline::after(WAIT)),
+        tokens.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the first fetch reaches the server"
     );
     // Caller 2 waits on it.
@@ -540,14 +539,14 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
     std::thread::spawn(move || {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&wait_rx)
-        .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
+        .unwrap_or_else(|_| panic!("the second caller waits within {MUST_SUCCEED_WITHIN:?}"));
     // The first fetch fails; caller 2 wakes and is held before it looks.
     tokens.release_one();
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived_rx)
-        .unwrap_or_else(|_| panic!("the woken caller parks within {WAIT:?}"));
+        .unwrap_or_else(|_| panic!("the woken caller parks within {MUST_SUCCEED_WITHIN:?}"));
     // Caller 3 starts its own fetch while caller 2 is held.
     let (third_tx, third_rx) = mpsc::channel();
     let third_provider = Arc::clone(&provider);
@@ -556,31 +555,31 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
         let _sent = third_tx.send(third_provider.token(&third_pair));
     });
     assert!(
-        tokens.await_requests(2, Deadline::after(WAIT)),
+        tokens.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the third caller fetches without waiting on the held waiter"
     );
     // Caller 2 fetches for itself while caller 3's fetch is still held: no
     // release went out since, so the third request is still unanswered.
     release_tx.send(()).unwrap();
     assert!(
-        tokens.await_requests(3, Deadline::after(WAIT)),
+        tokens.await_requests(3, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the woken waiter fetches without waiting on the third caller"
     );
     tokens.release();
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&first_rx)
-            .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
+            .unwrap_or_else(|_| panic!("the first token returns within {MUST_SUCCEED_WITHIN:?}"))
             .is_err(),
         "the held fetch fails"
     );
-    let second = Deadline::after(WAIT)
+    let second = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
-        .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the second token returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
-    let third = Deadline::after(WAIT)
+    let third = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&third_rx)
-        .unwrap_or_else(|_| panic!("the third token returns within {WAIT:?}"))
+        .unwrap_or_else(|_| panic!("the third token returns within {MUST_SUCCEED_WITHIN:?}"))
         .unwrap();
     assert_eq!(second.expose(), "tok-2");
     assert_eq!(third.expose(), "tok-3");
