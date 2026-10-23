@@ -11,6 +11,7 @@ mod hub_start;
 mod support;
 use serde_json::{Value, json};
 use std::fs;
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::Output;
@@ -170,6 +171,88 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
     drop(served.hub);
     served.process.kill("TERM");
     assert_eq!(served.process.wait().code(), Some(143));
+}
+
+#[test]
+fn a_taken_port_is_retried_with_a_fresh_one() {
+    let setup = Setup::new();
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut draws = 0;
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut || {
+            draws += 1;
+            if draws == 1 {
+                taken
+            } else {
+                hub_start::free_port()
+            }
+        },
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub":{"port":port}}),
+            );
+            setup.fiber(&["hub", "serve", "--installed"])
+        },
+    );
+    assert_ne!(served.port, taken, "the hub that said hello is the retry");
+    assert!(
+        setup.hub_log().contains(&format!("127.0.0.1:{taken}: ")),
+        "the first hub failed on the taken port: {}",
+        setup.hub_log()
+    );
+    drop(served.hub);
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+    drop(held);
+}
+
+#[test]
+fn a_hub_that_never_gets_a_port_fails_naming_the_port_and_the_log() {
+    let setup = Setup::new();
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut draws = 0;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hub_start::serve_installed(
+            &setup,
+            3,
+            &mut || {
+                draws += 1;
+                taken
+            },
+            &mut |port| {
+                write_json(
+                    &setup.home().join("config.json"),
+                    &json!({"hub":{"port":port}}),
+                );
+                setup.fiber(&["hub", "serve", "--installed"])
+            },
+        )
+    }));
+    let payload = failed.err().expect("a hub that cannot bind fails");
+    let message = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .expect("the panic carries text");
+    for needle in [
+        format!("127.0.0.1:{taken}"),
+        "exited".to_owned(),
+        "Address already in use".to_owned(),
+        "attempt 3 of 3".to_owned(),
+    ] {
+        assert!(message.contains(&needle), "{needle:?} missing: {message}");
+    }
+    assert_eq!(draws, 3, "one port is drawn per attempt");
+    drop(held);
 }
 
 #[test]
