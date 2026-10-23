@@ -63,7 +63,8 @@ impl Loop {
             conversation: vec![Input::User {
                 text,
                 images: Vec::new(),
-            }],
+            }]
+            .into(),
             previous_end: None,
             sent_tools: None,
             max_output_tokens: Some(4096),

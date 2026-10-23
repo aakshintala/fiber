@@ -636,7 +636,7 @@ impl Loop {
             tool_choice: "auto".to_owned(),
             cache_lifetime: endpoint.cache_lifetime,
             cache_key: self.reviewer_key.clone(),
-            conversation,
+            conversation: conversation.into(),
             previous_end,
             sent_tools: None,
             max_output_tokens,

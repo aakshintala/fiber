@@ -482,7 +482,7 @@ fn imaged_user_request(text: &str) -> (TempDir, ModelRequest) {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: text.into(),
             images: vec![ImageRef {
                 path: "artifacts/i_1.png".into(),
@@ -490,7 +490,8 @@ fn imaged_user_request(text: &str) -> (TempDir, ModelRequest) {
                 width: 2,
                 height: 1,
             }],
-        }],
+        }])
+        .into(),
         session_dir: session.path().to_path_buf(),
         ..harness::request()
     };
@@ -1129,7 +1130,7 @@ fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
         // No file is written: the image cannot be read.
         let session = TempDir::new("fiber-common-request-image");
         let imaged = |text: &str| ModelRequest {
-            conversation: vec![Input::User {
+            conversation: (vec![Input::User {
                 text: text.into(),
                 images: vec![ImageRef {
                     path: "artifacts/gone.png".into(),
@@ -1137,7 +1138,8 @@ fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
                     width: 2,
                     height: 1,
                 }],
-            }],
+            }])
+            .into(),
             session_dir: session.path().to_path_buf(),
             ..harness::request()
         };

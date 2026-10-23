@@ -17,7 +17,7 @@ use rustix::process::{Pid, Signal};
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
     bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
-    listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
+    listed_exit, lives, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
     signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
@@ -596,6 +596,25 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     );
 }
 
+/// Only an `ESRCH` probe answer retires a group: `Ok`, `EPERM` and any
+/// other errno read live. The answers are forced values, never timing.
+#[test]
+fn group_probe_reads_empty_only_on_esrch() {
+    assert!(lives(Ok(())), "an Ok probe must read as live");
+    assert!(
+        lives(Err(rustix::io::Errno::PERM)),
+        "an EPERM probe must read as live"
+    );
+    assert!(
+        lives(Err(rustix::io::Errno::INTR)),
+        "an errno other than ESRCH must read as live"
+    );
+    assert!(
+        !lives(Err(rustix::io::Errno::SRCH)),
+        "an ESRCH probe must read as empty"
+    );
+}
+
 /// A shell held alive on a stdin pipe the test owns: dropping the pipe ends
 /// it, and the test reaps it.
 fn held() -> Child {
@@ -650,7 +669,15 @@ fn group_probe_holds_while_the_group_lives_and_falls_once_it_is_reaped() {
     assert!(group_lives(group), "a live group must read as live");
     drop(child.stdin.take().unwrap());
     reaped(child, "the group leader to exit once its stdin closed");
-    assert!(!group_lives(group), "a reaped group must not read as live");
+    // On macOS the probe can keep answering EPERM, which reads live, for
+    // milliseconds after the reap, so the fall is awaited under a deadline.
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    while group_lives(group) {
+        if deadline.left().is_zero() {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for a reaped group to read as gone");
+        }
+        thread::yield_now();
+    }
 }
 
 #[test]

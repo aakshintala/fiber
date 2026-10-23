@@ -173,13 +173,16 @@ impl crate::Loop {
                         }
                     };
                     self.write_paused(reply, reasoning, turn, &message)?;
-                    request
-                        .conversation
-                        .extend(blocks.iter().map(|block| Input::Assistant {
-                            model: self.model.reference.clone(),
-                            text: String::new(),
-                            provider_item: Some(block.clone()),
-                        }));
+                    // A pause continuation appends the paused reply's blocks,
+                    // so it rebuilds the shared conversation once around the
+                    // longer copy; the held request keeps the step's own.
+                    let mut conversation = request.conversation.to_vec();
+                    conversation.extend(blocks.iter().map(|block| Input::Assistant {
+                        model: self.model.reference.clone(),
+                        text: String::new(),
+                        provider_item: Some(block.clone()),
+                    }));
+                    request.conversation = conversation.into();
                     paused.extend(blocks);
                     if self.turn_cancelled() {
                         return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
