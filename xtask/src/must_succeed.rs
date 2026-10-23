@@ -146,6 +146,10 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     ),
     held("crates/tui/src/lib_image_tests.rs", "held by #3152"),
     held("crates/tui/src/loop_tests.rs", "held by #3152"),
+    held(
+        "crates/tui/src/viewer_tests.rs",
+        "held by #3207; DEADLINE to MUST_SUCCEED_WITHIN after it lands",
+    ),
     held("crates/fakes/src/clock_tests.rs", "held by #3161"),
     held("crates/loop/tests/review_jig.rs", "held by #3172"),
     held(

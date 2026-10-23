@@ -1,9 +1,9 @@
 //! Tests for the viewer worker: its program per system, the copy
 //! it writes, and every way an open fails.
 
-use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use base64::Engine as _;
 
@@ -11,6 +11,9 @@ use super::{command, spawn};
 use crate::Input;
 use crate::image::View;
 use fakes::Deadline;
+
+/// One deadline per receive: the worker answers promptly.
+const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A view of `bytes` under `name`.
 fn view(name: &str, bytes: &[u8]) -> View {
@@ -28,7 +31,7 @@ fn view(name: &str, bytes: &[u8]) -> View {
 fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), String> {
     let (out, rx) = mpsc::channel();
     spawn(argv, dir, view, &out);
-    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Ok(Input::Viewed { result, .. }) => result,
         Ok(
             Input::Bytes(_)
@@ -46,7 +49,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
-        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),
+        Err(err) => panic!("waited {DEADLINE:?} for the worker: {err}"),
     }
 }
 
