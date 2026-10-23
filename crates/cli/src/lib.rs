@@ -191,14 +191,17 @@ pub const LOGOUT_SHAPE: &str =
 /// A workspace's project: its `sessions` directory and its key
 /// (`docs/state.md`, "Projects"). The key comes from `log::project_key`,
 /// the one place it is derived.
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 pub fn project_of(
     home: &Path,
     workspace: &Path,
-) -> Result<(PathBuf, ::config::ProjectKey), Failure> {
+) -> Result<(PathBuf, ::config::ProjectKey), CliError> {
     let project = doors::project(workspace);
     let sessions = log::sessions_dir(home, &project);
-    let key =
-        ::config::ProjectKey::new(log::project_key(&project)).map_err(|e| failed(e.code(), e))?;
+    let key = ::config::ProjectKey::new(log::project_key(&project))?;
     Ok((sessions, key))
 }
 

@@ -299,6 +299,40 @@ fn a_sed_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() 
     );
 }
 
+/// A read-only `cd` with output discarded takes the permission fast path:
+/// the later paths resolve past the join, so no reviewer call names them,
+/// and the run still reads the joined file.
+#[test]
+fn a_cd_read_with_stderr_discarded_takes_the_fast_path_with_no_reviewer_call() {
+    let setup = Setup::new();
+    std::fs::create_dir(setup.workspace().join("sub")).unwrap();
+    std::fs::write(setup.workspace().join("sub").join("n.md"), "The note.\n").unwrap();
+    script(
+        &setup,
+        "s.json",
+        &json!({"steps": [
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "cd sub && cat n.md 2>/dev/null"}}]},
+            {"text": "Done."}
+        ]}),
+    );
+    script(&setup, "r.json", &json!({"steps": []}));
+    reviewed_by_script(&setup, json!({}));
+    let run = ask(&setup);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let completed = run.of("tool_call_completed");
+    let payload = completed
+        .first()
+        .expect("the tool call completed")
+        .to_string();
+    assert!(payload.contains("The note."), "{payload}");
+    for resolved in run.of("permission_resolved") {
+        assert_ne!(resolved["payload"]["decided_by"], "reviewer", "{resolved}");
+    }
+    let durable = run.durable();
+    assert!(!durable.contains(&"permission_requested"), "{durable:?}");
+    assert!(!durable.contains(&"permission_resolved"), "{durable:?}");
+}
+
 #[test]
 fn an_exhausted_script_fails_the_turn_invalid_request() {
     let setup = Setup::new();

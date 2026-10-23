@@ -132,7 +132,8 @@ pub(super) fn gaps(home: &Path, name: &str) -> Result<Vec<HostGap>, ConfigureErr
     let providers = cli::providers_in(home).map_err(|e| super::from_failure(Failure::from(e)))?;
     let workspace = std::env::current_dir()
         .map_err(|e| from_failure(Failure::from(cli::CliError::CurrentDirectory(e))))?;
-    let (_, project) = ::cli::project_of(home, &workspace).map_err(from_failure)?;
+    let (_, project) =
+        ::cli::project_of(home, &workspace).map_err(|e| from_failure(Failure::from(e)))?;
     let config = config::Config::load(config::Sources {
         home: home.to_path_buf(),
         workspace,

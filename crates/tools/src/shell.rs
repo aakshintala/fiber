@@ -41,6 +41,7 @@ mod tty;
 mod read_only;
 
 mod classify;
+mod cwd;
 mod entry;
 mod matches;
 mod syntax;

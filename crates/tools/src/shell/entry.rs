@@ -6,8 +6,6 @@
 //! a basename the built-ins own) is never consulted. Anything neither owns
 //! is not read-only.
 
-use std::path::Path;
-
 use super::classify::Outcome;
 use super::read_only::{COMMANDS, Command, EXACT, Flag};
 use super::syntax::Word;
@@ -252,7 +250,7 @@ fn short_letter(flag: &Flag) -> Option<char> {
 pub(super) fn configured_outcome(
     flags: &[String],
     words: std::slice::Iter<'_, Word>,
-    workdir: &Path,
+    dirs: &[String],
 ) -> Outcome {
     let mut words = words;
     let mut operands = Vec::new();
@@ -288,7 +286,7 @@ pub(super) fn configured_outcome(
         }
         return Outcome::Executes;
     }
-    super::classify::path_tail(&operands, workdir)
+    super::classify::path_tail(&operands, dirs)
 }
 
 #[cfg(test)]
