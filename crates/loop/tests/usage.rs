@@ -401,6 +401,8 @@ fn a_call_failed_before_its_generation_records_the_tokens_it_saw() {
     let recorded = only_record(&mut session, &FAILED_UNNAMED_KINDS);
     assert_eq!(recorded.tokens.input, 10);
     assert_eq!(recorded.tokens.output, 3);
+    assert_eq!(recorded.tokens.cache_read, 0);
+    assert!(recorded.tokens.cache_write.is_empty());
     assert_eq!(recorded.input_bytes, 1000);
     assert_eq!(recorded.cost, None);
 }
