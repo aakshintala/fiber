@@ -66,6 +66,41 @@ pub struct Manifest {
     /// URL is a per-account host's pattern. None by default.
     #[serde(default)]
     pub providers: BTreeMap<String, Vec<String>>,
+    /// The commands it registers, each with its description and optional
+    /// argument hint. `None` when the key is absent; a present key, `{}`
+    /// included, makes the extension lazy (`docs/extensions.md`, "What a
+    /// package holds").
+    #[serde(default, deserialize_with = "present")]
+    pub commands: Option<BTreeMap<String, ManifestCommand>>,
+}
+
+/// One command a manifest declares.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ManifestCommand {
+    /// What the `/` list shows beside the name.
+    pub description: String,
+    /// The argument hint the `/` list shows, such as `[path]`.
+    #[serde(default)]
+    pub argument_hint: Option<String>,
+}
+
+/// Reads a key that, when present, must hold a value: `null` is an error,
+/// not the same as an absent key.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Whether `name` is one `fiber.command` accepts: non-empty with no
+/// whitespace, `/` or `:`.
+fn is_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.chars().any(char::is_whitespace)
+        && !name.contains('/')
+        && !name.contains(':')
 }
 
 /// An extension section's files in the opening message
@@ -498,6 +533,18 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
             source_name: file.display().to_string(),
             key: "providers".into(),
             expected: "names that are each one file name in providers/".into(),
+        });
+    }
+    if manifest
+        .commands
+        .iter()
+        .flatten()
+        .any(|(name, _)| !is_command_name(name))
+    {
+        return Err(ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: "commands".into(),
+            expected: "names that are each non-empty with no whitespace, `/` or `:`".into(),
         });
     }
     if manifest.secrets.iter().any(|name| !one_file_name(name)) {
