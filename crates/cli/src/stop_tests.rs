@@ -670,15 +670,6 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
         let pushed = Rc::clone(&pushed);
         move || pushed.borrow_mut().push("answer".to_owned())
     });
-    let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
-        let _ = line;
-        Ok(ok())
-    }));
-    let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
-        let line = format!("{program} {}", args.join(" "));
-        pushed.borrow_mut().push(line.clone());
-        (inner.borrow_mut())(&line)
-    });
     let home_owned = home.to_owned();
     let mut start = move || -> std::io::Result<()> {
         let listener = UnixListener::bind(home_owned.join("run/hub"))?;
@@ -697,7 +688,7 @@ fn installed_started(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
         });
         Ok(())
     };
-    run_local(out, home, &mut start, clock, &stub_run).unwrap();
+    run_local(out, home, &mut start, clock, &stub.run).unwrap();
     let mut expected = vec!["answer".to_owned(), print_args(&service)];
     expected.extend(stop_args(&service));
     assert_eq!(stub.calls(), expected);
@@ -719,15 +710,6 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
         let pushed = Rc::clone(&pushed);
         move || pushed.borrow_mut().push("answer".to_owned())
     });
-    let inner: RefCell<Script> = RefCell::new(Box::new(move |line: &str| {
-        let _ = line;
-        Ok(ok())
-    }));
-    let stub_run: Box<ManagerRun<'static>> = Box::new(move |program, args| {
-        let line = format!("{program} {}", args.join(" "));
-        pushed.borrow_mut().push(line.clone());
-        (inner.borrow_mut())(&line)
-    });
     let listener = UnixListener::bind(home.join("run/hub")).unwrap();
     let (line_tx, line_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -747,7 +729,7 @@ fn installed_rejected(home: &Path, out: &mut dyn Write, clock: &dyn Clock) {
     let mut start = move || -> std::io::Result<()> {
         panic!("the probe answers: the starter never runs");
     };
-    let error = run_local(out, home, &mut start, clock, &stub_run).unwrap_err();
+    let error = run_local(out, home, &mut start, clock, &stub.run).unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "s_aaa still running");
     assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
@@ -869,10 +851,12 @@ fn a_rejected_stop_still_stops_the_service_then_fails() {
 /// reads HOME, which only the child controls.
 fn installed_rejected_service_error(home: &Path, out: &mut dyn Write) {
     let service = child_service(home);
-    // The manager answers the check, then fails the stop itself.
+    // The manager answers the check, then fails the stop itself: only
+    // the stop line fails, since launchd's print check shares its line
+    // with a gone poll that never runs here.
     let stops = stop_args(&service);
     let stub = Stub::new(move |line| {
-        if stops.iter().any(|stop| stop == line) {
+        if line.contains("bootout") || line.contains(" stop ") {
             Err(std::io::Error::other("boom"))
         } else {
             Ok(ok())
@@ -917,8 +901,9 @@ fn installed_rejected_service_error(home: &Path, out: &mut dyn Write) {
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "s_aaa still running");
     assert!(line_rx.recv().is_ok(), "the hub reads the stop first");
-    let mut expected = vec!["answer".to_owned(), print_args(&service)];
-    expected.extend(stop_args(&service));
+    // The stop is attempted after the rejection, then fails: no gone
+    // poll follows a failed stop.
+    let expected = vec!["answer".to_owned(), print_args(&service), stops[0].clone()];
     assert_eq!(
         stub.calls(),
         expected,
