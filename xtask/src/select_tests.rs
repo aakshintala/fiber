@@ -1975,6 +1975,243 @@ fn a_bare_root_returned_from_a_helper_reports_the_builds_message() {
 }
 
 #[test]
+fn a_root_bound_base_reports_its_identifier() {
+    // A base bound straight to the manifest directory with no join
+    // reports the bound name: the threading arm owns bare bound bases
+    // regardless of containment. Dropping the bound-name lookup, or the
+    // inline chain to a non-empty one, silences it, so this pins those
+    // mutants.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn load(path: &str) -> String {\nlet m = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nstd::fs::read_to_string(m.join(path)).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: threads m into a path at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_rooted_inline_parent_reports_the_manifest_literal() {
+    // A single `..` joined inline keeps no segment: the chain stays
+    // empty and the bare inline base reports. Collecting the `..`
+    // silences it, so this pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn load(path: &str) -> String {\nstd::fs::read_to_string(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"..\").join(path)).unwrap()\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: threads CARGO_MANIFEST_DIR into a path at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_non_write_call_does_not_mute_a_manifest_path() {
+    // Only `write` and `create` consume a path: a manifest-bound path
+    // passed to any other call keeps its escaping report. Treating every
+    // call as a write mutes it, so this pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn f() {\nlet p = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research/x.json\");\nlog(p);\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: builds ../../research/x.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_create_call_mutes_its_first_argument() {
+    // `create` consumes its path like `write` does: a manifest-bound
+    // path created and never read stays silent, while the paired control
+    // file reports. Dropping `create` from the guard reports the bless
+    // path too, so this pins that mutant.
+    let files = [
+        runtime_src(
+            "main",
+            "crates/main/src/command_reference_tests.rs",
+            "src/command_reference_tests.rs",
+            "fn save() {\nlet path = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../docs/user/commands.md\");\nstd::fs::File::create(&path).unwrap();\n}\n",
+        ),
+        runtime_src(
+            "provider",
+            "crates/provider/tests/control.rs",
+            "tests/control.rs",
+            "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/control.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_bare_join_on_an_unknown_base_reports_nothing() {
+    // A `..` chain on a name bound to nothing manifest-rooted is not a
+    // bare root: with no base, no bare chain and no literals the
+    // definition-site hook stays silent, while the paired control file
+    // reports. Loosening any of the three conditions reports it, so
+    // this pins those mutants.
+    let files = [
+        runtime_src(
+            "contract",
+            "crates/contract/src/golden_tests.rs",
+            "src/golden_tests.rs",
+            "fn r() -> PathBuf {\nfoo.join(\"../..\")\n}\n",
+        ),
+        runtime_src(
+            "provider",
+            "crates/provider/tests/control.rs",
+            "tests/control.rs",
+            "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/control.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn an_explicit_tail_return_without_a_semicolon_reports_the_bare_root() {
+    // A trailing `return` without its semicolon is the body's value: the
+    // hook pushes the tail whole, since a leading `return` never joins
+    // the manifest-rooted receiver, and the bare root still reports.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/hooks_entries.rs",
+        "tests/hooks_entries.rs",
+        "fn r() -> PathBuf {\nreturn PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\")\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/hooks_entries.rs: builds ../.. at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_format_without_the_manifest_dir_reports_nothing() {
+    // A format template with no manifest token is not manifest-rooted:
+    // the probe arm needs the marker, while the paired control file
+    // reports. Accepting any non-marker literal as the marker reports
+    // it, so this pins that mutant.
+    let files = [
+        runtime_src(
+            "main",
+            "crates/main/tests/ask.rs",
+            "tests/ask.rs",
+            "fn f(x: &str) {\nformat!(\"{}/../../research/x.json\", env!(\"OTHER\"));\n}\n",
+        ),
+        runtime_src(
+            "provider",
+            "crates/provider/tests/control.rs",
+            "tests/control.rs",
+            "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/control.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_rooted_format_with_a_plain_path_suffix_reports_it() {
+    // A plain path suffix beside the manifest marker resolves as
+    // written: the probe arm reports the static outside part. Skipping
+    // path-like suffixes silences it, so this pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "tests/ask.rs",
+        "fn f() {\nformat!(\"{}/{}\", env!(\"CARGO_MANIFEST_DIR\"), \"../../research/x.json\");\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/ask.rs: builds ../../research/x.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn an_absolute_inline_base_reports_nothing() {
+    // An absolute segment replaces the receiver: the inline base is not
+    // manifest-rooted, so the threading arm stays silent while the
+    // paired control file reports.
+    let files = [
+        runtime_src(
+            "main",
+            "crates/main/tests/ask.rs",
+            "tests/ask.rs",
+            "fn load(path: &str) -> String {\nstd::fs::read_to_string(Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"/abs\").join(path)).unwrap()\n}\n",
+        ),
+        runtime_src(
+            "provider",
+            "crates/provider/tests/control.rs",
+            "tests/control.rs",
+            "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/control.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
+fn a_nested_block_returning_the_bare_root_reports_nothing() {
+    // The definition-site hook scans the function body, not nested
+    // blocks: a bare root built inside a nested block is no helper
+    // contract, so it stays silent while the paired control file
+    // reports. Hooking every group reports it, so this pins that mutant.
+    let files = [
+        runtime_src(
+            "contract",
+            "crates/contract/src/golden_tests.rs",
+            "src/golden_tests.rs",
+            "fn f() {\n{ PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../..\") }\n}\n",
+        ),
+        runtime_src(
+            "provider",
+            "crates/provider/tests/control.rs",
+            "tests/control.rs",
+            "fn research(path: &str) -> PathBuf {\nPath::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research\").join(path)\n}\n",
+        ),
+    ];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/control.rs: builds ../../research at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
 fn a_manifest_join_consumed_by_a_read_reports_once_with_the_reads_message() {
     // The new escaping arm sees the bound research directory, but the
     // read already reports the same file through the old arm, so the

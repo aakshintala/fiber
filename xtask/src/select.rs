@@ -257,7 +257,10 @@ fn root_name(tokens: &[TokenTree], root: &BTreeSet<String>) -> Option<String> {
     })
 }
 /// The string literals after the manifest literal in `preceding`:
-/// the inline chain a join builds on, without the base.
+/// the inline chain a join builds on, without the base. Absolute
+/// segments stay collected: a non-empty chain never reports through
+/// a bare base, so an absolute path replacing the receiver stays
+/// silent.
 fn inline_lits(preceding: &[TokenTree]) -> Vec<String> {
     fn visit(tokens: &[TokenTree], seen: &mut bool, out: &mut Vec<String>) {
         for tree in tokens {
@@ -266,7 +269,7 @@ fn inline_lits(preceding: &[TokenTree]) -> Vec<String> {
                     if let Some(text) = string_literal(&lit.to_string()) {
                         if text == "CARGO_MANIFEST_DIR" {
                             *seen = true;
-                        } else if *seen && is_joined_name(&text) && !text.starts_with('/') {
+                        } else if *seen && is_joined_name(&text) {
                             out.push(text);
                         }
                     }
@@ -456,13 +459,11 @@ fn root_returns(body: &[TokenTree], manifest_dir: &str, root: &BTreeSet<String>)
             current.push(tree.clone());
         }
     }
-    // The tail: an explicit return without its semicolon, or the
-    // body's value.
-    if let [TokenTree::Ident(ret), rest @ ..] = current.as_slice()
-        && ret == "return"
-    {
-        returns.push(rest.to_vec());
-    } else if !current.is_empty() {
+    // The tail: a bare value, or an explicit return without its
+    // semicolon. A leading `return` never joins the manifest-rooted
+    // receiver, so stripping it changes no report and the tail pushes
+    // whole.
+    if !current.is_empty() {
         returns.push(current);
     }
     for expr in returns {
