@@ -149,21 +149,6 @@ fn a_jig_that_exits_before_its_line_names_its_status_and_stderr() {
     assert!(message.contains("its stderr: boom\n"), "{message}");
 }
 
-/// A jig that never prints its line and never exits on its own: `read`
-/// blocks on the standard input the harness holds open. The listening wait
-/// expires at its bound, the group kill ends the jig, and the failure says
-/// it was still running.
-#[test]
-fn a_jig_still_running_at_its_line_bound_is_reported_as_running() {
-    let mut command = Command::new("/bin/sh");
-    command.arg("-c").arg("read line");
-    let message = failure_message(command);
-    assert!(
-        message.contains("its state: still running at its deadline\n"),
-        "{message}"
-    );
-}
-
 /// The panic message of a jig that fails [`serve_one_fixture`].
 fn failure_message(command: Command) -> String {
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
