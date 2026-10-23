@@ -291,7 +291,7 @@ struct Spawned {
 
 struct State {
     exited: bool,
-    /// The `fiber_exited` line printed last on stdout, when it parsed.
+    /// The last line on stdout, when it parsed as a `fiber_exited` verdict.
     failure: Option<Failure>,
     /// Tests only: fired by the drain with no lock held just before its
     /// first read.
@@ -339,8 +339,8 @@ impl Started for Spawned {
     }
 }
 
-/// Reads the session's stdout to EOF, keeping the `fiber_exited` line
-/// printed last, then reaps the child. The child lock is held only to
+/// Reads the session's stdout to EOF, parsing only its last line as a
+/// `fiber_exited` verdict, then reaps the child. The child lock is held only to
 /// take stdout and across the final `wait()`, never across a stdout
 /// read, so `kill` returns while the drain still holds the pipe open.
 fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
@@ -351,17 +351,22 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
             reading.send(()).unwrap_or(());
         }
         let mut read = BufReader::new(stdout);
+        let mut last = String::new();
         let mut buf = String::new();
         loop {
             buf.clear();
             match read.read_line(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    if let Some(failure) = fiber_exited_error(&buf) {
-                        support::lock(&shared.0).failure = Some(failure);
-                    }
+                Ok(0) => break,
+                Ok(_) => std::mem::swap(&mut last, &mut buf),
+                // An unreadable final line leaves no last line to parse.
+                Err(_) => {
+                    last.clear();
+                    break;
                 }
             }
+        }
+        if let Some(failure) = fiber_exited_error(&last) {
+            support::lock(&shared.0).failure = Some(failure);
         }
     }
     match support::lock(child).wait() {
