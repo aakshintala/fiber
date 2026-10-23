@@ -2368,6 +2368,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
             | Input::Signal(_)
             | Input::Files { .. }
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Image { .. }
             | Input::Feedback(_)
@@ -2937,6 +2938,7 @@ fn the_signal_thread_sends_each_taken_signal() {
         | Input::Feedback(_)
         | Input::Viewed { .. }
         | Input::Models(_)
+        | Input::Install { .. }
         | Input::Login { .. }
         | Input::Tick => panic!("the signal thread sent something else"),
     }
