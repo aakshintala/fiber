@@ -4,7 +4,7 @@
 //! start before the session's tool set is fixed ("Registering"). Provider
 //! files wait for first use and share their extension's VM.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -27,7 +27,7 @@ use serde_json::{Map, Value};
 use contract::search::SearchBackend;
 use contract::tool::Tool;
 
-use crate::commands::{CommandSource, SessionCommands};
+use crate::commands::{CommandSource, Lazy, SessionCommands};
 use crate::lua::{DeclaredHooks, LuaExtension};
 use crate::{API, Error, LuaProvider, LuaTool};
 
@@ -108,7 +108,7 @@ pub struct SessionExtensions {
     /// The names of extensions refused for an undeclared Lua registration,
     /// in load order. A data refusal is not listed: `Providers::load`
     /// never admitted that data.
-    rejected: Vec<String>,
+    rejected: Arc<Mutex<Vec<String>>>,
     /// The `before_tool` chain, in run order.
     before_tool: Vec<chain::Entry>,
     /// The `before_message` chain, in run order.
@@ -158,6 +158,9 @@ struct Started {
     tools: Vec<LuaTool>,
     backends: Vec<String>,
     providers: Vec<String>,
+    /// For an extension whose manifest has a `commands` key: the start its
+    /// first command run owes.
+    lazy: Option<Arc<Lazy>>,
 }
 
 /// One session-end watcher failure: what the drain collects for `run_turn`
@@ -229,6 +232,7 @@ impl SessionExtensions {
             host,
             crate::host::state::StateRegistry::new(seed),
             crate::RepositorySet::default(),
+            BTreeSet::new(),
         )
     }
 
@@ -252,6 +256,7 @@ impl SessionExtensions {
             host,
             crate::host::state::StateRegistry::new(seed),
             repository,
+            BTreeSet::new(),
         )
     }
 
@@ -271,6 +276,7 @@ impl SessionExtensions {
             self.host_script.clone(),
             self.state.clone(),
             crate::RepositorySet::default(),
+            self.started_lazy(),
         )
     }
 
@@ -293,6 +299,7 @@ impl SessionExtensions {
             self.host_script.clone(),
             self.state.clone(),
             repository,
+            self.started_lazy(),
         )
     }
 
@@ -306,6 +313,23 @@ impl SessionExtensions {
             .collect()
     }
 
+    /// The lazy extensions whose start finished: a reload starts these again
+    /// and leaves every other lazy extension unstarted.
+    fn started_lazy(&self) -> BTreeSet<String> {
+        self.commands
+            .lazies()
+            .iter()
+            .filter(|lazy| lazy.started())
+            .map(|lazy| lazy.extension().to_owned())
+            .collect()
+    }
+
+    /// `restart` names the lazy extensions to start before the session is
+    /// returned.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the loader receives the session's existing services and shared state"
+    )]
     fn load_registry(
         home: &Path,
         config: &Config,
@@ -314,6 +338,7 @@ impl SessionExtensions {
         host: Option<Arc<crate::host::script::HostScript>>,
         state: Arc<crate::host::state::StateRegistry>,
         repository: crate::RepositorySet,
+        restart: BTreeSet<String>,
     ) -> Self {
         let mut session = Self {
             state,
@@ -416,6 +441,7 @@ impl SessionExtensions {
                 tools: Vec::new(),
                 backends: Vec::new(),
                 providers: Vec::new(),
+                lazy: None,
             };
             // A data provider the manifest does not declare under
             // `providers` keeps the extension out, before its VM starts.
@@ -459,10 +485,14 @@ impl SessionExtensions {
                         provider: unclaimed.to_owned(),
                     },
                 );
-                session.rejected.push(entry.name.clone());
+                session.reject(&entry.name);
                 continue;
             }
-            if entry.dir.join(ENTRY).is_file() {
+            // A `commands` key, `{}` included, makes the extension lazy: its
+            // VM is built but not started, and its commands come from the
+            // manifest.
+            let lazy = entry.manifest.commands.is_some();
+            if lazy || entry.dir.join(ENTRY).is_file() {
                 let extension = match start::start_vm(
                     &entry.name,
                     &entry.dir,
@@ -486,6 +516,24 @@ impl SessionExtensions {
                         continue;
                     }
                 };
+                if let Some(declared) = &entry.manifest.commands {
+                    entry.commands = declared
+                        .iter()
+                        .map(|(name, spec)| (name.clone(), spec.description.clone()))
+                        .collect();
+                    entry.lazy = Some(Lazy::new(
+                        entry.name.clone(),
+                        Arc::clone(&extension),
+                        declared
+                            .iter()
+                            .map(|(name, spec)| (name.clone(), spec.argument_hint.clone()))
+                            .collect(),
+                        Arc::clone(&session.rejected),
+                    ));
+                    entry.extension = Some(extension);
+                    started.push(entry);
+                    continue;
+                }
                 let registered = extension.hooks().and_then(|declared| {
                     Ok((
                         declared,
@@ -504,7 +552,7 @@ impl SessionExtensions {
                     Err(e) => {
                         session.failed(&entry.name, &e);
                         if extension.misplaced_provider() {
-                            session.rejected.push(entry.name.clone());
+                            session.reject(&entry.name);
                         }
                         continue;
                     }
@@ -542,6 +590,19 @@ impl SessionExtensions {
             })
             .collect();
         session.commands = SessionCommands::build(&real_sources, config);
+        let lazies: Vec<Arc<Lazy>> = started.iter().filter_map(|s| s.lazy.clone()).collect();
+        session.commands.attach_lazy(&lazies);
+        for lazy in session.commands.lazies() {
+            if restart.contains(lazy.extension())
+                && let Err(rejection) = lazy.start()
+            {
+                session.notices.push(notice(
+                    rejection.code,
+                    rejection.message,
+                    Some(lazy.extension()),
+                ));
+            }
+        }
         let mut backend_choices: Vec<(String, String, Arc<LuaExtension>)> = Vec::new();
         for s in &started {
             if let Some(lua) = &s.extension {
@@ -568,6 +629,12 @@ impl SessionExtensions {
                 session.failed(&s.name, &e);
                 continue;
             }
+            // A lazy extension's VM stays unstarted but joins the session's
+            // walks, which only set what `host.drive`, `host.model` and
+            // `host.delegate` later read.
+            if let (Some(lua), Some(_)) = (&s.extension, &s.lazy) {
+                session.lua.push(Arc::clone(lua));
+            }
             if let (Some(lua), Some(declared)) = (&s.extension, s.declared) {
                 let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
                 session.register(&s.name, declared, &mut chain);
@@ -593,6 +660,7 @@ impl SessionExtensions {
             // `tools` and `search_backends` above already waited on the
             // same registration.
             if let Some(lua) = &s.extension
+                && s.lazy.is_none()
                 && let Ok(declared) = lua.watchers()
             {
                 // A watch refusal surfaces as the registration notice,
@@ -662,8 +730,18 @@ impl SessionExtensions {
 
     /// The names of extensions refused for an undeclared Lua registration,
     /// in load order: what `Providers::add_session` drops the data of.
-    pub fn rejected(&self) -> &[String] {
-        &self.rejected
+    pub fn rejected(&self) -> Vec<String> {
+        self.rejected
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn reject(&self, name: &str) {
+        self.rejected
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(name.to_owned());
     }
 
     /// Installs the session's diagnostics after `load`, before any
