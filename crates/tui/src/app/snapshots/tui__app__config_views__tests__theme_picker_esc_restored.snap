@@ -3,9 +3,9 @@ source: crates/tui/src/app/config_views_tests.rs
 expression: painted_text(&restored)
 ---
   Settings  /settings                                                Esc returns
- handoff.tokens  400000  default
- tui.theme       "dark"  global
-
+   key             value   layer
+   handoff.tokens  400000  default
+ › tui.theme       dark    global
 
 
 
@@ -22,7 +22,7 @@ expression: painted_text(&restored)
 
 
  Applies now.
- ↑↓ move · Enter edit · Ctrl+G open the file · Esc close
+ Ctrl+G opens the file
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  ▌ ›
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

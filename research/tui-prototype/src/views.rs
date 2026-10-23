@@ -486,7 +486,10 @@ fn tools_rows() -> Vec<super::Row> {
         super::Row::default(),
         row(vec![sp("Extension · notes", bold())]),
         row(vec![
-            sp("notes_save · full · ~400 · this project ", Style::new()),
+            sp("notes_save · full · ~400 · this project", Style::new()),
+            // The focused row marks its focused switch with a bold "›"
+            // in place of the space before it.
+            sp("›", bold()),
             switch(false),
             sp(" · everywhere ", Style::new()),
             switch(true),
@@ -1574,6 +1577,23 @@ mod tests {
         let t = buf_text(&buf, 160, 48);
         assert!(t.contains("notes_save · full"), "no extension row");
         assert!(!t.contains("loaded"), "a tool still shows a loaded state");
+    }
+
+    #[test]
+    fn tools_focused_switch_is_marked_with_a_bold_chevron() {
+        let rows = tools_rows();
+        let marked: Vec<_> = rows
+            .iter()
+            .filter(|r| r.spans.iter().any(|s| s.content == "›"))
+            .collect();
+        assert_eq!(marked.len(), 1, "one focused row");
+        let plain: String = marked[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            plain.contains("this project›[off] · everywhere [on]"),
+            "{plain}"
+        );
+        let chevron = marked[0].spans.iter().find(|s| s.content == "›");
+        assert!(chevron.is_some_and(|s| s.style.add_modifier.contains(Modifier::BOLD)));
     }
 
     #[test]
