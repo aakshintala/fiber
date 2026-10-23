@@ -132,7 +132,6 @@ impl Retry {
             if clock.now() >= until {
                 return true;
             }
-            // `park` holds the lock into the condvar wait, so a wake is never missed.
             gate = park(clock, Some(until), None, &self.changed, gate, |_| false)
                 .unwrap_or_else(|| self.lock());
         }

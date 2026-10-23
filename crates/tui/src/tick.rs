@@ -149,7 +149,6 @@ impl Ticker {
                     gate = self.lock();
                 }
                 Step::Until(at) => {
-                    // `park` holds the lock into the condvar wait, so a wake is never missed.
                     gate = park(clock, Some(at), None, &self.changed, gate, |_| false)
                         .unwrap_or_else(|| self.lock());
                 }
