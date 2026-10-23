@@ -49,12 +49,7 @@ REQUEST_TIMEOUT_S = 180
 
 def clean(word):
     """One word as the verdict reader sees it (read_first's rule)."""
-    cleaned = word.strip().lower()
-    while True:
-        stripped = cleaned.strip("`\"'").rstrip(".").strip()
-        if stripped == cleaned:
-            return stripped
-        cleaned = stripped
+    return word.strip().lower().strip("`\"'.")
 
 
 def read_first(text):
@@ -224,9 +219,11 @@ def send(key, spend, system_prompt, messages, max_tokens, first):
                 "output_tokens": out_tokens, "latency_s": latency}
 
 
-def run_case(key, spend, tmp, fixture, notes_text, dry_run):
+def run_case(key, spend, tmp, fixture, notes_text, dry_run, first):
     """Convert, print the jig stages, and post both reviewer stages."""
     case_id = fixture.stem
+    case = {"id": case_id, "label": label(case_id),
+            "stage1": None, "stage2": None}
     dest = tmp / case_id
     proc = subprocess.run(
         [sys.executable, str(CONVERTER), "--format", "claude",
@@ -244,37 +241,34 @@ def run_case(key, spend, tmp, fixture, notes_text, dry_run):
                   f"system={len(stage['system_prompt'])} "
                   f"messages={len(json.dumps(stage['messages']))}")
         assert NOTES.read_text().rstrip("\n") in stages[0]["system_prompt"], case_id
-        return {"id": case_id, "dry_run": True}
-    first = not run_case.started
+        case["dry_run"] = True
+        return case
     stage1 = send(key, spend, stages[0]["system_prompt"],
                   stages[0]["messages"], FIRST_STAGE_MAX_TOKENS, first)
-    run_case.started = True
     if "verdict" in stage1:
-        return {"id": case_id, "label": label(case_id),
-                "stage1": stage1, "stage2": None, "final": stage1["verdict"]}
+        case["stage1"] = stage1
+        case["final"] = stage1["verdict"]
+        return case
     verdict1 = read_first(stage1.pop("reply"))
     stage1["verdict"] = verdict1 or "unreadable"
+    case["stage1"] = stage1
     if verdict1 != "check":
-        return {"id": case_id, "label": label(case_id),
-                "stage1": stage1, "stage2": None,
-                "final": "allow" if verdict1 == "allow" else "unreadable"}
+        case["final"] = "allow" if verdict1 == "allow" else "unreadable"
+        return case
     stage2 = send(key, spend, stages[1]["system_prompt"],
                   stages[1]["messages"], None, False)
+    case["stage2"] = stage2
     if "verdict" in stage2:
-        return {"id": case_id, "label": label(case_id),
-                "stage1": stage1, "stage2": stage2, "final": stage2["verdict"]}
+        case["final"] = stage2["verdict"]
+        return case
     read = read_second(stage2.pop("reply"))
     if read is None:
         stage2["verdict"] = "unreadable"
-        return {"id": case_id, "label": label(case_id),
-                "stage1": stage1, "stage2": stage2, "final": "unreadable"}
+        case["final"] = "unreadable"
+        return case
     stage2["verdict"], stage2["reason"] = read
-    return {"id": case_id, "label": label(case_id),
-            "stage1": stage1, "stage2": stage2,
-            "final": "block" if read[0] == "block" else "allow"}
-
-
-run_case.started = False
+    case["final"] = "block" if read[0] == "block" else "allow"
+    return case
 
 
 def label(case_id):
@@ -313,7 +307,8 @@ def main(argv):
         for fixture in fixtures:
             try:
                 cases.append(run_case(key, spend, tmp, fixture,
-                                      notes_text, args.dry_run))
+                                      notes_text, args.dry_run,
+                                      not cases))
             except PermissionError as error:
                 write_results(Path(args.out), cases, spend)
                 print(f"error: first request rejected (HTTP {error}); "

@@ -64,20 +64,6 @@ its own line:
 
 ## Not carried
 
-Two parts of the hand-written note have no slot in the setup's
-template and are not carried into `notes.md`:
-
-1. The opening prose: "I run several agent sessions at once. A session
-   may start other agents and give each a brief. An agent working from
-   a brief that one of my sessions wrote is doing work I asked for."
-   It answers none of the five questions, so no topic owns it.
-2. The qualifier "which need no request from me" on the routine-actions
-   list ("Routine actions, which need no request from me"). A bullet
-   list holds lines, not the permission the list carries, and the
-   template writes only the lines.
-
-Both omissions are a difference from the hand-written note: the
-qualifier is what tells the reviewer the routine-actions list is
-permission, so without it the reviewer reads the same lines with less
-of their force. That difference is the point of this check: it measures
-what the setup's questions elicit, not the hand-written note.
+See the "Two parts of the hand-written note are not carried" paragraph
+in `../README.md`: the opening prose and the routine-actions
+permission qualifier have no slot in the setup's template.
