@@ -1087,10 +1087,8 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     // reading, so the release runs on a thread bounded by the test's
     // deadline (`docs/testing.md`, "Waits and timeouts").
     let (released, done) = mpsc::channel();
-    let path = hold.clone();
     thread::spawn(move || {
-        let written = fs::write(&path, "go\n");
-        if let Ok(()) = released.send(written) {}
+        released.send(fs::write(&hold, "go\n")).unwrap();
     });
     setup
         .deadline
@@ -1150,6 +1148,9 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         .iter()
         .filter(|line| line["kind"] == "command_accepted")
         .collect();
+    // Every driver command is answered with exactly one `command_accepted`
+    // or `command_rejected` (`docs/invocation.md`, "Driver commands"), so
+    // `c_prompt` and `c_msg` give exactly two.
     assert_eq!(accepts.len(), 2, "{lines:?}");
     assert_eq!(accepts[0]["payload"]["command_id"], "c_prompt");
     assert_eq!(accepts[1]["payload"]["command_id"], "c_msg");
