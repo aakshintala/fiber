@@ -674,11 +674,22 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let quote =
         |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
     // Never answers `initialize`. The trap is set before the pid line,
-    // so the ready wait proves SIGTERM will be caught. The `read`
-    // blocks on a FIFO the test holds open for writing, so the parked
-    // server burns no CPU. Builtins only: no `exec sleep` to drop the
-    // trap, no background child to outlive the group. Dropping the
-    // write end at the test's end (even on panic) releases the read.
+    // so the ready wait proves SIGTERM will be caught. The `read` runs
+    // in the background and the shell parks in `wait`. The vulnerable
+    // window is after the FIFO open returns and before `read(2)` blocks,
+    // where a foreground `read` left TERM pending until the write end
+    // dropped; `wait` is interruptible there, so a TERM that lands while
+    // the `read` is starting still runs the trap, which kills the `read`
+    // (no child outlives the group) and writes the marker. The parked
+    // server burns no CPU, and no `exec sleep` drops the trap. Dropping
+    // the write end at the test's end (even on panic) releases the read
+    // if still parked.
+    // The counts below cite their promises: exit 143 (`docs/invocation.md`,
+    // "Three signals, one path"); no event lines (a signal before
+    // `fiber_started` writes no durable event: `docs/invocation.md`, "What
+    // is written"); no session log or directory (`docs/errors.md`, "Before
+    // a session exists"); no provider request (`docs/invocation.md`, "What
+    // happens, all at once": "No model request is made").
     // On the base commit the server gets only the bound's SIGKILL, so
     // the marker is never written and this fails there.
     let hold = setup.root.path().join("hold.fifo");
@@ -699,10 +710,10 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
         }
     });
     let script = format!(
-        "trap 'echo term > {}; exit 0' TERM\necho $$ > {}\nread -r _ < {}\n",
+        "trap 'kill \"$child\"; echo term > {}; exit 0' TERM\nread -r _ < {} & child=$!\necho $$ > {}\nwait\n",
         quote(&marker),
-        quote(ready.path()),
         quote(&hold),
+        quote(ready.path()),
     );
     write(
         &setup.home().join("config.json"),

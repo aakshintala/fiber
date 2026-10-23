@@ -113,7 +113,7 @@ fn key_of(path: &Path) -> PathBuf {
 }
 
 fn guard(mutex: &Mutex<State>) -> MutexGuard<'_, State> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    support::lock(mutex)
 }
 
 #[cfg(test)]

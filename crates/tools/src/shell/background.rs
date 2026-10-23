@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -188,7 +188,7 @@ impl MoveAsk {
 }
 
 fn lock_state(state: &Mutex<Ask>) -> MutexGuard<'_, Ask> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
+    support::lock(state)
 }
 
 /// Opens the job and either returns its receipt or, when open fails, the
@@ -671,7 +671,7 @@ impl Cancel for JobCancel {
 }
 
 fn lock_job(inner: &Mutex<JobInner>) -> MutexGuard<'_, JobInner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
+    support::lock(inner)
 }
 
 #[cfg(test)]
