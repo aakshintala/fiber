@@ -5225,6 +5225,65 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
     assert_eq!(exited_cost(&history), Some(0.18));
 }
 
+/// `event` as an ephemeral line of `session`: a `usage_recorded` with no
+/// `seq`, which no resume counts or copies.
+fn ephemeral(session: &str, event: &Event) -> Envelope {
+    Envelope {
+        kind: event.kind().to_owned(),
+        session_id: SessionId(session.into()),
+        ts: 1,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: event.payload().unwrap(),
+    }
+}
+
+#[test]
+fn a_backfill_does_not_count_an_ephemeral_copy_as_the_parents() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The parent log holds only an ephemeral copy: it is no durable
+    // record, so the delegate's line is still missing.
+    append_raw(
+        &history.dir,
+        &ephemeral("s_parent", &usage_copy("g_1", Some(0.10), "s_child")),
+    );
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(copies_of(&history.new_lines(), "g_1").len(), 1);
+}
+
+#[test]
+fn a_backfill_skips_an_ephemeral_line_in_the_delegates_log() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    drop(delegate);
+    append_raw(
+        &history.root.path().join("s_child"),
+        &ephemeral("s_child", &History::usage("g_2", MODEL, Some(0.50))),
+    );
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert!(copies_of(&history.new_lines(), "g_2").is_empty());
+}
+
 #[test]
 fn a_backfill_appends_nothing_the_parent_already_holds() {
     let mut history = History::new(Vec::new());

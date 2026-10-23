@@ -520,7 +520,6 @@ impl Loop {
                 *at += 1;
                 continue;
             }
-            *at += 1;
             missing.push(normalized);
         }
         Ok(missing)

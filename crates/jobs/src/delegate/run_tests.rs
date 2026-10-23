@@ -3071,7 +3071,7 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
+    let (notice, usages) = take_report_with_usages(&rig, 1);
     assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
     assert_eq!(usages[0].0, SessionId("s_child".into()));
     assert_eq!(usages[0].1, "g_9");
@@ -3233,7 +3233,7 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
+    let (notice, usages) = take_report_with_usages(&rig, 3);
     // Below the budget nothing trips; the crossing trips once; the line
     // after never trips again.
     assert_eq!(trip.sum(), 0.35);
