@@ -754,9 +754,9 @@ A command case names no turn, so its stream has none. The lines below are the
 ones `docs/events.md` proves for a session that runs no turn: `session_started`
 is the log's first line, `fiber_started` follows it in a new session,
 `extensions_loaded` is written before the first model request, and `fiber_exited`
-is the last line the process writes. The observed run may write more durable
-lines between `extensions_loaded` and `fiber_exited`; the export cases pin the
-observed list.
+is the last line the process writes. That is the whole durable stream the
+export command cases observe: no turn runs, so nothing writes between
+`extensions_loaded` and `fiber_exited`.
 
 ```json
 {
