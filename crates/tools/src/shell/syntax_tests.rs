@@ -156,6 +156,12 @@ fn quoted_parts_cook_inside_a_concatenation() {
 }
 
 #[test]
+fn a_bare_dollar_in_a_concatenation_opaques_it() {
+    // `$` is anonymous and outside the plain set, so the word never cooks.
+    assert_opaque("echo a$");
+}
+
+#[test]
 fn cook_quoted_rejects_a_lopsided_spelling() {
     assert_eq!(cook_quoted("\"ab\"", '"'), Some("ab".to_string()));
     assert_eq!(cook_quoted("ab\"", '"'), None);
