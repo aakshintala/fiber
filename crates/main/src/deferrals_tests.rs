@@ -26,7 +26,7 @@ fn absent_keys_give_the_default() {
 fn a_true_key_is_read_by_tool_name() {
     let (deferrals, notices) = notices(&config(&["tools.x.deferred=true"]));
     assert_eq!(deferrals.tools.len(), 1);
-    assert_eq!(deferrals.tools["x"], true);
+    assert!(deferrals.tools["x"]);
     assert!(notices.is_empty());
 }
 
@@ -34,7 +34,7 @@ fn a_true_key_is_read_by_tool_name() {
 fn a_false_key_is_read_by_tool_name() {
     let (deferrals, notices) = notices(&config(&["tools.x.deferred=false"]));
     assert_eq!(deferrals.tools.len(), 1);
-    assert_eq!(deferrals.tools["x"], false);
+    assert!(!deferrals.tools["x"]);
     assert!(notices.is_empty());
 }
 
@@ -45,15 +45,15 @@ fn both_values_together_give_both() {
         "tools.y.deferred=false",
     ]));
     assert_eq!(deferrals.tools.len(), 2);
-    assert_eq!(deferrals.tools["x"], true);
-    assert_eq!(deferrals.tools["y"], false);
+    assert!(deferrals.tools["x"]);
+    assert!(!deferrals.tools["y"]);
 }
 
 #[test]
 fn a_quoted_name_holding_a_dot_is_one_tool() {
     let (deferrals, _) = notices(&config(&["tools.\"srv.tool\".deferred=true"]));
     assert_eq!(deferrals.tools.len(), 1);
-    assert_eq!(deferrals.tools["srv.tool"], true);
+    assert!(deferrals.tools["srv.tool"]);
 }
 
 #[test]

@@ -880,6 +880,10 @@ fn tool_rows_forwards_only_the_search_declares_and_every_state() {
             .push((name.to_owned(), info.is_some()));
     });
     let moves = Arc::clone(&moved);
+    #[allow(
+        clippy::type_complexity,
+        reason = "the setter type is doors' closure type, named at neither end"
+    )]
     let state: Arc<dyn Fn(&str, contract::events::ToolState) + Send + Sync> =
         Arc::new(move |name: &str, state| {
             moves.lock().unwrap().push((name.to_owned(), state));

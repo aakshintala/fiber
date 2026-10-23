@@ -259,6 +259,10 @@ pub(crate) fn tool_search_factory() -> r#loop::ToolSearchFactory {
 /// the declarer only for the search tool the loop adds and removes, so
 /// every other tool keeps the source its own registration gave it; `state`
 /// reaches the setter for every name, correcting each row at each build.
+#[allow(
+    clippy::type_complexity,
+    reason = "the setter type is doors' closure type, named at neither end"
+)]
 pub(crate) fn tool_rows(
     declare: doors::Declare,
     state: Arc<dyn Fn(&str, ToolState) + Send + Sync>,

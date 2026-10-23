@@ -522,6 +522,10 @@ impl Session {
     /// and order are unchanged. An unknown name changes nothing and adds
     /// no row. It holds the gate weakly and does nothing once
     /// [`Session::close`] has begun.
+    #[allow(
+        clippy::type_complexity,
+        reason = "no new export: the setter returns the closure type itself"
+    )]
     pub fn state_setter(&self) -> Arc<dyn Fn(&str, ToolState) + Send + Sync> {
         let gate = Arc::downgrade(&self.gate);
         Arc::new(move |name: &str, state: ToolState| {
@@ -532,10 +536,10 @@ impl Session {
                 return;
             }
             let mut tools = lock(&gate.tools);
-            if let Ok(at) = tools.binary_search_by(|tool| tool.name.as_str().cmp(name)) {
-                if let Some(entry) = tools.get_mut(at) {
-                    entry.state = state;
-                }
+            if let Ok(at) = tools.binary_search_by(|tool| tool.name.as_str().cmp(name))
+                && let Some(entry) = tools.get_mut(at)
+            {
+                entry.state = state;
             }
         })
     }

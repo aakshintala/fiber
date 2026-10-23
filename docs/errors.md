@@ -408,7 +408,7 @@ Notices, for a failure outside any action or a login a person must finish:
 | Code | Class | Meaning |
 |---|---|---|
 | `command_conflict` | event | two extensions registered the same command name |
-| `config_key_ignored` | event | an unknown key, a key a repository may not set, or a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking") |
+| `config_key_ignored` | event | an unknown key, a key a repository may not set, a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking"), or `tools."tool_search".deferred`, which has no effect (`docs/tools.md`, "Tool search") |
 | `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `extension_missing` | event | configuration declares hooks but the `hooks` extension is not installed, so its declared hooks will not run; the message says to run `fiber extension install hooks` |
