@@ -578,10 +578,14 @@ fn uneven() -> Fixture {
     fx
 }
 
-/// A text of words that wraps to exactly `rows` rows at `width` columns.
+/// A text of distinct words that wraps to exactly `rows` rows at `width`
+/// columns.
 fn rows_of(rows: usize, width: usize, tag: &str) -> String {
     (1..400)
-        .map(|words| format!("{tag} {}", "word ".repeat(words).trim_end()))
+        .map(|words| {
+            let list: Vec<String> = (0..words).map(|at| format!("w{at}")).collect();
+            format!("{tag} {}", list.join(" "))
+        })
         .find(|text| wrap(text, width).len() == rows)
         .expect("a text of that many rows")
 }
