@@ -766,7 +766,7 @@ impl App {
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
-            Open::Rules(rules) => rules.frame(),
+            Open::Rules(rules) => rules.frame(self.config_view_width(), self.motion().wall_ms()),
             Open::Login(_) => return None,
             // `/logout` draws its own overlay, as `/login` does.
             Open::Logout(_) => return None,

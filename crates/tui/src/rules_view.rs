@@ -7,8 +7,14 @@ use contract::rules::RuleDecision;
 use crate::configure::{Revoked, RuleRow, RulesScope, RulesSection};
 use crate::keys::{Edit, Key};
 use crate::local_time::utc_minute;
+use crate::model_picker::age;
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::text;
+use crate::theme::Role;
+
+/// The columns beside a rule's text: ` · `, the ✕ and the focus gutter.
+const BESIDE_TEXT: usize = 6;
 
 /// One row of the view: a section's heading, one of its rules, or the
 /// note in place of its rules.
@@ -20,14 +26,23 @@ enum Item {
     Rule(RulesScope, usize),
     /// The note in place of a section's rules.
     Note(RulesScope),
+    /// The blank row between the sections.
+    Blank,
 }
 
 impl Item {
     /// The section the row belongs to.
-    fn scope(self) -> RulesScope {
+    fn scope(self) -> Option<RulesScope> {
         match self {
-            Item::Heading(scope) | Item::Rule(scope, _) | Item::Note(scope) => scope,
+            Item::Heading(scope) | Item::Rule(scope, _) | Item::Note(scope) => Some(scope),
+            Item::Blank => None,
         }
+    }
+
+    /// Whether the row takes a key: a rule revokes, and a rule or a note
+    /// opens its section's file with Ctrl+G.
+    fn takes(self) -> bool {
+        matches!(self, Item::Rule(..) | Item::Note(_))
     }
 }
 
@@ -47,7 +62,7 @@ impl Rules {
         let mut rules = Self {
             sections: None,
             items: Vec::new(),
-            list: List::default(),
+            list: List::gutter(),
             said: Vec::new(),
         };
         rules.reread(ctx);
@@ -66,13 +81,31 @@ impl Rules {
         }
         self.items = build(self.sections.as_ref());
         let shown = self.shown(ctx);
-        self.list
-            .select(self.list.selected(), self.items.len(), shown);
+        // The selection rests on a row that takes a key: the one it was
+        // on, else the next, else the last.
+        let takes = self.takes();
+        let at = takes
+            .iter()
+            .copied()
+            .find(|at| *at >= self.list.selected())
+            .or_else(|| takes.last().copied())
+            .unwrap_or(self.list.selected());
+        self.list.select(at, self.items.len(), shown);
     }
 
     /// The rows the view shows at `ctx`'s height.
     fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(), ctx.height)
+        rows_height(&self.frame(ctx.width, None), ctx.height)
+    }
+
+    /// The rows that take a key: Up and Down move between them only.
+    fn takes(&self) -> Vec<usize> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.takes())
+            .map(|(at, _)| at)
+            .collect()
     }
 
     /// The selected row.
@@ -97,7 +130,10 @@ impl Rules {
             return self.revoke_selected(ctx);
         }
         let shown = self.shown(ctx);
-        if self.list.key(key, self.items.len(), shown) {
+        if self
+            .list
+            .key_over(key, self.items.len(), shown, &self.takes())
+        {
             self.said.clear();
         }
         Act::Stay
@@ -119,13 +155,18 @@ impl Rules {
             Spot::Close => Act::Close,
             Spot::Switch { .. } => Act::Stay,
             Spot::Row(at) => {
-                self.list.select(at, self.items.len(), shown);
-                self.said.clear();
+                if self.takes().contains(&at) {
+                    self.list.select(at, self.items.len(), shown);
+                    self.said.clear();
+                }
                 Act::Stay
             }
             Spot::Revoke(at) => {
-                self.list.select(at, self.items.len(), shown);
-                self.revoke_selected(ctx)
+                if self.takes().contains(&at) {
+                    self.list.select(at, self.items.len(), shown);
+                    return self.revoke_selected(ctx);
+                }
+                Act::Stay
             }
             // Only the model picker draws cells with targets of their own.
             // Only the running list draws item rows.
@@ -136,7 +177,11 @@ impl Rules {
     /// Opens the selected section's file; with the rules unread there is
     /// no section, so nothing opens.
     fn open_file(&self) -> Act {
-        match self.selected().and_then(|item| self.section(item.scope())) {
+        match self
+            .selected()
+            .and_then(Item::scope)
+            .and_then(|scope| self.section(scope))
+        {
             Some(section) => Act::Open(section.file.clone()),
             None => Act::Stay,
         }
@@ -170,8 +215,16 @@ impl Rules {
         Act::Stay
     }
 
-    /// The frame to draw.
-    pub(crate) fn frame(&self) -> Frame {
+    /// The frame to draw at `width` columns. `wall_ms` is the wall time,
+    /// from which a rule's age reads; without it a rule shows the UTC
+    /// minute it was added.
+    pub(crate) fn frame(&self, width: usize, wall_ms: Option<u64>) -> Frame {
+        // With no row that takes a key there is nothing to focus.
+        let list = if self.items.iter().any(|item| item.takes()) {
+            self.list
+        } else {
+            self.list.blur()
+        };
         Frame {
             title: "Rules".to_owned(),
             command: "/rules",
@@ -179,40 +232,54 @@ impl Rules {
                 .items
                 .iter()
                 .enumerate()
-                .map(|(at, item)| self.line(*item, at))
+                .map(|(at, item)| self.line(*item, at, width, wall_ms))
                 .collect(),
-            list: self.list,
+            list,
             below: self.said.clone(),
             field: None,
-            footer: "↑↓ move · Delete revoke · Ctrl+G open the file · Esc close".to_owned(),
+            footer: "Ctrl+G opens the rules file".to_owned(),
         }
     }
 
     /// One row's cells.
-    fn line(&self, item: Item, at: usize) -> Vec<(String, Option<Spot>, Ink)> {
+    fn line(
+        &self,
+        item: Item,
+        at: usize,
+        width: usize,
+        wall_ms: Option<u64>,
+    ) -> Vec<(String, Option<Spot>, Ink)> {
         match item {
             Item::Heading(scope) => {
                 let name = match scope {
                     RulesScope::Global => "Global",
-                    RulesScope::Project => "Project",
+                    RulesScope::Project => "This project",
                 };
-                let file = self
-                    .section(scope)
-                    .map(|section| section.file.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                vec![(format!("{name} rules  {file}"), None, Ink::Heading)]
+                vec![(name.to_owned(), None, Ink::Heading)]
             }
             Item::Rule(_, _) => {
                 let row = self.rule_row(item);
                 match row {
-                    Some(row) => vec![
-                        ("✕ ".to_owned(), Some(Spot::Revoke(at)), Ink::Plain),
-                        (fields(row), None, Ink::Plain),
-                    ],
+                    Some(row) => {
+                        let room = width.saturating_sub(BESIDE_TEXT);
+                        vec![
+                            (
+                                format!("{} · ", text::cut(&fields(row, wall_ms), room, "…")),
+                                None,
+                                Ink::Plain,
+                            ),
+                            (
+                                "✕".to_owned(),
+                                Some(Spot::Revoke(at)),
+                                Ink::Role(Role::Error),
+                            ),
+                        ]
+                    }
                     None => vec![("No rules.".to_owned(), None, Ink::Muted)],
                 }
             }
             Item::Note(scope) => vec![(note(self.section(scope)), None, Ink::Muted)],
+            Item::Blank => Vec::new(),
         }
     }
 
@@ -245,6 +312,9 @@ fn build(sections: Option<&(RulesSection, RulesSection)>) -> Vec<Item> {
     };
     let mut items = Vec::new();
     for scope in [RulesScope::Global, RulesScope::Project] {
+        if scope == RulesScope::Project {
+            items.push(Item::Blank);
+        }
         items.push(Item::Heading(scope));
         let section = pick(sections, scope);
         match section.rows.as_ref() {
@@ -259,28 +329,39 @@ fn build(sections: Option<&(RulesSection, RulesSection)>) -> Vec<Item> {
     items
 }
 
-/// One rule's fields, joined by two spaces: decision, tool, prefix
-/// (`(any)` when empty), `added` as a UTC minute, and the session. An
-/// absent `added` or session is left out.
-fn fields(row: &RuleRow) -> String {
+/// One rule's text: `allow shell:git status`, with `(any)` for an empty
+/// prefix, then ` · added 2d ago in s_01`. The age reads from `wall_ms`;
+/// without it the time is the UTC minute added. An absent `added` or
+/// session, or a time past what can be shown, is left out.
+fn fields(row: &RuleRow, wall_ms: Option<u64>) -> String {
     let decision = match row.rule.decision {
         RuleDecision::Allow => "allow",
         RuleDecision::Ask => "ask",
         RuleDecision::Deny => "deny",
     };
-    let mut fields = vec![decision.to_owned(), row.rule.tool.clone()];
-    if row.rule.prefix.is_empty() {
-        fields.push("(any)".to_owned());
+    let prefix = if row.rule.prefix.is_empty() {
+        "(any)"
     } else {
-        fields.push(row.rule.prefix.clone());
+        &row.rule.prefix
+    };
+    let mut text = format!("{decision} {}:{prefix}", row.rule.tool);
+    let when = row.rule.added.and_then(|added| match wall_ms {
+        Some(wall) => Some(format!("{} ago", age(wall.saturating_sub(added)))),
+        None => utc_minute(added),
+    });
+    let session = row.rule.session_id.as_ref().map(|session| &session.0);
+    if when.is_some() || session.is_some() {
+        text.push_str(" · added");
+        if let Some(when) = when {
+            text.push(' ');
+            text.push_str(&when);
+        }
+        if let Some(session) = session {
+            text.push_str(" in ");
+            text.push_str(session);
+        }
     }
-    if let Some(added) = row.rule.added.and_then(utc_minute) {
-        fields.push(added);
-    }
-    if let Some(session) = &row.rule.session_id {
-        fields.push(session.0.clone());
-    }
-    fields.join("  ")
+    text
 }
 
 /// The note in place of `section`'s rules: the error and how to fix it,

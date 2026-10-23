@@ -868,10 +868,7 @@ fn slash_rules_opens_the_view_attached_and_on_home() {
         rows.first().is_some_and(|row| row.starts_with(" Rules")),
         "{rows:?}"
     );
-    assert!(
-        rows.iter().any(|row| row.starts_with("Global rules")),
-        "{rows:?}"
-    );
+    assert!(rows.iter().any(|row| row.trim() == "Global"), "{rows:?}");
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
 
     let mut app = attached(Some(seam));
@@ -903,7 +900,6 @@ fn delete_reaches_the_rules_view_not_the_draft() {
     let (seam, text) = rules_fake();
     let mut app = attached(Some(Arc::clone(&seam)));
     slash_rules(&mut app);
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_edit(Edit::Delete), Effect::None);
     assert_eq!(
         seam.revokes(),
@@ -916,6 +912,31 @@ fn delete_reaches_the_rules_view_not_the_draft() {
     );
     assert!(app.input().is_empty());
     assert!(app.config_view_open());
+}
+
+#[test]
+fn the_rules_view_reads_each_age_from_the_frames_wall_time() {
+    let (seam, _) = rules_fake();
+    let mut app = attached(Some(seam));
+    // The rule was added at 1791331200000; two days later it is "2d ago".
+    app.set_now(now(), 1_791_331_200_000 + 2 * 86_400_000);
+    slash_rules(&mut app);
+    let rows = screen(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("allow shell:npm test · added 2d ago in s_01 · ✕")),
+        "{rows:?}"
+    );
+    // With no wall time set, the rule shows the minute it was added.
+    let (seam, _) = rules_fake();
+    let mut app = attached(Some(seam));
+    slash_rules(&mut app);
+    let rows = screen(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("added 2026-10-07 00:00 UTC in s_01")),
+        "{rows:?}"
+    );
 }
 
 #[test]
