@@ -603,7 +603,8 @@ a click on it returns too. The views are:
   necessarily next to each other and ignoring case, the model's provider,
   id or display name. The filter keeps the list's order and only drops
   rows. Backspace removes a letter; Esc clears the query first and closes
-  the picker on the next press. Enter with no match leaves the picker open.
+  the picker on the next press. Enter with nothing focused does nothing and
+  leaves the picker open; it installs only a row ↓ or a click has focused.
   Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
@@ -639,9 +640,48 @@ a click on it returns too. The views are:
   model's chips. A model chosen for this session only gets a third row,
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
-  matches nothing shows one line, "No models match" dim, and no provider
-  sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+  matches no model and no not-installed row shows one line, "No models
+  match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+
+  Below the last provider section, after a blank row, the choosing picker
+  lists each first-party provider no installed extension declares, one row
+  each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
+  `accent`, " · not installed" dim. The scripted provider is never listed
+  (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
+  `/scoped-models` list none. Typing filters these rows by provider name as it
+  filters models, and a query that matches no model and no row still shows the
+  one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+  walk the models and then these rows; no row is focused until ↓ or a click
+  puts it there, so Enter with no row focused does what it does with none
+  listed (a query that hides every model focuses nothing). The focused row
+  reads as a focused model does, with "› " in its gutter, bold, on the bar.
+  Enter, or a click on the name, installs the provider as `fiber extension
+  install <name>` does, asking nothing more: choosing the row is the approval.
+  While it installs the row reads " ⟳ installing" and the spinner in
+  `attention`; choosing another row does nothing until it ends, and closing the
+  picker does not stop it. A failed install keeps the row, still marked not
+  installed, and adds a row under it, indented four columns, "✗ " and the
+  error in `error`, its first line cut at 80 columns; choosing the row again
+  tries again. A successful install drops the row, asks one model refresh so
+  the provider's models list, and draws under the list, until the picker closes
+  and indented four columns: "✓ " in `success` and "installed <name>", the
+  lines of the install summary dim ("What an install shows",
+  `docs/extensions.md`), and, for a provider whose key is missing, "<name>
+  needs a credential: run `fiber login <name>`" dim, or, for a key that could
+  not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
+  An install that ends while the picker is closed asks the refresh and, if it
+  failed, shows the notice "Installing <name> failed: <error>"; if it
+  succeeded, each credential line above is a notice instead
+  (`credential_missing`, `credential_failed`). On a remote terminal the install
+  runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
+  the list is the hub's; with the hub not connected the row fails with "The hub
+  is not connected."; and the install holds the terminal's one hub connection
+  until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
+  "Installing"), so other hub commands wait behind it; while it runs,
+  `/settings` and the other config views are refused with "a provider is
+  installing; try again when it finishes", and Esc closes the picker with the
+  install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
   labels follow the header in the answer's order,

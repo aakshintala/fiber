@@ -1711,6 +1711,8 @@ ahead. The summary is the one in
 [What an install shows](#what-an-install-shows), and on update it adds the
 diff since the installed version. Without a terminal they go
 ahead without asking, so scripts can set up a machine.
+Choosing a provider in the terminal's model picker installs it without
+asking: choosing it is the approval.
 
 Each prints `installed <name>` on stderr for every extension it put in place.
 
