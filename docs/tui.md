@@ -678,9 +678,10 @@ a click on it returns too. The views are:
   the list is the hub's; with the hub not connected the row fails with "The hub
   is not connected."; and the install holds the terminal's one hub connection
   until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
-  "Installing"), so other hub commands wait behind it; while it runs,
-  `/settings` and the other config views are refused with "a provider is
-  installing; try again when it finishes", and Esc closes the picker with the
+  "Installing"), so other hub commands wait behind it; while it runs on a
+  remote terminal, `/settings` and the other config views are refused with "a
+  provider is installing; try again when it finishes" (a local terminal gets
+  no such refusal), and on either terminal Esc closes the picker with the
   install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
