@@ -242,7 +242,7 @@ fn title_row(name: &str, figures: Vec<Span<'static>>, text: usize) -> Row {
         .map(|span| format::width(&span.content))
         .sum();
     let room = text.saturating_sub(right_w.saturating_add(1));
-    let shown = cut_left(name, room.max(1));
+    let shown = crate::text::cut_left(name, room.max(1));
     let used = format::width(&shown);
     let pad = text.saturating_sub(used + right_w).max(1);
     let mut spans = vec![Span::styled(
@@ -559,7 +559,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .iter()
             .map(|server| format!("\u{2717} {server} down"))
             .collect();
-        let value = cut_left(&down.join(" "), text.saturating_sub("tools".len() + 1));
+        let value = crate::text::cut_left(&down.join(" "), text.saturating_sub("tools".len() + 1));
         out.push(Row {
             line: sides(
                 vec![Span::styled("tools", style(Role::Muted))],
@@ -699,25 +699,6 @@ pub(super) fn branch_text(app: &App) -> Option<String> {
     }
 }
 
-/// `text` cut from the left to at most `max` columns, with a leading `…`.
-fn cut_left(text: &str, max: usize) -> String {
-    if format::width(text) <= max {
-        return text.to_owned();
-    }
-    let mut kept = Vec::new();
-    let mut width = 0;
-    for ch in text.chars().rev() {
-        let mut buf = [0u8; 4];
-        let cell = format::width(ch.encode_utf8(&mut buf));
-        if width + cell > max.saturating_sub(1) {
-            break;
-        }
-        width += cell;
-        kept.push(ch);
-    }
-    format!("…{}", kept.iter().rev().collect::<String>())
-}
-
 /// A token count without its trailing `token` word.
 pub(super) fn short_tokens(n: u64) -> String {
     let text = format::tokens(n);
@@ -767,7 +748,7 @@ fn changed_files_rows(app: &App, text: usize) -> Vec<Row> {
     for (rank, (path, added, removed)) in paths.iter().take(5).enumerate() {
         let counts = format!("+{added} \u{2212}{removed}");
         let room = text.saturating_sub(format::width(&counts).saturating_add(1));
-        let shown = cut_left(path, room);
+        let shown = crate::text::cut_left(path, room);
         let pad = " ".repeat(text.saturating_sub(format::width(&shown) + format::width(&counts)));
         out.push(Row {
             line: Line::from(vec![

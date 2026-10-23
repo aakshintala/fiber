@@ -1,7 +1,7 @@
 //! Tests for the question panel's stateless text rows: the character
 //! cursor's edges and multi-byte text.
 
-use super::{cells, clean, delete_before, insert_at, move_caret};
+use super::{cells, delete_before, insert_at, move_caret};
 
 #[test]
 fn inserting_moves_past_the_new_character() {
@@ -33,12 +33,6 @@ fn the_character_cursor_stops_at_both_ends() {
     move_caret("ab", &mut caret, true);
     move_caret("ab", &mut caret, true);
     assert_eq!(caret, 2);
-}
-
-#[test]
-fn cleaning_turns_every_control_into_a_space() {
-    assert_eq!(clean("a\nb\rc\td\x1b[2J"), "a b c d [2J");
-    assert_eq!(clean(""), "");
 }
 
 #[test]

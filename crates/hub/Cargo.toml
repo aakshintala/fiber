@@ -12,6 +12,7 @@ libc = "0.2"
 log = { path = "../log" }
 # SHA-1 for the websocket handshake and SHA-256 for device-token hashes.
 ring.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true

@@ -46,6 +46,7 @@ mod resume;
 mod retire;
 mod rewind;
 mod sessions;
+mod sessions_stop;
 mod spawn;
 mod start;
 #[cfg(test)]
@@ -164,6 +165,12 @@ pub trait Started: Send {
     /// from the `fiber_exited` line it printed last on stdout, or
     /// `io_failed` naming the session when there is none.
     fn exited(&self) -> Option<Failure>;
+
+    /// Kills the process without waiting for it: the drain reaps it, as
+    /// for every exit, so a caller that holds the child lock for a read
+    /// is never blocked. The default is a no-op, for a `Started` whose
+    /// exit is already settled.
+    fn kill(&self) {}
 
     /// Blocks until the process has exited, then returns what [`exited`](Self::exited)
     /// would then return. The default returns [`exited`](Self::exited) at once,

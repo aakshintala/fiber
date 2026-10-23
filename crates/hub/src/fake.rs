@@ -8,6 +8,7 @@ use std::net::Shutdown;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -74,6 +75,16 @@ pub(crate) struct FakeStarter {
     /// How many more `resume` calls exit `session_held` without binding,
     /// as a resume does while the exiting process still holds the lock.
     held: Arc<Mutex<usize>>,
+    /// Whether a non-subscribe first line per connection is answered
+    /// `command_rejected` `not_subscribed`, as a session answers one: off
+    /// keeps the accept-any-command arm every current test uses.
+    strict: bool,
+    /// Whether the fake session exits once its `close` is accepted: the
+    /// socket is gone, as a real session's is. Off holds the socket open
+    /// after answering, until the test releases it.
+    exit_on_close: bool,
+    /// Each `kill` call's session, in order.
+    killed: Arc<Mutex<Vec<SessionId>>>,
 }
 
 /// Every line the fake sessions received, and a wake for each new one.
@@ -174,6 +185,23 @@ impl FakeStarter {
         starter
     }
 
+    /// Binds `run/<id>` and rejects a non-subscribe first line per
+    /// connection with `command_rejected` `not_subscribed`, as a session
+    /// does: the loop must subscribe before it closes.
+    pub(crate) fn strict(home: &Path) -> Self {
+        let mut starter = Self::bind_and_hold(home);
+        starter.strict = true;
+        starter
+    }
+
+    /// Binds `run/<id>` and exits the fake session once its `close` is
+    /// accepted: the socket is gone, as a real session's is.
+    pub(crate) fn exit_on_close(home: &Path) -> Self {
+        let mut starter = Self::bind_and_hold(home);
+        starter.exit_on_close = true;
+        starter
+    }
+
     fn new(home: &Path, bind: bool, exited: Option<Failure>, handshake: Option<Handshake>) -> Self {
         Self {
             home: home.to_path_buf(),
@@ -191,6 +219,9 @@ impl FakeStarter {
             started_continues: Arc::new(Mutex::new(Vec::new())),
             serving: Arc::new(Serving::default()),
             held: Arc::new(Mutex::new(0)),
+            strict: false,
+            exit_on_close: false,
+            killed: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -255,6 +286,11 @@ impl FakeStarter {
         lock(&self.rewound).clone()
     }
 
+    /// Each `kill` call's session, in order.
+    pub(crate) fn kills(&self) -> Vec<SessionId> {
+        lock(&self.killed).clone()
+    }
+
     /// Ends session `id` as an exiting process does: its socket is gone,
     /// and every connection it served is closed, waiting at most `within`
     /// for each to end. True once all have ended.
@@ -289,12 +325,19 @@ impl FakeStarter {
             let handshake = Arc::clone(&self.handshake);
             let serving = Arc::clone(&self.serving);
             let closing = self.closing;
+            let strict = self.strict;
+            let exit = self.exit_on_close.then(|| {
+                Arc::new(ExitOnClose {
+                    socket: socket.clone(),
+                    fired: AtomicBool::new(false),
+                })
+            });
             // The listener lives in the accept loop's thread.
             thread::Builder::new()
                 .name("fake-session".to_owned())
                 .spawn(move || {
                     accept_loop(
-                        listener, &received, &accepted, &handshake, &serving, closing,
+                        listener, &received, &accepted, &handshake, &serving, closing, strict, exit,
                     )
                 })
                 .map_err(|error| {
@@ -303,6 +346,8 @@ impl FakeStarter {
         }
         Ok(Box::new(FakeStarted {
             exited: self.exited.clone(),
+            id: id.clone(),
+            killed: Arc::clone(&self.killed),
         }))
     }
 }
@@ -349,6 +394,8 @@ impl Starter for FakeStarter {
                         ErrorCode::SessionHeld,
                         "Another process holds this session.",
                     )),
+                    id: id.clone(),
+                    killed: Arc::clone(&self.killed),
                 }));
             }
         }
@@ -362,12 +409,26 @@ impl Starter for FakeStarter {
 /// What `exited` returns. The listener lives in the accept loop's thread.
 pub(crate) struct FakeStarted {
     exited: Option<Failure>,
+    id: SessionId,
+    killed: Arc<Mutex<Vec<SessionId>>>,
 }
 
 impl Started for FakeStarted {
     fn exited(&self) -> Option<Failure> {
         self.exited.clone()
     }
+
+    fn kill(&self) {
+        lock(&self.killed).push(self.id.clone());
+    }
+}
+
+/// Exits the fake session once its `close` is accepted: the first close
+/// unlinks the socket and shuts every served connection, as a real
+/// session's exit does. Later closes find nothing to do.
+struct ExitOnClose {
+    socket: PathBuf,
+    fired: AtomicBool,
 }
 
 /// A failure with Fiber's own sentence.
@@ -405,6 +466,10 @@ fn append_started(home: &Path, id: &SessionId) {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fake threads every shared table to each serving connection"
+)]
 fn accept_loop(
     listener: UnixListener,
     received: &Arc<Received>,
@@ -412,6 +477,8 @@ fn accept_loop(
     handshake: &Arc<Mutex<Option<Handshake>>>,
     serving: &Arc<Serving>,
     closing: Closing,
+    strict: bool,
+    exit: Option<Arc<ExitOnClose>>,
 ) {
     let mut next_conn = 0;
     loop {
@@ -428,10 +495,13 @@ fn accept_loop(
         let index = next_conn;
         let handshake = Arc::clone(handshake);
         let serving = Arc::clone(serving);
+        let exit = exit.clone();
         let spawned = thread::Builder::new()
             .name("fake-session-conn".to_owned())
             .spawn(move || {
-                serve_one(stream, &received, &accepted, &handshake, closing, index);
+                serve_one(
+                    stream, &received, &accepted, &handshake, closing, strict, exit, index,
+                );
                 *lock(&serving.live) -= 1;
                 serving.ended.notify_all();
             });
@@ -442,12 +512,18 @@ fn accept_loop(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the fake threads every shared table to each serving connection"
+)]
 fn serve_one(
     stream: UnixStream,
     received: &Arc<Received>,
     accepted: &Arc<Accepted>,
     handshake: &Arc<Mutex<Option<Handshake>>>,
     closing: Closing,
+    strict: bool,
+    exit: Option<Arc<ExitOnClose>>,
     index: usize,
 ) {
     if stream
@@ -461,6 +537,9 @@ fn serve_one(
         Err(_) => return,
     };
     let mut read = BufReader::new(stream);
+    // Whether this connection has sent `subscribe`: a strict fake
+    // rejects any other first command, as a session does.
+    let mut subscribed = false;
     loop {
         match support::framing::read_line(&mut read, support::framing::MAX_LINE) {
             // The hub's liveness check closed without sending.
@@ -470,6 +549,17 @@ fn serve_one(
                 buf.push(b'\n');
                 let text = String::from_utf8_lossy(&buf).into_owned();
                 let command = command_of(&text);
+                if strict && !subscribed && command.as_deref() != Some("subscribe") {
+                    // Answered before it is recorded, as the closing
+                    // arm below is, so a test that saw it received knows
+                    // the rejection is sent.
+                    write_ack(&mut writer, &text, &not_subscribed());
+                    received.push(index, text);
+                    continue;
+                }
+                if command.as_deref() == Some("subscribe") {
+                    subscribed = true;
+                }
                 let closes = match closing {
                     Closing::Never => false,
                     Closing::AllButSubscribe => {
@@ -485,6 +575,21 @@ fn serve_one(
                     continue;
                 }
                 received.push(index, text.clone());
+                if command.as_deref() == Some("close")
+                    && let Some(exit) = exit.as_ref()
+                {
+                    // The answer goes out before the exit: the hub reads
+                    // the acceptance, then the socket's close. Only this
+                    // connection ends: every other session keeps its own
+                    // socket, as processes do, and the unlinked path
+                    // refuses every later connect.
+                    write_accepted(&mut writer, &text);
+                    if !exit.fired.swap(true, Ordering::SeqCst) {
+                        std::fs::remove_file(&exit.socket).unwrap_or(());
+                    }
+                    writer.shutdown(Shutdown::Both).unwrap_or(());
+                    return;
+                }
                 match command.as_deref() {
                     // The hub's handshake subscribes before its first prompt.
                     Some("subscribe") => {
@@ -522,6 +627,17 @@ fn closing_reply() -> Handshake {
         accept: false,
         code: "closing".to_owned(),
         message: "The session is closing.".to_owned(),
+    }
+}
+
+/// What a strict fake answers a non-subscribe first line with, as a
+/// session answers one (`crates/doors/src/client.rs`, `NOT_SUBSCRIBED`):
+/// the hub must subscribe before any other command.
+fn not_subscribed() -> Handshake {
+    Handshake {
+        accept: false,
+        code: "not_subscribed".to_owned(),
+        message: "Send `subscribe` first.".to_owned(),
     }
 }
 

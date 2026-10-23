@@ -303,7 +303,7 @@ impl Parser {
                 // The marker ends in this read, so its end is past `held`.
                 let after = at.saturating_add(PASTE_END.len()).saturating_sub(held);
                 paste.truncate(at);
-                let text = paste_text(paste);
+                let text = crate::text::paste_clean(&String::from_utf8_lossy(paste));
                 self.paste = None;
                 if !text.is_empty() {
                     out.push(Event::Edit(Edit::Paste(text)));
@@ -344,17 +344,6 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
         .map(|at| at.saturating_add(from))
-}
-
-/// A paste's text: `\r\n` and `\r` become `\n`, and every control
-/// character but `\n` and `\t` goes.
-fn paste_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-        .collect()
 }
 
 /// The events of the bytes at the start of a buffer and how many bytes
@@ -744,7 +733,7 @@ fn kitty_key(params: &[u8]) -> Option<Event> {
         127 => Code::Backspace,
         _ => {
             let ch = char::from_u32(code)?;
-            if ch.is_control() {
+            if !crate::text::printable(ch) {
                 return None;
             }
             // Shift on a character that is not a letter is dropped.
@@ -805,7 +794,7 @@ fn decode_char(buf: &[u8]) -> Step {
         .ok()
         .and_then(|text| text.chars().next())
     {
-        Some(ch) if ch.is_control() => Some((Vec::new(), len)),
+        Some(ch) if !crate::text::printable(ch) => Some((Vec::new(), len)),
         Some(ch) => {
             let (code, mods) = char_stroke(ch, Mods::NONE);
             stroke(code, mods, len)

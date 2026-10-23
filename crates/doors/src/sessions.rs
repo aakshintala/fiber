@@ -24,6 +24,30 @@ pub(crate) const CLEANUP_MARGIN: Duration = Duration::from_millis(50);
 pub(crate) const MAX_LINE: usize = 1024 * 1024;
 pub(crate) const READ_CHUNK: usize = 65_536;
 
+/// The session ids with a socket entry under `home`'s `run/`, sorted,
+/// with no connect: the stop path lists them to decide whether a hub is
+/// worth starting. A missing `run/` is no entries.
+pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
+    let run = config::run_dir(home);
+    let entries = match fs::read_dir(&run) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) => return Err(error),
+    };
+    let mut names: Vec<SessionId> = entries
+        .filter_map(|entry| {
+            entry
+                .ok()?
+                .file_name()
+                .to_str()
+                .filter(|name| valid_id(name))
+                .map(|name| SessionId(name.to_owned()))
+        })
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 /// The account's session sockets, queried afresh on each call.
 pub struct SessionSockets {
     run: PathBuf,

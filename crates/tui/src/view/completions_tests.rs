@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use std::path::PathBuf;
 
-use super::{cut_left, dot_cut, match_in, range_text};
+use super::{cut_left, match_in, range_text};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::theme::Role;
@@ -515,17 +515,6 @@ fn range_text_counts_bindings_on_both_sides() {
         range_text(3, 3, 23),
         Some("↑ 3 above · 4–6 of 23 · ↓ 17 more".to_owned())
     );
-}
-
-#[test]
-fn dot_cut_keeps_fitting_text_and_marks_a_cut() {
-    assert_eq!(dot_cut("abcdef", 6), "abcdef");
-    assert_eq!(dot_cut("abcdef", 7), "abcdef");
-    assert_eq!(dot_cut("abcdefg", 6), "abcde…");
-    assert_eq!(dot_cut("abcdefg", 1), "…");
-    assert_eq!(dot_cut("abcdefg", 0), "");
-    assert_eq!(dot_cut("caf\u{e9}x", 5), "caf\u{e9}x");
-    assert_eq!(dot_cut("caf\u{e9}xy", 4), "caf…");
 }
 
 #[test]

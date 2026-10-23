@@ -8,14 +8,12 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{
-    overlay::{self, Place, Row},
-    to_u16,
-};
+use super::overlay::{self, Place, Row};
 use crate::format::width as cells;
 use crate::model_picker::{Fresh, ModelRow, PickerView};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
+use crate::text::to_u16;
 use crate::theme::Role;
 
 /// The picker wraps at this content width before shrinking to what the

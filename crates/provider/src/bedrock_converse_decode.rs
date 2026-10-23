@@ -19,11 +19,12 @@ use crate::wire::{args_value, str_at};
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
 /// returns the reply once `metadata` arrives. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply, Error> {
     decode_tracked(stream, sink).map_err(|(error, _)| error)
 }
 
-/// As [`decode`], also carrying what the stream had seen when it failed: its
+/// As `decode`, also carrying what the stream had seen when it failed: its
 /// usage so far, under no generation, since no event names one; the call
 /// names it from the response's `x-amzn-requestid`.
 #[allow(

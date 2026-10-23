@@ -129,7 +129,27 @@ fn ask(
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
 ) -> Option<BTreeMap<String, String>> {
-    let result = exchange(stream, deadline, names, clock, before_read, before_wait);
+    let Ok(mut request) = serde_json::to_vec(&HubCommandLine {
+        id: CommandId(ENV_ID.to_owned()),
+        command: HubCommand::PlaceholderEnv(PlaceholderEnvArgs {
+            names: names.to_vec(),
+        }),
+    }) else {
+        return None;
+    };
+    request.push(b'\n');
+    let result = exchange(
+        stream,
+        &request,
+        deadline,
+        clock,
+        before_read,
+        before_wait,
+        || (),
+        || (),
+        |_| (),
+        answer,
+    );
     let restored = restore_blocking(stream);
     match result {
         // The exchange's own answer wins over a restore failure.
@@ -145,44 +165,55 @@ fn ask(
 // and mutants run on Linux, where no test through this seam can produce
 // it (docs/testing/mutants.md).
 #[cfg_attr(false, mutants::skip)]
-fn restore_blocking(stream: &UnixStream) -> std::io::Result<()> {
+pub(crate) fn restore_blocking(stream: &UnixStream) -> std::io::Result<()> {
     match stream.set_nonblocking(false) {
         Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
         other => other,
     }
 }
 
-/// The exchange `ask` wraps: it sends `placeholder_env` and reads lines
-/// until its answer, failing once `deadline` passes on `clock`. It leaves
-/// the stream's mode alone; `ask` restores blocking after.
-fn exchange(
+/// Sends `request` and reads lines until the answer, failing once
+/// `deadline` passes on `clock`: the write and every read are
+/// non-blocking under the same deadline, so unrelated lines, trickled
+/// bytes and silence all end there. `before_read` runs just before each
+/// read; `before_wait` runs after each wait's deadline check, just before
+/// [`Clock::wait_until`]. The first answered line ends the exchange.
+/// Malformed lines never end it: they are skipped. `closed`, `late` and
+/// `lost` shape the three failures; `on_line` maps each parsed line to
+/// its answer, if any. It leaves the stream's mode alone; the caller
+/// restores blocking after.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call of the shared query: stream, request, deadline, clock, hooks, error shapes and line handler"
+)]
+pub(crate) fn exchange<T, E>(
     mut stream: &UnixStream,
+    request: &[u8],
     deadline: Instant,
-    names: &[String],
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
-) -> Result<BTreeMap<String, String>, ()> {
-    stream.set_nonblocking(true).map_err(|_| ())?;
-    let mut request = serde_json::to_vec(&HubCommandLine {
-        id: CommandId(ENV_ID.to_owned()),
-        command: HubCommand::PlaceholderEnv(PlaceholderEnvArgs {
-            names: names.to_vec(),
-        }),
-    })
-    .map_err(|_| ())?;
-    request.push(b'\n');
+    closed: impl Fn() -> E,
+    late: impl Fn() -> E,
+    lost: impl Fn(&std::io::Error) -> E,
+    mut on_line: impl FnMut(&HubLine) -> Result<Option<T>, E>,
+) -> Result<T, E> {
+    stream.set_nonblocking(true).map_err(|error| lost(&error))?;
     let mut sent = 0;
     while sent < request.len() {
         match stream.write(request.get(sent..).unwrap_or_default()) {
-            Ok(0) => return Err(()),
+            Ok(0) => return Err(closed()),
             Ok(wrote) => sent += wrote,
             Err(error) => {
+                // `!=`, not a `WouldBlock` match guard: the guard's
+                // always-wait mutant no test can reach on a connected
+                // socket, while this form's flipped comparison fails the
+                // send-buffer and silent-deadline tests.
                 if error.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(());
+                    return Err(lost(&error));
                 }
                 if clock.now() >= deadline {
-                    return Err(());
+                    return Err(late());
                 }
                 before_wait();
                 wait_clock(clock, deadline, stream.as_fd(), PollFlags::OUT);
@@ -193,20 +224,24 @@ fn exchange(
     let mut chunk = [0u8; 1024];
     loop {
         if clock.now() >= deadline {
-            return Err(());
+            return Err(late());
         }
         before_read();
         match stream.read(&mut chunk) {
-            Ok(0) => return Err(()),
+            Ok(0) => return Err(closed()),
             Ok(read) => {
                 pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
             }
             Err(error) => {
+                // `!=`, not a `WouldBlock` match guard: the guard's
+                // always-wait mutant no test can reach on a connected
+                // socket, while this form's flipped comparison fails the
+                // silent-deadline tests.
                 if error.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(());
+                    return Err(lost(&error));
                 }
                 if clock.now() >= deadline {
-                    return Err(());
+                    return Err(late());
                 }
                 before_wait();
                 wait_clock(clock, deadline, stream.as_fd(), PollFlags::IN);
@@ -214,8 +249,13 @@ fn exchange(
         }
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
-            if let Some(values) = answer(&line)? {
-                return Ok(values);
+            let Ok(line) = serde_json::from_slice::<HubLine>(&line) else {
+                continue;
+            };
+            match on_line(&line) {
+                Err(error) => return Err(error),
+                Ok(Some(value)) => return Ok(value),
+                Ok(None) => {}
             }
         }
     }
@@ -224,7 +264,7 @@ fn exchange(
 /// Parks `clock` until `until`, waiting on `fd` for real while parked:
 /// the full bound on a real clock, a short slice on a fake one, which the
 /// caller re-checks against the fake deadline after.
-fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFlags) {
+pub(crate) fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFlags) {
     clock.wait_until(Some(until), &mut |bound| {
         let wait = bound.or(Some(Duration::from_millis(10)));
         let spec = wait.map(|wait| Timespec {
@@ -242,15 +282,12 @@ fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFla
     });
 }
 
-/// The hub's captured values for the requested names, from its answer to
-/// `ENV_ID`; `None` for any other line. A refusal or a missing or
-/// malformed answer is `None`, so the caller falls back to the process
-/// environment.
-fn answer(line: &[u8]) -> Result<Option<BTreeMap<String, String>>, ()> {
-    let Ok(line) = serde_json::from_slice::<HubLine>(line) else {
-        return Ok(None);
-    };
-    let Some(result) = crate::sessions::answer_of(&line, ENV_ID, "placeholder_env") else {
+/// The hub's captured values for the requested names, from its parsed
+/// answer to `ENV_ID`; `None` for any other line. A refusal or a missing
+/// answer is `None`, so the caller falls back to the process environment.
+/// Malformed lines never reach it: the exchange skips them.
+fn answer(line: &HubLine) -> Result<Option<BTreeMap<String, String>>, ()> {
+    let Some(result) = crate::sessions::answer_of(line, ENV_ID, "placeholder_env") else {
         return Ok(None);
     };
     let Ok(result) = result else {

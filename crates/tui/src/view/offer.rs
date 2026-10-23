@@ -6,9 +6,10 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 
-use super::{paragraph, to_u16};
+use super::paragraph;
 use crate::mouse::{Target, TargetId};
 use crate::offer::Row;
+use crate::text::to_u16;
 
 /// Draws `rows` from wrapped row `top` into `area`, pushing a target over
 /// each spot of a row shown. A `top` past the end shows the last screenful.

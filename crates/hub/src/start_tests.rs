@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -156,6 +157,47 @@ fn other() -> SessionId {
 }
 
 #[test]
+fn a_start_admitted_before_the_store_binds_then_the_next_is_refused() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let workspace = temp.workspace();
+    let Outcome::Accepted { session_id, .. } = run(
+        &hub,
+        &CommandId("c_first".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start admitted before the store binds");
+    };
+    assert!(
+        temp.dir.join("run").join(&session_id.0).exists(),
+        "the admitted start bound its socket"
+    );
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    let Outcome::Rejected(refused) = run(
+        &hub,
+        &CommandId("c_second".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start after the store is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    // Only the admitted start ran a process.
+    assert_eq!(starter.started_continues().len(), 1);
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn a_continues_naming_the_new_session_is_invalid_arguments() {
     let temp = Temp::new();
     let starter = FakeStarter::bind_and_hold(&temp.dir);
@@ -284,6 +326,41 @@ fn a_session_that_exits_first_rejects_with_its_fiber_exited() {
     };
     assert_eq!(refused.code, ErrorCode::NoModel);
     assert_eq!(refused.message, "No model is configured.");
+}
+
+/// A start that times out kills its starter: the stop arriving just
+/// after the timeout must find the child already dead, so it can never
+/// bind after the stop's scans and escape shutdown.
+#[test]
+fn a_start_that_times_out_kills_its_starter() {
+    let temp = Temp::new();
+    let starter = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let workspace = temp.workspace();
+    let Outcome::Rejected(refused) = run(
+        &hub,
+        &CommandId("c_start".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+        None,
+        None,
+    ) else {
+        panic!("the start that binds nothing is rejected");
+    };
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    hub.request_stop();
+    // Exactly the timed-out session dies; a live child would bind its
+    // socket after the scans below, escaping the stop.
+    let kills = starter.kills();
+    assert_eq!(kills.len(), 1, "the timed-out start kills its starter");
+    for id in &kills {
+        assert!(
+            !temp.dir.join("run").join(&id.0).exists(),
+            "the killed starter never binds"
+        );
+    }
 }
 
 #[test]

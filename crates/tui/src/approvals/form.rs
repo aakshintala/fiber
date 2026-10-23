@@ -7,7 +7,7 @@ use contract::shapes::{Question, True};
 use ratatui::style::{Modifier, Style};
 
 use super::builder::Builder;
-use super::text::{cells, clean, delete_before, insert_at, move_caret};
+use super::text::{cells, delete_before, insert_at, move_caret};
 use super::{Panel, PanelKey, Title};
 use crate::format::{answer_parts, width as measure};
 use crate::keys::{Edit, Key};
@@ -264,8 +264,8 @@ impl Form {
     pub(crate) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
-                for ch in text.chars() {
-                    self.type_char(if ch.is_control() { ' ' } else { ch });
+                for ch in crate::text::controls_to_space(text).chars() {
+                    self.type_char(ch);
                 }
             }
             Edit::Left => self.arrow(false),
@@ -461,7 +461,7 @@ impl Form {
         let headers: Vec<String> = self
             .fields
             .iter()
-            .map(|question| clean(&question.header))
+            .map(|question| crate::text::controls_to_space(&question.header))
             .collect();
         let mut owned: Vec<String> = Vec::with_capacity(headers.len().saturating_add(1));
         for (field, header) in headers.iter().enumerate() {
@@ -557,7 +557,9 @@ impl Form {
             }
             return;
         }
-        let words: Vec<char> = clean(&answer.words).chars().collect();
+        let words: Vec<char> = crate::text::controls_to_space(&answer.words)
+            .chars()
+            .collect();
         let before = |start: usize| -> String {
             words
                 .get(start..answer.caret)
@@ -616,7 +618,7 @@ impl Form {
         } else {
             ("  ", Style::default())
         };
-        let note = clean(&self.note);
+        let note = crate::text::controls_to_space(&self.note);
         let (rest, style) = if note.is_empty() {
             (" Add a note on the whole form".to_owned(), DIM)
         } else {
