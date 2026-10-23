@@ -402,6 +402,162 @@ fn a_role_cell_draws_its_role_and_a_muted_cell_is_faint() {
 }
 
 #[test]
+fn the_footer_and_the_lines_below_draw_dim() {
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    render(&frame(1), area, &mut buf, &mut Vec::new());
+    for (y, word) in [(2, "below"), (3, "keys")] {
+        for x in 0..u16::try_from(word.len()).expect("a width") {
+            let cell = &buf[(x, y)];
+            assert!(cell.modifier.contains(Modifier::DIM), "{word} at {x}");
+            assert_eq!(cell.fg, Role::Muted.color(), "{word} at {x}");
+        }
+    }
+    // A row stays as its ink draws it.
+    assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn a_gutter_list_marks_its_selected_row_and_draws_no_bar() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let mut shown = frame(5);
+    shown.list = List::gutter();
+    shown.rows[1][0].1 = Some(Spot::Revoke(1));
+    shown.list.select(1, 5, rows_height(&shown, 6));
+    render(&shown, area, &mut buf, &mut targets);
+    assert!(shown.list.is_gutter());
+    assert!(!List::default().is_gutter());
+    assert_eq!(text(&buf, 1), "  row 0");
+    assert_eq!(text(&buf, 2), "› row 1");
+    assert_eq!(text(&buf, 3), "  row 2");
+    for y in 1..4 {
+        for x in 0..40 {
+            assert!(
+                !buf[(x, y)].modifier.contains(Modifier::REVERSED),
+                "bar at {x},{y}"
+            );
+        }
+    }
+    // A cell's target starts after the gutter; the row's covers the line.
+    let revoke = targets
+        .iter()
+        .find(|target| target.id == TargetId::View(Spot::Revoke(1)))
+        .expect("a revoke target");
+    assert_eq!((revoke.rect.x, revoke.rect.y), (2, 2));
+    let row = targets
+        .iter()
+        .find(|target| target.id == TargetId::View(Spot::Row(1)))
+        .expect("a row target");
+    assert_eq!((row.rect.x, row.rect.width), (0, 40));
+}
+
+#[test]
+fn a_blurred_gutter_list_marks_no_row() {
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(3);
+    shown.list = List::gutter().blur();
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "  row 0");
+    assert_eq!(text(&buf, 2), "  row 1");
+    assert_eq!(text(&buf, 3), "  row 2");
+    assert!(!buf[(0, 1)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(shown.list.top(), 0);
+}
+
+#[test]
+fn a_gutter_in_a_one_column_area_does_not_overrun() {
+    let area = Rect::new(0, 0, 1, 4);
+    let mut buf = Buffer::empty(area);
+    let mut shown = frame(2);
+    shown.list = List::gutter();
+    render(&shown, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "›");
+}
+
+/// A list after pressing `keys` over `rows` rows shown `height` at a
+/// time, moving only onto `takes`; its selection after each key.
+fn stepped(keys: &[Key], rows: usize, height: usize, takes: &[usize]) -> Vec<usize> {
+    let mut list = List::default();
+    list.select(takes[0], rows, height);
+    keys.iter()
+        .map(|key| {
+            list.key_over(key, rows, height, takes);
+            list.selected()
+        })
+        .collect()
+}
+
+#[test]
+fn arrows_move_only_between_the_rows_that_take_a_key() {
+    let takes = [1, 2, 5];
+    assert_eq!(
+        stepped(
+            &[Key::Down, Key::Down, Key::Down, Key::Up, Key::Up, Key::Up],
+            8,
+            8,
+            &takes
+        ),
+        [2, 5, 5, 2, 1, 1]
+    );
+    let mut list = List::default();
+    list.select(1, 8, 8);
+    assert!(list.key_over(&Key::Down, 8, 8, &takes));
+    assert!(!list.key_over(&Key::Enter, 8, 8, &takes));
+    list.select(5, 8, 8);
+    assert!(!list.key_over(&Key::Down, 8, 8, &takes));
+    list.select(1, 8, 8);
+    assert!(!list.key_over(&Key::Up, 8, 8, &takes));
+}
+
+#[test]
+fn a_page_key_moves_as_the_plain_list_does() {
+    // Only ↑ and ↓ skip: a page lands where the plain list puts it.
+    let takes = [1, 3];
+    let mut list = List::default();
+    list.select(1, 10, 4);
+    assert!(list.key_over(&Key::PageDown, 10, 4, &takes));
+    assert_eq!(list.selected(), 4);
+    assert!(list.key_over(&Key::PageUp, 10, 4, &takes));
+    assert_eq!(list.selected(), 1);
+}
+
+#[test]
+fn rest_on_keeps_a_taking_row_else_the_next_else_the_last() {
+    let takes = [2, 5];
+    for (from, to) in [(0, 2), (2, 2), (3, 5), (5, 5), (6, 5)] {
+        let mut list = List::default();
+        list.select(from, 8, 8);
+        list.rest_on(&takes, 8, 8);
+        assert_eq!(list.selected(), to, "from {from}");
+    }
+    // With none that take a key, the selection stays.
+    let mut list = List::default();
+    list.select(3, 8, 8);
+    list.rest_on(&[], 8, 8);
+    assert_eq!(list.selected(), 3);
+    // The window follows: from row 6 the three-row window starts at 4,
+    // and row 5 is still in it.
+    let mut list = List::default();
+    list.select(6, 8, 3);
+    list.rest_on(&takes, 8, 3);
+    assert_eq!((list.selected(), list.top()), (5, 4));
+    // From row 0 to row 2 the window stays at the top.
+    let mut list = List::default();
+    list.rest_on(&takes, 8, 3);
+    assert_eq!((list.selected(), list.top()), (2, 0));
+}
+
+#[test]
+fn with_no_taking_rows_a_key_moves_as_the_plain_list_does() {
+    let mut list = List::default();
+    assert!(list.key_over(&Key::Down, 5, 5, &[]));
+    assert_eq!(list.selected(), 1);
+}
+
+#[test]
 fn an_empty_footer_draws_nothing() {
     let area = Rect::new(0, 0, 20, 4);
     let mut buf = Buffer::empty(area);

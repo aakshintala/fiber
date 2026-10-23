@@ -1,14 +1,14 @@
 ---
 source: crates/tui/src/rules_view_tests.rs
-assertion_line: 508
 expression: "drawn(&rules, 80, 24)"
 ---
  Rules  /rules                                                       Esc returns
-Global rules  /home/rules
-✕ allow  shell  npm test  2026-10-07 00:00 UTC  s_01
-✕ deny  shell  (any)
-Project rules  /home/projects/-w/rules
-/home/projects/-w/rules:2: bad  Ctrl+G opens it to fix it.
+  Global
+› allow shell:npm test · added 2026-10-07 00:00 UTC in s_01 · ✕
+  deny shell:(any) · ✕
+
+  This project
+  /home/projects/-w/rules:2: bad  Ctrl+G opens it to fix it.
 
 
 
@@ -25,5 +25,4 @@ Project rules  /home/projects/-w/rules
 
 
 
-
-↑↓ move · Delete revoke · Ctrl+G open the file · Esc close
+Ctrl+G opens the rules file

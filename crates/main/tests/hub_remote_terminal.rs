@@ -548,7 +548,7 @@ fn bare_fiber_on_a_listed_hub_opens_the_hubs_home() {
     // chip's brackets never match.
     run.write(b"/settings\r");
     run.wait_screen("the hub settings", |screen| {
-        shows(screen, "Settings") && shows(screen, "\"fake/m\"") && !shows(screen, "client/other")
+        shows(screen, "Settings") && shows(screen, "fake/m") && !shows(screen, "client/other")
     });
     run.write(b"\x1b[27u");
     run.wait_screen("the closed settings", |screen| !shows(screen, "Settings"));
