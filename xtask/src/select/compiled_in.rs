@@ -36,6 +36,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/invocation.md", "main"),
     ("docs/user/commands.md", "main"),
     ("docs/tui.md", "contract"),
+    ("docs/tui.md", "extensions"),
     ("docs/tui.md", "tui"),
     ("crates/contract/prompt/loaded.md", "contract"),
     ("crates/contract/prompt/no-match.md", "contract"),
