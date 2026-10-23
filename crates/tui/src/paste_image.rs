@@ -21,7 +21,7 @@ use base64::engine::general_purpose::STANDARD;
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal};
+use rustix::process::Signal;
 use support::group::GROUP_POLL;
 
 use crate::Input;
@@ -206,36 +206,6 @@ pub(crate) fn read(
     run(&mut child, reader.decode, clock, deadline, cap)
 }
 
-/// `id` as a [`Pid`]: refused ids and ids past `i32` never reach a call.
-fn pid_of(id: u32) -> Option<Pid> {
-    if support::group::refused(id) {
-        return None;
-    }
-    Pid::from_raw(i32::try_from(id).ok()?)
-}
-
-/// Whether a group probe leaves no member behind: only SRCH, no such
-/// group, empties it. An accepted probe, PERM and every other errno keep
-/// the group pending for the next pass. A successful send proves delivery
-/// was accepted, never that the group is empty.
-fn probe_means_empty(outcome: rustix::io::Result<()>) -> bool {
-    match outcome {
-        Ok(()) => false,
-        Err(Errno::SRCH) => true,
-        Err(_) => false,
-    }
-}
-
-/// Whether the command's group still holds a process, through
-/// `kill(-pgid, 0)`. A refused id, or one past what a pid holds, reads
-/// empty: the probe sends nothing for it.
-fn group_alive(id: u32) -> bool {
-    let Some(pid) = pid_of(id) else {
-        return false;
-    };
-    !probe_means_empty(rustix::process::test_kill_process_group(pid))
-}
-
 /// SIGKILL to the command's group until it probes empty, within the
 /// cleanup bound on the injected clock: a member forked past the first
 /// kill is caught by the next pass instead of left behind. Each pass but
@@ -245,7 +215,7 @@ fn group_alive(id: u32) -> bool {
 /// it ended.
 fn settle_group(id: u32, clock: &Arc<dyn Clock>, end: Instant) -> bool {
     loop {
-        if !group_alive(id) {
+        if !support::group::alive(id) {
             return true;
         }
         if clock.now() >= end {

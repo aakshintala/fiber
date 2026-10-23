@@ -16,8 +16,7 @@ use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
 
 use super::{
     Decode, Failed, IMAGE_CAP, NO_CLIPBOARD, Reader, Signal, apple_script_png, arm_cleanup_pause,
-    command, drain, group_alive, png_size, probe_means_empty, read, read_stdout, settle_group,
-    signal_after_group, start,
+    command, drain, png_size, read, read_stdout, settle_group, signal_after_group, start,
 };
 
 /// One named wall-clock deadline for every blocking wait.
@@ -300,15 +299,6 @@ fn failures_name_what_went_wrong() {
 }
 
 #[test]
-fn only_a_missing_group_probes_empty() {
-    // An accepted probe holds a member; only SRCH retires the group, and
-    // any other errno keeps it pending for the next pass.
-    assert!(!probe_means_empty(Ok(())));
-    assert!(probe_means_empty(Err(rustix::io::Errno::SRCH)));
-    assert!(!probe_means_empty(Err(rustix::io::Errno::PERM)));
-}
-
-#[test]
 fn settle_group_returns_at_once_for_no_group() {
     let clock = FakeClock::new();
     let start = clock.now();
@@ -343,7 +333,7 @@ fn settle_group_rekills_until_the_bound() {
             .unwrap();
         let pgid = keeper.id();
         let watchdog = Watchdog::group(pgid);
-        assert!(group_alive(pgid));
+        assert!(support::group::alive(pgid));
         drop(support::group::signal_process(pgid, Signal::KILL));
         let start = clock.now();
         let end = start + Duration::from_millis(bound_ms);
