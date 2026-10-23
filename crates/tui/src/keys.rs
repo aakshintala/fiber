@@ -424,9 +424,8 @@ fn control_stroke(byte: u8) -> Option<(Code, Mods)> {
 
 /// `ESC` with the byte after it in the same read: Alt with that key's
 /// stroke (`ESC 0x7f` is Alt+Backspace, `ESC` with a control byte Ctrl+Alt
-/// with that letter). `0x08` is Ctrl+H, so `ESC 0x08` is Ctrl+Alt+H, which
-/// no binding uses; it reads as an `Event::Stroke` of Ctrl+Alt+h, consuming
-/// 2 bytes.
+/// with that letter). `0x08` is Ctrl+H, so `ESC 0x08` is Ctrl+Alt+H; no
+/// binding uses it.
 fn alt_stroke(buf: &[u8]) -> Step {
     let tail = buf.get(1..)?;
     if tail.first() == Some(&0x08) {
@@ -570,11 +569,9 @@ fn sgr_mouse(params: &[u8], release: bool) -> Option<Mouse> {
 
 /// `CSI` with an arrow, Home or End final byte (`A`, `B`, `C`, `D`, `H`,
 /// `F`): that key, plain or `CSI 1;<modifiers>` with the kitty modifier
-/// bits. A lone `1` with no `;` field is no modifiers for `C` and `D`
-/// only; with any other letter it reads as nothing. A lone parameter
-/// other than `1` reads as nothing. A modifier the bindings do not name
-/// (hyper, meta)
-/// reads as nothing.
+/// bits. A bare `1` is no modifiers for `C` and `D` only; a bare `1` with
+/// any other letter is nothing, as the old arms read it. A modifier the
+/// bindings do not name (hyper, meta) reads as nothing.
 fn csi_letter(final_byte: u8, params: &[u8]) -> Option<Event> {
     let mods = if params.is_empty() {
         Mods::NONE
