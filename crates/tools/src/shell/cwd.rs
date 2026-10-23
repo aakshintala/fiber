@@ -16,6 +16,7 @@
 //! resolves through the deny, which canonicalises every declared path.
 
 use std::collections::BTreeSet;
+use std::path::{Component, Path, PathBuf};
 
 use super::syntax::Join;
 
@@ -26,67 +27,67 @@ pub(super) const MAX_DIRECTORIES: usize = 32;
 /// The `(succeeded, directory)` states of one call.
 pub(super) struct Cwd {
     states: BTreeSet<(bool, String)>,
-    running: Vec<(bool, String)>,
-    kept: BTreeSet<(bool, String)>,
+}
+
+/// Whether `join` runs its element on a state with this success value.
+fn runs(join: Join, succeeded: bool) -> bool {
+    match join {
+        Join::First | Join::Seq => true,
+        Join::And => succeeded,
+        Join::Or => true,
+    }
+}
+
+/// Whether `join` carries a state with this success value past its element.
+fn keeps(join: Join, succeeded: bool) -> bool {
+    match join {
+        Join::First | Join::Seq => false,
+        Join::And => !succeeded,
+        Join::Or => succeeded,
+    }
 }
 
 impl Cwd {
     pub(super) fn new(workdir: &str) -> Cwd {
         Cwd {
             states: BTreeSet::from([(true, workdir.to_owned())]),
-            running: Vec::new(),
-            kept: BTreeSet::new(),
         }
     }
 
-    /// The directories `join` runs its element in, sorted and deduplicated,
-    /// or nothing when more than [`MAX_DIRECTORIES`] distinct directories
-    /// would run it and the path is lost.
-    pub(super) fn enter(&mut self, join: Join) -> Option<Vec<String>> {
-        let mut running = BTreeSet::new();
-        let mut kept = BTreeSet::new();
-        for state in &self.states {
-            let succeeded = state.0;
-            let runs = match join {
-                Join::First | Join::Seq => true,
-                Join::And => succeeded,
-                Join::Or => true,
-            };
-            if runs {
-                running.insert(state.clone());
-            }
-            let keeps = match join {
-                Join::First | Join::Seq => false,
-                Join::And => !succeeded,
-                Join::Or => succeeded,
-            };
-            if keeps {
-                kept.insert(state.clone());
-            }
-        }
-        let dirs: BTreeSet<String> = running.iter().map(|(_, dir)| dir.clone()).collect();
+    /// The directories `join` runs its element in, or nothing when more
+    /// than [`MAX_DIRECTORIES`] distinct directories would run it and the
+    /// path is lost.
+    pub(super) fn enter(&self, join: Join) -> Option<Vec<String>> {
+        let dirs: BTreeSet<String> = self
+            .states
+            .iter()
+            .filter(|(succeeded, _)| runs(join, *succeeded))
+            .map(|(_, dir)| dir.clone())
+            .collect();
         if dirs.len() > MAX_DIRECTORIES {
             return None;
         }
-        let dirs: Vec<String> = dirs.into_iter().collect();
-        self.running = running.into_iter().collect();
-        self.kept = kept;
-        Some(dirs)
+        Some(dirs.into_iter().collect())
     }
 
     /// Fold the element just checked back into the states: `Some` target
     /// for a `cd` element, `None` for any other.
-    pub(super) fn leave(&mut self, cd_target: Option<&str>) {
-        let mut next = std::mem::take(&mut self.kept);
-        for (_, dir) in std::mem::take(&mut self.running) {
-            match cd_target {
-                Some(target) => {
-                    next.insert((true, join_dir(&dir, target)));
-                    next.insert((false, dir));
-                }
-                None => {
-                    next.insert((true, dir.clone()));
-                    next.insert((false, dir));
+    pub(super) fn leave(&mut self, join: Join, cd_target: Option<&str>) {
+        let mut next = BTreeSet::new();
+        for (succeeded, dir) in std::mem::take(&mut self.states) {
+            if keeps(join, succeeded) {
+                next.insert((succeeded, dir.clone()));
+            }
+            if runs(join, succeeded) {
+                match cd_target {
+                    Some(target) => {
+                        next.insert((true, join_dir(&dir, target)));
+                        next.insert((false, dir));
+                    }
+                    None => {
+                        next.insert((true, dir.clone()));
+                        next.insert((false, dir));
+                    }
                 }
             }
         }
@@ -98,28 +99,25 @@ impl Cwd {
 /// absolute target replaces the directory, `.` stays, `..` pops one
 /// component, and a `..` with an empty stack stays literal.
 pub(super) fn join_dir(dir: &str, target: &str) -> String {
-    let mut absolute = dir.starts_with('/');
-    let mut parts: Vec<&str> = dir.split('/').filter(|piece| !piece.is_empty()).collect();
-    if target.starts_with('/') {
-        absolute = true;
-        parts.clear();
-    }
-    for piece in target.split('/') {
-        match piece {
-            "" | "." => {}
-            ".." => {
-                if parts.pop().is_none() {
-                    parts.push("..");
+    let mut joined = if target.starts_with('/') {
+        PathBuf::from("/")
+    } else {
+        PathBuf::from(dir)
+    };
+    for component in Path::new(target).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                if !joined.pop() {
+                    joined.push("..");
                 }
             }
-            _ => parts.push(piece),
+            Component::Normal(piece) => {
+                joined.push(piece);
+            }
         }
     }
-    let mut joined = parts.join("/");
-    if absolute {
-        joined.insert(0, '/');
-    }
-    joined
+    joined.to_string_lossy().into_owned()
 }
 
 #[cfg(test)]

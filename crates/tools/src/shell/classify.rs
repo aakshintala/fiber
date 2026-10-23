@@ -151,7 +151,7 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
                 Outcome::Reads(mut more) => paths.append(&mut more),
             }
         }
-        cwd.leave(cd_target);
+        cwd.leave(element.join, cd_target);
     }
     if saw_executes {
         Outcome::Executes
@@ -229,19 +229,24 @@ fn is_git(simple: &Simple) -> bool {
 }
 
 /// The `cd` target: `cd <dir>` or `cd -- <dir>` with exactly one
-/// following word, or nothing when the shape differs.
+/// following word, or nothing when the shape differs. A flag-like operand
+/// reads only after `--`: `cd -P` executes while `cd -- -P` names a
+/// directory.
 fn cd_operand(simple: &Simple) -> Option<&str> {
     let mut words = simple.words.iter();
     if !words.next().is_some_and(|word| word.cooked == "cd") {
         return None;
     }
     let first = words.next()?;
-    let operand = if first.cooked == "--" {
-        words.next()?
+    let (operand, dashed) = if first.cooked == "--" {
+        (words.next()?, true)
     } else {
-        first
+        (first, false)
     };
     if words.next().is_some() {
+        return None;
+    }
+    if !dashed && operand.cooked.starts_with('-') {
         return None;
     }
     Some(operand.cooked.as_str())

@@ -8,6 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2810,7 +2811,8 @@ fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
     let shell = Shell::new(workspace.clone(), FakeClock::new());
     let sub = workspace.join("sub").to_str().unwrap().to_owned();
     // A `cd` is a read-only step: later paths resolve past the join, and
-    // an operand-less command declares each directory it may run in.
+    // an operand-less command declares each directory it may run in. The
+    // doc promises which directories, not their order.
     for (command, paths) in [
         (
             "cd sub && cat n.md 2>/dev/null",
@@ -2818,11 +2820,7 @@ fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
         ),
         (
             "cd sub ; ls",
-            vec![
-                sub.clone(),
-                workspace.to_str().unwrap().to_owned(),
-                sub.clone(),
-            ],
+            vec![sub.clone(), workspace.to_str().unwrap().to_owned()],
         ),
         (
             "cd sub | cat f",
@@ -2839,7 +2837,17 @@ fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
             vec![contract::shapes::Effect::Reads],
             "{command}"
         );
-        assert_eq!(effects.declared.paths, Some(paths), "{command}");
+        let declared: BTreeSet<&str> = effects
+            .declared
+            .paths
+            .as_ref()
+            .map(|paths| paths.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            declared,
+            BTreeSet::from_iter(paths.iter().map(String::as_str)),
+            "{command}"
+        );
     }
     // A `git` after any `cd`, and a `cd` outside the allow-list, execute.
     for command in [
@@ -2848,6 +2856,7 @@ fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
         "cd sub | git status",
         "cd",
         "cd -",
+        "cd -P",
         "cd a b",
     ] {
         let effects = effects_of(&shell, command);

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use contract::shapes::Effect;
@@ -241,6 +242,19 @@ fn assert_reads(command: &str) {
     let effects = classified(command);
     assert_eq!(effects.declared.effects, vec![Effect::Reads], "{command}");
     assert!(effects.declared.reversible, "{command}");
+}
+
+/// The paths a `cd` call declares, as a membership: the doc promises
+/// which directories each element runs in, not their order.
+fn assert_declares(command: &str, paths: &[&str]) {
+    assert_reads(command);
+    let declared = classified(command).declared.paths.unwrap_or_default();
+    let actual: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    assert_eq!(
+        actual,
+        BTreeSet::from_iter(paths.iter().copied()),
+        "{command}"
+    );
 }
 
 fn assert_closed(command: &str) {
@@ -1204,6 +1218,9 @@ fn cd_forms_outside_the_allow_list_execute() {
         "cd",
         "cd -",
         "cd \"\"",
+        "cd -P",
+        "cd -L",
+        "cd -x",
         "cd -P x",
         "cd -L x",
         "cd a b",
@@ -1227,29 +1244,16 @@ fn cd_forms_outside_the_allow_list_execute() {
 
 #[test]
 fn cd_dash_dash_names_one_directory() {
-    assert_reads("cd -- x");
-    assert_eq!(
-        classified("cd -- x").declared.paths,
-        Some(vec!["/work/x".to_owned()]),
-        "cd -- x"
-    );
+    assert_declares("cd -- x", &["/work/x"]);
+    // A flag-like operand reads only after `--`.
+    assert_declares("cd -- -P", &["/work/-P"]);
 }
 
 #[test]
 fn cd_declares_its_directory() {
-    assert_reads("cd sub");
-    assert_eq!(
-        classified("cd sub").declared.paths,
-        Some(vec!["/work/sub".to_owned()]),
-        "cd sub"
-    );
+    assert_declares("cd sub", &["/work/sub"]);
     // A lexical join still resolves against the workdir.
-    assert_reads("cd sub/../proc");
-    assert_eq!(
-        classified("cd sub/../proc").declared.paths,
-        Some(vec!["/work/proc".to_owned()]),
-        "cd sub/../proc"
-    );
+    assert_declares("cd sub/../proc", &["/work/proc"]);
     // Under /proc the call is reviewed.
     for command in ["cd /proc", "cd /proc/self", "cd /proc/1/fd"] {
         assert_closed(command);
@@ -1260,23 +1264,9 @@ fn cd_declares_its_directory() {
 fn operand_less_commands_declare_each_running_directory() {
     // Each element declares the directories it runs in: the `cd` its own
     // join, then the operand-less `ls` each running directory.
-    assert_reads("cd sub && ls");
-    assert_eq!(
-        classified("cd sub && ls").declared.paths,
-        Some(vec!["/work/sub".to_owned(), "/work/sub".to_owned()]),
-        "cd sub && ls"
-    );
+    assert_declares("cd sub && ls", &["/work/sub"]);
     for command in ["cd sub ; ls", "cd sub || ls"] {
-        assert_reads(command);
-        assert_eq!(
-            classified(command).declared.paths,
-            Some(vec![
-                "/work/sub".to_owned(),
-                "/work".to_owned(),
-                "/work/sub".to_owned(),
-            ]),
-            "{command}"
-        );
+        assert_declares(command, &["/work", "/work/sub"]);
     }
 }
 
@@ -1293,50 +1283,20 @@ fn git_after_any_cd_executes() {
         assert_closed(command);
     }
     // Git before the cd still reads, declaring the joined directory.
-    assert_reads("git status && cd sub");
-    assert_eq!(
-        classified("git status && cd sub").declared.paths,
-        Some(vec!["/work/sub".to_owned()]),
-        "git status && cd sub"
-    );
+    assert_declares("git status && cd sub", &["/work/sub"]);
 }
 
 #[test]
 fn cd_before_an_input_redirect_checks_each_running_directory() {
-    assert_reads("cd sub && cat <f");
-    assert_eq!(
-        classified("cd sub && cat <f").declared.paths,
-        Some(vec![
-            "/work/sub".to_owned(),
-            "/work/sub".to_owned(),
-            "/work/sub/f".to_owned(),
-        ]),
-        "cd sub && cat <f"
-    );
+    assert_declares("cd sub && cat <f", &["/work/sub", "/work/sub/f"]);
     for command in ["cd sub ; cat <f", "cd sub || cat <f"] {
-        assert_reads(command);
-        assert_eq!(
-            classified(command).declared.paths,
-            Some(vec![
-                "/work/sub".to_owned(),
-                "/work".to_owned(),
-                "/work/sub".to_owned(),
-                "/work/f".to_owned(),
-                "/work/sub/f".to_owned(),
-            ]),
-            "{command}"
-        );
+        assert_declares(command, &["/work", "/work/sub", "/work/f", "/work/sub/f"]);
     }
 }
 
 #[test]
 fn cd_in_a_pipeline_moves_nothing() {
-    assert_reads("cd sub | cat f");
-    assert_eq!(
-        classified("cd sub | cat f").declared.paths,
-        Some(vec!["/work/sub".to_owned(), "/work/f".to_owned()]),
-        "cd sub | cat f"
-    );
+    assert_declares("cd sub | cat f", &["/work/sub", "/work/f"]);
 }
 
 #[test]

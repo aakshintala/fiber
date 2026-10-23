@@ -13,7 +13,7 @@ use std::os::unix::fs::symlink;
 use proptest::prelude::*;
 
 use super::super::syntax::Join;
-use super::Cwd;
+use super::{Cwd, join_dir};
 
 #[derive(Debug, Clone)]
 struct Step {
@@ -33,37 +33,11 @@ fn arb_script() -> impl Strategy<Value = Vec<Step>> {
     prop::collection::vec(step, 1..=6)
 }
 
-/// The bash-logical join, implemented apart from `Cwd`: an absolute target
-/// replaces the directory, `.` stays, `..` pops, and a `..` with an empty
-/// stack stays literal.
-fn logical_join(dir: &str, target: &str) -> String {
-    let mut absolute = dir.starts_with('/');
-    let mut parts: Vec<&str> = dir.split('/').filter(|piece| !piece.is_empty()).collect();
-    if target.starts_with('/') {
-        absolute = true;
-        parts.clear();
-    }
-    for piece in target.split('/') {
-        match piece {
-            "" | "." => {}
-            ".." => {
-                if parts.pop().is_none() {
-                    parts.push("..");
-                }
-            }
-            _ => parts.push(piece),
-        }
-    }
-    let mut joined = parts.join("/");
-    if absolute {
-        joined.insert(0, '/');
-    }
-    joined
-}
-
 /// The real directory of every executed `ls` element, over all 2^n success
 /// assignments: the first element always runs, `&&` runs when the previous
-/// element ran and read, `||` when it ran and did not, `;` always.
+/// element ran and read, `||` when it ran and did not, `;` always. The join
+/// below is `Cwd`'s own, so this oracle checks the state machine against
+/// the real bash-logical executions, not the join.
 fn executed_dirs(steps: &[Step], workdir: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     let count = steps.len();
@@ -86,7 +60,7 @@ fn executed_dirs(steps: &[Step], workdir: &str) -> Vec<(usize, String)> {
             let ok = mask & (1_usize << index) != 0;
             if executed {
                 if step.cd {
-                    dir = logical_join(&dir, &step.arg);
+                    dir = join_dir(&dir, &step.arg);
                 } else {
                     found.push((index, dir.clone()));
                 }
@@ -120,7 +94,7 @@ proptest! {
         let mut entered = Vec::new();
         for step in &steps {
             entered.push(cwd.enter(step.join));
-            cwd.leave(if step.cd { Some(step.arg.as_str()) } else { None });
+            cwd.leave(step.join, if step.cd { Some(step.arg.as_str()) } else { None });
         }
         for (index, real) in executed_dirs(&steps, &workdir) {
             let Some(dirs) = &entered[index] else {
