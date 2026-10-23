@@ -5,11 +5,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, ChildStdout, Command, Stdio};
 
 use std::os::unix::process::ExitStatusExt;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-    mpsc,
-};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -20,10 +16,9 @@ use rustix::process::{Pid, Signal};
 
 use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
-    bounded, group_alive, group_empties, group_empties_with, group_lives, kill_group,
-    kill_matching, kill_pid, listed_exit, matching, matching_exits, pattern, pid_alive, pids_exit,
-    read_lookup, signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits,
-    wait_exits,
+    bounded, group_alive, group_empties, group_lives, kill_group, kill_matching, kill_pid,
+    listed_exit, lives, matching, matching_exits, pattern, pid_alive, pids_exit, read_lookup,
+    signal_group, signal_named, signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
 
@@ -601,62 +596,22 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     );
 }
 
-/// An `EPERM` probe answer reads as a live group: only `ESRCH` retires one.
-/// The probe answers are forced by the injected closure, never by timing.
+/// Only an `ESRCH` probe answer retires a group: `Ok`, `EPERM` and any
+/// other errno read live. The answers are forced values, never timing.
 #[test]
-fn group_empties_does_not_read_eperm_as_empty() {
+fn group_probe_reads_empty_only_on_esrch() {
+    assert!(lives(Ok(())), "an Ok probe must read as live");
     assert!(
-        !group_empties_with(2, Deadline::after(Duration::from_millis(100)), |_| {
-            Err(rustix::io::Errno::PERM)
-        }),
-        "an EPERM probe must not read as empty"
+        lives(Err(rustix::io::Errno::PERM)),
+        "an EPERM probe must read as live"
     );
-}
-
-/// An `EPERM` window that ends in `ESRCH` retires the group: the wait
-/// answers `true` after exactly the forced four probes.
-#[test]
-fn group_empties_returns_once_an_eperm_window_ends_in_esrch() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let counting = Arc::clone(&calls);
     assert!(
-        group_empties_with(2, Deadline::after(MUST_SUCCEED_WITHIN), move |_| {
-            let call = counting.fetch_add(1, Ordering::SeqCst) + 1;
-            if call <= 3 {
-                Err(rustix::io::Errno::PERM)
-            } else {
-                Err(rustix::io::Errno::SRCH)
-            }
-        }),
-        "waited {MUST_SUCCEED_WITHIN:?} for the ESRCH probe to retire the group"
+        lives(Err(rustix::io::Errno::INTR)),
+        "an errno other than ESRCH must read as live"
     );
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        4,
-        "the wait must retire on the fourth probe, the first ESRCH one"
-    );
-}
-
-/// The Linux sequence is unchanged: `Ok` reads live, `ESRCH` reads gone.
-#[test]
-fn group_empties_reads_ok_as_live_and_esrch_as_gone() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let counting = Arc::clone(&calls);
     assert!(
-        group_empties_with(2, Deadline::after(MUST_SUCCEED_WITHIN), move |_| {
-            let call = counting.fetch_add(1, Ordering::SeqCst) + 1;
-            if call == 1 {
-                Ok(())
-            } else {
-                Err(rustix::io::Errno::SRCH)
-            }
-        }),
-        "waited {MUST_SUCCEED_WITHIN:?} for the ESRCH probe to retire the group"
-    );
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        2,
-        "the wait must retire on the second probe, the first ESRCH one"
+        !lives(Err(rustix::io::Errno::SRCH)),
+        "an ESRCH probe must read as empty"
     );
 }
 
@@ -714,7 +669,15 @@ fn group_probe_holds_while_the_group_lives_and_falls_once_it_is_reaped() {
     assert!(group_lives(group), "a live group must read as live");
     drop(child.stdin.take().unwrap());
     reaped(child, "the group leader to exit once its stdin closed");
-    assert!(!group_lives(group), "a reaped group must not read as live");
+    // On macOS the probe can keep answering EPERM, which reads live, for
+    // milliseconds after the reap, so the fall is awaited under a deadline.
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    while group_lives(group) {
+        if deadline.left().is_zero() {
+            panic!("waited {MUST_SUCCEED_WITHIN:?} for a reaped group to read as gone");
+        }
+        thread::yield_now();
+    }
 }
 
 #[test]
