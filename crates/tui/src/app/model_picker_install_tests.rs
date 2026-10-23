@@ -158,6 +158,10 @@ fn a_second_choice_while_one_installs_starts_nothing() {
     let zeta = row_at(&app, 1);
     let _ = app.model_picker_click(Spot::Cell(zeta, 0));
     assert!(app.take_install_start().is_none());
+    // The choice is dropped before any check can fail the other row.
+    app.set_configure(None);
+    let _ = app.model_picker_click(Spot::Cell(zeta, 0));
+    assert!(!screen(&app).contains("✗"), "{}", screen(&app));
 }
 
 #[test]
@@ -449,6 +453,15 @@ fn remote_case(
     script: Vec<(serde_json::Value, serde_json::Value)>,
     test: impl FnOnce(App) + Send + 'static,
 ) {
+    remote_case_in(script, None, test);
+}
+
+/// As [`remote_case`], with `workspace` as the app's local workspace.
+fn remote_case_in(
+    script: Vec<(serde_json::Value, serde_json::Value)>,
+    workspace: Option<&'static str>,
+    test: impl FnOnce(App) + Send + 'static,
+) {
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc;
     let deadline = fakes::Deadline::start();
@@ -491,13 +504,15 @@ fn remote_case(
     std::thread::spawn(move || {
         let seam = Arc::new(Fake::new(Vec::new()));
         let remote = Arc::new(crate::remote::Remote::new(seam, "/client".into(), router));
-        let mut app = App::new(None);
-        app.set_home(Launch {
-            location: crate::LaunchLocation::Remote {
-                hub: "box".to_owned(),
-            },
-            ..Default::default()
-        });
+        let mut app = App::new(workspace.map(PathBuf::from));
+        if workspace.is_none() {
+            app.set_home(Launch {
+                location: crate::LaunchLocation::Remote {
+                    hub: "box".to_owned(),
+                },
+                ..Default::default()
+            });
+        }
         app.set_size(100, 30);
         app.set_configure(Some(Arc::clone(&remote) as Arc<dyn Configure>));
         app.set_remote(remote);
@@ -540,6 +555,19 @@ fn a_remote_home_with_no_workspace_installs_at_the_hub_global_parent() {
         let start = job(&mut app);
         assert_eq!(start.provider, "openai");
         assert_eq!(start.workspace, PathBuf::from("/hub"));
+    });
+}
+
+#[test]
+fn a_remote_terminal_with_a_workspace_installs_there_and_asks_the_hub_nothing() {
+    // The script is empty: a hub-global read would wait for ever.
+    remote_case_in(Vec::new(), Some("/w"), |mut app| {
+        app.outbox.link = Link::Up;
+        let _ = app.open_model_picker(Mode::Choose);
+        let _ = app.on_key(Key::Down, now());
+        let _ = app.on_key(Key::Enter, now());
+        let start = job(&mut app);
+        assert_eq!(start.workspace, PathBuf::from("/w"));
     });
 }
 

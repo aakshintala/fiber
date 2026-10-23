@@ -282,7 +282,7 @@ fn a_done_install_draws_its_outcome_lines() {
     let (_, line) = find_row(&text, "Version v1.4.0");
     assert_eq!(
         cell_x(&ok, "✓"),
-        cell_x(&line, "Version v1.4.0") - 0,
+        cell_x(&line, "Version v1.4.0"),
         "one indent: {ok:?} {line:?}"
     );
 }

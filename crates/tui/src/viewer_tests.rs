@@ -46,6 +46,7 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
