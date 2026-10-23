@@ -79,6 +79,9 @@ mod startable;
 mod test_support;
 #[cfg(test)]
 mod timing_tests;
+mod tui_vm;
+#[cfg(test)]
+mod tui_vm_tests;
 mod update;
 
 use std::io;
@@ -123,6 +126,7 @@ pub use repository::{
 };
 pub use resolve::{nightly_parts, version, version_key};
 pub use startable::{context_window, takes, thinking_refusal};
+pub use tui_vm::{Span, TuiError, TuiVm};
 pub use update::{StagedUpdate, Target, stage_update};
 
 /// The extension API's major version this Fiber speaks

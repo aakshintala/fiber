@@ -309,7 +309,7 @@ impl Deadline {
     }
 
     /// Points the hook at `at`, the deadline of the callback about to run.
-    pub(super) fn restore(&self, at: Option<Instant>) {
+    pub(crate) fn restore(&self, at: Option<Instant>) {
         self.at.set(at);
     }
 
@@ -320,7 +320,7 @@ impl Deadline {
     }
 
     /// Arms `thread` so the hook stops it at this deadline.
-    pub(super) fn arm(&self, thread: &Thread) -> mlua::Result<()> {
+    pub(crate) fn arm(&self, thread: &Thread) -> mlua::Result<()> {
         let deadline = self.clone();
         thread.set_hook(
             HookTriggers::new().every_nth_instruction(CHECK_EVERY),
