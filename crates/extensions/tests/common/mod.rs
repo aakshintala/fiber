@@ -8,6 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -395,11 +396,8 @@ pub(crate) fn header(headers: &[(String, String)], name: &str) -> Option<String>
         .map(|(_, v)| v.clone())
 }
 
-/// How long a sign waits before it fails the test instead of hanging it.
-const SIGN_WITHIN: Duration = Duration::from_secs(5);
-
 /// Signs one request with `headers` already on it, on its own thread under
-/// [`SIGN_WITHIN`], so a call that never returns fails the test instead of
+/// [`MUST_SUCCEED_WITHIN`], so a call that never returns fails the test instead of
 /// hanging it.
 #[track_caller]
 pub(crate) fn sign_with(
@@ -419,9 +417,9 @@ pub(crate) fn sign_with(
             body: &body,
         }))
     });
-    match Deadline::after(SIGN_WITHIN).recv(&rx) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&rx) {
         Ok(answer) => answer,
-        Err(_) => panic!("the sign did not return within {SIGN_WITHIN:?}"),
+        Err(_) => panic!("the sign did not return within {MUST_SUCCEED_WITHIN:?}"),
     }
 }
 

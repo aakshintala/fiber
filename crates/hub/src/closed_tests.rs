@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,12 +29,9 @@ use crate::relay::{Kept, Relay, Replayed};
 use crate::testkit::write_log;
 use fakes::Deadline;
 
-/// One hang-guard deadline per wait: every close lands before it.
-const DEADLINE: Duration = Duration::from_secs(5);
-
 /// How long one read inside a multi-line wait blocks, so the reader
 /// notices the wait's end within this bound instead of one more
-/// [`DEADLINE`].
+/// [`MUST_SUCCEED_WITHIN`].
 const SLICE: Duration = Duration::from_secs(1);
 
 const SID: &str = "s_0123456789abcdef";
@@ -183,7 +181,10 @@ fn join(thread: thread::JoinHandle<()>, what: &str) {
         thread.join().unwrap();
         done_tx.send(()).unwrap_or(());
     });
-    assert!(Deadline::after(DEADLINE).recv(&done).is_ok(), "{what}");
+    assert!(
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&done).is_ok(),
+        "{what}"
+    );
 }
 
 /// Takes the scoped reader's lines with one deadline for the whole wait,
@@ -195,7 +196,7 @@ fn take_collected(
     stop: &AtomicBool,
     what: &str,
 ) -> Vec<String> {
-    let got = Deadline::after(DEADLINE).recv(lines);
+    let got = Deadline::after(MUST_SUCCEED_WITHIN).recv(lines);
     stop.store(true, Ordering::SeqCst);
     match got {
         Ok(Some(got)) => got,
@@ -361,7 +362,7 @@ fn route_on_thread(rig: &Rig, id: &str, stripped: Map<String, Value>) {
         done_tx.send(()).unwrap_or(());
     });
     assert!(
-        Deadline::after(DEADLINE).recv(&done).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&done).is_ok(),
         "the routed command is queued before its deadline"
     );
 }
@@ -434,7 +435,7 @@ fn a_session_whose_socket_refuses_keeps_the_level() {
     join(thread, "the relay thread to end");
     drop(rig.client);
     drop(rig.hub);
-    let lines = Deadline::after(DEADLINE)
+    let lines = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&eof)
         .expect("the client read ends after the relay");
     assert_eq!(
@@ -470,7 +471,7 @@ fn a_log_ending_fiber_exited_keeps_the_level() {
     join(thread, "the relay thread to end");
     drop(rig.client);
     drop(rig.hub);
-    let lines = Deadline::after(DEADLINE)
+    let lines = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&eof)
         .expect("the client read ends after the relay");
     assert_eq!(
@@ -553,7 +554,7 @@ fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
         .unwrap();
     session_peer.flush().unwrap();
     assert!(
-        starter.await_received(2, DEADLINE),
+        starter.await_received(2, MUST_SUCCEED_WITHIN),
         "the rerouted command reached the resumed session"
     );
     drop(session_peer);
@@ -605,7 +606,7 @@ fn a_command_racing_buffered_lines_waits_for_the_end_and_reaches_the_session_uns
     }));
     let thread = spawn(&rig, SID, reader);
     assert!(
-        Deadline::after(DEADLINE).recv(&reached).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&reached).is_ok(),
         "the relay paused before its first read"
     );
     // The racing command's write fails: it queues unsent on the dead relay.
@@ -678,7 +679,7 @@ fn a_command_racing_the_end_is_answered_after_stream_closed() {
     drop(session_peer);
     let thread = spawn(&rig, SID, reader);
     assert!(
-        Deadline::after(DEADLINE).recv(&reached).is_ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&reached).is_ok(),
         "the relay paused at its end"
     );
     // The racing command's write fails: it queues unsent on the dead relay.
@@ -782,7 +783,8 @@ fn a_disconnected_connection_skips_the_check() {
         release.recv().unwrap_or(());
     }));
     let thread = spawn(&rig, SID, reader);
-    Deadline::after(DEADLINE).recv_or_fail(&reached, "the relay paused before its first read");
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&reached, "the relay paused before its first read");
     lock(&rig.relays).close_all();
     drop(session_peer);
     drop(release_tx);

@@ -12,6 +12,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
@@ -39,9 +40,6 @@ use extensions::SessionExtensions;
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
-
-/// How long a test waits for one dispatch or signal before failing.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A cancel that never fires.
 struct Never;
@@ -125,7 +123,7 @@ fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the extensions to load"),
     )
@@ -550,12 +548,12 @@ fn cancel_between_lifecycle_callbacks_keeps_one_scope() {
         })
     };
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the first hook suspended on HTTP"
     );
     cancel.fire();
     server.release();
-    let answer = Deadline::after(WAIT)
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the cancelled chain");
     worker.join().expect("the dispatch thread joins");
@@ -719,11 +717,11 @@ fn a_suspended_dispatch_spans_the_whole_call() {
             let _sent = tx.send(answer);
         })
     };
-    let id = Deadline::after(WAIT)
+    let id = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the hook suspended on HTTP"
     );
     // The dispatch waits on the fake clock past its own check before fake
@@ -737,7 +735,7 @@ fn a_suspended_dispatch_spans_the_whole_call() {
         clock.await_thread_parked(
             id,
             Some(mark + Duration::from_secs(31)),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the hook caller parked past its check on the suspended callback"
     );
@@ -745,14 +743,14 @@ fn a_suspended_dispatch_spans_the_whole_call() {
         Some(mark + Duration::from_secs(31)),
         Some(id),
         Duration::from_millis(2500),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
         ends.lock().unwrap().is_empty(),
         "no completion while the dispatch is suspended"
     );
     server.release();
-    let answer = Deadline::after(WAIT)
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the dispatch");
     worker.join().expect("the dispatch thread joins");
@@ -805,11 +803,11 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
             let _sent = tx.send(answer);
         })
     };
-    let id = Deadline::after(WAIT)
+    let id = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&id_rx)
         .expect("waited for the dispatch thread");
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the hook suspended on HTTP"
     );
     // The caller waits on the suspended callback past its own check: the
@@ -818,7 +816,7 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
         clock.await_thread_parked(
             id,
             Some(mark + Duration::from_millis(2000)),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the hook caller parked past its check on the suspended callback"
     );
@@ -828,9 +826,9 @@ fn a_hook_past_its_deadline_fails_inside_its_scope() {
         Some(mark + Duration::from_millis(2000)),
         Some(id),
         Duration::from_millis(1500),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let answer = Deadline::after(WAIT)
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the timed-out dispatch");
     assert!(matches!(answer.outcome, BeforeMessageOutcome::Failed(_)));
@@ -1547,7 +1545,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         });
     }
     assert!(
-        held_a.await_requests(1, Deadline::after(WAIT)),
+        held_a.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "command A suspended on HTTP"
     );
     // Provider p suspends on its first held request while A waits.
@@ -1557,7 +1555,7 @@ fn overlapping_callbacks_keep_their_own_attribution() {
         let _sent = models_tx.send(provider_p.list_models(&ModelsArg::default()));
     });
     assert!(
-        held_p.await_requests(1, Deadline::after(WAIT)),
+        held_p.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "provider p suspended on HTTP"
     );
     // Quota q runs on the same VM and completes; the second VM overlaps
@@ -1584,15 +1582,15 @@ fn overlapping_callbacks_keep_their_own_attribution() {
     // its second HTTP after its resume.
     held_p.release();
     assert!(
-        held_p.await_requests(2, Deadline::after(WAIT)),
+        held_p.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "provider p resumed into its second HTTP"
     );
     held_a.release();
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&models_rx)
         .expect("waited for p")
         .expect("p lists its models");
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&cmd_rx)
         .expect("waited for the command")
         .expect("the command completes");
@@ -1767,7 +1765,7 @@ fn session_discovery_and_refresh_carry_the_sink() {
         .refresh(None, ModelsArg::default())
         .expect("a stale list refreshes");
     assert!(
-        server.await_requests(2, Deadline::after(WAIT)),
+        server.await_requests(2, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the refresh reached its request"
     );
     server.release();

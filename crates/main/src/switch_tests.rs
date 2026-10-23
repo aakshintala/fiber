@@ -11,6 +11,7 @@
 )]
 
 pub(super) use crate::test_support::install_extension;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -2027,7 +2028,7 @@ fn a_read_cancelled_in_progress_publishes_nothing() {
     );
     // Releases a survivor, if the cancel missed it.
     std::fs::write(&gate, "").unwrap();
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 /// A scripted session's switch with no label fails at `connect` when the

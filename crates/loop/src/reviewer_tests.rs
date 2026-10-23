@@ -9,9 +9,9 @@
     reason = "test code; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{
     CacheLifetime, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
@@ -468,7 +468,7 @@ fn already_clean_verdicts_read_without_hanging() {
     let _block = thread::spawn(move || {
         let _sent = block_tx.send(read_second("block: force-pushes to main"));
     });
-    let wait = Duration::from_secs(5);
+    let wait = fakes::MUST_SUCCEED_WITHIN;
     let first = Deadline::after(wait).recv_or_fail(&first_rx, "read_first(\"allow\")");
     assert!(matches!(first, Ok(First::Allow)), "{first:?}");
     let second = Deadline::after(wait).recv_or_fail(&second_rx, "read_second(\"allow\")");
@@ -907,7 +907,7 @@ fn fanout_returns_every_reply_in_request_order() {
         let replies = fanout_stage1(&worker, requests);
         let _sent = done_tx.send(replies);
     });
-    let deadline = Deadline::after(Duration::from_secs(5));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     for _ in 0..3 {
         deadline.recv_or_fail(&entered_rx, "every stage-1 request parks at the gate");
     }

@@ -1,5 +1,6 @@
 use super::*;
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::sync::{
@@ -52,7 +53,7 @@ fn platform_verifier_advertises_the_crypto_providers_signature_schemes() {
 fn an_abrupt_tls_eof_is_reported_without_another_tcp_read() {
     fakes::within(
         "abrupt TLS EOF",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
@@ -60,8 +61,8 @@ fn an_abrupt_tls_eof_is_reported_without_another_tcp_read() {
             let (done, finished) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let (mut tcp, _) = listener.accept().unwrap();
-                tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                tcp.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+                tcp.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
                 let mut tls = rustls::ServerConnection::new(server_config()).unwrap();
                 while tls.is_handshaking() {
                     tls.complete_io(&mut tcp).unwrap();
@@ -95,7 +96,7 @@ fn an_abrupt_tls_eof_is_reported_without_another_tcp_read() {
                 socket.read(&mut [0]).unwrap_err().kind(),
                 io::ErrorKind::UnexpectedEof
             );
-            fakes::Deadline::after(Duration::from_secs(5))
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&finished, "TLS peer closed without close_notify");
         },
     );
@@ -105,15 +106,15 @@ fn an_abrupt_tls_eof_is_reported_without_another_tcp_read() {
 fn tls_socket_echoes_text_with_the_test_ca() {
     fakes::within(
         "TLS websocket echo",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             let (done, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let (tcp, _) = listener.accept().unwrap();
-                tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                tcp.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+                tcp.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
                 let mut stream = rustls::StreamOwned::new(
                     rustls::ServerConnection::new(server_config()).unwrap(),
                     tcp,
@@ -155,7 +156,7 @@ fn tls_socket_echoes_text_with_the_test_ca() {
                 .unwrap();
             assert_eq!(line, "echo\n");
             stream.write_all(b"back\n").unwrap();
-            fakes::Deadline::after(Duration::from_secs(5))
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&rx, "TLS peer read the client frame");
         },
     );
@@ -165,15 +166,15 @@ fn tls_socket_echoes_text_with_the_test_ca() {
 fn tls_records_larger_than_the_deframer_buffer_keep_every_byte() {
     fakes::within(
         "large TLS websocket message",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let (done, completed) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let (tcp, _) = listener.accept().unwrap();
-                tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                tcp.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                tcp.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+                tcp.set_write_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
                 let mut stream = rustls::StreamOwned::new(
                     rustls::ServerConnection::new(server_config()).unwrap(),
                     tcp,
@@ -208,23 +209,27 @@ fn tls_records_larger_than_the_deframer_buffer_keep_every_byte() {
             assert_eq!(line.len(), 262145);
             assert_eq!(line.last(), Some(&b'\n'));
             assert!(line[..262144].iter().all(|byte| *byte == b'x'));
-            fakes::Deadline::after(Duration::from_secs(5))
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv_or_fail(&completed, "TLS server sent all records");
         },
     );
 }
 
+/// How long the server reads after the client rejects its certificate; no
+/// application data is expected.
+const NO_DATA_AFTER_REJECTION: Duration = Duration::from_secs(2);
+
 #[test]
 fn platform_verifier_refuses_the_private_test_ca() {
     fakes::within(
         "untrusted TLS certificate",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         || {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
             std::thread::spawn(move || {
                 let (tcp, _) = listener.accept().unwrap();
-                tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                tcp.set_read_timeout(Some(NO_DATA_AFTER_REJECTION)).unwrap();
                 let mut stream = rustls::StreamOwned::new(
                     rustls::ServerConnection::new(server_config()).unwrap(),
                     tcp,
@@ -266,7 +271,7 @@ fn silent_tls_peer_expires_at_connect_bound() {
     });
     let result = fakes::within(
         "TLS connect bound",
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let via = super::super::Via {
                 proxy: None,

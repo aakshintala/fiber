@@ -1,7 +1,7 @@
 //! Unit tests for the models.dev generator: one small inline catalog
 //! per rule.
 
-use std::time::Duration;
+use fakes::MUST_SUCCEED_WITHIN;
 
 use serde_json::json;
 
@@ -984,17 +984,12 @@ fn assert_curl_argv(url: &str) {
     assert_eq!(argv, ["curl", "-fsSL", "--max-time", "120", url]);
 }
 
-/// One deadline for every blocking `fetch` below (`docs/testing.md`,
-/// "Waits and timeouts"): a mutant that hangs `fetch` fails here,
-/// not on nextest's kill.
-const FETCH_WITHIN: Duration = Duration::from_secs(4);
-
-/// `fetch` on a thread, received under `FETCH_WITHIN`.
+/// `fetch` on a thread, received under `MUST_SUCCEED_WITHIN`.
 fn fetched(url: &str) -> Result<Vec<u8>, String> {
     let url = url.to_owned();
     fakes::within(
         "models-dev fetch",
-        Deadline::after(FETCH_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || fetch(&url),
     )
 }

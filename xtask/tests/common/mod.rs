@@ -34,8 +34,8 @@ pub(crate) fn run(
 /// Runs `git args` in `dir` and returns its trimmed standard output,
 /// failing the test when git exits nonzero. The wait is bounded at 30 s,
 /// the bound both callers use today; a passing run never waits on it.
-/// (`cli` keeps its own `git` with its 5 s bound, so this function is
-/// unused in that test target.)
+/// (`cli` keeps its own `git`, under the same shared bound, so this function
+/// is unused in that test target.)
 #[allow(dead_code, reason = "shared module; cli keeps its own git")]
 pub(crate) fn git(dir: &TempDir, args: &[&str]) -> String {
     let mut command = Command::new("git");

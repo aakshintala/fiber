@@ -8,17 +8,15 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Deadline;
 
 use super::*;
-
-const FIFO_DEADLINE: Duration = Duration::from_secs(2);
 
 struct Temp {
     dir: PathBuf,
@@ -129,7 +127,7 @@ fn a_fifo_does_not_hold_authentication_open() {
     thread::spawn(move || {
         done.send(holder(&home, "t0k3n")).unwrap_or(());
     });
-    let held = Deadline::after(FIFO_DEADLINE)
+    let held = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&returned)
         .expect("authentication lookup returns while a FIFO is present");
     assert!(held.is_none(), "a FIFO does not hold a device token");
