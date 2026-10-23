@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, StopArgs};
-use contract::shapes::Failure;
 use serde_json::Value;
 use support::clock::Parker;
 
@@ -255,12 +254,7 @@ pub fn hub_uninstall() -> i32 {
 /// Restarts `home`'s installed hub through its service manager: `Ok(true)`
 /// once the manager restarted it, `Ok(false)` with nothing run when no
 /// service is installed, so the caller signals the hub instead.
-pub fn hub_restart(home: &Path) -> Result<bool, Failure> {
-    restart_home(home).map_err(Failure::from)
-}
-
-/// [`hub_restart`] with the hub family's own error.
-fn restart_home(home: &Path) -> Result<bool, CliError> {
+pub fn hub_restart(home: &Path) -> Result<bool, CliError> {
     let exe = current_exe()?;
     let service = Service::locate(manager(), home, &exe, &|key| std::env::var_os(key))?;
     restart(&service, &system_run)
