@@ -1,7 +1,8 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
 //! process clock and the clock-parked wait, the process-group guard, the
 //! poison-ignoring `lock`, the admission lock, the stoppable read, the line
-//! framing, lowercase hex and SHA-256, and the `mint` id (`docs/architecture.md`, "The modules").
+//! framing, lowercase hex and SHA-256, the `mint` id, and the scrubbed `git`
+//! command builder (`docs/architecture.md`, "The modules").
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -15,6 +16,11 @@ pub mod clock;
 /// The process-group guard, the process-wide list and the signals
 /// (`docs/testing.md`, "Running tests").
 pub mod group;
+
+/// A `git` command with the scrubbed environment: `core.fsmonitor` off,
+/// the lock and terminal-prompt guards pinned, the redirecting variables
+/// removed, and hooks off unless the caller keeps them.
+pub mod git;
 
 /// A new id from random bytes, such as a session's or a command's.
 pub mod id;

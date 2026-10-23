@@ -296,13 +296,13 @@ pub(super) fn assembled(
         Arc::new(tools::PathLocks::new()),
         None,
     );
+    let lookup = crate::placeholders::lookup(home, &providers, &*fakes::clock::FakeClock::new());
     let (naming, _) = crate::lua_providers::add_lua(
         &extensions,
         &mut providers,
         &config,
         &fakes::children::grouped_output,
-        home,
-        &*fakes::clock::FakeClock::new(),
+        &lookup,
     )
     .unwrap();
     let owners = (extensions.lua_providers().iter())
@@ -1006,13 +1006,14 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         Arc::new(tools::PathLocks::new()),
         None,
     );
+    let lookup =
+        crate::placeholders::lookup(&fixture.home, &providers, &*fakes::clock::FakeClock::new());
     let (naming, _) = crate::lua_providers::add_lua(
         &extensions,
         &mut providers,
         &config,
         &fakes::children::grouped_output,
-        &fixture.home,
-        &*fakes::clock::FakeClock::new(),
+        &lookup,
     )
     .unwrap();
     assert!(
@@ -1340,54 +1341,6 @@ fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
     assert_eq!(
         rejection.message,
         "The model `m` is offered by more than one provider: fake/m, other/m. \
-         Name one as `provider/model`."
-    );
-}
-
-/// Adds extensions `lit1` and `lit2` each naming the literal `n:high`: a
-/// model id ending in a recognised thinking level that two registry
-/// providers share.
-fn with_two_literal_providers(fixture: &Fixture) {
-    for name in ["lit1", "lit2"] {
-        install_extension(
-            &fixture.home,
-            &format!("extensions/{name}"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-            &[(
-                name,
-                json!({
-                    "name": name,
-                    "models": [
-                        {"id": "n:high", "protocol": "openai-responses",
-                         "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                    ],
-                }),
-            )],
-        );
-    }
-}
-
-/// Two registry literals sharing one id are ambiguous on the full id, even
-/// when the naming list holds only one: skipping the guard would fall back
-/// to the stripped id, and pushing only duplicates would drop the other.
-#[test]
-fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
-    let fixture = fixture("fiber-switch-literal-registry-ambiguity");
-    with_two_literal_providers(&fixture);
-    let config = config(&fixture, &[]);
-    let (providers, _) = Providers::load(&fixture.home).unwrap();
-    let credentials: Credentials = [("lit1", keyed("default"))]
-        .into_iter()
-        .map(|(name, entry)| (name.to_owned(), entry))
-        .collect();
-    // The naming list holds only one of the two literals.
-    let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
-    let switching = over(&fixture.home, providers, naming, config, credentials);
-    let rejection = rejected(&switching, &args("n:high"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        rejection.message,
-        "The model `n:high` is offered by more than one provider: lit1/n:high, lit2/n:high. \
          Name one as `provider/model`."
     );
 }
@@ -1804,12 +1757,12 @@ fn a_scripted_model_the_session_did_not_start_with_is_rejected() {
         let switching = scripted_switching(&fixture, overrides);
         let rejection = rejected(&switching, &args("scripted/r.json"), None);
         assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-        assert_eq!(rejection.message, crate::scripted::START_ONLY);
+        assert_eq!(rejection.message, extensions::START_ONLY);
     }
     // Any other unknown reference keeps its own message.
     let switching = scripted_switching(&fixture, &["model=scripted/s.json"]);
     let rejection = rejected(&switching, &args("nobody/m"), None);
-    assert_ne!(rejection.message, crate::scripted::START_ONLY);
+    assert_ne!(rejection.message, extensions::START_ONLY);
 }
 
 #[test]
@@ -2422,7 +2375,7 @@ fn probe() -> ModelRequest {
         tool_choice: "none".to_owned(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "probe".to_owned(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,

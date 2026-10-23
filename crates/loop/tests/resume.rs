@@ -1351,7 +1351,13 @@ impl support::History {
         let looped = self.resume_headless(Vec::new());
         let outcome = self.run(looped, "again");
         assert_eq!(outcome, contract::events::TurnOutcome::Completed);
-        let mut conversation = self.provider.requests().pop().unwrap().conversation;
+        let mut conversation = self
+            .provider
+            .requests()
+            .pop()
+            .unwrap()
+            .conversation
+            .to_vec();
         assert_eq!(
             conversation.pop(),
             Some(Input::User {
@@ -1497,7 +1503,7 @@ fn an_open_batch_gets_no_fixed_result() {
         ]
     );
     assert_eq!(calls, ["a_1", "a_2"]);
-    for input in conversation {
+    for input in conversation.iter() {
         if let Input::ToolResult { text, .. } = input {
             assert!(
                 !text.contains("never ran") && !text.contains("unknown"),
@@ -3079,7 +3085,7 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     );
     // A later resume renders the same conversation from the log.
     let rebuilt = history.rebuilt();
-    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
+    assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
 }
 
 #[test]
@@ -3121,7 +3127,7 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
     let rebuilt = history.rebuilt();
-    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
+    assert_eq!(&rebuilt[..conversation.len()], &conversation[..]);
     // The rebuild puts the opening message at index 0, so the a_1 call is
     // followed directly by its result, and the notice follows the result.
     let call = conversation
@@ -3171,7 +3177,7 @@ fn resume_conversation(history: &mut History, prompt: &str) -> Vec<Input> {
         .last()
         .unwrap()
         .conversation
-        .clone()
+        .to_vec()
 }
 
 #[test]
@@ -3470,10 +3476,10 @@ impl Provider for ShutsDown {
     }
 }
 
-/// `fiber_exited` under SIGTERM after the resumed process's lines.
-fn exited_on_signal(history: &History) -> Envelope {
-    let written =
-        r#loop::fiber_exited(&history.log, &history.dir, Ok(()), true, Some(143)).unwrap();
+/// `fiber_exited` under SIGTERM after the resumed process's lines, over
+/// the live loop's summary.
+fn exited_on_signal(history: &History, summary: &r#loop::Summary) -> Envelope {
+    let written = r#loop::fiber_exited(&history.log, summary, Ok(()), true, Some(143)).unwrap();
     assert_eq!(written.code, 143);
     history.lines().pop().unwrap()
 }
@@ -3487,14 +3493,71 @@ fn a_shutdown_before_the_finishing_turn_writes_nothing_and_keeps_the_request() {
         .cancelled_by(Arc::clone(&cancel));
     r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
     cancel.shutdown(143);
-    let (_looped, outcome) = history.step(looped);
+    let (looped, outcome) = history.step(looped);
 
     assert_eq!(outcome, None);
     // No preamble, no re-raise: only this process's `fiber_started`.
     assert_eq!(history.new_kinds(), ["fiber_started"]);
     assert!(history.provider.requests().is_empty());
-    let exited = exited_on_signal(&history);
+    let exited = exited_on_signal(&history, looped.summary());
     assert_eq!(exited.payload["suspended_on"], "r_9");
+}
+
+/// A session whose earlier process died with an extension's ask open and an
+/// approval pending.
+fn crashed_history() -> History {
+    let mut history = History::new(vec![Scripted::text("Done.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(
+        Event::InteractionRequested(InteractionRequested {
+            request_id: contract::RequestId("r_ext".into()),
+            interaction: Interaction::Confirm {
+                prompt: "Proceed?".into(),
+            },
+            action_ids: None,
+            extension: Some("fiber.test/notes".into()),
+            resumes: false,
+        }),
+        None,
+    );
+    history.freeze();
+    history
+}
+
+#[test]
+fn a_resumed_exit_declines_the_ask_an_earlier_process_left_open() {
+    let mut history = crashed_history();
+    let looped = history.resume_headless(Vec::new());
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    r#loop::fiber_exited(&history.log, looped.summary(), Ok(()), false, None).unwrap();
+
+    assert_eq!(
+        history.new_kinds(),
+        ["fiber_started", "interaction_resolved", "fiber_exited"]
+    );
+    let lines = history.new_lines();
+    assert_eq!(lines[1].payload["request_id"], "r_ext");
+    assert_eq!(lines[1].payload["by"], "fiber");
+    assert_eq!(lines[1].payload["declined"], true);
+    // The earlier approval is not this process's: only a signal names it.
+    assert!(lines[2].payload.get("suspended_on").is_none());
+}
+
+#[test]
+fn a_signalled_resumed_exit_names_the_approval_an_earlier_process_left() {
+    let mut history = crashed_history();
+    let looped = history.resume_headless(Vec::new());
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    let exited = exited_on_signal(&history, looped.summary());
+    assert_eq!(exited.payload["suspended_on"], "r_9");
+    assert_eq!(
+        history.new_kinds(),
+        ["fiber_started", "interaction_resolved", "fiber_exited"]
+    );
 }
 
 #[test]
@@ -3524,12 +3587,11 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
     assert_eq!(kinds.last().map(String::as_str), Some("turn_completed"));
     // The loop starts no other turn and rejects the held prompt.
     let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
-    assert!(
-        Deadline::after(support::DEADLINE)
-            .recv(&finished)
-            .expect("run returned")
-    );
+    std::thread::spawn(move || done.send(looped.run()).unwrap());
+    let run = Deadline::after(support::DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
+    assert!(run.result.is_ok());
     match &*answer.lock().unwrap() {
         Some(Err(rejected)) => assert_eq!(rejected.code, contract::ErrorCode::Closing),
         other => panic!("the prompt was answered closing, not {other:?}"),
@@ -3538,7 +3600,7 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
         history.new_kinds().last().map(String::as_str),
         Some("turn_completed")
     );
-    let exited = exited_on_signal(&history);
+    let exited = exited_on_signal(&history, &run.summary);
     assert_eq!(exited.payload.get("suspended_on"), None);
 }
 
@@ -3969,7 +4031,8 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
         let mut looped = looped;
-        done.send(looped.turn().unwrap()).unwrap();
+        let outcome = looped.turn().unwrap();
+        done.send((looped, outcome)).unwrap();
     });
     clock.advance_when_parked(
         Some(deadline),
@@ -3978,7 +4041,7 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
         &Deadline::after(support::DEADLINE),
     );
     inbox.send(Delivery::Cancelled).unwrap();
-    let outcome = Deadline::after(support::DEADLINE)
+    let (looped, outcome) = Deadline::after(support::DEADLINE)
         .recv(&finished)
         .expect("the finishing turn ended at the idle deadline");
 
@@ -3993,7 +4056,7 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
             "permission_requested"
         ]
     );
-    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(&history.log, looped.summary(), Ok(()), false, None).unwrap();
     let exited = history.lines().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], "r_9");
 }
@@ -4104,6 +4167,7 @@ fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() 
     let inbox = std::mem::replace(&mut history.inbox_tx, mpsc::channel().0);
     let watcher = history.log.watch();
     let clock = Arc::clone(&history.clock);
+    let mut stepped: Option<Loop> = None;
     std::thread::scope(|scope| {
         scope.spawn(move || {
             support::read_until(watcher, "a re-raised permission_requested line", |line| {
@@ -4122,14 +4186,16 @@ fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() 
         });
         // The wait ends as the idle delay ends it: no turn outcome, and
         // nothing written past the re-raised request.
-        let (_looped, outcome) = history.step(looped);
+        let (looped, outcome) = history.step(looped);
         assert_eq!(outcome, None);
+        stepped = Some(looped);
     });
     assert!(exec.ran().is_empty());
     let new = history.new_lines();
     assert_eq!(new.last().unwrap().kind, "permission_requested");
     assert!(new.iter().all(|line| line.kind != "permission_resolved"));
-    let exited = exited_on_signal(&history);
+    let stepped = stepped.expect("the step ran");
+    let exited = exited_on_signal(&history, stepped.summary());
     assert_eq!(exited.payload["suspended_on"], "r_9");
 }
 
@@ -5148,10 +5214,12 @@ fn copies_of(lines: &[Envelope], generation: &str) -> Vec<Envelope> {
         .collect()
 }
 
-/// The exited totals over the log, as the ledger folds it: the spend the
-/// backfilled copies leave behind.
-fn exited_cost(history: &History) -> Option<f64> {
-    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, None).unwrap();
+/// The exited totals over the resumed loop's summary, as its ledger folds
+/// it: the spend the backfilled copies leave behind. Only what the resume
+/// wrote counts: lines an earlier process left behind are that process's,
+/// never this one's (`docs/events.md`, `fiber_exited`).
+fn exited_cost(history: &History, summary: &r#loop::Summary) -> Option<f64> {
+    r#loop::fiber_exited(&history.log, summary, Ok(()), false, None).unwrap();
     let all = log::read(&history.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
@@ -5176,7 +5244,7 @@ fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     // The orphan is marked before the backfill's copies: `job_completed`
     // first, then the delegate's records in delegate-log order, each
     // naming the delegate as the origin.
@@ -5193,7 +5261,7 @@ fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
         assert!(line.turn_id.is_none());
         assert_eq!(line.payload["origin_session_id"], "s_child");
     }
-    assert_eq!(exited_cost(&history), Some(0.18));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.18));
 }
 
 #[test]
@@ -5213,7 +5281,7 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     // Only the correction is appended: the already-copied prefix is
     // skipped by ordered occurrence, even though the ledger's latest
     // value already equals the correction's.
@@ -5222,7 +5290,7 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.18);
     assert_eq!(found[0].payload["origin_session_id"], "s_child");
-    assert_eq!(exited_cost(&history), Some(0.18));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.18));
 }
 
 /// `event` as an ephemeral line of `session`: a `usage_recorded` with no
@@ -5301,10 +5369,14 @@ fn a_backfill_appends_nothing_the_parent_already_holds() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     // The orphan is still marked, but no copy is appended twice.
     assert_eq!(history.new_kinds(), ["job_completed"]);
-    assert_eq!(exited_cost(&history), Some(0.18));
+    // The exit reports this process's calls only: the resume wrote no
+    // usage, so the cost is 0, not the earlier process's 0.18
+    // (`docs/events.md`, `fiber_exited`: `usage` is "this process's model
+    // calls for the session").
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.0));
 }
 
 #[test]
@@ -5325,7 +5397,7 @@ fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     // Occurrence matching appends B and the second A: comparing against
     // the latest value would have appended nothing.
     assert_eq!(
@@ -5336,7 +5408,7 @@ fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
     assert_eq!(found.len(), 2);
     assert_eq!(found[0].payload["cost"], 0.15);
     assert_eq!(found[1].payload["cost"], 0.10);
-    assert_eq!(exited_cost(&history), Some(0.10));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
 }
 
 #[test]
@@ -5388,7 +5460,7 @@ fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     // Delegate-log order after the already-copied g_1 prefix: the g_2
     // record names the direct delegate, the grandchild's line still names
     // the grandchild.
@@ -5413,7 +5485,7 @@ fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
     assert_eq!(usages[1].payload["origin_session_id"], "s_child");
     assert_eq!(usages[2].payload["generation_id"], "g_3");
     assert_eq!(usages[2].payload["origin_session_id"], "s_grand");
-    assert_eq!(exited_cost(&history), Some(0.75));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.75));
 }
 
 #[test]
@@ -5470,7 +5542,7 @@ fn an_orphan_on_another_harness_copies_nothing() {
 /// resume has parked on its lock. The result crosses back as text, so the
 /// loop itself never has to be `Send`. The test's one deadline bounds the
 /// whole wait, parks and completion together.
-fn resume_on_thread(history: &mut History) -> mpsc::Receiver<Result<(), String>> {
+fn resume_on_thread(history: &mut History) -> mpsc::Receiver<(Option<Loop>, Result<(), String>)> {
     let (tx, inbox) = mpsc::channel();
     drop(tx);
     let session = r#loop::Session {
@@ -5490,10 +5562,16 @@ fn resume_on_thread(history: &mut History) -> mpsc::Receiver<Result<(), String>>
     let folded = r#loop::resumed(&history.dir).unwrap();
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = Loop::resume(session, folded)
-            .map(|_| ())
-            .map_err(|error| format!("{error:?}"));
-        done.send(result).expect("the test waits for the resume");
+        // The loop comes back with the report, so the exit reads the
+        // resume's own summary.
+        match Loop::resume(session, folded) {
+            Ok(looped) => done
+                .send((Some(looped), Ok(())))
+                .expect("the test waits for the resume"),
+            Err(error) => done
+                .send((None, Err(format!("{error:?}"))))
+                .expect("the test waits for the resume"),
+        }
     });
     finished
 }
@@ -5556,9 +5634,9 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
 
     // The resume reports exactly the appended lines: the orphan marking
     // and the delegate's full final log in order.
-    deadline
-        .recv_or_fail(&finished, "the resume to report")
-        .unwrap();
+    let (resumed, result) = deadline.recv_or_fail(&finished, "the resume to report");
+    result.unwrap();
+    let looped = resumed.expect("the resume built a loop");
     assert_eq!(
         history.new_kinds(),
         [
@@ -5575,7 +5653,7 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     let second = copies_of(&history.new_lines(), "g_2");
     assert_eq!(second.len(), 1);
     assert_eq!(second[0].payload["origin_session_id"], "s_child");
-    assert_eq!(exited_cost(&history), Some(0.625));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.625));
 }
 
 #[test]
@@ -5599,14 +5677,14 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
     drop(delegate);
     advance_retry(&history, &deadline);
 
-    deadline
-        .recv_or_fail(&finished, "the resume to report")
-        .unwrap();
+    let (resumed, result) = deadline.recv_or_fail(&finished, "the resume to report");
+    result.unwrap();
+    let looped = resumed.expect("the resume built a loop");
     assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.10);
-    assert_eq!(exited_cost(&history), Some(0.10));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
 }
 
 #[test]
@@ -5632,11 +5710,11 @@ fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
     drop(delegate);
     history.freeze();
 
-    drop(resume_for_backfill(&mut history));
+    let looped = resume_for_backfill(&mut history);
     assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
     let first = copies_of(&history.new_lines(), "g_1");
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].payload["cost"], 0.10);
     assert!(copies_of(&history.new_lines(), "g_2").is_empty());
-    assert_eq!(exited_cost(&history), Some(0.10));
+    assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
 }

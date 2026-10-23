@@ -52,7 +52,7 @@ fn request() -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: contract::events::CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
@@ -77,7 +77,7 @@ fn connect_fetches_quota_for_its_label() {
         }],
     }))
     .unwrap();
-    let here = crate::connect::Here {
+    let here = crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
@@ -91,7 +91,7 @@ fn connect_fetches_quota_for_its_label() {
             model: &data.models[0],
             thinking: None,
         };
-        drop(done.send(crate::connect::connect(
+        drop(done.send(crate::connect(
             model,
             Some(contract::Secret::new("k".to_owned())),
             None,
@@ -128,7 +128,7 @@ fn provider_for(protocol: &str, deferred_tools: bool) -> Arc<dyn Provider> {
         }],
     }))
     .unwrap();
-    let here = crate::connect::Here {
+    let here = crate::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
@@ -138,7 +138,7 @@ fn provider_for(protocol: &str, deferred_tools: bool) -> Arc<dyn Provider> {
         model: &data.models[0],
         thinking: None,
     };
-    crate::connect::connect(model, None, None, None, &here).unwrap()
+    crate::connect(model, None, None, None, &here).unwrap()
 }
 
 #[test]
@@ -152,4 +152,63 @@ fn connect_passes_deferred_tools_to_responses_and_messages() {
 #[test]
 fn connect_leaves_a_protocol_without_deferral_in_full() {
     assert!(!provider_for("openai-completions", true).defers());
+}
+
+/// Provider data with one model on `protocol`.
+fn native(protocol: &str) -> config::ProviderData {
+    serde_json::from_value(json!({
+        "name": "qp",
+        "models": [{
+            "id": "m",
+            "protocol": protocol,
+            "base_url": "http://127.0.0.1:9/v1",
+        }],
+    }))
+    .unwrap()
+}
+
+/// Whether `connect_observed` builds a factory for `data`'s first model
+/// (a `scripted` one reads its id as a script under `workspace`) when the
+/// writer is at debug (`debug`) or at info.
+fn observed(data: &config::ProviderData, workspace: &std::path::Path, debug: bool) -> bool {
+    let here = crate::Here {
+        workspace: workspace.to_path_buf(),
+        clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
+    };
+    let diag = crate::Diagnostics {
+        log: Arc::new(crate::test_support::Level { debug }),
+        timings: Arc::new(|_, _, _| None),
+    };
+    let model = extensions::Model {
+        provider: data,
+        model: &data.models[0],
+        thinking: None,
+    };
+    let (_provider, observe) =
+        crate::connect_observed(model, None, None, None, &here, &diag).unwrap();
+    observe.is_some()
+}
+
+#[test]
+fn connect_observed_builds_a_factory_for_a_native_model_at_debug() {
+    let root = fakes::TempDir::new("fiber-connect-observed");
+    assert!(observed(&native("openai-responses"), root.path(), true));
+    assert!(observed(&native("anthropic-messages"), root.path(), true));
+}
+
+#[test]
+fn connect_observed_builds_no_factory_at_info() {
+    let root = fakes::TempDir::new("fiber-connect-observed");
+    assert!(!observed(&native("openai-responses"), root.path(), false));
+}
+
+#[test]
+fn connect_observed_builds_no_factory_for_a_scripted_model_at_debug() {
+    let root = fakes::TempDir::new("fiber-connect-observed");
+    std::fs::write(root.path().join("s.json"), r#"{"steps": []}"#).unwrap();
+    let mut providers = extensions::Providers::default();
+    providers.add_scripted("scripted/s.json");
+    let data = providers.get("scripted").unwrap().clone();
+    assert!(!observed(&data, root.path(), true));
 }

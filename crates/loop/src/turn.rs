@@ -11,13 +11,13 @@ use contract::events::{
 };
 use contract::provider::Input;
 
-use crate::{Error, Loop, Preamble, cancel, inbox, mint, prompt, status};
+use crate::{Error, Loop, Preamble, Summary, cancel, inbox, mint, prompt, status};
 
 impl Loop {
     /// Runs turns until `close` is taken or every sender of the inbox is
     /// gone, then, while jobs still run, the ending notice and their ends
     /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
-    pub fn run(mut self) -> Result<(), Error> {
+    pub fn run(mut self) -> crate::Ran {
         let status = status::spawn(&self);
         self.status_tap = status.as_ref().map(status::Status::tap);
         let result = loop {
@@ -34,7 +34,15 @@ impl Loop {
         if let Some(status) = status {
             status.stop();
         }
-        result
+        let summary = std::mem::take(&mut self.summary);
+        crate::Ran { summary, result }
+    }
+
+    /// This process's lines so far, folded as they were written: what
+    /// `fiber_exited` will report. For tests that run turns by hand, before
+    /// `run` returns.
+    pub fn summary(&self) -> &Summary {
+        &self.summary
     }
 
     /// Blocks until a prompt or a steer arrives, then runs one turn from
@@ -230,8 +238,9 @@ impl Loop {
         if crate::timing_tests::take_fail_preamble_write() {
             return Err(crate::timing_tests::log_io_error());
         }
-        self.log
-            .append(&Event::PreambleBuilt(event.clone()), None, None)?;
+        let written = Event::PreambleBuilt(event.clone());
+        self.log.append(&written, None, None)?;
+        self.summary.observe(&written, None);
         let large = prompt::definitions_notice(&event);
         // The effective deferred set the requests render logged searches
         // against (`docs/tools.md`, "Tool search"): `None` is a model

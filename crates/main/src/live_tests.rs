@@ -310,7 +310,7 @@ fn live_reviewer() {
         r#loop::BlockLimits::default(),
     );
     // The lines below carry the assertions; a failed turn still wrote them.
-    if let Err(e) = looped.run() {
+    if let Err(e) = looped.run().result {
         eprintln!("live reviewer turn failed: {:?}", e.code());
     }
 

@@ -37,20 +37,35 @@ pub(crate) fn advance_past_grace_or_answer<T>(
     advance: Duration,
     answered: Option<T>,
 ) -> Option<T> {
-    use contract::clock::Clock as _;
-    use support::group::DRAIN;
-
     if answered.is_some() {
         return answered;
     }
+    advance_past_grace_or_answer_within(clock, done, kill_at, advance, ROUNDS, SIGHT)
+}
+
+/// Advances past the grace park with the given bound: `rounds` rounds of
+/// one bounded `sight` wait each. Panics when the run neither parks nor
+/// answers.
+#[track_caller]
+fn advance_past_grace_or_answer_within<T>(
+    clock: &fakes::clock::FakeClock,
+    done: &mpsc::Receiver<T>,
+    kill_at: Instant,
+    advance: Duration,
+    rounds: u32,
+    sight: Duration,
+) -> Option<T> {
+    use contract::clock::Clock as _;
+    use support::group::DRAIN;
+
     let mut waited = kill_at;
     let mut step = advance;
     // Rounds of waiting with no park to show for them: the follow below
     // retries at once and takes no round of its own, so a mismatch on the
     // final round still follows instead of falling out to the hang guard.
-    let mut rounds = 0;
-    while rounds < ROUNDS {
-        match clock.try_advance_when_parked(Some(waited), None, step, SIGHT) {
+    let mut misses = 0;
+    while misses < rounds {
+        match clock.try_advance_when_parked(Some(waited), None, step, sight) {
             Ok(_) => return None,
             Err(miss) => match done.try_recv() {
                 // A park at another instant fails the advance, while no
@@ -78,7 +93,7 @@ pub(crate) fn advance_past_grace_or_answer<T>(
                         panic!("{miss}")
                     }
                     fakes::clock::Miss::NoPark => {
-                        rounds += 1;
+                        misses += 1;
                     }
                 },
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -110,8 +125,22 @@ pub(crate) fn await_grace_or_answer<T>(
     done: &mpsc::Receiver<T>,
     kill_at: Instant,
 ) -> Option<T> {
-    for _ in 0..ROUNDS {
-        if clock.await_parked(kill_at, fakes::Deadline::after(SIGHT)) {
+    await_grace_or_answer_within(clock, done, kill_at, ROUNDS, SIGHT)
+}
+
+/// Waits for the grace park or the run's answer with the given bound:
+/// `rounds` rounds of one bounded `sight` wait each. Panics when the run
+/// neither parks nor answers.
+#[track_caller]
+fn await_grace_or_answer_within<T>(
+    clock: &fakes::clock::FakeClock,
+    done: &mpsc::Receiver<T>,
+    kill_at: Instant,
+    rounds: u32,
+    sight: Duration,
+) -> Option<T> {
+    for _ in 0..rounds {
+        if clock.await_parked(kill_at, fakes::Deadline::after(sight)) {
             return match done.try_recv() {
                 Ok(done) => Some(done),
                 Err(mpsc::TryRecvError::Empty) => None,

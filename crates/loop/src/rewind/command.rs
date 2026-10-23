@@ -80,6 +80,8 @@ impl Loop {
             reject(ack, ErrorCode::Busy, TURN_RUNNING);
             return Ok(());
         }
+        // The pre-write check: a malformed line anywhere in the own log
+        // refuses the rewind `log_corrupt` before any write below.
         let own_lines = log::read(self.log.dir())?;
         let Some(first) = own_lines.first() else {
             return Err(Error::NoSessionStarted);
@@ -137,16 +139,14 @@ impl Loop {
         // `rewound` names the point's session only for an ancestor point:
         // for this session's own point the key is absent.
         let from_session_id = (target.session != own).then(|| target.session.clone());
-        self.log.append(
-            &Event::Rewound(Rewound {
-                new_session_id: new_session_id.clone(),
-                seq: Seq(point),
-                from_session_id,
-                summary,
-            }),
-            None,
-            None,
-        )?;
+        let rewound = Event::Rewound(Rewound {
+            new_session_id: new_session_id.clone(),
+            seq: Seq(point),
+            from_session_id,
+            summary,
+        });
+        self.log.append(&rewound, None, None)?;
+        self.summary.observe(&rewound, None);
         self.rewound = true;
         for delivery in self.deferred.drain(..) {
             refuse_after_rewound(delivery);

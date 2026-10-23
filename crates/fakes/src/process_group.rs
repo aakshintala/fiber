@@ -130,8 +130,10 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// empty, and returns whether it did. One probe right after the group's
 /// leader exits is a race: a transient child, such as a `cat` in a command
 /// substitution, can outlive it for a moment under load. The probes run on
-/// a thread, so the deadline holds even when a probe is slow. Any probe
-/// error (no such group, no permission) counts as empty.
+/// a thread, so the deadline holds even when a probe is slow. Only `ESRCH`
+/// (no such group) counts as empty: `Ok` and every other errno read the
+/// group as still holding a process, since a killed child not yet reaped
+/// probes `EPERM` on macOS and `Ok` on Linux.
 ///
 /// # Panics
 ///
@@ -154,6 +156,12 @@ pub fn group_empties(group: u32, deadline: Deadline) -> bool {
     let result = deadline.recv(&empty).is_ok();
     drop(stop);
     result
+}
+
+/// Whether a probe answer still names a live group: every answer but
+/// `ESRCH` reads live, the same predicate as `support::group::alive`.
+fn lives(answer: rustix::io::Result<()>) -> bool {
+    !matches!(answer, Err(rustix::io::Errno::SRCH))
 }
 
 /// Sends `signal` (`CONT`, `HUP`, `INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
@@ -386,23 +394,24 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Whether process group `group` has a member: kill(-group, 0), starting no
-/// process. Panics when `group` is 1 or less.
+/// process. Only `ESRCH` reads empty, through [`lives`]. Panics when
+/// `group` is 1 or less.
 #[allow(
     clippy::expect_used,
     reason = "a probe of an id past the pid range panics, like a refused id"
 )]
 fn group_lives(group: u32) -> bool {
     let id = checked(group, "process group").expect("a group past the pid range is never live");
-    rustix::process::test_kill_process_group(id).is_ok()
+    lives(rustix::process::test_kill_process_group(id))
 }
 
 /// How long each liveness wait holds between probes: one bounded wait
 /// against its stop channel, so no wait spins.
-const POLL: Duration = Duration::from_millis(10);
+pub(crate) const POLL: Duration = Duration::from_millis(10);
 
 /// True once `stop` sent or disconnected: the one bounded wait every probe
 /// loop shares, holding no lock between probes.
-fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
+pub(crate) fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
     !matches!(
         Deadline::after(POLL).recv(stop),
         Err(mpsc::RecvTimeoutError::Timeout)

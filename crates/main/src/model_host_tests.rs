@@ -264,7 +264,7 @@ fn key_names_the_session_and_the_extension() {
     assert_eq!(sent[0].max_output_tokens, Some(16));
     assert_eq!(sent[0].system_prompt, "be brief");
     assert_eq!(
-        sent[0].conversation,
+        &sent[0].conversation[..],
         vec![
             Input::User {
                 text: "hi".to_owned(),
@@ -1395,7 +1395,7 @@ fn image_parts_ride_the_request_as_references() {
     let sent = provider.requests();
     assert_eq!(sent.len(), 1);
     assert_eq!(
-        sent[0].conversation,
+        &sent[0].conversation[..],
         vec![Input::User {
             text: "look".to_owned(),
             images: vec![ImageRef {

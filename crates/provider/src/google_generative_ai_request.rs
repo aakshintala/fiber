@@ -307,7 +307,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     // A signature on a `functionCall`, waiting for that call. It never
     // rides onto text or into the next reply.
     let mut signature = None;
-    for input in &request.conversation {
+    for input in request.conversation.iter() {
         match input {
             Input::User { text, images } => {
                 park(&mut out, &mut signature);
@@ -486,7 +486,8 @@ mod body_segments_tests {
             conversation: vec![Input::User {
                 text: "hi".to_owned(),
                 images: Vec::new(),
-            }],
+            }]
+            .into(),
             sent_tools: None,
             previous_end: None,
             max_output_tokens: None,

@@ -7,7 +7,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Weak, mpsc};
 use std::thread::{Builder, JoinHandle};
 
@@ -893,7 +892,7 @@ pub(crate) fn clients_of(log: &Weak<Log>) -> u32 {
 /// The workspace's branch: `HEAD` is a detached head, and a failed or
 /// absent `git`, or a directory outside a repository, is no repository.
 fn branch(workspace: &PathBuf) -> Option<Git> {
-    let out = Command::new("git")
+    let out = support::git::command("git")
         .arg("-C")
         .arg(workspace)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])

@@ -118,7 +118,15 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     held("crates/provider/src/scripted_tests.rs", "held by #3127"),
     held("crates/loop/tests/review_jig.rs", "held by #3172"),
     held(
-        "crates/main/src/connect_tests.rs",
+        "crates/loop/src/reload_tests.rs",
+        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "crates/loop/tests/tool_search.rs",
+        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "crates/routing/src/connect_tests.rs",
         "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
     ),
 ];

@@ -232,7 +232,38 @@ pub(crate) fn run(
     deadline: Option<Instant>,
     cancel: mpsc::Receiver<()>,
 ) -> Result<Ran, Box<ExecError>> {
-    let mut cmd = Command::new(&req.program);
+    run_with(req, clock, deadline, cancel, Command::new(&req.program))
+}
+
+/// Runs `req` as [`run`] does, except the base command is the scrubbed
+/// `git` builder: `req`'s args follow the builder's `-c` pairs, so the
+/// `git` subcommand appears after them. `req`'s `env` stays empty, so no
+/// request variable re-adds one the builder removed.
+pub(crate) fn run_git(
+    req: &ExecRequest,
+    clock: &dyn Clock,
+    deadline: Option<Instant>,
+    cancel: mpsc::Receiver<()>,
+) -> Result<Ran, Box<ExecError>> {
+    run_with(
+        req,
+        clock,
+        deadline,
+        cancel,
+        support::git::command(&req.program),
+    )
+}
+
+/// [`run`] over a caller-built base command: `req`'s args, directory,
+/// environment, input and cap join it, then the run proceeds as `run`
+/// does, in its own process group or in Fiber's.
+fn run_with(
+    req: &ExecRequest,
+    clock: &dyn Clock,
+    deadline: Option<Instant>,
+    cancel: mpsc::Receiver<()>,
+    mut cmd: Command,
+) -> Result<Ran, Box<ExecError>> {
     cmd.args(&req.args)
         .current_dir(&req.cwd)
         .envs(&req.env)

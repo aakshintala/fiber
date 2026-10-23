@@ -45,7 +45,12 @@ pub(crate) fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Err
 /// The actions with a `tool_call_completed` in `lines`.
 pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>, Error> {
     let mut completed = HashSet::new();
-    for line in lines.iter().filter(|l| l.is_durable()) {
+    // The kind is tested before the payload is parsed: only a completion
+    // can fail this pass.
+    for line in lines
+        .iter()
+        .filter(|l| l.is_durable() && l.kind == "tool_call_completed")
+    {
         if let Some(Event::ToolCallCompleted(_)) =
             Event::from_envelope(line).map_err(Error::Unreadable)?
             && let Some(action) = &line.action_id

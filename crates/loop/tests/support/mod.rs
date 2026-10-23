@@ -63,7 +63,7 @@ pub(crate) fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#lo
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        let result = looped.run();
+        let result = looped.run().result;
         done.send(result).unwrap();
     });
     finished
@@ -1502,7 +1502,7 @@ impl Session {
         self.resume(Vec::new());
         self.inbox.send(delivery("again")).unwrap();
         assert_eq!(self.turn(), Some(TurnOutcome::Completed));
-        let mut conversation = self.requests().pop().unwrap().conversation;
+        let mut conversation = self.requests().pop().unwrap().conversation.to_vec();
         assert_eq!(
             conversation.pop(),
             Some(Input::User {

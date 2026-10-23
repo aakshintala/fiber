@@ -2,7 +2,7 @@
 //! editor on the row's file, and a theme choice repaints the next frame
 //! without a restart (`docs/tui.md`, "Swapped views", "Themes").
 
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
@@ -21,20 +21,6 @@ fn inputs(then: &[&str]) -> Vec<Input> {
         .chain(then)
         .map(|bytes| Input::Bytes(bytes.as_bytes().to_vec()))
         .collect()
-}
-
-/// Runs `work` on a thread, failing after [`DEADLINE`].
-#[track_caller]
-fn within<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("lib-settings".to_owned())
-        .spawn(move || done.send(work()).unwrap_or(()))
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(looped) => looped,
-        Err(err) => panic!("waited {DEADLINE:?} for the loop: {err}"),
-    }
 }
 
 /// A seam over the `tui.theme` row alone.
@@ -72,7 +58,9 @@ fn ctrl_g_opens_the_rows_file_and_reads_the_rows_again() {
     lp.var = Box::new(move |name| (name == "EDITOR").then(|| command.clone()));
     lp.app
         .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
-    let code = within(move || feed(&mut lp, inputs(&["\x07"])));
+    let code = fakes::within("the loop", Deadline::after(DEADLINE), move || {
+        feed(&mut lp, inputs(&["\x07"]))
+    });
     assert_eq!(code, 0);
     assert_eq!(
         std::fs::read_to_string(dir.path().join("config.json")).ok(),
@@ -88,7 +76,7 @@ fn ctrl_g_with_no_editor_says_so() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app
         .set_configure(Some(Arc::new(Fake::new(Vec::new())) as Arc<dyn Configure>));
-    let lp = within(move || {
+    let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\x07"]));
         lp
     });
@@ -104,7 +92,7 @@ fn a_theme_choice_repaints_the_next_frame() {
     lp.app
         .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
     // Enter opens the choices on `auto`; two Downs reach `light`.
-    let lp = within(move || {
+    let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\r"]));
         lp
     });
@@ -131,7 +119,7 @@ fn a_bad_theme_file_follows_the_terminal_with_its_notice() {
     lp.app
         .set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
     // `solar` is the fourth choice; the seam cannot read its file.
-    let lp = within(move || {
+    let lp = fakes::within("the loop", Deadline::after(DEADLINE), move || {
         feed(&mut lp, inputs(&["\r", "\x1b[B", "\x1b[B", "\x1b[B", "\r"]));
         lp
     });

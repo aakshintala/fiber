@@ -1,10 +1,9 @@
 //! The process boundary in a session's log (`docs/events.md`, "Process
 //! boundary"): `fiber_started` before the session's first line, and
-//! `fiber_exited`, folded from the log, after the loop has stopped. Only the
-//! loop writes durable events (`docs/architecture.md`, "Streaming").
+//! `fiber_exited`, from the loop's `Summary`, after the loop has stopped.
+//! Only the loop writes durable events (`docs/architecture.md`, "Streaming").
 
-use std::path::Path;
-
+use contract::ActionId;
 use contract::RequestId;
 use contract::events::{
     Answer, Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, InteractionResolved,
@@ -12,6 +11,7 @@ use contract::events::{
 };
 use contract::shapes::{Failure, Question, True};
 use log::Log;
+use serde_json::Value;
 
 use crate::Error;
 use crate::usage::Ledger;
@@ -73,10 +73,181 @@ pub struct Exited {
     pub error: Option<Failure>,
 }
 
+/// What `Loop::run` returns: the run's `Summary` beside its result, so
+/// `fiber_exited` reports this process's lines without reading the log.
+/// A failed run still carries its summary: usage written before the
+/// failure is still reported (`a_failed_run_exits_1_with_its_error`).
+#[derive(Debug)]
+pub struct Ran {
+    /// This process's lines, folded as they were written.
+    pub summary: Summary,
+    /// How the run ended.
+    pub result: Result<(), Error>,
+}
+
+/// What `fiber_exited` reports: this process's final message, usage, open
+/// requests and turn error, folded from each line as the loop wrote it.
+/// Each process builds its own, starting empty; `fiber_exited` reads
+/// nothing back from the log (`docs/events.md`, `fiber_exited`: "That copy
+/// is output, never a source").
+#[derive(Debug, Default, Clone)]
+pub struct Summary {
+    /// This process's model calls, latest per generation: `fiber_exited`
+    /// reports them as `usage` (`docs/events.md`, `fiber_exited`).
+    ledger: Ledger,
+    final_message: Option<FinalMessage>,
+    error: Option<Failure>,
+    questions: Option<Vec<Question>>,
+    /// Text parts of the open assistant message, joined in log order.
+    /// Every message takes them: messages never interleave, and a failed
+    /// call logs none, so the next message must not inherit them.
+    text: String,
+    /// Requests this process raised and has not resolved, oldest first.
+    /// Each entry also says whether an earlier process left it open.
+    open: Vec<(RequestId, bool)>,
+    /// The extension asks still unresolved, oldest first. A resumed
+    /// session starts a new VM, so no callback waits for the answer and
+    /// nothing can raise the question again (`docs/events.md`,
+    /// `interaction_resolved`).
+    open_extension: Vec<RequestId>,
+    /// Repository offers raised: `preamble_built` ends the wait on each.
+    offers: Vec<RequestId>,
+    /// Whether `rewound` was written: it closes the process boundary as
+    /// `fiber_exited` does (`docs/events.md`, "Rewind").
+    rewound: bool,
+}
+
+impl Summary {
+    /// Folds one written event into the summary, with the line's
+    /// `action_id`. Runs only after a successful append, so every folded
+    /// line is on the log.
+    pub(crate) fn observe(&mut self, event: &Event, action: Option<&ActionId>) {
+        if let Event::PermissionRequested(requested) = event {
+            self.raised(requested.request_id.clone(), false);
+        } else if let Event::InteractionRequested(requested) = event {
+            self.raised(requested.request_id.clone(), requested.extension.is_some());
+        } else if let Event::PermissionResolved(resolved) = event {
+            if let Some(id) = &resolved.request_id {
+                self.open.retain(|pending| &pending.0 != id);
+            }
+        } else if let Event::InteractionResolved(resolved) = event {
+            self.answered(&resolved.request_id);
+        } else if let Event::RepositoryCodeOffered(offered) = event {
+            // An offer precedes every request its process raises, so it goes
+            // first: `suspended_on` names an approval or question whenever
+            // one is open too, and resume finds the suspended turn by it.
+            self.open.insert(0, (offered.request_id.clone(), false));
+            self.offers.push(offered.request_id.clone());
+        } else if let Event::RepositoryCodeResolved(resolved) = event {
+            self.open.retain(|pending| pending.0 != resolved.request_id);
+        } else if let Event::PreambleBuilt(_) = event {
+            // A process that built its preamble no longer waits on an offer.
+            self.open
+                .retain(|pending| !self.offers.contains(&pending.0));
+        } else if let Event::Rewound(_) = event {
+            self.rewound = true;
+        }
+        if let Event::TurnStarted(_) = event {
+            self.final_message = None;
+            self.error = None;
+            self.questions = None;
+        } else if let Event::TextCompleted(part) = event {
+            self.text.push_str(&part.text);
+        } else if let Event::AssistantMessageCompleted(message) = event {
+            let part = std::mem::take(&mut self.text);
+            if message.outcome == MessageOutcome::Completed
+                && let Some(id) = action
+            {
+                self.final_message = Some(FinalMessage {
+                    final_action_id: id.clone(),
+                    text: part,
+                });
+            }
+        } else if let Event::TurnCompleted(turn) = event {
+            if turn.outcome == TurnOutcome::Failed {
+                self.final_message = None;
+            }
+            self.error = turn.error.clone();
+            self.questions = turn.questions.clone();
+        } else if let Event::UsageRecorded(recorded) = event {
+            // The cost as the log reads it back: serde_json's float parse is
+            // not exact, so `fiber_exited.usage.cost` stays the bytes it
+            // was when it was folded from the log. A cost that does not
+            // encode as a number reads back `null`.
+            let mut line = recorded.clone();
+            line.cost = serde_json::to_string(&line.cost)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .flatten();
+            self.ledger.record(&line);
+        }
+    }
+
+    /// Marks every request open now as left by an earlier process: it is
+    /// named `suspended_on` only under a signal. Extension asks need no
+    /// mark: they are declined whichever process raised them.
+    pub(crate) fn carry(&mut self) {
+        for pending in &mut self.open {
+            pending.1 = true;
+        }
+    }
+
+    /// Folds a line of an earlier process by its raw `payload`, for the
+    /// kinds the resume history pass would otherwise never parse: a
+    /// `request_id` that is not a string skips the line, as a payload that
+    /// does not read contributes nothing to the exit.
+    pub(crate) fn seed_raw(&mut self, kind: &str, payload: &serde_json::Map<String, Value>) {
+        let Some(id) = payload.get("request_id").and_then(Value::as_str) else {
+            return;
+        };
+        let id = RequestId(id.to_owned());
+        match kind {
+            "permission_requested" => self.raised(id, false),
+            "interaction_requested" => {
+                self.raised(id, payload.get("extension").is_some_and(Value::is_string));
+            }
+            "interaction_resolved" => self.answered(&id),
+            _ => {}
+        }
+    }
+
+    /// A request raised. An extension question belongs to a callback in
+    /// this process's VM, so resuming never raises it again: it is
+    /// declined at exit, not suspended on
+    /// (`an_open_extension_ask_is_declined_at_exit`).
+    fn raised(&mut self, id: RequestId, extension: bool) {
+        if extension {
+            self.open_extension.push(id);
+        } else {
+            self.open.push((id, false));
+        }
+    }
+
+    /// An interaction resolved. Whoever answered an extension ask already
+    /// wrote the one resolution (`a_resolved_extension_ask_is_left_alone`).
+    fn answered(&mut self, id: &RequestId) {
+        self.open.retain(|pending| &pending.0 != id);
+        self.open_extension.retain(|pending| pending != id);
+    }
+
+    /// The latest approval or question this process left unresolved, or
+    /// else its unresolved repository offer. Extension asks are never here;
+    /// they are declined at exit instead. A request an earlier process
+    /// left open counts only under a signal (`docs/invocation.md`,
+    /// "Shutdown").
+    fn suspended_on(&self, signalled: bool) -> Option<RequestId> {
+        self.open
+            .iter()
+            .rev()
+            .find(|(_, carried)| signalled || !carried)
+            .map(|(id, _)| id.clone())
+    }
+}
+
 /// Writes `fiber_exited` once the loop has stopped: the final message and
-/// the usage, folded from the session's log in `dir`, and `ran`'s error or
-/// else, for a `one_turn` run (`fiber ask`), the last turn's. A session the
-/// hub started does not fail when a turn did: its clients saw each
+/// the usage from this process's `summary`, and `ran`'s error or else, for
+/// a `one_turn` run (`fiber ask`), the last turn's. A session the hub
+/// started does not fail when a turn did: its clients saw each
 /// `turn_completed`. Returns what it wrote: exit code 1 with an `error`
 /// (`docs/errors.md`, "What a caller gets"), otherwise 0. Under a
 /// shutdown, `signal` is its exit code: it is the code written, with no
@@ -84,7 +255,22 @@ pub struct Exited {
 /// earlier process left unresolved (`docs/invocation.md`, "Shutdown").
 pub fn fiber_exited(
     log: &Log,
-    dir: &Path,
+    summary: &Summary,
+    ran: Result<(), Failure>,
+    one_turn: bool,
+    signal: Option<i32>,
+) -> Result<Exited, Error> {
+    let append = |event: &Event| log.append(event, None, None).map(drop);
+    write_exit(&append, summary, ran, one_turn, signal)
+}
+
+/// `fiber_exited` over `append`, which writes one line to the log. A failed
+/// append is returned as it came: the lines after it are not written. A
+/// test fails `append` here, because a `Log` cannot be made to fail a write
+/// from outside the `log` crate.
+fn write_exit(
+    append: &dyn Fn(&Event) -> Result<(), log::Error>,
+    summary: &Summary,
     ran: Result<(), Failure>,
     one_turn: bool,
     signal: Option<i32>,
@@ -92,189 +278,59 @@ pub fn fiber_exited(
     // A rewound session's last line is `rewound`, which closes the process
     // boundary as `fiber_exited` does: nothing more is written, and open
     // extension asks are left as they are (`docs/events.md`, "Rewind").
-    if log::last_line(dir).is_some_and(|line| line.kind == "rewound") {
+    if summary.rewound {
         let error = ran.err();
         return Ok(Exited {
             code: i32::from(error.is_some()),
             error,
         });
     }
-    let folded = log::lines(dir)
-        .map_err(Error::from)
-        .and_then(|lines| fold(lines, signal.is_some()));
-    let (fold, unread) = match folded {
-        Ok(fold) => (fold, None),
-        Err(e) => (Fold::default(), Some(e)),
+    let turn_error = if one_turn {
+        summary.error.clone()
+    } else {
+        None
     };
-    let unread = unread.map(|e| Failure {
-        code: e.code(),
-        message: e.to_string(),
-        retry_after_ms: None,
-        provider: None,
-    });
-    let turn_error = if one_turn { fold.error } else { None };
-    let error = ran.err().or(unread).or(turn_error);
+    let error = ran.err().or(turn_error);
     let (exit_code, error, final_message) = match signal {
         Some(code) => (code, None, None),
-        None => (i32::from(error.is_some()), error, fold.final_message),
+        None => (
+            i32::from(error.is_some()),
+            error,
+            summary.final_message.clone(),
+        ),
     };
-    decline_extension_asks(log, &fold.open_extension)?;
+    decline_extension_asks(append, &summary.open_extension)?;
     let exited = Event::FiberExited(FiberExited {
         exit_code,
-        usage: fold.ledger.usage(),
+        usage: summary.ledger.usage(),
         final_message,
         error: error.clone(),
-        suspended_on: fold.suspended_on,
-        questions: fold.questions,
+        suspended_on: summary.suspended_on(signal.is_some()),
+        questions: summary.questions.clone(),
     });
-    log.append(&exited, None, None)?;
+    append(&exited)?;
     Ok(Exited {
         code: exit_code,
         error,
     })
 }
 
-/// What `fiber_exited` reports, folded from the session's log.
-#[derive(Default)]
-struct Fold {
-    final_message: Option<FinalMessage>,
-    error: Option<Failure>,
-    questions: Option<Vec<Question>>,
-    ledger: Ledger,
-    /// The latest approval or question this process left unresolved, or
-    /// else its unresolved repository offer. Extension asks are never here; they are declined at exit instead.
-    suspended_on: Option<RequestId>,
-    /// The extension asks still unresolved, oldest first. Unlike `open`
-    /// below, these survive `fiber_started`: a resumed session starts a new
-    /// VM, so no callback waits for the answer and nothing can raise the
-    /// question again (`docs/events.md`, `interaction_resolved`).
-    open_extension: Vec<RequestId>,
-}
-
 /// Declines every still-open extension ask with `by: fiber`, in log order,
 /// before `fiber_exited`'s own line. A resumed session's status never waits
-/// on a question no callback holds. A fold that failed to read leaves the
-/// default fold, so nothing is declined then.
-fn decline_extension_asks(log: &Log, open: &[RequestId]) -> Result<(), Error> {
+/// on a question no callback holds.
+fn decline_extension_asks(
+    append: &dyn Fn(&Event) -> Result<(), log::Error>,
+    open: &[RequestId],
+) -> Result<(), Error> {
     for request_id in open {
         let resolved = Event::InteractionResolved(InteractionResolved {
             request_id: request_id.clone(),
             by: ResolvedBy::Fiber,
             answer: Answer::Declined { declined: True },
         });
-        log.append(&resolved, None, None)?;
+        append(&resolved)?;
     }
     Ok(())
-}
-
-/// Folds `lines`, one at a time. With `keep_open`, the requests raised
-/// before the latest `fiber_started` and still unresolved stay open across
-/// it. A line whose payload does not read contributes nothing; the first
-/// such line after the latest `fiber_started` fails the fold with its
-/// error, and one before it belongs to an earlier process and does not. A
-/// line that is not an envelope ends the fold with its error.
-fn fold(lines: log::Lines, keep_open: bool) -> Result<Fold, Error> {
-    let mut fold = Fold::default();
-    // Text parts of the open assistant message, joined in log order.
-    // Every message takes them: messages never interleave, and a failed
-    // call logs none, so the next message must not inherit them.
-    let mut text = String::new();
-    // Requests this process raised and has not resolved, oldest first.
-    // `suspended_on` is the latest (`docs/events.md`, `fiber_exited`).
-    let mut open = Vec::new();
-    // Extension asks still unresolved, oldest first. These survive
-    // `fiber_started`: an earlier process's ask, such as after a crash,
-    // is declined too (an_ask_an_earlier_process_left_open_is_declined).
-    let mut open_extension = Vec::new();
-    // Repository offers raised: `preamble_built` ends the wait on each.
-    let mut offers = Vec::new();
-    // The first payload since the latest `fiber_started` that did not read.
-    let mut unread = None;
-    for line in lines {
-        let line = line?;
-        let event = match Event::from_envelope(&line) {
-            Ok(event) => event,
-            Err(e) => {
-                unread.get_or_insert(Error::Unreadable(e));
-                continue;
-            }
-        };
-        // Each process reports its own lines only: the fold restarts at
-        // the latest `fiber_started` (`docs/events.md`, `fiber_exited`:
-        // `usage` is "this process's model calls for the session").
-        if matches!(&event, Some(Event::FiberStarted(_))) {
-            fold = Fold::default();
-            text.clear();
-            unread = None;
-            if !keep_open {
-                open.clear();
-            }
-            continue;
-        }
-        if let Some(Event::PermissionRequested(requested)) = &event {
-            open.push(requested.request_id.clone());
-        } else if let Some(Event::InteractionRequested(requested)) = &event {
-            // an_open_extension_ask_is_declined_at_exit, not suspended: an
-            // extension question belongs to a callback in this process's
-            // VM, so resuming never raises it again.
-            if requested.extension.is_some() {
-                open_extension.push(requested.request_id.clone());
-            } else {
-                open.push(requested.request_id.clone());
-            }
-        } else if let Some(Event::PermissionResolved(resolved)) = &event {
-            if let Some(id) = &resolved.request_id {
-                open.retain(|pending| pending != id);
-            }
-        } else if let Some(Event::InteractionResolved(resolved)) = &event {
-            // a_resolved_extension_ask_is_left_alone: whoever answered it
-            // already wrote the one resolution.
-            open.retain(|pending| pending != &resolved.request_id);
-            open_extension.retain(|pending| pending != &resolved.request_id);
-        } else if let Some(Event::RepositoryCodeOffered(offered)) = &event {
-            // An offer precedes every request its process raises, so it goes
-            // first: `suspended_on` names an approval or question whenever
-            // one is open too, and resume finds the suspended turn by it.
-            open.insert(0, offered.request_id.clone());
-            offers.push(offered.request_id.clone());
-        } else if let Some(Event::RepositoryCodeResolved(resolved)) = &event {
-            open.retain(|pending| pending != &resolved.request_id);
-        } else if let Some(Event::PreambleBuilt(_)) = &event {
-            // A process that built its preamble no longer waits on an offer.
-            open.retain(|pending| !offers.contains(pending));
-        }
-        if let Some(Event::TurnStarted(_)) = &event {
-            fold.final_message = None;
-            fold.error = None;
-            fold.questions = None;
-        } else if let Some(Event::TextCompleted(part)) = &event {
-            text.push_str(&part.text);
-        } else if let Some(Event::AssistantMessageCompleted(message)) = &event {
-            let part = std::mem::take(&mut text);
-            if message.outcome == MessageOutcome::Completed
-                && let Some(id) = &line.action_id
-            {
-                fold.final_message = Some(FinalMessage {
-                    final_action_id: id.clone(),
-                    text: part,
-                });
-            }
-        } else if let Some(Event::TurnCompleted(turn)) = &event {
-            if turn.outcome == TurnOutcome::Failed {
-                fold.final_message = None;
-            }
-            fold.error = turn.error.clone();
-            fold.questions = turn.questions.clone();
-        } else if let Some(Event::UsageRecorded(call)) = &event {
-            fold.ledger.record(call);
-        }
-    }
-    if let Some(e) = unread {
-        return Err(e);
-    }
-    fold.suspended_on = open.last().cloned();
-    fold.open_extension = open_extension;
-    Ok(fold)
 }
 
 #[cfg(test)]
