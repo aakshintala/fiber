@@ -1,7 +1,6 @@
 //! Pairing codes and terminal QR output (`docs/invocation.md`, "Remote clients").
-use crate::{failed, finish, sessions::request, write_line};
+use crate::{CliError, finish, sessions::request_value, write_line};
 use contract::commands::hub::{Device, HubCommand};
-use contract::{ErrorCode, shapes::Failure};
 use qrcode::{QrCode, render::unicode::Dense1x2};
 use serde_json::Value;
 use std::io::{self, BufReader, IsTerminal as _, Write};
@@ -76,10 +75,10 @@ fn run(
     address: Option<&Address>,
     terminal: bool,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
+) -> Result<(), CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
     let mut read = BufReader::new(stream);
-    let answer = request(
+    let answer = request_value(
         &mut read,
         "c_pairing_code",
         HubCommand::PairingCode(Device {
@@ -89,14 +88,14 @@ fn run(
     let code = answer
         .get("code")
         .and_then(Value::as_str)
-        .ok_or_else(|| failed(ErrorCode::IoFailed, "the hub's pairing answer has no code"))?;
+        .ok_or(CliError::PairingAnswerMissing)?;
     // Draw before printing: an oversized address leaves no partial output.
     let qr = if terminal {
         Some(draw(&qr_text(address, code))?)
     } else {
         None
     };
-    let print = || -> Result<(), Failure> {
+    let print = || -> Result<(), CliError> {
         write_line(out, code)?;
         if let Some(qr) = qr {
             write_line(out, &format!("\n{qr}"))?;
@@ -111,13 +110,8 @@ fn qr_text(address: Option<&Address>, code: &str) -> String {
         |address| format!("{}\n{code}", address.as_str()),
     )
 }
-fn draw(text: &str) -> Result<String, Failure> {
-    let code = QrCode::new(text.as_bytes()).map_err(|_| {
-        failed(
-            ErrorCode::Usage,
-            "The address is too long to draw as a QR code.",
-        )
-    })?;
+fn draw(text: &str) -> Result<String, CliError> {
+    let code = QrCode::new(text.as_bytes()).map_err(|_| CliError::QrTooLong)?;
     Ok(code
         .render::<Dense1x2>()
         .quiet_zone(true)

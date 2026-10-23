@@ -21,6 +21,7 @@ use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
 use super::run;
+use crate::CliError;
 
 /// One named deadline per wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -89,7 +90,7 @@ fn received(got: &mpsc::Receiver<String>) -> Vec<Value> {
 
 /// `run` on a thread, with its result received under one deadline: a
 /// blocking socket read never parks the test thread past the wait.
-fn run_wait(client: UnixStream) -> (Result<(), contract::shapes::Failure>, Vec<u8>) {
+fn run_wait(client: UnixStream) -> (Result<(), CliError>, Vec<u8>) {
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut out = Vec::new();
@@ -140,7 +141,8 @@ fn a_status_without_variables_is_a_failure() {
     let (_got, client) = fake_hub(vec![refreshed(), bare]);
     let (result, out) = run_wait(client);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::StatusNoVariables), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(out.is_empty(), "nothing is printed without variables");
 }
 
@@ -149,7 +151,8 @@ fn a_status_with_an_unknown_source_is_a_failure() {
     let (_got, client) = fake_hub(vec![refreshed(), status("elsewhere")]);
     let (result, out) = run_wait(client);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::StatusNoVariables), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(out.is_empty(), "nothing is printed for an unknown source");
 }
 
@@ -160,8 +163,11 @@ fn a_rejected_refresh_is_a_failure_with_its_code() {
     let (got, client) = fake_hub(vec![rejected]);
     let (result, out) = run_wait(client);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::Busy);
-    assert_eq!(error.message, "try later");
+    assert!(
+        matches!(&error, CliError::Rejected { message, .. } if message == "try later"),
+        "{error}"
+    );
+    assert_eq!(error.code(), ErrorCode::Busy);
     assert!(out.is_empty());
     let line = Deadline::after(DEADLINE).recv(&got).unwrap();
     assert_eq!(
@@ -181,7 +187,8 @@ fn a_connection_closed_before_the_answer_is_a_failure() {
     });
     let (result, out) = run_wait(client);
     let error = result.unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::HubClosed { .. }), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(out.is_empty());
 }
 
