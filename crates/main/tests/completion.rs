@@ -32,34 +32,9 @@ use support::{Deadline, Setup};
 /// How long one `fiber` or shell run may take.
 const RUN: Duration = Duration::from_secs(20);
 
-/// How long the checks and cleanup after one run may take in all.
-const REAP: Duration = Duration::from_secs(5);
-
-/// Each cleanup path has four steps, each with a quarter of the `REAP` budget.
-const GROUP_KILL: Duration = Duration::from_millis(1_250);
-const MATCHING_KILL: Duration = Duration::from_millis(1_250);
-const GROUP_EMPTY: Duration = Duration::from_millis(1_250);
-const MATCHING_EXIT: Duration = Duration::from_millis(1_250);
-const GROUP_WATCHDOG: Duration = Duration::from_millis(1_250);
-const MATCHING_WATCHDOG: Duration = Duration::from_millis(1_250);
-
-const _: () = assert!(
-    REAP.as_millis()
-        == GROUP_KILL.as_millis()
-            + MATCHING_KILL.as_millis()
-            + GROUP_EMPTY.as_millis()
-            + MATCHING_EXIT.as_millis()
-);
-const _: () = assert!(
-    REAP.as_millis()
-        == GROUP_EMPTY.as_millis()
-            + MATCHING_EXIT.as_millis()
-            + GROUP_WATCHDOG.as_millis()
-            + MATCHING_WATCHDOG.as_millis()
-);
-
 /// Runs one cleanup step on its own thread and returns failures so later
-/// cleanup checks still run before the test reports them.
+/// cleanup checks still run before the test reports them. Each step carries
+/// the must-succeed bound.
 #[track_caller]
 fn within_cleanup<T: Send + 'static>(
     what: &str,
@@ -248,7 +223,8 @@ fn set(words: &[&str]) -> BTreeSet<String> {
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
 /// the test holds open and never writes to: a run that read stdin would
 /// block until `RUN` expires. After the exit, the group and every process
-/// whose command line holds `tag` must be gone within `REAP`. On expiry,
+/// whose command line holds `tag` must be gone within the must-succeed
+/// bound. On expiry,
 /// both are killed and reaped before the test fails.
 #[track_caller]
 fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
@@ -268,25 +244,30 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         // Both bounded kills finish before either process check starts.
         let group_killed = within_cleanup(
             &format!("killing {what}'s process group"),
-            GROUP_KILL,
+            fakes::MUST_SUCCEED_WITHIN,
             move || kill_group(group, "KILL"),
         );
         let tag_for_kill = tag.clone();
         let tag_killed = within_cleanup(
             &format!("killing processes matching {tag}"),
-            MATCHING_KILL,
+            fakes::MUST_SUCCEED_WITHIN,
             move || kill_matching(&tag_for_kill),
         );
         let tag_for_wait = tag.clone();
         let group_gone = within_cleanup(
             &format!("{what}'s process group to empty"),
-            GROUP_EMPTY,
-            move || group_empties(group, fakes::Deadline::after(GROUP_EMPTY)),
+            fakes::MUST_SUCCEED_WITHIN,
+            move || group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            MATCHING_EXIT,
-            move || matching_exits(&tag_for_wait, fakes::Deadline::after(MATCHING_EXIT)),
+            fakes::MUST_SUCCEED_WITHIN,
+            move || {
+                matching_exits(
+                    &tag_for_wait,
+                    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                )
+            },
         );
         drop((group_dog, tag_dog));
         panic!(
@@ -298,24 +279,32 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let tag_for_wait = tag.clone();
     let group_gone = within_cleanup(
         &format!("{what}'s process group to empty"),
-        GROUP_EMPTY,
-        move || group_empties(group, fakes::Deadline::after(GROUP_EMPTY)),
+        fakes::MUST_SUCCEED_WITHIN,
+        move || group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        MATCHING_EXIT,
-        move || matching_exits(&tag_for_wait, fakes::Deadline::after(MATCHING_EXIT)),
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            matching_exits(
+                &tag_for_wait,
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            )
+        },
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && tag_gone.as_ref() == Ok(&true) {
-        let group_stood_down =
-            within_cleanup("the group watchdog to exit", GROUP_WATCHDOG, move || {
-                group_dog.stand_down(fakes::Deadline::after(GROUP_WATCHDOG));
-            });
+        let group_stood_down = within_cleanup(
+            "the group watchdog to exit",
+            fakes::MUST_SUCCEED_WITHIN,
+            move || {
+                group_dog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+            },
+        );
         let tag_stood_down = within_cleanup(
             "the matching watchdog to exit",
-            MATCHING_WATCHDOG,
+            fakes::MUST_SUCCEED_WITHIN,
             move || {
-                tag_dog.stand_down(fakes::Deadline::after(MATCHING_WATCHDOG));
+                tag_dog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
             },
         );
         Some((group_stood_down, tag_stood_down))
