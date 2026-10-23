@@ -6,7 +6,7 @@ use ratatui::layout::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
-use super::{Align, Layout, cut, parts};
+use super::{Align, Layout, parts};
 use crate::app::Target;
 use crate::format;
 use crate::rows::Rows;
@@ -122,16 +122,6 @@ fn a_long_label_is_cut_to_its_width_and_draws_one_row() {
     // `y` gives the whole label, never the cut line.
     assert!(!part.label().ends_with('…'));
     assert!(format::width(&part.label()) > 40);
-}
-
-#[test]
-fn cut_keeps_a_label_that_fits() {
-    assert_eq!(cut("▣ a.png · 1×1", 40), "▣ a.png · 1×1");
-}
-
-#[test]
-fn a_zero_width_line_draws_empty() {
-    assert_eq!(cut("▣ a.png · 1×1", 0), "");
 }
 
 #[test]

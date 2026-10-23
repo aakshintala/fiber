@@ -7,7 +7,6 @@
 use contract::events::{ToolInfo, ToolSource, ToolState};
 
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
-use crate::format::{cut, width};
 use crate::keys::{Edit, Key};
 use crate::settings_view::{Act, Ctx, reload_text};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
@@ -22,19 +21,6 @@ pub(crate) fn on(lists: &ToolLists, tool: &str) -> bool {
         .as_ref()
         .is_none_or(|names| names.iter().any(|name| name == tool))
         && !lists.disabled.iter().any(|name| name == tool)
-}
-
-/// `text` in exactly `columns` terminal columns: padded, or cut with `…`.
-pub(crate) fn fit(text: &str, columns: usize) -> String {
-    if width(text) <= columns {
-        let mut out = text.to_owned();
-        out.push_str(&" ".repeat(columns.saturating_sub(width(text))));
-        return out;
-    }
-    let mut out = cut(text, columns.saturating_sub(1));
-    out.push('…');
-    out.push_str(&" ".repeat(columns.saturating_sub(width(&out))));
-    out
 }
 
 /// A switch's mark: on or off, with `›` when it is the selection's focus.
@@ -416,7 +402,11 @@ impl Tools {
             ),
         };
         vec![
-            (format!("  {}", fit(&row.name, NAME)), None, Ink::Plain),
+            (
+                format!("  {}", crate::text::fit(&row.name, NAME)),
+                None,
+                Ink::Plain,
+            ),
             (project.0, project.1, Ink::Plain),
             ("  ".to_owned(), None, Ink::Plain),
             (everywhere.0, everywhere.1, Ink::Plain),
@@ -440,7 +430,7 @@ fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Opti
     vec![(
         format!(
             "{}{:^12}  {:^10}  {:<8}  {}",
-            fit(&heading_of(group), NAME + 2),
+            crate::text::fit(&heading_of(group), NAME + 2),
             project,
             everywhere,
             "state",

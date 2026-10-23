@@ -43,8 +43,9 @@ impl Cancel for Stopping {
 }
 
 /// Runs while a signaller holds the child that keeps its group unreaped,
-/// just before the SIGTERM: the seam a test pauses on to force a reap
-/// against it.
+/// just before the SIGTERM: the test pauses there to force a reap against
+/// it. No outside seam can pause a signaller holding that child, so the
+/// pause point stays as this race's only way to hold the SIGTERM back.
 #[cfg(test)]
 pub(crate) fn before_signal() {
     crate::server::tests::before_signal();
@@ -54,7 +55,9 @@ pub(crate) fn before_signal() {
 pub(crate) fn before_signal() {}
 
 /// Runs as a reap is about to take `which` lock (`child` or `live`): the
-/// seam a test waits on to know the reap contends before it asserts.
+/// test waits there to know the reap contends. A reap parked on either
+/// lock is invisible from outside, so the pause point stays as this race's
+/// only way to see the reap wait.
 #[cfg(test)]
 pub(crate) fn before_lock(which: &'static str) {
     crate::server::tests::before_lock(which);

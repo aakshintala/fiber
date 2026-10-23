@@ -122,6 +122,7 @@ impl Origin {
             cwd: dir.map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf),
             // `git`'s output is not capped today.
             env: BTreeMap::new(),
+            input: None,
             cap: usize::MAX,
             // In Fiber's process group, so SSH and credential-helper
             // prompts on the terminal still work as they do today.

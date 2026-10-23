@@ -1586,6 +1586,27 @@ fn the_menu_names_setup_with_its_synopsis() {
 }
 
 #[test]
+fn the_menu_names_stop_with_its_synopsis() {
+    let itself = menu()
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap()
+        .to_owned();
+    let row = itself
+        .lines()
+        .find(|line| line.starts_with("  stop "))
+        .unwrap()
+        .to_owned();
+    // The synopsis is the text before the description's gap of two or
+    // more spaces, past the two-space indent.
+    assert_eq!(
+        row[2..].split("  ").next().unwrap_or(""),
+        "stop [--hub <name>]",
+        "{row}"
+    );
+}
+
+#[test]
 fn sessions_export_without_an_id_is_a_usage_sentence() {
     assert!(
         sentence(&["fiber", "sessions", "export"])
@@ -1823,6 +1844,29 @@ fn hub_names_the_listed_hub_on_bare_fiber_and_resume() {
     }
     let help = super::render_help(&["resume"]).unwrap();
     assert!(help.contains("--hub <name>"), "{help}");
+}
+
+#[test]
+fn stop_takes_an_optional_listed_hub() {
+    for (argv, hub) in [
+        (vec!["fiber", "stop"], None),
+        (vec!["fiber", "stop", "--hub", "box"], Some("box")),
+    ] {
+        let Invocation::Run(Some(Commands::Stop { hub: actual }), _) = parse_from(argv.clone())
+        else {
+            panic!("stop with --hub: {argv:?}");
+        };
+        assert_eq!(actual.as_deref(), hub, "{argv:?}");
+    }
+    let help = super::render_help(&["stop"]).unwrap();
+    assert!(help.contains("--hub <name>"), "{help}");
+}
+
+#[test]
+fn hub_stop_stays_a_usage_error() {
+    let said = sentence(&["fiber", "hub", "stop"]);
+    assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+    assert_eq!(said.lines().count(), 1, "{said}");
 }
 
 #[test]
@@ -2392,6 +2436,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "setup",
             "logout",
             "doctor",
+            "stop",
             "feedback",
             "completion",
             "version",
@@ -2465,6 +2510,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "setup",
             "logout",
             "doctor",
+            "stop",
             "feedback",
             "completion",
             "version",
@@ -3632,7 +3678,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 45);
+    assert_eq!(synopses.len(), 46);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],

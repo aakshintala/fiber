@@ -12,6 +12,7 @@ use std::hash::{BuildHasher, RandomState};
 use contract::SessionId;
 use serde_json::{Value, json};
 
+use crate::import_report::ImportSource;
 use crate::input::Draft;
 
 /// What the terminal is attached to.
@@ -45,6 +46,9 @@ pub(crate) enum Kind {
     Shell,
     /// A built-in command such as `handoff`, `reload` or `close`.
     Command,
+    /// An `import` for a named source or both; its answer's report is
+    /// titled from it.
+    Import(ImportSource),
 }
 
 /// The hub connection, as the terminal sees it.

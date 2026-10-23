@@ -1,0 +1,135 @@
+{
+  "script": {
+    "steps": [
+      {
+        "tool_calls": [
+          {
+            "arguments": {
+              "path": "script.json"
+            },
+            "name": "read"
+          }
+        ]
+      },
+      {
+        "text": "Done."
+      }
+    ]
+  },
+  "prompt": "read it",
+  "settings": {
+    "hooks": {
+      "hooks": {
+        "rep": {
+          "point": "after_tool",
+          "command": "probe",
+          "args": [],
+          "timeout": 10000,
+          "on_failure": "blocking",
+          "tools": [
+            "read"
+          ]
+        }
+      }
+    }
+  },
+  "host": {
+    "exec": [
+      {
+        "request": {
+          "program": "probe",
+          "args": [],
+          "input": "{\"arguments\":{\"path\":\"script.json\"},\"content\":\"{\\\"steps\\\":[{\\\"tool_calls\\\":[{\\\"arguments\\\":{\\\"path\\\":\\\"script.json\\\"},\\\"name\\\":\\\"read\\\"}]},{\\\"text\\\":\\\"Done.\\\"}]}\",\"details\":{\"start_line\":1},\"point\":\"after_tool\",\"schema_version\":1,\"status\":\"completed\",\"tool\":\"read\"}\n"
+        },
+        "reply": {
+          "code": 0,
+          "stdout": "{\"content\":\"hook replaced\"}\n",
+          "stderr": ""
+        }
+      }
+    ]
+  },
+  "expect": [
+    {
+      "kind": "session_started"
+    },
+    {
+      "kind": "fiber_started"
+    },
+    {
+      "kind": "extensions_loaded"
+    },
+    {
+      "kind": "preamble_built"
+    },
+    {
+      "kind": "opening_message"
+    },
+    {
+      "kind": "extension_state_set",
+      "payload": {
+        "extension": "github.com/aakshintala/fiber/extensions/hooks",
+        "key": "hooks_workspace"
+      }
+    },
+    {
+      "kind": "turn_started"
+    },
+    {
+      "kind": "step_started"
+    },
+    {
+      "kind": "assistant_message_started"
+    },
+    {
+      "kind": "tool_call_requested"
+    },
+    {
+      "kind": "usage_recorded"
+    },
+    {
+      "kind": "assistant_message_completed"
+    },
+    {
+      "kind": "tool_call_started"
+    },
+    {
+      "kind": "tool_call_completed",
+      "payload": {
+        "content": [
+          {
+            "type": "text",
+            "text": "hook replaced"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "step_started"
+    },
+    {
+      "kind": "extension_exec"
+    },
+    {
+      "kind": "assistant_message_started"
+    },
+    {
+      "kind": "text_completed",
+      "payload": {
+        "text": "Done."
+      }
+    },
+    {
+      "kind": "usage_recorded"
+    },
+    {
+      "kind": "assistant_message_completed"
+    },
+    {
+      "kind": "turn_completed"
+    },
+    {
+      "kind": "fiber_exited"
+    }
+  ]
+}

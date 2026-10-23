@@ -13,7 +13,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -639,6 +639,197 @@ fn a_binary_message_after_authentication_closes_1003() {
     client.binary(b"x");
     assert_eq!(client.next("the close"), Item::Close(1003, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
+    await_zero(&hub);
+}
+
+/// A `stop` over a websocket answers before the close, then ends: the
+/// answer goes out behind the drain barrier, so the client reads the
+/// ack, then the close frame, then EOF.
+#[test]
+fn a_websocket_stop_answers_before_the_close_then_ends() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let (port, hub, _got, done) = serve_with_port(&temp, Vec::new(), Arc::clone(&clock));
+    pair_device(&temp.dir, "phone", "t0k3n");
+    let client = helloed(port, None);
+    let accepted = authenticate(&client, "c1", "t0k3n");
+    assert_eq!(accepted["kind"], "command_accepted");
+    client.text(r#"{"id":"c_stop","command":"stop","args":{}}"#);
+    let ack = text_of(&client, "the stop acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted");
+    assert_eq!(ack["payload"]["command_id"], "c_stop");
+    assert!(
+        ack["payload"].get("result").is_none(),
+        "a bare stop carries no result: {ack}"
+    );
+    assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
+    assert_eq!(client.next("the end"), Item::Eof);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    await_zero(&hub);
+}
+
+#[test]
+fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
+    // One live session through a scripted socket: answers `subscribe`
+    // and `close`, then closes, so the loop confirms it.
+    const SID: &str = "s_0123456789abcdef";
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let listener = UnixListener::bind(run.join(SID)).unwrap();
+    let (port, hub, _got, done) = serve_with_port(&temp, Vec::new(), Arc::clone(&clock));
+    pair_device(&temp.dir, "phone", "t0k3n");
+    let client = helloed(port, None);
+    let accepted = authenticate(&client, "c1", "t0k3n");
+    assert_eq!(accepted["kind"], "command_accepted");
+    thread::Builder::new()
+        .name("hub-test-scripted-session".to_owned())
+        .spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut read = BufReader::new(stream.try_clone().unwrap());
+            let mut write = stream;
+            for _ in 0..2 {
+                let mut line = String::new();
+                read.read_line(&mut line).unwrap();
+                let command: Value = serde_json::from_str(&line).unwrap();
+                let id = command["id"].as_str().unwrap_or("").to_owned();
+                let mut bytes = serde_json::to_vec(&json!({
+                    "kind": "command_accepted",
+                    "ts": 0,
+                    "schema_version": 1,
+                    "payload": {"command_id": id},
+                }))
+                .unwrap();
+                bytes.push(b'\n');
+                write.write_all(&bytes).unwrap();
+                write.flush().unwrap();
+            }
+            write.shutdown(Shutdown::Both).unwrap_or(());
+        })
+        .unwrap();
+    client.text(r#"{"id":"c_stop","command":"stop","args":{"sessions":true}}"#);
+    let ack = text_of(&client, "the stop acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted");
+    assert_eq!(ack["payload"]["command_id"], "c_stop");
+    assert_eq!(
+        ack["payload"]["result"],
+        json!({"sessions_stopped": 1}),
+        "the ack counts the closed session"
+    );
+    assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
+    assert_eq!(client.next("the end"), Item::Eof);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    await_zero(&hub);
+}
+
+/// A `stop` with `sessions` over a websocket interrupted mid-scan tells
+/// the asker what is still running: one live session through a scripted
+/// socket answers both lines but never closes, so the signal lands while
+/// the loop waits for its EOF. The client reads the partial rejection
+/// frame, then the close frame, then EOF, in that order.
+#[test]
+fn a_websocket_stop_interrupted_mid_scan_names_what_is_still_running() {
+    const SID: &str = "s_0123456789abcdef";
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let listener = UnixListener::bind(run.join(SID)).unwrap();
+    let (port, hub, got, done) = serve_with_port(&temp, Vec::new(), Arc::clone(&clock));
+    pair_device(&temp.dir, "phone", "t0k3n");
+    let client = helloed(port, None);
+    let accepted = authenticate(&client, "c1", "t0k3n");
+    assert_eq!(accepted["kind"], "command_accepted");
+    // One live session: answers `subscribe` and `close`, then holds the
+    // socket open without EOF, so the loop parks awaiting its close.
+    // The feed scanner connects first at startup; the loop connects
+    // after the stop. Every connection answers what it is asked; the
+    // one asked `close` is the loop's.
+    let (answered_tx, answered_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-scripted-session".to_owned())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                stream.set_read_timeout(Some(DEADLINE)).unwrap();
+                let answered_tx = answered_tx.clone();
+                thread::Builder::new()
+                    .name("hub-test-scripted-conn".to_owned())
+                    .spawn(move || {
+                        let mut read = BufReader::new(stream.try_clone().unwrap());
+                        let mut write = stream;
+                        loop {
+                            let mut line = String::new();
+                            match read.read_line(&mut line) {
+                                Ok(0) | Err(_) => return,
+                                Ok(_) => {}
+                            }
+                            let command: Value = match serde_json::from_str(&line) {
+                                Ok(command) => command,
+                                Err(_) => continue,
+                            };
+                            let name = command["command"].as_str().unwrap_or("").to_owned();
+                            let id = command["id"].as_str().unwrap_or("").to_owned();
+                            // One `write_all`, as every session writes: a
+                            // split line loses its head on the loop's
+                            // non-blocking read.
+                            let mut bytes = serde_json::to_vec(&json!({
+                                "kind": "command_accepted",
+                                "ts": 0,
+                                "schema_version": 1,
+                                "payload": {"command_id": id},
+                            }))
+                            .unwrap();
+                            bytes.push(b'\n');
+                            write.write_all(&bytes).unwrap();
+                            write.flush().unwrap();
+                            if name == "close" {
+                                answered_tx.send(()).unwrap_or(());
+                                // Held open: the read ends when the hub
+                                // exits and closes.
+                                let mut tail = String::new();
+                                read.read_line(&mut tail).unwrap_or(0);
+                                return;
+                            }
+                        }
+                    })
+                    .unwrap();
+            }
+        })
+        .unwrap();
+    client.text(r#"{"id":"c_stop","command":"stop","args":{"sessions":true}}"#);
+    Deadline::after(DEADLINE)
+        .recv(&answered_rx)
+        .expect("the session answers both lines");
+    signal(&hub, &got);
+    let rejected = text_of(&client, "the partial rejection");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["code"], "io_failed");
+    assert_eq!(rejected["payload"]["command_id"], "c_stop");
+    assert_eq!(
+        rejected["payload"]["message"],
+        "Session s_0123456789abcdef is still running."
+    );
+    assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
+    assert_eq!(client.next("the end"), Item::Eof);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     await_zero(&hub);
 }
 

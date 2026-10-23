@@ -81,6 +81,7 @@ mod stroke;
 mod surface;
 mod swapped;
 mod term;
+mod text;
 mod theme;
 mod tick;
 mod tools_view;

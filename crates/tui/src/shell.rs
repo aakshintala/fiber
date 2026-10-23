@@ -54,7 +54,8 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
         | CommandResult::Status { .. }
         | CommandResult::Subscribe { .. }
         | CommandResult::Import { .. }
-        | CommandResult::PlaceholderEnv { .. } => None,
+        | CommandResult::PlaceholderEnv { .. }
+        | CommandResult::Stop { .. } => None,
     }
 }
 

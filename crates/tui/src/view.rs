@@ -13,6 +13,7 @@ use ratatui::widgets::{Paragraph, Widget, Wrap};
 use crate::app::{App, Surface};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
+use crate::text::to_u16;
 
 pub(crate) mod banner;
 pub(crate) mod chrome;
@@ -788,12 +789,6 @@ impl Scroll {
         self.top = None;
         self.has_new = false;
     }
-}
-
-/// A row count as a screen coordinate; a screen is never taller than
-/// `u16::MAX`.
-fn to_u16(value: usize) -> u16 {
-    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// The screen as text, one row per line, trailing spaces trimmed.

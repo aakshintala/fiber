@@ -293,6 +293,19 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Doctor), _) => {
             ::cli::doctor(&cli::bare_version(), clock.as_ref(), &McpClient)
         }
+        cli::Invocation::Run(Some(cli::Commands::Stop { hub }), _) => {
+            let (home, target) = match hub_target(hub.as_deref()) {
+                Ok(target) => target,
+                Err(error) => return fail(error),
+            };
+            if target.is_listed() {
+                let mut connect = || connect_hub(&home, &target, &fiber, clock.as_ref());
+                ::cli::stop_remote(&mut connect, clock.as_ref())
+            } else {
+                let mut start = || start_hub(fiber.clone());
+                ::cli::stop_local(&home, &mut start, clock.as_ref())
+            }
+        }
         cli::Invocation::Run(
             Some(cli::Commands::Update {
                 channel,

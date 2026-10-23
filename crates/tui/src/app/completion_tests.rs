@@ -1011,3 +1011,61 @@ fn extensions_loaded_asks_again_and_its_answer_runs_the_new_command() {
     assert_eq!(lines[0]["command"], "command");
     assert_eq!(lines[0]["args"], json!({"name": "deploy", "text": "now"}));
 }
+
+#[test]
+fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
+    // An empty draft closes nothing: the next `/` still opens.
+    let mut app = attached();
+    app.close_completion_panels();
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    // A `/` draft closes the `/` panel; emptying the draft reopens it.
+    let mut app = attached();
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    app.close_completion_panels();
+    assert!(app.completions().is_none());
+    app.on_key(Key::Backspace, now());
+    assert_eq!(app.draft(), "");
+    type_text(&mut app, "/");
+    assert!(app.completions().is_some());
+    // A `/theme ` draft closes the names panel.
+    let mut app = attached();
+    type_text(&mut app, "/theme ");
+    assert!(app.completions().is_some());
+    app.close_completion_panels();
+    assert!(app.completions().is_none());
+    // A `/theme zzz` draft with no matching name closes nothing: the
+    // names still open once the draft matches again.
+    let mut app = attached();
+    type_text(&mut app, "/theme zzz");
+    assert!(app.completions().is_none());
+    app.close_completion_panels();
+    for _ in 0..3 {
+        app.on_key(Key::Backspace, now());
+    }
+    assert_eq!(app.draft(), "/theme ");
+    assert!(app.completions().is_some());
+    // A `/` draft under the search panel leaves the search untouched,
+    // and the `/` panel still opens after the search closes.
+    let mut app = attached();
+    type_text(&mut app, "/");
+    assert_eq!(app.on_key(Key::CtrlR, now()), Effect::None);
+    assert!(app.search_panel().is_some());
+    app.close_completion_panels();
+    assert!(app.search_panel().is_some());
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.search_panel().is_none());
+    assert!(app.completions().is_some());
+    // An open `@` panel closes, and a late search answer is ignored.
+    let mut app = attached();
+    assert_eq!(app.on_key(Key::Char('@'), now()), Effect::ListFiles);
+    let generation = app.generation();
+    app.on_files(generation, Ok(vec!["a.rs".to_owned()]));
+    assert!(app.files_open());
+    app.close_completion_panels();
+    assert!(!app.files_open());
+    assert!(app.completions().is_none());
+    app.on_files(generation, Ok(vec!["a.rs".to_owned()]));
+    assert!(app.completions().is_none());
+}

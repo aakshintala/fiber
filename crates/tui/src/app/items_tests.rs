@@ -1483,3 +1483,59 @@ fn take_wake_prefers_the_earlier_retry_over_the_status_tick() {
     let _ = crate::view::render(&app, area, &mut buf, None);
     assert_eq!(app.take_wake(), Some(refused_at + RETRY));
 }
+
+#[test]
+fn an_accepted_import_in_the_open_delegate_session_opens_the_report() {
+    use super::super::Kind;
+    use crate::import_report::ImportSource;
+    use crate::input::Draft;
+
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    app.outbox.insert(
+        "c_1".to_owned(),
+        Kind::Import(ImportSource::Codex),
+        Draft::default(),
+    );
+    let accepted = other_line(
+        DELEGATE_A,
+        "command_accepted",
+        json!({
+            "command_id": "c_1",
+            "result": {
+                "imported": {
+                    "mcp_servers": ["alpha"],
+                    "skills": [],
+                    "commands": [],
+                    "instructions": [],
+                },
+                "left_behind": [],
+            },
+        }),
+    );
+    assert!(app.on_line(accepted).is_empty());
+    let report = app
+        .import_report()
+        .expect("the item session's accept opens the report");
+    assert_eq!(report.title(), "Imported from Codex");
+    assert!(!app.outbox.pending.contains_key("c_1"));
+    // A malformed accept for a fresh id on the item session adds one
+    // notice and opens no second report.
+    app.outbox.insert(
+        "c_2".to_owned(),
+        Kind::Import(ImportSource::Codex),
+        Draft::default(),
+    );
+    let malformed = other_line(DELEGATE_A, "command_accepted", json!({"command_id": "c_2"}));
+    assert!(app.on_line(malformed).is_empty());
+    assert_eq!(app.notices().len(), 1);
+    assert_eq!(app.notice(), Some("rejected"));
+    assert_eq!(
+        app.import_report()
+            .expect("the first report stays open")
+            .title(),
+        "Imported from Codex"
+    );
+}

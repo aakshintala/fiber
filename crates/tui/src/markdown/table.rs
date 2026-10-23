@@ -8,7 +8,7 @@ use pulldown_cmark::Alignment;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::wrap::{Cell, char_width, link_cols, spans_of, wrap_joined_indices};
+use super::wrap::{Cell, link_cols, spans_of, wrap_joined_indices};
 use super::{Role, style};
 
 /// Cells between columns.
@@ -201,5 +201,8 @@ fn is_number(text: &str) -> bool {
 
 /// The cells `cells` take on screen.
 fn cells_width(cells: &[Cell]) -> usize {
-    cells.iter().map(|(ch, _)| char_width(*ch)).sum()
+    cells
+        .iter()
+        .map(|(ch, _)| crate::text::char_width(*ch))
+        .sum()
 }

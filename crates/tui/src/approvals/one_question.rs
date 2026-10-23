@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::builder::Builder;
 use super::form::Spot;
-use super::text::{clean, delete_before, insert_at, move_caret};
+use super::text::{delete_before, insert_at, move_caret};
 use super::{Panel, PanelKey, Title};
 use crate::format::width as measure;
 use crate::keys::{Edit, Key};
@@ -183,8 +183,8 @@ impl OneQuestion {
         match edit {
             Edit::Paste(text) => {
                 if self.kind == Kind::TextInput {
-                    for ch in text.chars() {
-                        self.type_char(if ch.is_control() { ' ' } else { ch });
+                    for ch in crate::text::controls_to_space(text).chars() {
+                        self.type_char(ch);
                     }
                 }
             }
@@ -342,7 +342,9 @@ impl OneQuestion {
             }
             return line;
         }
-        let words: Vec<char> = clean(&self.words).chars().collect();
+        let words: Vec<char> = crate::text::controls_to_space(&self.words)
+            .chars()
+            .collect();
         let before = |start: usize| -> String {
             words
                 .get(start..self.caret)
