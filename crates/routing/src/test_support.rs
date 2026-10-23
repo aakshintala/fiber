@@ -108,3 +108,17 @@ pub(crate) fn install_extension(
         .unwrap();
     }
 }
+
+/// A diagnostic writer that is or is not at debug and writes nothing.
+pub(crate) struct Level {
+    /// Whether the writer is at debug.
+    pub(crate) debug: bool,
+}
+
+impl contract::diag::DebugLog for Level {
+    fn debugging(&self) -> bool {
+        self.debug
+    }
+
+    fn provider_request(&self, _request: &contract::diag::ProviderRequest) {}
+}

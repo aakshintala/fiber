@@ -693,13 +693,8 @@ pub(crate) fn prepare(
     .map_err(rejection)?;
     // The reviewer's model, before the read: Fiber never reviews with the
     // session's own model.
-    let judge = crate::reviewer_reference(&now.config, &resolved).and_then(|typed| {
-        let model = switching
-            .registry
-            .resolve(&typed)
-            .map_err(|e| crate::failed(e.code(), e))?;
-        Ok((model.reference(), model.provider.name.clone()))
-    });
+    let judge = crate::reviewer_model(&switching.registry, &now.config, &resolved)
+        .map(|model| (model.reference(), model.provider.name.clone()));
     if let Ok((judged, _)) = &judge
         && *judged == reference
     {

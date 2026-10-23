@@ -83,7 +83,7 @@ use log::Log;
 use r#loop::Loop;
 #[cfg(test)]
 use parts::parts_in;
-use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_reference};
+use parts::{Parts, choose_reviewer, parts_with, per_run, reviewer_model};
 use routing::{Here, connect, connect_observed};
 use routing::{credential, lua_providers, scripted};
 

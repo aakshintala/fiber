@@ -154,19 +154,6 @@ fn connect_leaves_a_protocol_without_deferral_in_full() {
     assert!(!provider_for("openai-completions", true).defers());
 }
 
-/// A diagnostic writer that is or is not at debug and writes nothing.
-struct Level {
-    debug: bool,
-}
-
-impl contract::diag::DebugLog for Level {
-    fn debugging(&self) -> bool {
-        self.debug
-    }
-
-    fn provider_request(&self, _request: &contract::diag::ProviderRequest) {}
-}
-
 /// Provider data with one model on `protocol`.
 fn native(protocol: &str) -> config::ProviderData {
     serde_json::from_value(json!({
@@ -190,7 +177,7 @@ fn observed(data: &config::ProviderData, workspace: &std::path::Path, debug: boo
         cache_diagnostics: false,
     };
     let diag = crate::Diagnostics {
-        log: Arc::new(Level { debug }),
+        log: Arc::new(crate::test_support::Level { debug }),
         timings: Arc::new(|_, _, _| None),
     };
     let model = extensions::Model {

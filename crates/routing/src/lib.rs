@@ -7,6 +7,7 @@
 pub mod connect;
 pub mod credential;
 pub mod lua_providers;
+pub mod reviewer;
 pub mod scripted;
 
 pub use connect::{Diagnostics, Here, connect, connect_observed};

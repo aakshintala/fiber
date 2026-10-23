@@ -16,7 +16,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use doors::failure;
 use extensions::Providers;
 use r#loop::Model;
-use routing::{Here, connect, connect_observed};
+use routing::{Here, connect_observed};
 
 use crate::{
     failed, handoff, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
@@ -561,40 +561,17 @@ pub(crate) fn reload_inputs(
     )
 }
 
-/// The reviewer model's reference: `reviewer.model` when set, else the
-/// session provider's own `providers."<name>".reviewer_model`, else the
-/// package's `reviewer_model`, else no reviewer. The provider lookup reads
-/// the effective layers, so a project value wins over the global one and
-/// a repository value is ignored; the stored ID is local and gains the
-/// session provider's prefix once. A missing reviewer is not a startup
+/// The reviewer's model: `routing::reviewer`'s lookup, where no source is
+/// `no_model` with the loop's message. A missing reviewer is not a startup
 /// error: the loop gets it, and every reviewed call escalates it
 /// (`docs/permissions.md`, "How it runs").
-pub(crate) fn reviewer_reference(
+pub(crate) fn reviewer_model<'a>(
+    providers: &'a Providers,
     config: &Config,
     session: &extensions::Model<'_>,
-) -> Result<String, Failure> {
-    if let Some(typed) = config
-        .get("reviewer.model", None)
-        .and_then(|(value, _)| value.as_str().map(str::to_owned))
-    {
-        return Ok(typed);
-    }
-    // Segments, never dotted text: a provider name holding a dot stays
-    // one segment.
-    let local = [
-        "providers".to_owned(),
-        session.provider.name.clone(),
-        "reviewer_model".to_owned(),
-    ];
-    if let Some((value, _)) = config.get_segments(&local, None)
-        && let Some(id) = value.as_str()
-    {
-        return Ok(format!("{}/{}", session.provider.name, id));
-    }
-    match &session.provider.reviewer_model {
-        Some(id) => Ok(format!("{}/{}", session.provider.name, id)),
-        None => Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE)),
-    }
+) -> Result<extensions::Model<'a>, Failure> {
+    routing::reviewer::model(providers, config, session)?
+        .ok_or_else(|| failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE))
 }
 
 /// The session's `Diag` as routing's observed factories take it: the writer
@@ -630,48 +607,23 @@ pub(crate) fn choose_reviewer(
     ) -> Result<(String, lua_providers::Access), Failure>,
     diag: Option<&Arc<log::diag::Diag>>,
 ) -> Result<(r#loop::Reviewer, Option<Observe>), Failure> {
-    let typed = reviewer_reference(config, session)?;
-    let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
-    let context_window = settings::context_window(model.model, &model.reference())?;
-    // Another provider's reviewer goes through the same path, so a Lua
-    // reviewer model works: the token when it registered `credential`,
-    // else the key.
-    let (label, access) = credential(model.provider)?;
-    // The token is read once, so a failing `credential()` fails here:
-    // not a startup error, the loop gets it and every reviewed call
-    // escalates it (`docs/permissions.md`, "How it runs").
-    let (provider, reviewer_observe) = match diag {
-        Some(diag) => connect_observed(
-            model,
-            access.key,
-            access.signer,
-            access.lua.as_ref().map(|lua| (lua, label.as_str())),
-            here,
-            &diagnostics(diag),
-        )?,
-        None => (
-            connect(
-                model,
-                access.key,
-                access.signer,
-                access.lua.as_ref().map(|lua| (lua, label.as_str())),
-                here,
-            )?,
-            None,
-        ),
-    };
+    let diag = diag.map(diagnostics);
+    let chosen =
+        routing::reviewer::choose(providers, config, session, here, credential, diag.as_ref())?
+            .ok_or_else(|| failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE))?;
+    let model = chosen.model;
     Ok((
         r#loop::Reviewer {
-            provider,
+            provider: chosen.provider,
             model: Model {
                 reference: model.reference(),
                 cost: model.model.cost.clone(),
                 subscription: model.model.subscription,
             },
             cache_lifetime: settings::cache_lifetime(config, &model.reference()),
-            context_window,
+            context_window: chosen.context_window,
             thinking_levels: model.model.thinking_levels.clone(),
         },
-        reviewer_observe,
+        chosen.observe,
     ))
 }
