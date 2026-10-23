@@ -239,7 +239,7 @@ pub(crate) static TABLE: &[CommandEntry] = &[
     CommandEntry {
         name: "close",
         description: "Stops the session on screen.",
-        hint: None,
+        hint: Some("[all]"),
         run: run_close,
     },
     CommandEntry {
@@ -340,7 +340,10 @@ fn run_import(app: &mut App, rest: &str) -> Option<Effect> {
     Some(effect)
 }
 
-fn run_close(app: &mut App, _rest: &str) -> Option<Effect> {
+fn run_close(app: &mut App, rest: &str) -> Option<Effect> {
+    if rest.trim() == "all" {
+        return Some(app.ask_close_all());
+    }
     Some(app.close())
 }
 
