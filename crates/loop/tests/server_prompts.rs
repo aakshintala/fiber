@@ -126,7 +126,7 @@ fn a_slash_prompt_runs_a_servers_prompt() {
     let expanded = session
         .requests()
         .iter()
-        .flat_map(|request| request.conversation.clone())
+        .flat_map(|request| request.conversation.to_vec())
         .rev()
         .find_map(|input| match input {
             Input::User { text, .. } => Some(text),

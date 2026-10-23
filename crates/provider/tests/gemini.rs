@@ -53,7 +53,8 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     let ep = endpoint(&server);
     for model in [ep.reference(), "other/model".into()] {
         let mut req = request();
-        req.conversation.push(Input::ToolCall {
+        let mut conversation = req.conversation.to_vec();
+        conversation.push(Input::ToolCall {
             action_id: ActionId("a_1".into()),
             model: model.clone(),
             call: ToolCallRequested {
@@ -65,20 +66,23 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
                 provider_item: None,
             },
         });
-        req.conversation.push(Input::ToolSearchResult {
+        conversation.push(Input::ToolSearchResult {
             action_id: ActionId("a_1".into()),
             loaded: vec!["a".into(), "b".into()],
         });
+        req.conversation = conversation.into();
 
         let protocol = Gemini::new(ep.clone());
         run(protocol.call(&req)).0.unwrap();
-        req.conversation[2] = Input::ToolResult {
+        let mut conversation = req.conversation.to_vec();
+        conversation[2] = Input::ToolResult {
             action_id: ActionId("a_1".into()),
             text: "Loaded: a, b.".into(),
             is_error: false,
             images: vec![],
             pdfs: vec![],
         };
+        req.conversation = conversation.into();
         run(protocol.call(&req)).0.unwrap();
         let requests = server.requests();
         let pair = &requests[requests.len() - 2..];
@@ -692,10 +696,11 @@ fn weather_tool() -> ToolDefinition {
 fn request() -> ModelRequest {
     ModelRequest {
         tools: vec![weather_tool()],
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..harness::request()
     }
 }
@@ -1130,7 +1135,7 @@ fn a_request_output_limit_without_generation_config_in_extra_body_sets_max_outpu
 /// The conversation after `reply`, as the loop renders it: each action in
 /// the order the model emitted it, then each call's result.
 fn after(reply: &Reply, model: &str) -> Vec<Input> {
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     for (n, action) in reply.actions.iter().enumerate() {
         match action {
             ReplyAction::Text(part) => conversation.push(Input::Assistant {
@@ -1192,7 +1197,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
 fn sent_contents(conversation: Vec<Input>) -> (Value, String) {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
@@ -1759,7 +1764,7 @@ fn consecutive_replies_each_keep_their_own_text() {
     )]));
     let signed = json!({"text": "Part two.", "thoughtSignature": "c2ln"});
     let (next, _) = decoded(&stream(&[chunk(json!([signed.clone()]), Some("STOP"))]));
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     for reply in [cut.unwrap(), next.unwrap()] {
         for action in &reply.actions {
             match action {
@@ -1866,7 +1871,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
     // A call signature with no `functionCall` before the next user message
     // goes out on an empty text part, ahead of that message. A later call
     // does not inherit it.
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Reasoning {
             model: REFERENCE.into(),
@@ -1963,7 +1968,7 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
     let part = |is_error: bool| {
         let server = ProviderServer::start([completed_reply()]).unwrap();
         let request = ModelRequest {
-            conversation: conversation(is_error),
+            conversation: (conversation(is_error)).into(),
             ..request()
         };
         run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
@@ -2029,11 +2034,12 @@ fn a_stored_image_is_sent_as_inline_data_parts_beside_the_response() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(
+        conversation: (image_conversation(
             false,
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
-        ),
+        ))
+        .into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2091,7 +2097,7 @@ fn a_stored_pdf_is_sent_as_inline_data_parts_beside_the_response() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: pdf_conversation(REFERENCE, pdf_ref("artifacts/p_1.pdf")),
+        conversation: (pdf_conversation(REFERENCE, pdf_ref("artifacts/p_1.pdf"))).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2112,7 +2118,7 @@ fn a_failed_result_with_an_image_keeps_the_error_key_and_still_has_parts() {
     let session = fakes::TempDir::new("fiber-gemini-request-image");
     std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(true, "boom", vec![png_ref("i.png")]),
+        conversation: (image_conversation(true, "boom", vec![png_ref("i.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2134,11 +2140,12 @@ fn a_text_only_model_gets_no_parts_and_the_response_says_so() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(
+        conversation: (image_conversation(
             false,
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
-        ),
+        ))
+        .into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2222,7 +2229,7 @@ fn a_foreign_call_and_result_go_as_text_while_the_models_own_stay_native() {
     ];
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
@@ -2293,7 +2300,7 @@ fn a_foreign_result_with_a_pdf_sends_text_then_inline_data() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: pdf_conversation("other/model", pdf_ref("artifacts/p_1.pdf")),
+        conversation: (pdf_conversation("other/model", pdf_ref("artifacts/p_1.pdf"))).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2337,7 +2344,7 @@ fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
     ];
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2423,7 +2430,7 @@ fn a_users_image_is_sent_as_inline_data_parts_after_the_text() {
     std::fs::create_dir(session.path().join("artifacts")).unwrap();
     std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
+        conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
         session_dir: session.path().to_path_buf(),
         ..request()
     };
@@ -2879,7 +2886,7 @@ fn the_recorded_search_replays_its_parts_and_never_its_grounding() {
     // The next request, as the loop renders the reply: the search parts
     // go back unchanged, in order.
     let next = ModelRequest {
-        conversation: after(&reply, REFERENCE),
+        conversation: (after(&reply, REFERENCE)).into(),
         ..request()
     };
     run(provider.call(&next)).0.unwrap();
@@ -2911,7 +2918,7 @@ fn the_recorded_search_replays_its_parts_and_never_its_grounding() {
     );
     // Another model reference leaves the search parts out.
     let foreign = ModelRequest {
-        conversation: after(&reply, "openai/gpt-6-luna"),
+        conversation: (after(&reply, "openai/gpt-6-luna")).into(),
         ..request()
     };
     run(provider.call(&foreign)).0.unwrap();

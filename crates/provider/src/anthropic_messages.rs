@@ -481,7 +481,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     // drops leaves the messages either side of it as one.
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     let mut positions: Vec<Option<(usize, usize)>> = Vec::with_capacity(request.conversation.len());
-    for input in &request.conversation {
+    for input in request.conversation.iter() {
         let blocks = block_of(
             input,
             &reference,

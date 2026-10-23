@@ -377,7 +377,7 @@ fn selection_prose_never_reaches_a_later_prompt() {
     assert_eq!(kept_lines(&lines).len(), 1);
     for request in reviewer.requests() {
         assert!(!request.system_prompt.contains("ZQX-PROSE"));
-        for input in &request.conversation {
+        for input in request.conversation.iter() {
             assert!(!format!("{input:?}").contains("ZQX-PROSE"));
         }
     }

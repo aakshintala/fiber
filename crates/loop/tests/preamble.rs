@@ -290,7 +290,7 @@ fn opening_text(session: &Session) -> String {
     let [request] = requests.as_slice() else {
         panic!("one request, got {}", requests.len());
     };
-    let [contract::provider::Input::User { text, .. }, ..] = request.conversation.as_slice() else {
+    let [contract::provider::Input::User { text, .. }, ..] = &request.conversation[..] else {
         panic!("{:?}", request.conversation);
     };
     text.clone()

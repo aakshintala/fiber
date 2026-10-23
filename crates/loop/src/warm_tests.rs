@@ -18,7 +18,7 @@ fn request() -> ModelRequest {
         tool_choice: "auto".to_owned(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
@@ -191,6 +191,37 @@ fn resend_with_nothing_held_is_none() {
     };
     assert_eq!(
         warming.resend(t0 + Duration::from_secs(10), t0 + hour(), five_minutes()),
+        None
+    );
+}
+
+#[test]
+fn held_and_resent_requests_share_the_recorded_conversation() {
+    use contract::provider::Input;
+    use std::sync::Arc;
+    let t0 = origin();
+    let mut recorded = request();
+    recorded.conversation = vec![Input::User {
+        text: "hello".to_owned(),
+        images: Vec::new(),
+    }]
+    .into();
+    let mut warming = Warming::default();
+    warming.set_cap(Some(1));
+    warming.record(&recorded, t0);
+    let held = warming.held().expect("request is held once recorded");
+    assert!(Arc::ptr_eq(&held.conversation, &recorded.conversation));
+    assert_eq!(held.max_output_tokens, None);
+    let resent = warming
+        .resend(t0 + Duration::from_secs(10), t0 + hour(), five_minutes())
+        .expect("resend is due before the cache expires");
+    assert_eq!(resent.max_output_tokens, Some(1));
+    assert!(Arc::ptr_eq(&resent.conversation, &recorded.conversation));
+    assert_eq!(
+        warming
+            .held()
+            .expect("held request is unchanged")
+            .max_output_tokens,
         None
     );
 }

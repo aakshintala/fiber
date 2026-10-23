@@ -327,7 +327,7 @@ fn reviewer_request() -> contract::provider::ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: contract::events::CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
