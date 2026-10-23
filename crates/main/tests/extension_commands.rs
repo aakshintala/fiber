@@ -1180,20 +1180,23 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
     // `clients` is set aside: written when the connection attaches, with
     // no position against the session's other lines (`docs/testing.md`,
     // "Event streams"); one attach writes exactly one.
+    // The durable lines stay pinned in order (`docs/events.md:116`): only
+    // `notice` and `extension_ui` float, both ephemeral with no promised
+    // order against each other (`docs/events.md`, `notice` and
+    // `extension_ui` sections).
+    let filtered = kinds(&out)
+        .into_iter()
+        .filter(|kind| *kind != "clients")
+        .collect::<Vec<_>>();
     assert_eq!(
-        kinds(&out)
-            .into_iter()
-            .filter(|kind| *kind != "clients")
-            .collect::<Vec<_>>(),
-        [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "notice",
-            "extension_ui",
-            "fiber_exited",
-        ]
+        &filtered[..3],
+        ["session_started", "fiber_started", "extensions_loaded"],
     );
+    assert_eq!(filtered.len(), 6, "{filtered:?}");
+    assert_eq!(*filtered.last().unwrap(), "fiber_exited");
+    let mut pair = vec![filtered[3], filtered[4]];
+    pair.sort_unstable();
+    assert_eq!(pair, ["extension_ui", "notice"], "{filtered:?}");
     assert_eq!(
         kinds(&out)
             .iter()
