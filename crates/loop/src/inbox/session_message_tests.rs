@@ -728,6 +728,18 @@ impl World {
         finished
     }
 
+    /// Moves the parked wait past `by`, expecting its park at `expected`:
+    /// the runner and the [`MUST_SUCCEED_WITHIN`] wait are filled in.
+    #[track_caller]
+    fn advance_parked(&self, expected: Option<std::time::Instant>, by: Duration) -> Mark {
+        self.clock.advance_when_parked(
+            expected,
+            self.runner,
+            by,
+            &Deadline::after(MUST_SUCCEED_WITHIN),
+        )
+    }
+
     fn send(&self, delivery: Delivery) {
         self.inbox.send(delivery).unwrap();
     }
@@ -811,12 +823,7 @@ fn users(request: &ModelRequest) -> Vec<String> {
 #[track_caller]
 fn park_idle(world: &World) -> Mark {
     let origin = world.clock.now();
-    world.clock.advance_when_parked(
-        Some(origin + IDLE),
-        world.runner,
-        IDLE,
-        &Deadline::after(MUST_SUCCEED_WITHIN),
-    )
+    world.advance_parked(Some(origin + IDLE), IDLE)
 }
 
 #[test]
@@ -855,12 +862,7 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     // Nothing closed while the loop runs on: a later message is still
     // admitted; the idle exit that ends the run closes admission.
     assert!(world.admission.admit(|| true).is_some());
-    world.clock.advance_when_parked(
-        Some(origin + IDLE + IDLE),
-        world.runner,
-        IDLE,
-        &Deadline::after(MUST_SUCCEED_WITHIN),
-    );
+    world.advance_parked(Some(origin + IDLE + IDLE), IDLE);
     world.send(Delivery::Cancelled);
     let result = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
@@ -912,17 +914,12 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
         let outcome = looped.turn();
         let _sent = done.send((looped, outcome));
     });
-    let runner = Some(handle.thread().id());
+    world.runner = Some(handle.thread().id());
     let origin = world.clock.now();
     // The clock moves first, then the wake lands, so the exit check
     // finds an empty inbox: a wake taken before the advance would park
     // again with no later wake.
-    world.clock.advance_when_parked(
-        Some(origin + IDLE),
-        runner,
-        IDLE,
-        &Deadline::after(MUST_SUCCEED_WITHIN),
-    );
+    world.advance_parked(Some(origin + IDLE), IDLE);
     world.send(Delivery::Cancelled);
     let (mut looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
@@ -1366,12 +1363,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
             .to_owned(),
     );
     // The offer waits with the message in the turn's input.
-    let mark = world.clock.advance_when_parked(
-        None,
-        world.runner,
-        IDLE,
-        &Deadline::after(MUST_SUCCEED_WITHIN),
-    );
+    let mark = world.advance_parked(None, IDLE);
     world.send(Delivery::Cancelled);
     assert!(
         world
@@ -1602,12 +1594,7 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
         |line| line.kind == "interaction_requested",
     );
     world.watched = Some(watcher);
-    let _mark = world.clock.advance_when_parked(
-        Some(origin + IDLE),
-        world.runner,
-        IDLE,
-        &Deadline::after(MUST_SUCCEED_WITHIN),
-    );
+    world.advance_parked(Some(origin + IDLE), IDLE);
     world.send(Delivery::Cancelled);
     let (looped, outcome) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&finished)
