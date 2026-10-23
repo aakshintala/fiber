@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::read_media as read;
+use super::read_media;
 
 /// `<root>/sessions/s_child`, the session under test, with `<root>/sessions`
 /// holding its siblings.
@@ -34,7 +34,7 @@ fn a_relative_artifact_is_read_under_the_session_directory() {
     sessions.write("s_child/artifacts/i.png", b"abcd");
 
     assert_eq!(
-        read(&sessions.dir, "artifacts/i.png").as_deref(),
+        read_media(&sessions.dir, "artifacts/i.png").as_deref(),
         Some(&b"abcd"[..])
     );
 }
@@ -51,7 +51,7 @@ fn a_relative_path_that_leaves_the_session_directory_is_not_read() {
         "./artifacts/i.png",
         "artifacts/../artifacts/i.png",
     ] {
-        assert_eq!(read(&sessions.dir, path), None, "{path}");
+        assert_eq!(read_media(&sessions.dir, path), None, "{path}");
     }
 }
 
@@ -64,7 +64,7 @@ fn an_interior_dot_or_doubled_slash_names_the_same_file() {
 
     for path in ["artifacts/./i.png", "artifacts//i.png"] {
         assert_eq!(
-            read(&sessions.dir, path).as_deref(),
+            read_media(&sessions.dir, path).as_deref(),
             Some(&b"abcd"[..]),
             "{path}"
         );
@@ -78,7 +78,7 @@ fn a_relative_path_is_not_limited_to_artifacts() {
     sessions.write("s_child/events.jsonl", b"{}\n");
 
     assert_eq!(
-        read(&sessions.dir, "events.jsonl").as_deref(),
+        read_media(&sessions.dir, "events.jsonl").as_deref(),
         Some(&b"{}\n"[..])
     );
 }
@@ -88,13 +88,13 @@ fn an_absolute_path_outside_the_sessions_directory_is_not_read() {
     let sessions = Sessions::new();
 
     assert!(Path::new("/etc/passwd").is_file());
-    assert_eq!(read(&sessions.dir, "/etc/passwd"), None);
+    assert_eq!(read_media(&sessions.dir, "/etc/passwd"), None);
 
     let elsewhere = sessions.root.path().join("elsewhere");
     fs::create_dir_all(&elsewhere).unwrap();
     fs::write(elsewhere.join("i.png"), b"abcd").unwrap();
     assert_eq!(
-        read(&sessions.dir, elsewhere.join("i.png").to_str().unwrap()),
+        read_media(&sessions.dir, elsewhere.join("i.png").to_str().unwrap()),
         None
     );
 }
@@ -105,7 +105,7 @@ fn a_sibling_sessions_artifact_is_read_by_its_absolute_path() {
     let parent_file = sessions.write("s_parent/artifacts/i.png", b"abcd");
 
     assert_eq!(
-        read(&sessions.dir, parent_file.to_str().unwrap()).as_deref(),
+        read_media(&sessions.dir, parent_file.to_str().unwrap()).as_deref(),
         Some(&b"abcd"[..])
     );
 }
@@ -117,12 +117,12 @@ fn an_absolute_path_in_a_sibling_session_is_read_only_under_artifacts() {
     sessions.write("s_parent/artifacts/i.png", b"abcd");
     let artifacts = sessions.root.path().join("sessions/s_parent/artifacts");
 
-    assert_eq!(read(&sessions.dir, events.to_str().unwrap()), None);
+    assert_eq!(read_media(&sessions.dir, events.to_str().unwrap()), None);
     // `artifacts` with no file under it names the directory, not a file.
-    assert_eq!(read(&sessions.dir, artifacts.to_str().unwrap()), None);
+    assert_eq!(read_media(&sessions.dir, artifacts.to_str().unwrap()), None);
     // `..` in an absolute path is refused even when it lands in `artifacts/`.
     let dotdot = format!("{}/../artifacts/i.png", artifacts.display());
-    assert_eq!(read(&sessions.dir, &dotdot), None);
+    assert_eq!(read_media(&sessions.dir, &dotdot), None);
 }
 
 #[test]
@@ -134,6 +134,6 @@ fn a_missing_file_is_not_read() {
         .path()
         .join("sessions/s_parent/artifacts/gone.png");
 
-    assert_eq!(read(&sessions.dir, "artifacts/gone.png"), None);
-    assert_eq!(read(&sessions.dir, sibling.to_str().unwrap()), None);
+    assert_eq!(read_media(&sessions.dir, "artifacts/gone.png"), None);
+    assert_eq!(read_media(&sessions.dir, sibling.to_str().unwrap()), None);
 }
