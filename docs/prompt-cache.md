@@ -60,9 +60,7 @@ Two requests built from the same inputs are the same bytes:
 - every JSON object in a tool definition is serialised with its keys sorted,
   including a schema an MCP server supplied
 - no value reaches a request through a hash map's iteration order
-- serde_json's `preserve_order` feature is never enabled; a CI check fails the
-  build if any dependency turns it on, because Cargo features apply to the whole
-  build
+- serde_json's `preserve_order` feature is never enabled in anything compiled into a Fiber binary; a CI check fails the build if any normal dependency turns it on, because Cargo unifies features across every crate linked into a binary. A build script's serde_json is resolved and compiled separately, so it never serialises a request.
 
 Probed ([research/prompt-cache/probes.md](../research/prompt-cache/probes.md)):
 a Rust `HashMap` serialised the same eight names in a different order in each

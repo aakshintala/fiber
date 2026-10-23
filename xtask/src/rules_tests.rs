@@ -665,6 +665,23 @@ fn preserve_order_without_a_named_enabler_still_fails() {
     );
 }
 
+/// The narrowed check (`-e features,no-build`) still fails when a normal
+/// edge enables `preserve_order`: only build edges left the tree.
+#[test]
+fn preserve_order_still_fails_when_a_normal_edge_enables_it() {
+    let tree = "0serde_json v1.0.151\n\
+1serde_json feature \"preserve_order\"\n\
+2tools v0.0.0 (/repo/crates/tools)\n\
+1serde_json feature \"std\"\n\
+2config v0.0.0 (/repo/crates/config)\n";
+    assert_eq!(
+        preserve_order(tree),
+        [
+            "tools: enables serde_json feature \"preserve_order\"; serde_json's preserve_order feature is never enabled (docs/prompt-cache.md)"
+        ]
+    );
+}
+
 const REGISTERED_TOOLS: [&str; 14] = [
     "ask_user",
     "delegate_models",
