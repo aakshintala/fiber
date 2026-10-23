@@ -188,6 +188,279 @@ fn is_manifest_rooted(tokens: &[TokenTree]) -> bool {
     })
 }
 
+/// Every string literal in `tokens` naming a joined file: the inline
+/// segments of a chain built on a bound base.
+fn all_lits(tokens: &[TokenTree]) -> Vec<String> {
+    fn visit(tokens: &[TokenTree], out: &mut Vec<String>) {
+        for tree in tokens {
+            match tree {
+                TokenTree::Literal(lit) => {
+                    if let Some(text) = string_literal(&lit.to_string())
+                        && is_joined_name(&text)
+                        && text != "CARGO_MANIFEST_DIR"
+                        && !text.starts_with('/')
+                    {
+                        out.push(text);
+                    }
+                }
+                TokenTree::Group(group) => {
+                    visit(&group.stream().into_iter().collect::<Vec<_>>(), out)
+                }
+                TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    visit(tokens, &mut out);
+    out
+}
+/// Whether `resolved` escapes the crate collectively: outside every
+/// workspace member directory, not just outside the reading crate.
+/// Cross-crate member fixtures stay unflagged; selection covers them
+/// through dependents.
+fn escapes_members(resolved: &str, members: &Members) -> bool {
+    members
+        .values()
+        .all(|member| resolved != member.dir && !resolved.starts_with(&format!("{}/", member.dir)))
+}
+/// Whether `resolved` names the executable fixtures `scripts/`
+/// changes run with: a manifest-rooted chain there is legitimate.
+fn is_scripts_path(resolved: &str) -> bool {
+    resolved == "scripts" || resolved.starts_with("scripts/")
+}
+/// Whether `resolved` is exactly the repository root: a tree name,
+/// not a file, so inline uses stay unreported.
+fn is_exact_root(resolved: &str) -> bool {
+    resolved.is_empty()
+}
+/// The first name in `tokens` bound to the manifest directory
+/// itself, searching inside groups: the base a bare join builds on.
+fn root_name(tokens: &[TokenTree], root: &BTreeSet<String>) -> Option<String> {
+    tokens.iter().find_map(|tree| match tree {
+        TokenTree::Ident(ident) => {
+            let name = ident.to_string();
+            root.contains(name.as_str()).then_some(name)
+        }
+        TokenTree::Group(group) => root_name(&group.stream().into_iter().collect::<Vec<_>>(), root),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => None,
+    })
+}
+/// The string literals after the manifest literal in `preceding`:
+/// the inline chain a join builds on, without the base.
+fn inline_lits(preceding: &[TokenTree]) -> Vec<String> {
+    fn visit(tokens: &[TokenTree], seen: &mut bool, out: &mut Vec<String>) {
+        for tree in tokens {
+            match tree {
+                TokenTree::Literal(lit) => {
+                    if let Some(text) = string_literal(&lit.to_string()) {
+                        if text == "CARGO_MANIFEST_DIR" {
+                            *seen = true;
+                        } else if *seen && is_joined_name(&text) && !text.starts_with('/') {
+                            out.push(text);
+                        }
+                    }
+                }
+                TokenTree::Group(group) => {
+                    visit(&group.stream().into_iter().collect::<Vec<_>>(), seen, out)
+                }
+                TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    let mut lits = Vec::new();
+    let mut seen_manifest = false;
+    visit(preceding, &mut seen_manifest, &mut lits);
+    lits
+}
+/// Whether `group`'s argument takes a runtime value: any identifier
+/// at all, searching inside groups. A join with one threads a value
+/// into the path instead of naming a file.
+fn holds_value(group: &proc_macro2::Group) -> bool {
+    fn visit(tokens: &[TokenTree]) -> bool {
+        tokens.iter().any(|tree| match tree {
+            TokenTree::Ident(_) => true,
+            TokenTree::Group(nested) => visit(&nested.stream().into_iter().collect::<Vec<_>>()),
+            TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+        })
+    }
+    visit(&group.stream().into_iter().collect::<Vec<_>>())
+}
+/// The identifiers a `write` or `create` call consumes as its first
+/// argument, passed through references: the written path. Receivers
+/// never count: only the argument group is scanned.
+fn first_arg_idents(group: &proc_macro2::Group) -> Vec<String> {
+    let mut first = Vec::new();
+    for tree in group.stream() {
+        if let TokenTree::Punct(mark) = &tree
+            && mark.as_char() == ','
+        {
+            break;
+        }
+        first.push(tree);
+    }
+    fn visit(tokens: &[TokenTree], out: &mut Vec<String>) {
+        for tree in tokens {
+            match tree {
+                TokenTree::Ident(ident) => out.push(ident.to_string()),
+                TokenTree::Group(nested) => {
+                    visit(&nested.stream().into_iter().collect::<Vec<_>>(), out)
+                }
+                TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    visit(&first, &mut out);
+    out
+}
+/// How many times `name` is mentioned in `tokens`, searching inside
+/// groups: the binding, the write positions, and every other use.
+fn count_mentions(tokens: &[TokenTree], name: &str) -> usize {
+    tokens
+        .iter()
+        .map(|tree| match tree {
+            TokenTree::Ident(ident) => usize::from(ident == name),
+            TokenTree::Group(group) => {
+                count_mentions(&group.stream().into_iter().collect::<Vec<_>>(), name)
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => 0,
+        })
+        .sum()
+}
+/// The write-only idents of one function body: idents consumed in
+/// first-argument position by a call named `write` or `create` with
+/// no other mention in the body besides their binding and those
+/// write positions. A written ident later passed elsewhere stays
+/// reported.
+fn write_muted(body: &[TokenTree]) -> BTreeSet<String> {
+    fn visit(tokens: &[TokenTree], written: &mut BTreeMap<String, usize>) {
+        let owned: Vec<TokenTree> = tokens.to_vec();
+        let mut stream = owned.into_iter().peekable();
+        while let Some(tree) = stream.next() {
+            match tree {
+                TokenTree::Ident(name) if name == "write" || name == "create" => {
+                    if let Some(TokenTree::Group(group)) = stream.peek() {
+                        for ident in first_arg_idents(group) {
+                            *written.entry(ident).or_default() += 1;
+                        }
+                    }
+                }
+                TokenTree::Group(group) => {
+                    visit(&group.stream().into_iter().collect::<Vec<_>>(), written)
+                }
+                TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+        }
+    }
+    let mut written = BTreeMap::new();
+    visit(body, &mut written);
+    written
+        .into_iter()
+        .filter(|(name, count)| count_mentions(body, name) == 1 + count)
+        .map(|(name, _)| name)
+        .collect()
+}
+/// The literals of a bare-root join chain resolving exactly to the
+/// repository root: a helper returning the tree itself. `None` for
+/// any other shape: a parameter, a non-bare base, a non-join use, or
+/// a chain resolving anywhere else. Join shape only: ancestors and
+/// push chains stay out of scope.
+fn bare_root_lits(
+    expr: &[TokenTree],
+    manifest_dir: &str,
+    root: &BTreeSet<String>,
+) -> Option<Vec<String>> {
+    let mut receiver: Vec<TokenTree> = Vec::new();
+    let owned: Vec<TokenTree> = expr.to_vec();
+    let mut stream = owned.into_iter().peekable();
+    let mut lits = Vec::new();
+    let mut based = false;
+    let mut bare = false;
+    while let Some(tree) = stream.next() {
+        let is_join = matches!(&tree, TokenTree::Ident(name) if name == "join");
+        // Clone the argument group before advancing: the peeked borrow
+        // ends here, so the skip below stays legal.
+        let group: Option<proc_macro2::Group> = if is_join {
+            match stream.peek() {
+                Some(TokenTree::Group(group)) => Some((*group).clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(group) = group {
+            if !based {
+                // The base is bare when it roots at the manifest
+                // directory with no literal segment yet, directly or
+                // through a name bound to it.
+                bare = is_manifest_rooted(&receiver) && inline_lits(&receiver).is_empty()
+                    || holds_root(&receiver, root);
+                based = true;
+            }
+            if holds_value(&group) {
+                return None;
+            }
+            for tree in group.stream() {
+                if let TokenTree::Literal(lit) = tree
+                    && let Some(text) = string_literal(&lit.to_string())
+                    && is_joined_name(&text)
+                    && text != "CARGO_MANIFEST_DIR"
+                    && !text.starts_with('/')
+                {
+                    lits.push(text);
+                }
+            }
+            stream.next();
+            receiver.push(tree);
+            receiver.push(TokenTree::Group(group));
+        } else {
+            receiver.push(tree);
+        }
+    }
+    if !based || !bare || lits.is_empty() {
+        return None;
+    }
+    resolve_in_root(manifest_dir, &lits)
+        .is_some_and(|resolved| resolved.is_empty())
+        .then_some(lits)
+}
+/// The bare-root chains one function body returns: explicit `return`
+/// values and the tail expression. Each resolves exactly to the
+/// repository root.
+fn root_returns(body: &[TokenTree], manifest_dir: &str, root: &BTreeSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = Vec::new();
+    let mut returns = Vec::new();
+    for tree in body {
+        if let TokenTree::Punct(mark) = tree
+            && mark.as_char() == ';'
+        {
+            if let [TokenTree::Ident(ret), rest @ ..] = current.as_slice()
+                && ret == "return"
+            {
+                returns.push(rest.to_vec());
+            }
+            current.clear();
+        } else {
+            current.push(tree.clone());
+        }
+    }
+    // The tail: an explicit return without its semicolon, or the
+    // body's value.
+    if let [TokenTree::Ident(ret), rest @ ..] = current.as_slice()
+        && ret == "return"
+    {
+        returns.push(rest.to_vec());
+    } else if !current.is_empty() {
+        returns.push(current);
+    }
+    for expr in returns {
+        if let Some(lits) = bare_root_lits(&expr, manifest_dir, root) {
+            out.extend(lits);
+        }
+    }
+    out
+}
 /// Whether `ch` ends the path expression a `join` builds on: the
 /// receiver runs back to the nearest one of these, so a manifest
 /// literal past it belongs to another expression. Bare brackets never
@@ -226,7 +499,7 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
     }
 }
 
-// debt: the walker stays in select.rs near 1000 lines while
+// debt: the walker stays in select.rs near 1600 lines while
 // runtime_read_mismatches is its only caller; a second caller splits it
 // into select/runtime_read.rs.
 /// Failures where a crate's Rust source reads a repository file at run
@@ -248,8 +521,19 @@ fn all_literals(stream: TokenStream, out: &mut Vec<String>) {
 ///   earlier `let` bound to the manifest directory itself, or holds an
 ///   identifier an earlier `let` bound to a join chain rooted there. A `let`
 ///   holding such a join reports its literals when a read takes the name,
-///   through any number of `let`s. A join onto any other base, a join
-///   outside every read, and an absolute or escaping suffix never report.
+///   through any number of `let`s. A join onto any other base, and an
+///   absolute or escaping suffix, never report.
+///
+/// A helper that builds a repository path without reading it is a
+/// run-time read too, reported outside any read: a manifest-rooted join
+/// or format chain resolving outside every workspace member directory
+/// and outside `scripts/`, unless it yields to `providers/` or
+/// `extensions/`, names exactly the repository root, or sits inside an
+/// include macro (`builds ...`); and a join threading a value onto a
+/// bare manifest base, or onto a bound chain resolving outside every
+/// member (`threads ...`). A binding a `write` or `create` call alone
+/// consumes mutes its own chain, and a new-arm literal a read consumes
+/// reports once with the reads-message.
 ///
 /// A literal nested inside another call is a computed path, not a named
 /// one: `read_to_string(home.join("docs/README.md"))` reads a temporary
@@ -273,7 +557,24 @@ pub(crate) fn runtime_read_mismatches(
         second: &'a mut BTreeMap<String, (Vec<String>, Vec<String>)>,
         manifest_dir: &'a str,
         has_manifest: bool,
+        members: &'a Members,
         found: &'a mut BTreeSet<String>,
+        /// Write-only idents of the enclosing function, from the
+        /// pre-scan: a binding mentioned only at its binding and in
+        /// `write` or `create` first arguments mutes the new arms.
+        muted: &'a mut BTreeSet<String>,
+        /// Inside an `include_str!` or `include_bytes!` macro: the new
+        /// arms never report include interiors.
+        in_include: bool,
+        /// Literals the escaping arm reports with the builds-message.
+        escaping: &'a mut BTreeSet<String>,
+        /// Names the threading arm reports with the threads-message.
+        threading: &'a mut BTreeSet<String>,
+        /// Every manifest-rooted chain a `let` binds, by name, for the
+        /// post-pass that drops new-arm entries a read consumes.
+        chains: &'a mut BTreeMap<String, Vec<String>>,
+        /// Binding names a read consumes, for the same post-pass.
+        read_used: &'a mut BTreeSet<String>,
     }
     /// The literals a top-level `join` call in `rhs` joins onto the
     /// manifest directory or onto a name bound to it: the value a `let`
@@ -478,6 +779,51 @@ pub(crate) fn runtime_read_mismatches(
         }
         (!reported.is_empty()).then_some(reported)
     }
+    /// The suffixes a `format!` outside any read builds onto the
+    /// manifest directory: `None` when the macro takes a runtime value,
+    /// misses the manifest token, or holds a template that does not
+    /// start with the placeholder. A template resolves with the
+    /// placeholders removed; a plain suffix resolves as written, and an
+    /// absolute plain suffix names a system path, so the whole macro
+    /// reports nothing, exactly like the read-argument arm.
+    fn format_probes(group: &proc_macro2::Group) -> Option<Vec<String>> {
+        if !all_literal(group.stream()) {
+            return None;
+        }
+        let mut literals = Vec::new();
+        all_literals(group.stream(), &mut literals);
+        if !literals
+            .iter()
+            .any(|literal| literal == "CARGO_MANIFEST_DIR")
+        {
+            return None;
+        }
+        let mut probes = Vec::new();
+        for piece in literals {
+            if piece == "CARGO_MANIFEST_DIR" {
+                continue;
+            }
+            if piece.contains("{}") {
+                if !piece.starts_with("{}") {
+                    return None;
+                }
+                let probe = piece.replace("{}", "");
+                if !is_joined_name(&probe) {
+                    continue;
+                }
+                probes.push(probe);
+            } else {
+                if piece.starts_with('/') {
+                    return None;
+                }
+                if !is_path_like(&piece) {
+                    continue;
+                }
+                probes.push(piece);
+            }
+        }
+        (!probes.is_empty()).then_some(probes)
+    }
     // debt: format! in a read argument keeps its own windows(3) scan;
     // a second scanned macro moves both into the walk.
     /// The literals a `format!` in a read's argument group reports: only
@@ -503,12 +849,12 @@ pub(crate) fn runtime_read_mismatches(
     }
     // debt: each read arm repeats the junk, marker, absolute, resolve and
     // yield checks by hand; a new arm centralizes them into one helper.
-    /// The literals a read reports through a bound name: when the
-    /// argument of a read is one name, directly or behind `&` with an
-    /// optional trailing comma. A one-level join reports the literals
-    /// resolving inside the repository; a deeper join reports its own
-    /// literals, the full chain having been contained at binding.
-    fn read_name(group: &proc_macro2::Group, cx: &Walk) -> Option<Vec<String>> {
+    /// The literals a read reports through a bound name, and the name:
+    /// when the argument of a read is one name, directly or behind `&`
+    /// with an optional trailing comma. A one-level join reports the
+    /// literals resolving inside the repository; a deeper join reports
+    /// its own literals, the full chain having been contained at binding.
+    fn read_name(group: &proc_macro2::Group, cx: &Walk) -> Option<(String, Vec<String>)> {
         let mut tokens = group.stream().into_iter().peekable();
         while matches!(tokens.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '&') {
             tokens.next();
@@ -523,7 +869,7 @@ pub(crate) fn runtime_read_mismatches(
             _ => return None,
         }
         if let Some((_, own)) = cx.second.get(&name.to_string()) {
-            return Some(own.clone());
+            return Some((name.to_string(), own.clone()));
         }
         let literals = cx.joined.get(&name.to_string())?;
         let kept: Vec<String> = literals
@@ -538,7 +884,7 @@ pub(crate) fn runtime_read_mismatches(
             })
             .cloned()
             .collect();
-        (!kept.is_empty()).then_some(kept)
+        (!kept.is_empty()).then_some((name.to_string(), kept))
     }
     /// If `stream` holds a plain binding next (`mut`, a name, an
     /// optional `: <type>`, `=`), rebind the name to its value through
@@ -619,7 +965,13 @@ pub(crate) fn runtime_read_mismatches(
         if let Some(literals) = shadowed {
             cx.root.remove(name.as_str());
             cx.second.remove(name.as_str());
-            cx.joined.insert(name, literals);
+            cx.joined.insert(name.clone(), literals.clone());
+            cx.chains.insert(name.clone(), literals.clone());
+            if cx.muted.contains(name.as_str()) {
+                for literal in &literals {
+                    cx.escaping.remove(literal);
+                }
+            }
         } else if let Some((chain, own)) = chained {
             // The full chain must resolve inside the repository and stay
             // out of the package reader's paths: the report names only
@@ -629,18 +981,27 @@ pub(crate) fn runtime_read_mismatches(
             cx.root.remove(name.as_str());
             cx.joined.remove(name.as_str());
             if contained {
-                cx.second.insert(name, (chain, own));
+                cx.second.insert(name.clone(), (chain.clone(), own.clone()));
+                cx.chains.insert(name.clone(), chain);
+                if cx.muted.contains(name.as_str()) {
+                    for literal in &own {
+                        cx.escaping.remove(literal);
+                    }
+                }
             } else {
                 cx.second.remove(name.as_str());
+                cx.chains.remove(name.as_str());
             }
         } else if rooted {
             cx.joined.remove(name.as_str());
             cx.second.remove(name.as_str());
-            cx.root.insert(name);
+            cx.root.insert(name.clone());
+            cx.chains.insert(name, Vec::new());
         } else {
             cx.root.remove(name.as_str());
             cx.joined.remove(name.as_str());
             cx.second.remove(name.as_str());
+            cx.chains.remove(name.as_str());
         }
     }
     /// Walk a group's tokens with the bindings scoped to it: bindings
@@ -656,7 +1017,14 @@ pub(crate) fn runtime_read_mismatches(
                 second: &mut cx.second.clone(),
                 manifest_dir: cx.manifest_dir,
                 has_manifest: cx.has_manifest,
+                members: cx.members,
                 found: &mut *cx.found,
+                muted: &mut *cx.muted,
+                in_include: cx.in_include,
+                escaping: &mut *cx.escaping,
+                threading: &mut *cx.threading,
+                chains: &mut *cx.chains,
+                read_used: &mut *cx.read_used,
             },
             in_read,
         );
@@ -666,6 +1034,9 @@ pub(crate) fn runtime_read_mismatches(
         // The current expression back to its nearest boundary: the
         // receiver a `join` builds on.
         let mut preceding: Vec<TokenTree> = Vec::new();
+        // Groups seen since the `fn` head started: the second one is
+        // the body, whose pre-scan mutes write-only idents.
+        let mut fn_head: Option<u8> = None;
         loop {
             let Some(tree) = stream.next() else {
                 break;
@@ -673,10 +1044,15 @@ pub(crate) fn runtime_read_mismatches(
             match tree {
                 TokenTree::Punct(punct) if is_receiver_boundary(punct.as_char()) => {
                     preceding.clear();
+                    fn_head = None;
                 }
                 TokenTree::Ident(ident) if ident == "let" => {
                     bind(&mut stream, cx, in_read);
                     preceding.clear();
+                }
+                TokenTree::Ident(ident) if ident == "fn" => {
+                    fn_head = Some(0);
+                    preceding.push(TokenTree::Ident(ident));
                 }
                 TokenTree::Ident(ident)
                     if ident == "read_to_string" || ident == "read" || ident == "open" =>
@@ -699,7 +1075,8 @@ pub(crate) fn runtime_read_mismatches(
                                 cx.found.insert(text);
                             }
                         }
-                        if let Some(literals) = read_name(&group, cx) {
+                        if let Some((name, literals)) = read_name(&group, cx) {
+                            cx.read_used.insert(name);
                             cx.found.extend(literals);
                         }
                         cx.found.extend(format_literals(&group, cx));
@@ -715,6 +1092,58 @@ pub(crate) fn runtime_read_mismatches(
                         // Directory reads never report: no include macro
                         // compiles a directory in.
                         walk_group(&group, cx, false);
+                        preceding.push(TokenTree::Group(group));
+                    }
+                    preceding.push(TokenTree::Ident(ident));
+                }
+                TokenTree::Ident(ident) if ident == "include_str" || ident == "include_bytes" => {
+                    if matches!(stream.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '!')
+                    {
+                        stream.next();
+                        match stream.next() {
+                            Some(TokenTree::Group(group)) => {
+                                let held = cx.in_include;
+                                cx.in_include = true;
+                                walk_group(&group, cx, in_read);
+                                cx.in_include = held;
+                                preceding.push(TokenTree::Group(group));
+                            }
+                            Some(other) => {
+                                // `!` without a group is no macro call:
+                                // replay the token through the walk.
+                                walk(vec![other], cx, in_read);
+                            }
+                            None => {}
+                        }
+                    }
+                    preceding.push(TokenTree::Ident(ident));
+                }
+                TokenTree::Ident(ident) if ident == "format" => {
+                    if matches!(stream.peek(), Some(TokenTree::Punct(mark)) if mark.as_char() == '!')
+                        && stream.next().is_some()
+                        && matches!(stream.peek(), Some(TokenTree::Group(_)))
+                        && let Some(TokenTree::Group(group)) = stream.next()
+                    {
+                        // Outside any read the old arms stay silent, so
+                        // the escaping arm reports the suffixes; inside a
+                        // read the old arm owns the template.
+                        if !in_read
+                            && !cx.in_include
+                            && let Some(probes) = format_probes(&group)
+                        {
+                            for probe in probes {
+                                if let Some(resolved) =
+                                    resolve_in_root(cx.manifest_dir, std::slice::from_ref(&probe))
+                                    && escapes_members(&resolved, cx.members)
+                                    && !is_scripts_path(&resolved)
+                                    && !yields_to_packages(&resolved, cx.has_manifest)
+                                    && !is_exact_root(&resolved)
+                                {
+                                    cx.escaping.insert(probe);
+                                }
+                            }
+                        }
+                        walk_group(&group, cx, in_read);
                         preceding.push(TokenTree::Group(group));
                     }
                     preceding.push(TokenTree::Ident(ident));
@@ -792,6 +1221,115 @@ pub(crate) fn runtime_read_mismatches(
                                     cx.found.extend(own);
                                 }
                             }
+                            if let Some(name) = joined_mention(&preceding, &*cx.joined)
+                                .or_else(|| second_mention(&preceding, &*cx.second))
+                                .or_else(|| root_name(&preceding, &*cx.root))
+                            {
+                                cx.read_used.insert(name);
+                            }
+                        }
+                        if !cx.in_include {
+                            // The escaping arm: literal suffixes on a
+                            // manifest-rooted base outside every read. A
+                            // read's own argument stays with the old arm.
+                            let mut own = Vec::new();
+                            for tree in group.stream() {
+                                if let TokenTree::Literal(lit) = tree
+                                    && let Some(text) = string_literal(&lit.to_string())
+                                    && is_joined_name(&text)
+                                    && text != "CARGO_MANIFEST_DIR"
+                                    // A join on an absolute path replaces
+                                    // the receiver.
+                                    && !text.starts_with('/')
+                                {
+                                    own.push(text);
+                                }
+                            }
+                            // The base the join builds on: inline manifest
+                            // literals, or a bound name's chain with the
+                            // inline receivers included.
+                            let base: Option<(Vec<String>, Option<String>)> =
+                                if is_manifest_rooted(&preceding) {
+                                    Some((inline_lits(&preceding), None))
+                                } else if let Some(found) = joined_mention(&preceding, &*cx.joined)
+                                {
+                                    let mut chain =
+                                        cx.joined.get(&found).cloned().unwrap_or_default();
+                                    chain.extend(all_lits(&preceding));
+                                    Some((chain, Some(found)))
+                                } else if let Some(found) = second_mention(&preceding, &*cx.second)
+                                {
+                                    let mut chain = cx
+                                        .second
+                                        .get(&found)
+                                        .map(|(full, _)| full.clone())
+                                        .unwrap_or_default();
+                                    chain.extend(all_lits(&preceding));
+                                    Some((chain, Some(found)))
+                                } else {
+                                    root_name(&preceding, &*cx.root)
+                                        .map(|found| (all_lits(&preceding), Some(found)))
+                                };
+                            if let Some((chain, name)) = base {
+                                let muted_base = name
+                                    .as_deref()
+                                    .is_some_and(|bound| cx.muted.contains(bound));
+                                if !muted_base {
+                                    let mut full = chain.clone();
+                                    full.extend(own.clone());
+                                    if !in_read
+                                        && !own.is_empty()
+                                        && let Some(resolved) =
+                                            resolve_in_root(cx.manifest_dir, &full)
+                                        && escapes_members(&resolved, cx.members)
+                                        && !is_scripts_path(&resolved)
+                                        && !yields_to_packages(&resolved, cx.has_manifest)
+                                        && !is_exact_root(&resolved)
+                                    {
+                                        cx.escaping.extend(own.clone());
+                                    }
+                                    if holds_value(&group) {
+                                        match (chain.is_empty(), name) {
+                                            // A bare inline base reports
+                                            // whatever member it sits in.
+                                            (true, None) => {
+                                                cx.threading
+                                                    .insert("CARGO_MANIFEST_DIR".to_owned());
+                                            }
+                                            // A bare bound base names its
+                                            // identifier.
+                                            (true, Some(bound)) => {
+                                                cx.threading.insert(bound);
+                                            }
+                                            // A bound chain reports only
+                                            // outside every member, unless
+                                            // the escaping arm already
+                                            // covers its literals.
+                                            (false, Some(bound)) => {
+                                                if let Some(resolved) =
+                                                    resolve_in_root(cx.manifest_dir, &full)
+                                                    && escapes_members(&resolved, cx.members)
+                                                    && !is_scripts_path(&resolved)
+                                                    && !yields_to_packages(
+                                                        &resolved,
+                                                        cx.has_manifest,
+                                                    )
+                                                    && !cx
+                                                        .escaping
+                                                        .iter()
+                                                        .any(|lit| full.contains(lit))
+                                                {
+                                                    cx.threading.insert(bound);
+                                                }
+                                            }
+                                            // An inline chain never
+                                            // threads: the escaping arm
+                                            // owns its literals.
+                                            (false, None) => {}
+                                        }
+                                    }
+                                }
+                            }
                         }
                         walk_group(&group, cx, in_read);
                         preceding.push(TokenTree::Group(group));
@@ -799,7 +1337,23 @@ pub(crate) fn runtime_read_mismatches(
                     preceding.push(TokenTree::Ident(ident));
                 }
                 TokenTree::Group(group) => {
-                    walk_group(&group, cx, in_read);
+                    if fn_head == Some(1) {
+                        // The function body: mute its write-only idents
+                        // and report a bare root it returns.
+                        fn_head = None;
+                        let body: Vec<TokenTree> = group.stream().into_iter().collect();
+                        let previous = std::mem::take(&mut *cx.muted);
+                        *cx.muted = write_muted(&body);
+                        cx.escaping
+                            .extend(root_returns(&body, cx.manifest_dir, &*cx.root));
+                        walk_group(&group, cx, in_read);
+                        *cx.muted = previous;
+                    } else {
+                        if fn_head == Some(0) {
+                            fn_head = Some(1);
+                        }
+                        walk_group(&group, cx, in_read);
+                    }
                     preceding.push(TokenTree::Group(group));
                 }
                 TokenTree::Ident(ident) => preceding.push(TokenTree::Ident(ident)),
@@ -830,6 +1384,11 @@ pub(crate) fn runtime_read_mismatches(
         let mut joined = BTreeMap::new();
         let mut second = BTreeMap::new();
         let mut found = BTreeSet::new();
+        let mut muted = BTreeSet::new();
+        let mut escaping = BTreeSet::new();
+        let mut threading = BTreeSet::new();
+        let mut chains = BTreeMap::new();
+        let mut read_used = BTreeSet::new();
         walk(
             source.into_iter().collect(),
             &mut Walk {
@@ -838,13 +1397,45 @@ pub(crate) fn runtime_read_mismatches(
                 second: &mut second,
                 manifest_dir: &member.dir,
                 has_manifest,
+                members,
                 found: &mut found,
+                muted: &mut muted,
+                in_include: false,
+                escaping: &mut escaping,
+                threading: &mut threading,
+                chains: &mut chains,
+                read_used: &mut read_used,
             },
             false,
         );
+        // The old arms own every literal they report: a new-arm entry
+        // for the same literal drops, so a bound file reaching a read
+        // reports once with the reads-message.
+        escaping.retain(|literal| !found.contains(literal));
+        // A new-arm entry belonging to the manifest-rooted chain of a
+        // binding a read consumes drops the same way.
+        escaping.retain(|literal| {
+            !read_used.iter().any(|name| {
+                chains
+                    .get(name)
+                    .is_some_and(|chain| chain.contains(literal))
+            })
+        });
         failures.extend(found.into_iter().map(|literal| {
             format!(
                 "{}: reads {literal} at run time; compile it in with include_str! or include_bytes!",
+                f.path
+            )
+        }));
+        failures.extend(escaping.into_iter().map(|literal| {
+            format!(
+                "{}: builds {literal} at run time; compile it in with include_str! or include_bytes!",
+                f.path
+            )
+        }));
+        failures.extend(threading.into_iter().map(|name| {
+            format!(
+                "{}: threads {name} into a path at run time; compile it in with include_str! or include_bytes!",
                 f.path
             )
         }));
