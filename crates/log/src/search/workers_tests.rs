@@ -10,7 +10,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -247,9 +246,12 @@ fn hits_tied_on_rank_give_one_answer_and_keep_their_own_names() {
     }
 }
 
+/// How long the threads of [`Rendezvous`] wait for each other.
+const MEET: Duration = Duration::from_secs(5);
+
 /// A [`Cancel`] that never cancels. It lets its first check through, then
 /// holds every later one until `threads` distinct threads have each made
-/// one, or until [`MUST_SUCCEED_WITHIN`] passes, which it records.
+/// one, or until [`MEET`] passes, which it records.
 struct Rendezvous {
     threads: usize,
     state: Mutex<Met>,
@@ -274,9 +276,7 @@ impl Cancel for Rendezvous {
         self.arrived.notify_all();
         let (mut state, wait) = self
             .arrived
-            .wait_timeout_while(state, MUST_SUCCEED_WITHIN, |met| {
-                met.seen.len() < self.threads
-            })
+            .wait_timeout_while(state, MEET, |met| met.seen.len() < self.threads)
             .unwrap();
         if wait.timed_out() {
             state.timed_out = true;
@@ -302,7 +302,7 @@ fn three_workers_read_three_sessions_at_once() {
     let (scanned, held) = (Arc::clone(&scan), Arc::clone(&cancel));
     let found = within(
         "three workers to meet",
-        Deadline::after(MUST_SUCCEED_WITHIN * 3),
+        Deadline::after(MEET * 3),
         move || scanned.search(&query("needle", false, 10), &*held, threads(3)),
     );
     let state = cancel.state.lock().unwrap();

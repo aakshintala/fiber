@@ -7,11 +7,14 @@
     reason = "test code; a failure is the test's"
 )]
 
-use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::Arc;
+use std::time::Duration;
 
 use contract::provider::ModelRequest;
 use serde_json::json;
+
+/// How long a test waits for the quota fetch.
+const WAIT: Duration = Duration::from_secs(5);
 
 /// A Lua provider `qp` whose `quota()` asks `<server>/<label>/<key>` over
 /// HTTP.
@@ -95,13 +98,13 @@ fn connect_fetches_quota_for_its_label() {
             &here,
         )));
     });
-    let provider = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+    let provider = fakes::Deadline::after(WAIT)
         .recv(&connected)
         .expect("connect ended in time")
         .unwrap();
     let _call = provider.call(&request());
     assert!(
-        server.await_requests(1, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
+        server.await_requests(1, fakes::Deadline::after(WAIT)),
         "the model call never fetched quota"
     );
     let paths: Vec<String> = server

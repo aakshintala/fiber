@@ -148,6 +148,26 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     held("crates/tui/src/loop_tests.rs", "held by #3152"),
     held("crates/fakes/src/clock_tests.rs", "held by #3161"),
     held("crates/loop/tests/review_jig.rs", "held by #3172"),
+    held(
+        "crates/loop/src/reload_tests.rs",
+        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "crates/loop/tests/tool_search.rs",
+        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "crates/main/src/connect_tests.rs",
+        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "crates/log/src/search/workers_tests.rs",
+        "held by #3188; MEET to MUST_SUCCEED_WITHIN after it lands",
+    ),
+    held(
+        "xtask/src/rules_tests.rs",
+        "held by #3185; CURSOR_PROBE_WITHIN to MUST_SUCCEED_WITHIN after it lands",
+    ),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.
