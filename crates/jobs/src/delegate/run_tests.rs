@@ -700,6 +700,37 @@ fn wait_ready(path: &std::path::Path) {
     );
 }
 
+/// Waits until the group's sleeper is listed: the stop must land after
+/// the grandchild's `sleep` exists, not just after its trap is armed;
+/// without this the runner never reports. Lists every process with its
+/// numeric group (`ps -g` is not portable: Linux selects sessions where
+/// macOS selects groups) and matches the group and command columns.
+#[track_caller]
+fn wait_sleeper(pgid: u32) {
+    let want = pgid.to_string();
+    within(
+        "the grandchild execs its sleeper",
+        Deadline::after(DEADLINE),
+        move || {
+            loop {
+                let out = std::process::Command::new("ps")
+                    .args(["-e", "-o", "pgid=,comm="])
+                    .output()
+                    .expect("ps lists the processes");
+                let text = String::from_utf8_lossy(&out.stdout);
+                let listed = text.lines().any(|line| {
+                    let mut columns = line.split_whitespace();
+                    columns.next() == Some(want.as_str()) && columns.next() == Some("sleep")
+                });
+                if listed {
+                    return;
+                }
+                thread::yield_now();
+            }
+        },
+    );
+}
+
 /// Waits, driving the fake clock, until `pgid` leaves the jobs list:
 /// retirement runs on wakes. One wall-clock deadline covers the whole
 /// wait (docs/testing.md, "Waits and timeouts"): the wait fails naming
@@ -1738,6 +1769,98 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the runner returns after the trap's exit");
+    assert!(
+        !crate::delegate::group::sent_signals()
+            .iter()
+            .any(|(signalled, signal)| *signalled == pgid
+                && *signal == rustix::process::Signal::KILL),
+        "no SIGKILL went to the reaped group"
+    );
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+}
+
+#[test]
+fn a_stop_reaches_a_live_grandchild_without_sigkill() {
+    let dir = TempDir::new("fiber-delegate-grandchild");
+    let pidfile = dir.path().join("pid");
+    let ready = dir.path().join("ready");
+    let termed = dir.path().join("termed");
+    let block = fifo(dir.path(), "block");
+    let done = fifo(dir.path(), "done");
+    let go = fifo(dir.path(), "go");
+    // The go fifo holds the grandchild's fork until the runner recorded
+    // the leader's group: a fork before `set_pgid` would keep the
+    // test's own group and never hear the stop. The leader arms its trap
+    // first, so no stop can land between the fork and the arming: the
+    // trap waits for the grandchild's done line, which the grandchild's
+    // own trap writes, so the grandchild's trap causally precedes the
+    // reap. Each trap then `wait`s: the grandchild reaps its sleeper
+    // and the leader reaps the grandchild, so no zombie outlives the
+    // exits to keep the retired group alive under `killpg` signal zero
+    // while the fake clock spins. No retire listing can catch it alive,
+    // and no SIGKILL can beat the trap. The recorded line proves the
+    // stop's SIGTERM reached past the leader.
+    let shell = format!(
+        "trap 'read _ < \"{done}\"; wait; exit 143' TERM; echo $$ > '{pid}'; read _ < '{go}'; sh -c \"trap 'echo termed > \\\"{termed}\\\"; echo x > \\\"{done}\\\"; wait; exit 0' TERM; echo ready > '{ready}'; sleep 300 & wait\" & read _ < '{block}'",
+        done = done.display(),
+        pid = pidfile.display(),
+        go = go.display(),
+        termed = termed.display(),
+        ready = ready.display(),
+        block = block.display(),
+    );
+    let rig = rig(vec![]);
+    let done = rig.start(&shell, BOUND, 1024);
+    let pgid = pid_in_file(&pidfile);
+    let watchdog = Watchdog::group(pgid);
+    release_fifo(&go, b"go\n");
+    wait_ready(&ready);
+    // The grandchild's `sleep` must exist, not just its armed trap: the
+    // stop waits for the sleeper itself.
+    wait_sleeper(pgid);
+    // Fake time never reaches the stop bound, so the traps' own exits
+    // cannot race the timer's SIGKILL (docs/testing.md, "Waits and
+    // timeouts": deadlines are hang guards, never timing assertions).
+    let kill_at = rig.clock.now() + BOUND;
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    // The driver stays up until the runner returns, not just until it
+    // reports: retire waits for the emptied group after the report, and
+    // a reparented zombie can outlive the report, so stopping the driver
+    // at the notice would park retire on a clock that never moves again.
+    let driver_stop = Arc::new(AtomicBool::new(false));
+    let driver_clock = Arc::clone(&rig.clock);
+    let driver_deadline = Deadline::after(DEADLINE);
+    let notice = thread::scope(|scope| {
+        scope.spawn(|| {
+            drive_runner_clock(&driver_stop, &driver_clock, &driver_deadline, Some(kill_at))
+        });
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the runner returns after the traps' exits");
+        driver_stop.store(true, Ordering::Relaxed);
+        take_report(
+            &rig,
+            &driver_stop,
+            "the runner reported before it returned",
+            &mut Vec::new(),
+        )
+    });
+    assert_eq!(notice.completed.status, Outcome::Cancelled);
+    assert_eq!(
+        notice
+            .completed
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(143)
+    );
+    // The runner already returned inside the scope above, which rules
+    // out later watches and timer signals.
+    assert_eq!(
+        std::fs::read_to_string(&termed).unwrap(),
+        "termed\n",
+        "the grandchild's TERM trap ran: no SIGKILL beat it"
+    );
     assert!(
         !crate::delegate::group::sent_signals()
             .iter()

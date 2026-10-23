@@ -28,9 +28,11 @@ use serde_json::json;
 const MODEL: &str = "fake/model-1";
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use contract::clock::Clock;
 use contract::events::{
     DecidedBy, Decision, Grant, PermissionResolved, ReviewerRef, SessionStarted, UsageRecorded,
     Variables, VariablesSource,
@@ -5080,4 +5082,488 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
     for tool in tools {
         assert_eq!(tool.ran().len(), 1);
     }
+}
+
+fn usage_copy(id: &str, cost: Option<f64>, origin: &str) -> Event {
+    let Event::UsageRecorded(mut line) = History::usage(id, MODEL, cost) else {
+        panic!("the test usage is a usage_recorded");
+    };
+    line.origin_session_id = Some(SessionId(origin.into()));
+    Event::UsageRecorded(line)
+}
+
+fn delegate_started(job: &str, session: &str, harness: &str) -> Event {
+    Event::DelegateStarted(contract::events::DelegateStarted {
+        job_id: contract::JobId(job.into()),
+        delegate_session_id: SessionId(session.into()),
+        harness: harness.into(),
+        model: MODEL.into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
+    })
+}
+
+fn stage_delegate(history: &History, session: &str) -> Arc<Log> {
+    Arc::new(
+        Log::create(
+            history.root.path(),
+            SessionId(session.into()),
+            Arc::clone(&history.clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    )
+}
+
+/// Resumes for the backfill's side effects only: no model switch, so no
+/// `model_changed`; no reviewer and no turns run.
+fn resume_for_backfill(history: &mut History) -> Loop {
+    let (tx, rx) = mpsc::channel();
+    drop(tx);
+    Loop::resume(
+        r#loop::Session {
+            log: Arc::clone(&history.log),
+            provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: history.prompt(),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
+        },
+        r#loop::resumed(&history.dir).unwrap(),
+    )
+    .unwrap()
+}
+
+fn copies_of(lines: &[Envelope], generation: &str) -> Vec<Envelope> {
+    lines
+        .iter()
+        .filter(|line| line.kind == "usage_recorded" && line.payload["generation_id"] == generation)
+        .cloned()
+        .collect()
+}
+
+/// The exited totals over the log, as the ledger folds it: the spend the
+/// backfilled copies leave behind.
+fn exited_cost(history: &History) -> Option<f64> {
+    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, None).unwrap();
+    let all = log::read(&history.dir).unwrap();
+    let exited = all.last().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    exited.payload["usage"]["cost"].as_f64()
+}
+
+#[test]
+fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The delegate's log holds an initial record and its correction; the
+    // parent copied neither before crashing. No terminal event is written:
+    // the released lock below is the completion edge, not any last line.
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.18)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // The orphan is marked before the backfill's copies: `job_completed`
+    // first, then the delegate's records in delegate-log order, each
+    // naming the delegate as the origin.
+    assert_eq!(
+        history.new_kinds(),
+        ["job_completed", "usage_recorded", "usage_recorded"]
+    );
+    let found = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].payload["cost"], 0.10);
+    assert_eq!(found[1].payload["cost"], 0.18);
+    for line in &found {
+        assert!(line.action_id.is_none());
+        assert!(line.turn_id.is_none());
+        assert_eq!(line.payload["origin_session_id"], "s_child");
+    }
+    assert_eq!(exited_cost(&history), Some(0.18));
+}
+
+#[test]
+fn a_backfill_skips_the_records_the_parent_already_copied() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The initial record reached the parent live, before the crash.
+    history.write(usage_copy("g_1", Some(0.10), "s_child"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.18)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // Only the correction is appended: the already-copied prefix is
+    // skipped by ordered occurrence, even though the ledger's latest
+    // value already equals the correction's.
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    let found = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].payload["cost"], 0.18);
+    assert_eq!(found[0].payload["origin_session_id"], "s_child");
+    assert_eq!(exited_cost(&history), Some(0.18));
+}
+
+#[test]
+fn a_backfill_appends_nothing_the_parent_already_holds() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    history.write(usage_copy("g_1", Some(0.10), "s_child"), None);
+    history.write(usage_copy("g_1", Some(0.18), "s_child"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.18)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // The orphan is still marked, but no copy is appended twice.
+    assert_eq!(history.new_kinds(), ["job_completed"]);
+    assert_eq!(exited_cost(&history), Some(0.18));
+}
+
+#[test]
+fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The parent holds only the first A of the delegate's A, B, A: the
+    // ledger's latest value already equals the last record, yet the
+    // middle correction and the repeated payload are both missing.
+    history.write(usage_copy("g_1", Some(0.10), "s_child"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    for cost in [Some(0.10), Some(0.15), Some(0.10)] {
+        delegate
+            .append(&History::usage("g_1", MODEL, cost), None, None)
+            .unwrap();
+    }
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // Occurrence matching appends B and the second A: comparing against
+    // the latest value would have appended nothing.
+    assert_eq!(
+        history.new_kinds(),
+        ["job_completed", "usage_recorded", "usage_recorded"]
+    );
+    let found = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].payload["cost"], 0.15);
+    assert_eq!(found[1].payload["cost"], 0.10);
+    assert_eq!(exited_cost(&history), Some(0.10));
+}
+
+#[test]
+fn a_resume_after_a_backfill_appends_no_further_copies() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    history.freeze();
+    // The first resume settled the orphan and copied the record: the
+    // second finds no orphan and no missing copy, and writes nothing.
+    drop(resume_for_backfill(&mut history));
+    assert!(history.new_kinds().is_empty());
+}
+
+#[test]
+fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    history.write(usage_copy("g_1", Some(0.25), "s_child"), None);
+    // Interleaved generations, and a line whose origin a grandchild
+    // already set: the parent holds none of them.
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.25)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_2", MODEL, Some(0.125)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.5)), None, None)
+        .unwrap();
+    let Event::UsageRecorded(mut grand) = History::usage("g_3", MODEL, Some(0.125)) else {
+        panic!("the test usage is a usage_recorded");
+    };
+    grand.origin_session_id = Some(SessionId("s_grand".into()));
+    delegate
+        .append(&Event::UsageRecorded(grand), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // Delegate-log order after the already-copied g_1 prefix: the g_2
+    // record names the direct delegate, the grandchild's line still names
+    // the grandchild.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "job_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded"
+        ]
+    );
+    let lines = history.new_lines();
+    let usages: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "usage_recorded")
+        .collect();
+    assert_eq!(usages[0].payload["generation_id"], "g_2");
+    assert_eq!(usages[0].payload["origin_session_id"], "s_child");
+    assert_eq!(usages[1].payload["generation_id"], "g_1");
+    assert_eq!(usages[1].payload["cost"], 0.5);
+    assert_eq!(usages[1].payload["origin_session_id"], "s_child");
+    assert_eq!(usages[2].payload["generation_id"], "g_3");
+    assert_eq!(usages[2].payload["origin_session_id"], "s_grand");
+    assert_eq!(exited_cost(&history), Some(0.75));
+}
+
+#[test]
+fn a_mapped_orphan_without_a_log_keeps_its_marking_and_copies_nothing() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_9", "s_gone", "fiber"), None);
+    history.write(job_started("j_9"), None);
+    // No delegate directory was staged: the log is gone with its writer.
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed"]);
+    let marked: Vec<_> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "job_completed")
+        .collect();
+    assert_eq!(marked.len(), 1);
+    assert_eq!(marked[0].payload["job_id"], "j_9");
+}
+
+#[test]
+fn an_orphan_without_a_delegate_start_copies_nothing() {
+    let mut history = History::new(Vec::new());
+    // No `delegate_started`: nothing maps the job to a delegate log.
+    history.write(job_started("j_8"), None);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed"]);
+}
+
+#[test]
+fn an_orphan_on_another_harness_copies_nothing() {
+    let mut history = History::new(Vec::new());
+    // Another harness names its own id: the mapping only covers Fiber
+    // delegates, so this orphan resolves to skip-and-continue even though
+    // a same-named directory holds usage lines.
+    history.write(delegate_started("j_7", "s_other", "other"), None);
+    history.write(job_started("j_7"), None);
+    let delegate = stage_delegate(&history, "s_other");
+    delegate
+        .append(&History::usage("g_7", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed"]);
+}
+
+/// Resumes on a thread for the writer-coordination waits: the old writer
+/// is a log handle the test holds, and the test releases it only after
+/// resume has parked on its lock. The result crosses back as text, so the
+/// loop itself never has to be `Send`. The test's one deadline bounds the
+/// whole wait, parks and completion together.
+fn resume_on_thread(history: &mut History) -> mpsc::Receiver<Result<(), String>> {
+    let (tx, inbox) = mpsc::channel();
+    drop(tx);
+    let session = r#loop::Session {
+        log: Arc::clone(&history.log),
+        provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+        model: History::model(),
+        prompt: history.prompt(),
+        inbox,
+        tools: Vec::new(),
+        permissions: r#loop::Permissions {
+            workspace: history.workspace.clone(),
+            credentials: history.credentials.clone(),
+            credential_files: Vec::new(),
+            rules: history.rules.clone(),
+        },
+    };
+    let folded = r#loop::resumed(&history.dir).unwrap();
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = Loop::resume(session, folded)
+            .map(|_| ())
+            .map_err(|error| format!("{error:?}"));
+        done.send(result).expect("the test waits for the resume");
+    });
+    finished
+}
+
+/// One writer-completion retry: the bound `Loop::resume` parks a `Busy`
+/// lock retry at, so the wait below ends exactly on resume's park.
+fn advance_retry(history: &History, deadline: &Deadline) {
+    let retry = std::time::Duration::from_millis(50);
+    history
+        .clock
+        .advance_when_parked(Some(history.clock.now() + retry), None, retry, deadline);
+}
+
+#[test]
+fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The old writer is still active, holding its session lock with a
+    // partial log: no terminal event will ever arrive, only the release.
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.25)), None, None)
+        .unwrap();
+    history.freeze();
+    let before = log::read(&history.dir).unwrap().len();
+
+    let finished = resume_on_thread(&mut history);
+    // Resume parks on the held lock: the advance below ends on its park,
+    // and the parent log is unchanged, so the snapshot was not taken yet.
+    advance_retry(&history, &deadline);
+    assert_eq!(log::read(&history.dir).unwrap().len(), before);
+    // The writer's final lines land before it releases: a correction of
+    // the partial record and a new generation.
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.5)), None, None)
+        .unwrap();
+    delegate
+        .append(&History::usage("g_2", MODEL, Some(0.125)), None, None)
+        .unwrap();
+    drop(delegate);
+    advance_retry(&history, &deadline);
+
+    // The resume reports exactly the appended lines: the orphan marking
+    // and the delegate's full final log in order.
+    finished
+        .recv()
+        .expect("the resume reports within the deadline")
+        .unwrap();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "job_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "usage_recorded"
+        ]
+    );
+    let first = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(first.len(), 2);
+    assert_eq!(first[0].payload["cost"], 0.25);
+    assert_eq!(first[1].payload["cost"], 0.5);
+    let second = copies_of(&history.new_lines(), "g_2");
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].payload["origin_session_id"], "s_child");
+    assert_eq!(exited_cost(&history), Some(0.625));
+}
+
+#[test]
+fn a_resume_backfills_a_writer_that_died_mid_stream() {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    // The writer dies with its lock held and its log partial: the lock
+    // releases with the dead writer, which is the only completion edge.
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    history.freeze();
+    let before = log::read(&history.dir).unwrap().len();
+
+    let finished = resume_on_thread(&mut history);
+    advance_retry(&history, &deadline);
+    assert_eq!(log::read(&history.dir).unwrap().len(), before);
+    drop(delegate);
+    advance_retry(&history, &deadline);
+
+    finished
+        .recv()
+        .expect("the resume reports within the deadline")
+        .unwrap();
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    let found = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].payload["cost"], 0.10);
+    assert_eq!(exited_cost(&history), Some(0.10));
+}
+
+#[test]
+fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
+    let mut history = History::new(Vec::new());
+    history.write(delegate_started("j_1", "s_child", "fiber"), None);
+    history.write(job_started("j_1"), None);
+    let delegate = stage_delegate(&history, "s_child");
+    delegate
+        .append(&History::usage("g_1", MODEL, Some(0.10)), None, None)
+        .unwrap();
+    // A crash-torn line mid-file: the readable log ends there, as
+    // `log::lines` ends it, but the good prefix still backfills.
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(history.root.path().join("s_child").join("events.jsonl"))
+        .unwrap()
+        .write_all(b"{not an event line}\n")
+        .unwrap();
+    delegate
+        .append(&History::usage("g_2", MODEL, Some(0.20)), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    let first = copies_of(&history.new_lines(), "g_1");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].payload["cost"], 0.10);
+    assert!(copies_of(&history.new_lines(), "g_2").is_empty());
+    assert_eq!(exited_cost(&history), Some(0.10));
 }

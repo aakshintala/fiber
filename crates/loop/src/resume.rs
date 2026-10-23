@@ -5,16 +5,17 @@
 //! refuses it as headless when no person can answer), finishes the turn,
 //! and then runs the prompt as the next turn.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use contract::events::{
     DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallCompleted,
-    ToolCallRequested, TurnCompleted, TurnOutcome,
+    ToolCallRequested, TurnCompleted, TurnOutcome, UsageRecorded,
 };
 use contract::inbox::Delivery;
-use contract::{ActionId, Envelope, TurnId};
+use contract::{ActionId, Envelope, GenerationId, JobId, SessionId, TurnId};
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
@@ -100,6 +101,11 @@ pub struct Resumed {
     pub(crate) reviewed: Vec<Reviewed>,
     /// The jobs started and never ended, each as its `orphaned` completion.
     pub(crate) orphans: Vec<JobCompleted>,
+    /// Each orphaned job's delegate session, from the own log's
+    /// Fiber-harness `delegate_started` lines, in no order: the orphan
+    /// backfill resolves its jobs through this. Jobs with no mapping (another
+    /// harness, a missing line) resolve to skip-and-continue.
+    pub(crate) delegate_sessions: HashMap<JobId, SessionId>,
     /// The repository's offers: the session's skips and the pending offer.
     pub(crate) offers: crate::offer::Folded,
     /// Whether the person's name pins the session: the fold of every
@@ -306,6 +312,7 @@ impl Loop {
             session_blocks,
             reviewed,
             orphans,
+            delegate_sessions,
             thinking,
             offers,
             naming,
@@ -404,13 +411,165 @@ impl Loop {
                 is_delegate,
             },
         )?;
+        let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
         resumed.mark_orphans(orphans)?;
+        // The backfill's missing copies, after the orphaned `job_completed`
+        // lines and before `resumed_label` or any new turn write.
+        for (session, lines) in backfill {
+            for line in lines {
+                resumed.copy_usage(&session, line)?;
+            }
+        }
         // After any orphaned `job_completed` lines, before the first
         // `preamble_built`: a resume that switches the credential label
         // records it as a switch does (`docs/events.md`,
         // "`model_changed`").
         resumed.resumed_label(settings)?;
         Ok(resumed)
+    }
+}
+
+/// How long a Busy writer-completion retry parks on the session clock:
+/// a cheap lock retry, so the bound stays small on the real clock while
+/// each fake-clock retry wakes on one advance.
+const WRITER_RETRY: Duration = Duration::from_millis(50);
+
+impl Loop {
+    /// Prepares the orphan backfill (`docs/delegates.md`, "Lifetime"): the
+    /// missing `usage_recorded` lines per mapped orphaned Fiber delegate, in
+    /// orphan order, each delegate once, each delegate's lines in
+    /// delegate-log order. Runs before `mark_orphans` or any other resume
+    /// write, so the snapshots below precede every line this resume writes.
+    /// Each delegate's snapshot is its final one: the old writer's
+    /// completion edge is its released session lock, awaited below.
+    fn prepare_backfill(
+        &self,
+        sessions: &HashMap<JobId, SessionId>,
+        orphans: &[JobCompleted],
+    ) -> Result<Vec<(SessionId, Vec<UsageRecorded>)>, Error> {
+        let mut delegates = Vec::new();
+        for orphan in orphans {
+            if let Some(session) = sessions.get(&orphan.job_id)
+                && !delegates.contains(session)
+            {
+                delegates.push(session.clone());
+            }
+        }
+        if delegates.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One indexed pass over the parent's existing log: the ordered
+        // already-copied records per generation. Only copies count: an own
+        // line names no originator, so it is never a copy of a delegate's.
+        let mut copied: HashMap<GenerationId, usize> = HashMap::new();
+        for line in log::read(self.log.dir())? {
+            if line.kind != "usage_recorded" || !line.is_durable() {
+                continue;
+            }
+            // A malformed line fails the history fold before this resume
+            // runs; anything left that does not parse is skipped, as the
+            // live tap skips it.
+            let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(&line) else {
+                continue;
+            };
+            if recorded.origin_session_id.is_some() {
+                *copied.entry(recorded.generation_id).or_default() += 1;
+            }
+        }
+        let mut backfill = Vec::new();
+        for session in delegates {
+            backfill.push((session.clone(), self.missing_usage(&session, &copied)?));
+        }
+        Ok(backfill)
+    }
+
+    /// The delegate's `usage_recorded` lines the parent log is missing, in
+    /// delegate-log order: each generation's already-copied prefix skipped
+    /// by ordered occurrence, never by comparing against the ledger's
+    /// latest value. The ledger is not the copy-history index; it dedupes
+    /// what these copies fold.
+    fn missing_usage(
+        &self,
+        session: &SessionId,
+        copied: &HashMap<GenerationId, usize>,
+    ) -> Result<Vec<UsageRecorded>, Error> {
+        let Some(home) = self.log.dir().parent() else {
+            return Ok(Vec::new());
+        };
+        let dir = home.join(&session.0);
+        if !log::dir_exists(&dir) {
+            return Ok(Vec::new());
+        }
+        let mut skipped: HashMap<GenerationId, usize> = HashMap::new();
+        let mut missing = Vec::new();
+        for line in self.final_usage(&dir)? {
+            if line.kind != "usage_recorded" || !line.is_durable() {
+                continue;
+            }
+            // A malformed line never reaches the loop live, so it never
+            // reaches it here either: the delegate is kept, the line is not.
+            let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(&line) else {
+                continue;
+            };
+            // Normalized exactly as live copying normalizes: the direct
+            // delegate names itself only when the line names nobody, so a
+            // grandchild's line still names the originator.
+            let normalized = Self::normalize_copy(session, recorded);
+            let at = skipped.entry(normalized.generation_id.clone()).or_default();
+            if *at < copied.get(&normalized.generation_id).copied().unwrap_or(0) {
+                *at += 1;
+                continue;
+            }
+            *at += 1;
+            missing.push(normalized);
+        }
+        Ok(missing)
+    }
+
+    /// The delegate log's final lines: waits out an old writer still
+    /// holding the session lock, then reads under the held lock. `Busy`
+    /// means the old writer may still append, so the loop parks through
+    /// the injected clock and retries: neither an initial end of file nor
+    /// an elapsed shutdown bound proves completion, while the held lock
+    /// proves the writer is done, graceful or crashed. A dead writer's
+    /// lock releases with it, so the wait always ends; shutdown observes
+    /// the same edge, and no inbox delivery is consumed or reordered here,
+    /// so an arriving cancellation still reaches the first turn as sent.
+    /// The child log is only read, never written, truncated or appended
+    /// to. A missing log or a failed read skips that delegate with its
+    /// orphan marking standing; `Busy` is neither.
+    fn final_usage(&self, dir: &Path) -> Result<Vec<Envelope>, Error> {
+        let parker = std::sync::Arc::new(support::clock::Parker::new());
+        let keeper: std::sync::Arc<dyn contract::clock::Wake> = parker.clone();
+        self.log
+            .clock()
+            .subscribe(std::sync::Arc::downgrade(&keeper));
+        loop {
+            match log::try_hold(dir)? {
+                log::Hold::Held(lock) => {
+                    // Line by line, not one `read`: a corrupt line ends
+                    // the readable log (as `log::lines` ends it), but the
+                    // good prefix before it still backfills instead of
+                    // the whole log reading as nothing.
+                    let mut lines = Vec::new();
+                    if let Ok(iter) = log::lines(dir) {
+                        for result in iter {
+                            let Ok(line) = result else {
+                                break;
+                            };
+                            lines.push(line);
+                        }
+                    }
+                    drop(lock);
+                    return Ok(lines);
+                }
+                log::Hold::Busy => {
+                    let seen = parker.generation();
+                    let clock = self.log.clock();
+                    parker.park(clock.as_ref(), Some(clock.now() + WRITER_RETRY), seen);
+                }
+            }
+        }
     }
 }
 

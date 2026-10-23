@@ -9,7 +9,7 @@ use std::path::Path;
 use contract::events::{
     CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
 };
-use contract::{Envelope, Seq, TurnId};
+use contract::{Envelope, JobId, Seq, SessionId, TurnId};
 use log::{Log, Segment};
 use serde_json::Value;
 
@@ -36,6 +36,7 @@ const FOLDED: &[&str] = &[
     "tool_call_requested",
     "job_started",
     "job_completed",
+    "delegate_started",
     "rewound",
     "opening_message",
     "skills_resent",
@@ -82,6 +83,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // (`docs/permissions.md`, "At a handoff").
         reviewed: Vec::new(),
         orphans: Vec::new(),
+        delegate_sessions: HashMap::new(),
         offers: crate::offer::Folded::default(),
         naming: crate::naming::Naming::default(),
         fired: crate::quota_notice::Fired::default(),
@@ -103,6 +105,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // and one in the child never share it.
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),
+        delegate_sessions: HashMap::new(),
         summary: false,
     };
     let mut end = 0;
@@ -149,6 +152,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     };
     resumed.workspace = workspace;
     resumed.orphans = pass.orphans.finish();
+    resumed.delegate_sessions = pass.delegate_sessions;
     resumed.end = end;
     Ok(resumed)
 }
@@ -164,6 +168,7 @@ struct Pass {
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
+    delegate_sessions: HashMap<JobId, SessionId>,
     summary: bool,
 }
 
@@ -252,6 +257,15 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             &mut pass.parent_ledger
         };
         ledger.record(recorded);
+    } else if let Event::DelegateStarted(started) = &event {
+        // The job-to-session map the orphan backfill resolves through:
+        // every Fiber-harness start in the chain, whatever segment holds
+        // it. Another harness names its own id, and a missing line means
+        // no mapping: both resolve to skip-and-continue at backfill.
+        if started.harness == "fiber" {
+            pass.delegate_sessions
+                .insert(started.job_id.clone(), started.delegate_session_id.clone());
+        }
     } else if let Event::PreambleBuilt(built) = &event {
         resumed.model = Some(built.model.clone());
         resumed.credential.clone_from(&built.credential);
