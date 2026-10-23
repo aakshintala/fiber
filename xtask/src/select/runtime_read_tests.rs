@@ -1915,6 +1915,83 @@ fn a_two_level_in_crate_chain_stays_unreported() {
 }
 
 #[test]
+fn a_typed_let_without_a_value_leaves_its_name_unbound_for_a_later_read() {
+    // `let p: PathBuf;` binds nothing: the `;` arm ends the annotation
+    // scan, so the later manifest base never reaches `p` and the read
+    // through `p.join(...)` stays unreported. Without that arm the scan
+    // runs on into the next `let` and binds `p` to the manifest base, so
+    // this pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let p: PathBuf;\nlet base = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\nlet doc = std::fs::read_to_string(p.join(\"docs/x\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_manifest_expression_before_a_boundary_is_not_the_receiver_of_a_later_join() {
+    // `;` ends the receiver: the `x.join(...)` after it builds on `x`
+    // alone, which binds nothing, so the escaping suffix stays
+    // unreported. With the receiver leaking across the boundary the
+    // manifest literal roots the join and the suffix reports, so this
+    // pins the `walk` guard mutant and the `is_receiver_boundary` mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "fn f() {\nPath::new(env!(\"CARGO_MANIFEST_DIR\"));\nx.join(\"../../research/x.json\");\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_leading_slash_before_dotdot_in_a_concat_suffix_stays_exempt() {
+    // A leading `/` adds no segment: `/../../providers/x` from
+    // `crates/main` resolves to the root `providers/` path, which yields
+    // to the package-reader check. Popping the pushed empty segment
+    // instead resolves under `crates/`, so this pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "let doc = read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../providers/x\")).unwrap();\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_joined_name_before_the_manifest_literal_is_not_an_inline_segment() {
+    // Only literals after the manifest literal count: `docs/pre.md`
+    // sits before it, so the chain stays empty and the escaping suffix
+    // resolves outside the members and reports. Collecting it moves the
+    // resolution back under `crates/main`, silencing the report, so this
+    // pins that mutant.
+    let files = [runtime_src(
+        "main",
+        "crates/main/tests/release.rs",
+        "tests/release.rs",
+        "fn f() {\nPath::new(\"docs/pre.md\").join(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../research/x.json\");\n}\n",
+    )];
+    assert_eq!(
+        runtime_read_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/main/tests/release.rs: builds ../../research/x.json at run time; compile it in with include_str! or include_bytes!"
+        ]
+    );
+}
+
+#[test]
 fn a_helper_joining_a_parameter_base_stays_unreported() {
     // The gate cannot see through a parameter base: a helper joining onto
     // a base it never binds is outside the check.
