@@ -1,7 +1,7 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
 //! process clock and the clock-parked wait, the process-group guard, the
 //! poison-ignoring `lock`, the admission lock, the stoppable read, the line
-//! framing and the `mint` id (`docs/architecture.md`, "The modules").
+//! framing, lowercase hex and SHA-256, and the `mint` id (`docs/architecture.md`, "The modules").
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -25,8 +25,13 @@ pub mod stoppable;
 /// One wire line: bytes to the next line feed.
 pub mod framing;
 
+/// Lowercase hex and SHA-256 as lowercase hex, each built into one `String`.
+pub mod hex;
+
 /// Text on one line: control characters as spaces.
 pub mod text;
+
+pub use hex::{hex, sha256_hex};
 
 pub use id::mint;
 
