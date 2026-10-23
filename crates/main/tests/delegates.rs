@@ -5975,6 +5975,13 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // The model's first turn calls the `go` tool; the second ends the
     // turn, so the prompt ends the session. Reviewer verdicts answer
     // "allow", as the answering helper does.
+    // Held: the delegate is still running when the prompt ends the session.
+    // Built before the parent and shared, so the parent's responder can
+    // wait for the delegate's model call before ending the turn.
+    let child = Arc::new(ProviderServer::start([text_reply(SENTINEL)]).unwrap());
+    child.hold();
+    let deadline = setup.deadline;
+    let waiting = Arc::clone(&child);
     let called = Arc::new(AtomicBool::new(false));
     let parent = ProviderServer::start_responding(move |request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
@@ -5982,14 +5989,17 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             return text_reply("allow");
         }
         if called.swap(true, Ordering::SeqCst) {
+            // The delegate's call is in flight before the turn ends, so the
+            // cancelled delegate's call settles while the session closes.
+            assert!(
+                waiting.await_requests(1, deadline),
+                "the delegate called its model"
+            );
             return text_reply("all done");
         }
         support::stream(&[function_call("call_go", "go", &json!({}))])
     })
     .unwrap();
-    // Held: the delegate is still running when the prompt ends the session.
-    let child = ProviderServer::start([text_reply(SENTINEL)]).unwrap();
-    child.hold();
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
@@ -6030,6 +6040,10 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
+            // The cancelled delegate's call settles here: its `usage` lands
+            // on `delegate_finished`, which `docs/events.md` writes just
+            // before `job_completed` ("Usage and notices").
+            "usage_recorded",
             "delegate_finished",
             "job_completed",
             "fiber_exited",
