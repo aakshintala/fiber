@@ -5990,8 +5990,6 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             return text_reply("allow");
         }
         if called.swap(true, Ordering::SeqCst) {
-            // The delegate's call is in flight before the turn ends, so the
-            // cancelled delegate's call settles while the session closes.
             assert!(
                 waiting.await_requests(1, deadline),
                 "the delegate called its model"
@@ -6010,11 +6008,32 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // `session_status` lines set aside: they carry no position relative
     // to the session's other lines (`docs/testing.md`, "Event streams").
     let kinds = owned_kinds(&lines);
-    let ordered: Vec<&str> = kinds
+    let mut ordered: Vec<&str> = kinds
         .iter()
         .filter(|kind| *kind != "session_status")
         .map(String::as_str)
         .collect();
+    // The cancelled delegate's call writes its usage at once
+    // (`docs/events.md`, "Usage and notices"), but the doc gives that line no
+    // place against `delegate_finished`: pin it once between the turn's end
+    // and the job's, and set it aside from the ordered list.
+    let turn_end = ordered
+        .iter()
+        .position(|kind| *kind == "turn_completed")
+        .expect("no turn_completed");
+    let job_end = ordered
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .expect("no job_completed");
+    let usage: Vec<usize> = (turn_end..job_end)
+        .filter(|at| ordered[*at] == "usage_recorded")
+        .collect();
+    assert_eq!(
+        usage.len(),
+        1,
+        "one usage_recorded after the turn: {ordered:?}"
+    );
+    ordered.remove(usage[0]);
     assert_eq!(
         ordered,
         [
@@ -6041,10 +6060,6 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-            // The cancelled delegate's call settles here: its `usage` lands
-            // on `delegate_finished`, which `docs/events.md` writes just
-            // before `job_completed` ("Usage and notices").
-            "usage_recorded",
             "delegate_finished",
             "job_completed",
             "fiber_exited",
