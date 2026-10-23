@@ -760,7 +760,9 @@ impl App {
             .map(|(_, tokens)| *tokens);
         Some(match self.config_views.open.as_ref()? {
             Open::Settings(settings) => settings.frame(usage),
-            Open::Tools(tools) => tools.frame(usage),
+            Open::Tools(tools) => {
+                tools.frame(self.config_view_width(), self.reload_cost().as_deref())
+            }
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Mcp(mcp) => mcp.frame(usage),
             Open::Credential(picker) => picker.frame(),
@@ -789,6 +791,23 @@ impl App {
             .as_ref()
             .filter(|(session, _)| self.session() == Some(session))
             .map(|(_, tokens)| *tokens)
+    }
+
+    /// What a reload's cache rebuild costs on the session on screen, as
+    /// the tools view's last row says it: its size, and its price when
+    /// the on-screen model's catalogue entry names one. `None` before
+    /// the session's first call.
+    fn reload_cost(&self) -> Option<String> {
+        let tokens = self.usage_on_screen()?;
+        let model = self.panel_state.model();
+        let price = self
+            .model_picker
+            .catalogue
+            .models
+            .iter()
+            .find(|entry| Some(entry.reference.as_str()) == model)
+            .and_then(|entry| entry.price.as_ref());
+        Some(crate::model_picker::rebuild_cost(tokens, price))
     }
 
     /// The theme a choice queued, once.

@@ -7,12 +7,12 @@ use std::path::Path;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Act, Ctx, Tools, on};
+use super::{Act, Ctx, Tools, on, size_text};
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
 use crate::configure_fake::Fake;
-use crate::format::width;
 use crate::keys::{Edit, Key};
-use crate::swapped::{Spot, render};
+use crate::swapped::{Ink, List, Spot, render};
+use crate::text::width;
 use contract::events::{ToolInfo, ToolSource, ToolState};
 
 const ID: &str = "c_1";
@@ -105,10 +105,14 @@ fn opened(fake: &Fake, infos: &[ToolInfo], usage: Option<u64>) -> Tools {
     tools
 }
 
+/// The frame at the width the tests draw in.
+fn frame(tools: &Tools) -> crate::swapped::Frame {
+    tools.frame(80, None)
+}
+
 /// Every row's cells joined.
 fn names(tools: &Tools) -> Vec<String> {
-    tools
-        .frame(None)
+    frame(tools)
         .rows
         .into_iter()
         .map(|cells| {
@@ -121,30 +125,31 @@ fn names(tools: &Tools) -> Vec<String> {
         .collect()
 }
 
-/// The tool rows' names: the first cell trimmed.
+/// The tool rows' names: the first cell up to the first ` · `.
 fn tool_names(tools: &Tools) -> Vec<String> {
-    tools
-        .frame(None)
+    frame(tools)
         .rows
         .into_iter()
         .filter_map(|cells| {
             cells
                 .first()
-                .map(|(text, _, _)| text.trim().to_owned())
-                .filter(|name| {
-                    !name.starts_with("Built-in")
-                        && !name.starts_with("Extension")
-                        && !name.starts_with("MCP server")
-                })
+                .filter(|(_, _, ink)| *ink != Ink::Heading)
+                .map(|(text, _, _)| text.split(" · ").next().unwrap_or("").to_owned())
+                .filter(|name| !name.is_empty())
         })
         .collect()
+}
+
+/// The selected row's index.
+fn selected(tools: &Tools) -> usize {
+    tools.list.selected()
 }
 
 #[test]
 fn before_the_answer_it_says_reading_and_has_no_rows() {
     let fake = Fake::new(Vec::new());
     let tools = Tools::open(ID.to_owned(), &ctx(&fake, None));
-    let frame = tools.frame(None);
+    let frame = frame(&tools);
     assert!(frame.rows.is_empty());
     assert_eq!(frame.below, vec!["Reading the tools…".to_owned()]);
     assert_eq!(frame.title, "Tools");
@@ -169,20 +174,35 @@ fn rows_group_built_in_then_extensions_then_servers_each_by_name() {
         tool_names(&tools),
         vec!["read", "write", "u", "t", "x", "zeta"]
     );
-    let headings: Vec<String> = names(&tools)
+    let headings: Vec<(String, Ink)> = frame(&tools)
+        .rows
         .into_iter()
-        .filter(|row| {
-            row.starts_with("Built-in")
-                || row.starts_with("Extension")
-                || row.starts_with("MCP server")
-        })
+        .filter_map(|cells| cells.into_iter().next())
+        .filter(|(_, _, ink)| *ink == Ink::Heading)
+        .map(|(text, _, ink)| (text, ink))
         .collect();
-    assert_eq!(headings.len(), 5);
-    assert!(headings[0].starts_with("Built-in"), "{headings:?}");
-    assert!(headings[1].starts_with("Extension c"), "{headings:?}");
-    assert!(headings[2].starts_with("Extension y"), "{headings:?}");
-    assert!(headings[3].starts_with("MCP server a"), "{headings:?}");
-    assert!(headings[4].starts_with("MCP server b"), "{headings:?}");
+    let words: Vec<&str> = headings.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(
+        words,
+        [
+            "Built-in",
+            "Extension · c",
+            "Extension · y",
+            "MCP · a",
+            "MCP · b"
+        ]
+    );
+}
+
+#[test]
+fn a_blank_row_separates_each_source() {
+    let fake = Fake::new(Vec::new());
+    let tools = opened(&fake, &[builtin("read"), extension("t", "y")], None);
+    let rows = names(&tools);
+    assert_eq!(rows.len(), 5, "{rows:?}");
+    assert!(rows[0].starts_with("Built-in"), "{rows:?}");
+    assert_eq!(rows[2], "", "{rows:?}");
+    assert!(rows[3].starts_with("Extension"), "{rows:?}");
 }
 
 #[test]
@@ -203,13 +223,33 @@ fn size_is_tokens_when_given_else_bytes() {
         &fake,
         &[
             info("a", ToolSource::Builtin, ToolState::Full, 460, Some(1840)),
-            info("b", ToolSource::Builtin, ToolState::Full, 460, None),
+            info("b", ToolSource::Builtin, ToolState::Full, 1234, None),
         ],
         None,
     );
     let rows = names(&tools);
-    assert!(rows[1].contains("about 1,840 tokens"), "{rows:?}");
-    assert!(rows[2].contains("460 bytes"), "{rows:?}");
+    assert_eq!(rows[1], "a · full · ~1.8k");
+    assert_eq!(rows[2], "b · full · 1,234 bytes");
+}
+
+#[test]
+fn a_token_size_reads_without_its_unit_or_a_zero_decimal() {
+    for (tokens, said) in [
+        (800, "~800"),
+        (999, "~999"),
+        (1000, "~1k"),
+        (1049, "~1k"),
+        (1050, "~1.1k"),
+        (9949, "~9.9k"),
+        (9950, "~10k"),
+        (1200, "~1.2k"),
+        (1, "~1"),
+        (1_500_000, "~1.5M"),
+        (2_000_000, "~2M"),
+    ] {
+        let tool = info("a", ToolSource::Builtin, ToolState::Full, 1, Some(tokens));
+        assert_eq!(size_text(&tool), said, "{tokens}");
+    }
 }
 
 #[test]
@@ -225,20 +265,19 @@ fn each_state_has_its_word() {
         None,
     );
     let rows = names(&tools);
-    assert!(rows[1].contains("full"), "{rows:?}");
-    assert!(rows[2].contains("deferred"), "{rows:?}");
-    assert!(rows[3].contains("loaded"), "{rows:?}");
+    assert!(rows[1].starts_with("a · full"), "{rows:?}");
+    assert!(rows[2].starts_with("b · deferred"), "{rows:?}");
+    assert!(rows[3].starts_with("c · loaded"), "{rows:?}");
 }
 
 #[test]
 fn built_in_rows_have_no_switch() {
     let fake = fake_with(Vec::new());
     let mut tools = opened(&fake, &[builtin("read")], None);
-    let frame = tools.frame(None);
+    let frame = frame(&tools);
     assert_eq!(frame.rows.len(), 2);
-    for (_, spot, _) in &frame.rows[1] {
-        assert!(!matches!(spot, Some(Spot::Switch { .. })), "{frame:?}");
-    }
+    assert_eq!(frame.rows[1].len(), 1);
+    assert!(!frame.rows[1][0].0.contains('['), "{frame:?}");
     tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     assert!(fake.switched.lock().unwrap().is_empty());
@@ -257,6 +296,30 @@ fn a_switch_is_on_unless_the_lists_say_off() {
 }
 
 #[test]
+fn a_tool_row_reads_as_the_doc_writes_it() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Extension("memory".to_owned()),
+        &["notes"],
+        &[],
+    )]);
+    let tools = opened(&fake, &[extension("notes", "memory")], None);
+    let cells = &frame(&tools).rows[1];
+    let kinds: Vec<(&str, Option<Spot>, Ink)> = cells
+        .iter()
+        .map(|(text, spot, ink)| (text.as_str(), *spot, *ink))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("notes · full · 100 bytes · this project ", None, Ink::Plain),
+            ("[off]", Some(Spot::Switch { row: 1, at: 0 }), Ink::Muted),
+            (" · everywhere ", None, Ink::Plain),
+            ("[on]", Some(Spot::Switch { row: 1, at: 1 }), Ink::Heading),
+        ]
+    );
+}
+
+#[test]
 fn this_project_reads_the_project_lists_and_everywhere_the_global() {
     let fake = fake_with(vec![group_switches(
         ToolGroup::Mcp("gh".to_owned()),
@@ -264,11 +327,10 @@ fn this_project_reads_the_project_lists_and_everywhere_the_global() {
         &[],
     )]);
     let tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    let frame = tools.frame(None);
+    let frame = frame(&tools);
     assert_eq!(frame.rows.len(), 2);
-    // `[ ]` under this project, `[x]` under everywhere.
-    assert!(frame.rows[1][1].0.contains("[ ]"), "{frame:?}");
-    assert!(frame.rows[1][3].0.contains("[x]"), "{frame:?}");
+    assert_eq!(frame.rows[1][1].0, "[off]");
+    assert_eq!(frame.rows[1][3].0, "[on]");
 }
 
 #[test]
@@ -279,7 +341,6 @@ fn space_switches_the_focused_layer_off_then_on() {
         &[],
     )]);
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     assert_eq!(
@@ -309,18 +370,13 @@ fn left_and_right_choose_the_switch_and_stop_at_each_end() {
         &[],
     )]);
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Down, &ctx(&fake, None));
     for _ in 0..3 {
         tools.edit_key(&Edit::Right);
     }
-    let frame = tools.frame(None);
-    assert!(frame.rows[1][3].0.contains('›'), "{frame:?}");
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     for _ in 0..3 {
         tools.edit_key(&Edit::Left);
     }
-    let frame = tools.frame(None);
-    assert!(frame.rows[1][1].0.contains('›'), "{frame:?}");
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     let switched = fake.switched.lock().unwrap().clone();
     assert_eq!(switched.len(), 2);
@@ -340,7 +396,8 @@ fn a_click_on_a_switch_selects_its_row_and_switches_it() {
         &[builtin("a"), builtin("b"), extension("t", "e")],
         None,
     );
-    tools.click(Spot::Switch { row: 4, at: 1 }, &ctx(&fake, None));
+    // Heading, a, b, a blank row, the extension's heading, then `t`.
+    tools.click(Spot::Switch { row: 5, at: 1 }, &ctx(&fake, None));
     assert_eq!(
         fake.switched.lock().unwrap().clone(),
         vec![(
@@ -350,7 +407,82 @@ fn a_click_on_a_switch_selects_its_row_and_switches_it() {
             false
         )]
     );
-    assert_eq!(tools.frame(None).rows.len(), 5);
+    assert_eq!(frame(&tools).rows.len(), 6);
+    assert_eq!(frame(&tools).rows[5][3].0, "[off]");
+}
+
+#[test]
+fn a_click_on_a_row_that_takes_no_switch_selects_nothing() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Extension("e".to_owned()),
+        &[],
+        &[],
+    )]);
+    let mut tools = opened(
+        &fake,
+        &[builtin("a"), extension("t", "e"), extension("u", "e")],
+        None,
+    );
+    let on_t = selected(&tools);
+    assert_eq!(on_t, 4);
+    // The heading, the built-in row and the blank row.
+    for row in [0, 1, 2, 3] {
+        tools.click(Spot::Row(row), &ctx(&fake, None));
+        assert_eq!(selected(&tools), on_t, "row {row}");
+    }
+    tools.click(Spot::Row(5), &ctx(&fake, None));
+    assert_eq!(selected(&tools), 5);
+}
+
+#[test]
+fn up_and_down_move_only_between_the_rows_that_take_a_switch() {
+    let fake = fake_with(vec![
+        group_switches(ToolGroup::Extension("e".to_owned()), &[], &[]),
+        group_switches(ToolGroup::Mcp("m".to_owned()), &[], &[]),
+    ]);
+    let mut tools = opened(
+        &fake,
+        &[
+            builtin("a"),
+            extension("t", "e"),
+            mcp("mcp__m__x", "m", "x"),
+        ],
+        None,
+    );
+    // Rows: Built-in, a, blank, Extension, t, blank, MCP, x.
+    assert_eq!(selected(&tools), 4);
+    tools.key(&Key::Down, &ctx(&fake, None));
+    assert_eq!(selected(&tools), 7);
+    tools.key(&Key::Down, &ctx(&fake, None));
+    assert_eq!(selected(&tools), 7);
+    tools.key(&Key::Up, &ctx(&fake, None));
+    assert_eq!(selected(&tools), 4);
+    tools.key(&Key::Up, &ctx(&fake, None));
+    assert_eq!(selected(&tools), 4);
+}
+
+#[test]
+fn the_frame_marks_a_focus_only_when_a_row_takes_a_switch() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Extension("e".to_owned()),
+        &[],
+        &[],
+    )]);
+    let with = opened(&fake, &[builtin("a"), extension("t", "e")], None);
+    assert!(frame(&with).list.is_gutter());
+    assert_eq!(frame(&with).list.selected(), 4);
+    let without = opened(&fake, &[builtin("a")], None);
+    assert!(frame(&without).list.is_gutter());
+    assert_ne!(frame(&without).list.selected(), 0);
+    assert_eq!(without.list, List::gutter());
+}
+
+#[test]
+fn a_view_with_no_switch_row_still_scrolls() {
+    let fake = Fake::new(Vec::new());
+    let mut tools = opened(&fake, &[builtin("a"), builtin("b")], None);
+    tools.key(&Key::Down, &ctx(&fake, None));
+    assert_eq!(selected(&tools), 1);
 }
 
 #[test]
@@ -359,7 +491,7 @@ fn space_on_a_heading_does_nothing() {
     let mut tools = opened(&fake, &[builtin("read")], None);
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     assert!(fake.switched.lock().unwrap().is_empty());
-    assert!(tools.frame(None).below.is_empty());
+    assert!(frame(&tools).below.is_empty());
 }
 
 #[test]
@@ -372,9 +504,8 @@ fn a_disabled_tool_the_answer_lacks_is_an_off_row() {
     let tools = opened(&fake, &[], None);
     assert_eq!(tool_names(&tools), vec!["gone"]);
     let rows = names(&tools);
-    assert!(rows[1].contains("off"), "{rows:?}");
-    assert!(!rows[1].contains("bytes"), "{rows:?}");
-    let frame = tools.frame(None);
+    assert_eq!(rows[1], "gone · off · this project [off] · everywhere [on]");
+    let frame = frame(&tools);
     assert!(matches!(
         frame.rows[1][1].1,
         Some(Spot::Switch { row: 1, at: 0 })
@@ -428,7 +559,6 @@ fn an_off_row_stays_after_it_is_switched_on() {
         &[],
     )]);
     let mut tools = opened(&fake, &[], None);
-    tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
     assert_eq!(
         fake.switched.lock().unwrap().clone(),
@@ -443,43 +573,72 @@ fn an_off_row_stays_after_it_is_switched_on() {
 }
 
 #[test]
-fn a_switch_says_the_reload_cost() {
-    for (usage, said) in [
-        (
-            Some(180_000),
-            "Applies on /reload, which rebuilds the cache: about 180,000 tokens.",
-        ),
-        (None, "Applies on each session's next /reload."),
-    ] {
-        let fake = fake_with(vec![group_switches(
-            ToolGroup::Mcp("gh".to_owned()),
-            &[],
-            &[],
-        )]);
-        let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], usage);
-        tools.key(&Key::Down, &ctx(&fake, usage));
-        tools.key(&Key::Char(' '), &ctx(&fake, usage));
-        assert_eq!(tools.frame(usage).below, vec![said.to_owned()]);
-    }
-}
-
-#[test]
-fn moving_clears_the_switch_line() {
+fn the_last_row_is_the_reload_cost_in_every_state() {
     let fake = fake_with(vec![group_switches(
         ToolGroup::Mcp("gh".to_owned()),
         &[],
         &[],
     )]);
+    let context = ctx(&fake, None);
+    let mut tools = Tools::open(ID.to_owned(), &context);
+    assert_eq!(
+        tools.frame(80, None).footer,
+        "a change rebuilds the cache on reload"
+    );
+    tools.answered(ID, &[mcp("mcp__gh__t", "gh", "t")], &context);
+    assert_eq!(
+        tools.frame(80, Some("~84k tokens")).footer,
+        "a change rebuilds the cache (~84k tokens) on reload"
+    );
+    assert_eq!(
+        tools.frame(80, Some("~84k tokens · $0.31")).footer,
+        "a change rebuilds the cache (~84k tokens · $0.31) on reload"
+    );
+    tools.key(&Key::Char(' '), &context);
+    assert_eq!(
+        tools.frame(80, None).footer,
+        "a change rebuilds the cache on reload"
+    );
+    let mut rejected = Tools::open(ID.to_owned(), &context);
+    rejected.rejected(ID, "busy");
+    assert_eq!(
+        rejected.frame(80, None).footer,
+        "a change rebuilds the cache on reload"
+    );
+}
+
+#[test]
+fn a_successful_switch_says_nothing_below() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Mcp("gh".to_owned()),
+        &[],
+        &[],
+    )]);
+    let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], Some(180_000));
+    tools.key(&Key::Char(' '), &ctx(&fake, Some(180_000)));
+    assert!(frame(&tools).below.is_empty());
+    assert_eq!(frame(&tools).rows[1][1].0, "[off]");
+}
+
+#[test]
+fn moving_clears_a_failed_switchs_message() {
+    let fake = fake_with(vec![group_switches(
+        ToolGroup::Mcp("gh".to_owned()),
+        &[],
+        &[],
+    )]);
+    if let Ok(mut refuse) = fake.refuse.lock() {
+        *refuse = Some("config.json: not JSON".to_owned());
+    }
     let mut tools = opened(
         &fake,
         &[mcp("mcp__gh__a", "gh", "a"), mcp("mcp__gh__b", "gh", "b")],
         None,
     );
-    tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
-    assert!(!tools.frame(None).below.is_empty());
+    assert!(!frame(&tools).below.is_empty());
     tools.key(&Key::Down, &ctx(&fake, None));
-    assert!(tools.frame(None).below.is_empty());
+    assert!(frame(&tools).below.is_empty());
 }
 
 #[test]
@@ -493,12 +652,11 @@ fn a_failed_switch_shows_its_message_and_keeps_the_rows() {
         *refuse = Some("config.json: not JSON".to_owned());
     }
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
-    let frame = tools.frame(None);
+    let frame = frame(&tools);
     assert_eq!(frame.below, vec!["config.json: not JSON".to_owned()]);
     assert_eq!(tool_names(&tools), vec!["t"]);
-    assert!(frame.rows[1][1].0.contains("[x]"), "{frame:?}");
+    assert_eq!(frame.rows[1][1].0, "[on]");
 }
 
 #[test]
@@ -512,75 +670,91 @@ fn a_switch_that_wrote_then_failed_shows_what_the_files_hold() {
         *fail = true;
     }
     let mut tools = opened(&fake, &[mcp("mcp__gh__t", "gh", "t")], None);
-    tools.key(&Key::Down, &ctx(&fake, None));
     tools.key(&Key::Char(' '), &ctx(&fake, None));
-    let frame = tools.frame(None);
-    assert!(frame.rows[1][1].0.contains("[ ]"), "{frame:?}");
-    assert!(frame.below != vec!["Applies on each session's next /reload.".to_owned()]);
+    let frame = frame(&tools);
+    assert_eq!(frame.rows[1][1].0, "[off]");
+    assert!(!frame.below.is_empty());
 }
 
-#[test]
-fn a_name_past_its_column_is_cut() {
-    let fake = Fake::new(Vec::new());
-    let tools = opened(
-        &fake,
-        &[
-            builtin(&"e".repeat(20)),
-            builtin(&"e".repeat(21)),
-            builtin(&"e".repeat(22)),
-        ],
-        None,
-    );
-    let frame = tools.frame(None);
-    assert_eq!(width(&frame.rows[1][0].0), 22);
-    assert_eq!(width(&frame.rows[2][0].0), 22);
-    assert_eq!(width(&frame.rows[3][0].0), 22);
-    assert!(frame.rows[1][0].0.contains(&"e".repeat(20)), "{frame:?}");
-    assert!(
-        frame.rows[2][0].0.contains(&format!("{}…", "e".repeat(19))),
-        "{frame:?}"
-    );
-    assert!(
-        frame.rows[3][0].0.contains(&format!("{}…", "e".repeat(19))),
-        "{frame:?}"
-    );
-}
-
-#[test]
-fn wide_names_keep_the_switch_columns_aligned() {
+/// The view over one `deferred` MCP tool named `name`, both switches off,
+/// so its row is as wide as it gets.
+fn widest_row(name: &str) -> Tools {
     let fake = fake_with(vec![group_switches(
         ToolGroup::Mcp("s".to_owned()),
-        &[],
-        &[],
+        &[name],
+        &[name],
     )]);
-    let tools = opened(
-        &fake,
-        &[
-            mcp("mcp__s__abc", "s", "abc"),
-            mcp(
-                "mcp__s__\u{3042}\u{3044}\u{3046}",
-                "s",
-                "\u{3042}\u{3044}\u{3046}",
-            ),
-            mcp(
-                &format!("mcp__s__{}", "e\u{301}".repeat(5)),
-                "s",
-                &"e\u{301}".repeat(5),
-            ),
-        ],
-        None,
-    );
+    opened(&fake, &[mcp("mcp__s__x", "s", name)], None)
+}
+
+/// The row's width, gutter included.
+fn row_width(tools: &Tools, width: usize) -> usize {
+    2 + tools.frame(width, None).rows[1]
+        .iter()
+        .map(|(text, _, _)| width_of(text))
+        .sum::<usize>()
+}
+
+fn width_of(text: &str) -> usize {
+    width(text)
+}
+
+#[test]
+fn a_name_past_its_room_is_cut_so_the_switches_stay_in_view() {
+    // ` · deferred · 460 bytes` and both switches at their widest take 63
+    // columns; the gutter takes 2; 15 are left for the name at width 80.
+    for (len, cut) in [(14, false), (15, false), (16, true)] {
+        let name = "e".repeat(len);
+        let tools = widest_row(&name);
+        let cells = &tools.frame(80, None).rows[1];
+        assert_eq!(cut, cells[0].0.contains('…'), "{len}");
+        // The row never passes the width, and a name that fits is whole.
+        assert!(row_width(&tools, 80) <= 80, "{len}");
+        if !cut {
+            assert!(cells[0].0.starts_with(&name), "{len}");
+        } else {
+            assert!(cells[0].0.starts_with(&format!("{}…", "e".repeat(14))));
+        }
+    }
+    // At the room the row fills the width exactly.
+    assert_eq!(row_width(&widest_row(&"e".repeat(15)), 80), 80);
+    assert_eq!(row_width(&widest_row(&"e".repeat(14)), 80), 79);
+    assert_eq!(row_width(&widest_row(&"e".repeat(16)), 80), 80);
+}
+
+#[test]
+fn a_wide_name_is_cut_by_columns_and_keeps_both_switches_in_view() {
+    let name = "\u{3042}".repeat(10);
+    let tools = widest_row(&name);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    render(&tools.frame(None), area, &mut buf, &mut Vec::new());
-    let bracket = |y: u16| (0..80).find(|x| buf[(*x, y)].symbol() == "[");
-    // Tool rows are y 2, 3 and 4: the heading is y 1.
-    let second = bracket(2).expect("row 2 renders its project switch");
-    let third = bracket(3).expect("row 3 renders its project switch");
-    let fourth = bracket(4).expect("row 4 renders its project switch");
-    assert_eq!(second, third);
-    assert_eq!(third, fourth);
-    assert!(second > 0);
+    let mut targets = Vec::new();
+    render(&tools.frame(80, None), area, &mut buf, &mut targets);
+    assert!(row_width(&tools, 80) <= 80);
+    for at in 0..2 {
+        let target = targets
+            .iter()
+            .find(|target| target.id == crate::mouse::TargetId::View(Spot::Switch { row: 1, at }))
+            .expect("a switch target");
+        assert!(target.rect.right() <= 80, "switch {at}");
+        assert!(target.rect.width > 0, "switch {at}");
+    }
+}
+
+#[test]
+fn a_narrow_width_clips_without_panicking() {
+    for width in [0, 1, 10, 40, 65] {
+        let tools = widest_row(&"e".repeat(30));
+        let cells = &tools.frame(width, None).rows[1];
+        assert_eq!(cells.len(), 4, "width {width}");
+        let area = Rect::new(0, 0, u16::try_from(width).unwrap_or(0), 5);
+        render(
+            &tools.frame(width, None),
+            area,
+            &mut Buffer::empty(area),
+            &mut Vec::new(),
+        );
+    }
 }
 
 #[test]
@@ -589,7 +763,7 @@ fn only_the_answer_to_its_id_is_read() {
     let context = ctx(&fake, None);
     let mut tools = Tools::open(ID.to_owned(), &context);
     tools.answered("c_2", &[builtin("read")], &context);
-    assert!(tools.frame(None).rows.is_empty());
+    assert!(frame(&tools).rows.is_empty());
     tools.answered(ID, &[builtin("read")], &context);
     assert_eq!(tool_names(&tools), vec!["read"]);
 }
@@ -600,12 +774,9 @@ fn a_rejection_shows_its_message_only_for_its_id() {
     let context = ctx(&fake, None);
     let mut tools = Tools::open(ID.to_owned(), &context);
     tools.rejected("c_2", "busy");
-    assert_eq!(
-        tools.frame(None).below,
-        vec!["Reading the tools…".to_owned()]
-    );
+    assert_eq!(frame(&tools).below, vec!["Reading the tools…".to_owned()]);
     tools.rejected(ID, "busy");
-    assert_eq!(tools.frame(None).below, vec!["busy".to_owned()]);
+    assert_eq!(frame(&tools).below, vec!["busy".to_owned()]);
 }
 
 #[test]
@@ -624,7 +795,7 @@ fn tools_80x24() {
         group_switches(ToolGroup::Extension("memory".to_owned()), &[], &[]),
         group_switches(ToolGroup::Mcp("docs".to_owned()), &[], &["gone"]),
     ]);
-    let mut tools = opened(
+    let tools = opened(
         &fake,
         &[
             builtin("read"),
@@ -642,13 +813,14 @@ fn tools_80x24() {
         ],
         None,
     );
-    for _ in 0..6 {
-        tools.key(&Key::Down, &ctx(&fake, None));
-    }
-    tools.edit_key(&Edit::Right);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
-    render(&tools.frame(None), area, &mut buf, &mut Vec::new());
+    render(
+        &tools.frame(80, Some("~84k tokens · $0.31")),
+        area,
+        &mut buf,
+        &mut Vec::new(),
+    );
     let text: Vec<String> = (0..24)
         .map(|y| {
             (0..80)

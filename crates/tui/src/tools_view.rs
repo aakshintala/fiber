@@ -7,12 +7,17 @@
 use contract::events::{ToolInfo, ToolSource, ToolState};
 
 use crate::configure::{SwitchScope, ToolGroup, ToolLists, ToolSwitches};
+use crate::format::tokens;
 use crate::keys::{Edit, Key};
-use crate::settings_view::{Act, Ctx, reload_text};
+use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
+use crate::text;
 
-/// A tool name's column.
-const NAME: usize = 20;
+/// The columns a view with a gutter keeps before each row's text.
+const GUTTER: usize = 2;
+
+/// A switch at its widest, as the name's room counts it.
+const WIDEST_SWITCH: &str = "[off]";
 
 /// Whether a tool is declared under `lists` (`mcp::start::kept`'s rule).
 pub(crate) fn on(lists: &ToolLists, tool: &str) -> bool {
@@ -60,32 +65,45 @@ fn state_word(state: ToolState) -> &'static str {
     }
 }
 
-/// A size as the rows show it: tokens once a request gave a rate, else
-/// bytes (`docs/tools.md`, "Seeing the tools").
+/// A size as the rows show it: tokens once a request gave a rate, as
+/// `~1.2k` or `~800`, else bytes (`docs/tools.md`, "Seeing the tools").
 fn size_text(info: &ToolInfo) -> String {
     match info.tokens {
-        Some(tokens) => format!("about {} tokens", about(tokens)),
+        Some(tokens) => format!("~{}", token_figure(tokens)),
         None => format!("{} bytes", about(info.bytes)),
     }
+}
+
+/// A token count as the rows say it: the figure of [`tokens`] without
+/// its unit and without a zero decimal, so whole thousands read "12k".
+fn token_figure(count: u64) -> String {
+    let text = tokens(count);
+    let text = text
+        .strip_suffix(" tokens")
+        .or_else(|| text.strip_suffix(" token"))
+        .unwrap_or(&text);
+    text.strip_suffix(".0k")
+        .map(|kept| format!("{kept}k"))
+        .or_else(|| text.strip_suffix(".0M").map(|kept| format!("{kept}M")))
+        .unwrap_or_else(|| text.to_owned())
 }
 
 /// A group heading's name.
 fn heading_of(group: &Option<ToolGroup>) -> String {
     match group {
         None => "Built-in".to_owned(),
-        Some(ToolGroup::Extension(name)) => format!("Extension {name}"),
-        Some(ToolGroup::Mcp(name)) => format!("MCP server {name}"),
+        Some(ToolGroup::Extension(name)) => format!("Extension · {name}"),
+        Some(ToolGroup::Mcp(name)) => format!("MCP · {name}"),
     }
 }
 
 /// One row of the view.
 #[derive(Debug)]
 enum Entry {
-    /// A group's heading: whether its tools have switches.
-    Heading {
-        group: Option<ToolGroup>,
-        switches: bool,
-    },
+    /// A group's heading.
+    Heading { group: Option<ToolGroup> },
+    /// The blank row between two groups.
+    Blank,
     /// A tool.
     Tool(ToolRow),
 }
@@ -120,7 +138,7 @@ pub(crate) struct Tools {
     list: List,
     /// The switch Space flips: this project at open.
     focus: SwitchScope,
-    /// What the last action said, shown below the rows.
+    /// What the last failed action said, shown below the rows.
     said: Vec<String>,
 }
 
@@ -138,17 +156,28 @@ impl Tools {
             switches,
             unlisted: Vec::new(),
             rows: Vec::new(),
-            list: List::default(),
+            list: List::gutter(),
             focus: SwitchScope::Project,
             said,
         };
-        tools.rebuild(ctx.height);
+        tools.rebuild(ctx);
         tools
     }
 
     /// The rows the view shows at `ctx`'s height.
     fn shown(&self, ctx: &Ctx<'_>) -> usize {
-        rows_height(&self.frame(ctx.usage), ctx.height)
+        rows_height(&self.frame(ctx.width, None), ctx.height)
+    }
+
+    /// The rows that take a switch: a tool with a group. Up and Down
+    /// move between them only.
+    fn takes(&self) -> Vec<usize> {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| matches!(entry, Entry::Tool(row) if row.group.is_some()))
+            .map(|(at, _)| at)
+            .collect()
     }
 
     /// Handles one key.
@@ -160,7 +189,10 @@ impl Tools {
             return self.switch(ctx);
         }
         let shown = self.shown(ctx);
-        if self.list.key(key, self.rows.len(), shown) {
+        if self
+            .list
+            .key_over(key, self.rows.len(), shown, &self.takes())
+        {
             self.said.clear();
         }
         Act::Stay
@@ -191,8 +223,10 @@ impl Tools {
             Spot::Close => Act::Close,
             Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
-                let shown = self.shown(ctx);
-                self.list.select(at, self.rows.len(), shown);
+                if self.takes().contains(&at) {
+                    let shown = self.shown(ctx);
+                    self.list.select(at, self.rows.len(), shown);
+                }
                 Act::Stay
             }
             Spot::Switch { row, at } => {
@@ -225,7 +259,7 @@ impl Tools {
         {
             Ok(()) => {
                 self.reread(ctx);
-                self.said = vec![reload_text(ctx.usage)];
+                self.said.clear();
             }
             Err(error) => {
                 // A write may have landed before the error, so the rows
@@ -256,7 +290,7 @@ impl Tools {
         if let Ok(switches) = ctx.seam.tool_switches(ctx.workspace) {
             self.switches = switches;
         }
-        self.rebuild(ctx.height);
+        self.rebuild(ctx);
     }
 
     /// The answer to the sent command: any other answer, and an answer to
@@ -267,7 +301,7 @@ impl Tools {
         }
         self.infos = tools.to_vec();
         self.awaiting = None;
-        self.rebuild(ctx.height);
+        self.rebuild(ctx);
     }
 
     /// The sent command's rejection: only for its id.
@@ -283,7 +317,7 @@ impl Tools {
     /// the answer, plus an `off` row for every name either switch's
     /// `disabled` list holds that the answer lacks. Rows sort by group,
     /// built-in first, then by name, each group under its heading.
-    fn rebuild(&mut self, height: usize) {
+    fn rebuild(&mut self, ctx: &Ctx<'_>) {
         let mut tools: Vec<ToolRow> = self
             .infos
             .iter()
@@ -330,29 +364,41 @@ impl Tools {
         let mut last: Option<Option<ToolGroup>> = None;
         for row in tools {
             if last.as_ref() != Some(&row.group) {
+                if last.is_some() {
+                    rows.push(Entry::Blank);
+                }
                 last = Some(row.group.clone());
                 rows.push(Entry::Heading {
                     group: row.group.clone(),
-                    switches: row.group.is_some(),
                 });
             }
             rows.push(Entry::Tool(row));
         }
         self.rows = rows;
-        let shown = rows_height(&self.frame(None), height);
-        self.list
-            .select(self.list.selected(), self.rows.len(), shown);
+        let shown = rows_height(&self.frame(ctx.width, None), ctx.height);
+        let takes = self.takes();
+        // The selection rests on a row that takes a switch: the one it
+        // was on, else the next, else the last.
+        let at = takes
+            .iter()
+            .copied()
+            .find(|at| *at >= self.list.selected())
+            .or_else(|| takes.last().copied())
+            .unwrap_or(self.list.selected());
+        self.list.select(at, self.rows.len(), shown);
     }
 
-    /// The frame to draw.
-    pub(crate) fn frame(&self, _usage: Option<u64>) -> Frame {
+    /// The frame to draw at `width` columns. `cost` is what a reload's
+    /// cache rebuild costs, as the footer says it, when known.
+    pub(crate) fn frame(&self, width: usize, cost: Option<&str>) -> Frame {
         let rows = self
             .rows
             .iter()
             .enumerate()
             .map(|(index, entry)| match entry {
-                Entry::Heading { group, switches } => heading_cells(group, *switches),
-                Entry::Tool(row) => self.tool_cells(index, row),
+                Entry::Heading { group } => vec![(heading_of(group), None, Ink::Heading)],
+                Entry::Blank => Vec::new(),
+                Entry::Tool(row) => self.tool_cells(index, row, width),
             })
             .collect();
         let below = if self.awaiting.is_some() {
@@ -362,83 +408,71 @@ impl Tools {
         } else {
             self.said.clone()
         };
+        let footer = match cost {
+            Some(cost) => format!("a change rebuilds the cache ({cost}) on reload"),
+            None => "a change rebuilds the cache on reload".to_owned(),
+        };
+        // With no row that takes a switch there is nothing to focus.
+        let list = if self.takes().is_empty() {
+            self.list.blur()
+        } else {
+            self.list
+        };
         Frame {
             title: "Tools".to_owned(),
             command: "/tools",
             rows,
-            list: self.list,
+            list,
             below,
             field: None,
-            footer: "↑↓ move · ←→ choose a switch · Space switch · Esc close".to_owned(),
+            footer,
         }
     }
 
-    /// One tool's cells: its name, its two switches, its state and size.
-    fn tool_cells(&self, index: usize, row: &ToolRow) -> Vec<(String, Option<Spot>, Ink)> {
-        let selected = index == self.list.selected();
-        let (project, everywhere) = match &row.group {
-            None => ((" ".repeat(12), None), (" ".repeat(10), None)),
-            Some(group) => (
-                (
-                    format!(
-                        "{:^12}",
-                        mark(
-                            self.on_in_scope(group, &row.name, SwitchScope::Project),
-                            selected && self.focus == SwitchScope::Project
-                        )
-                    ),
-                    Some(Spot::Switch { row: index, at: 0 }),
-                ),
-                (
-                    format!(
-                        "{:^10}",
-                        mark(
-                            self.on_in_scope(group, &row.name, SwitchScope::Everywhere),
-                            selected && self.focus == SwitchScope::Everywhere
-                        )
-                    ),
-                    Some(Spot::Switch { row: index, at: 1 }),
-                ),
-            ),
+    /// One tool's cells: `<name> · <state> · <size>`, then for a tool
+    /// with switches ` · this project ` and its switch and ` · everywhere `
+    /// and its switch. The name is cut to the room the rest of the row
+    /// leaves, so the switches stay inside `width`.
+    fn tool_cells(
+        &self,
+        index: usize,
+        row: &ToolRow,
+        width: usize,
+    ) -> Vec<(String, Option<Spot>, Ink)> {
+        let size = if row.size.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", row.size)
+        };
+        let scoped = row.group.is_some();
+        let project = " · this project ";
+        let everywhere = " · everywhere ";
+        let widest = if scoped {
+            format!("{project}{WIDEST_SWITCH}{everywhere}{WIDEST_SWITCH}")
+        } else {
+            String::new()
+        };
+        let rest = format!(" · {}{size}", row.state);
+        let room = width.saturating_sub(GUTTER + text::width(&rest) + text::width(&widest));
+        let head = format!("{}{rest}", text::cut(&row.name, room, "…"));
+        let Some(group) = &row.group else {
+            return vec![(head, None, Ink::Plain)];
+        };
+        let switch = |scope: SwitchScope, at: usize| {
+            let (word, ink) = if self.on_in_scope(group, &row.name, scope) {
+                ("[on]", Ink::Heading)
+            } else {
+                ("[off]", Ink::Muted)
+            };
+            (word.to_owned(), Some(Spot::Switch { row: index, at }), ink)
         };
         vec![
-            (
-                format!("  {}", crate::text::fit(&row.name, NAME)),
-                None,
-                Ink::Plain,
-            ),
-            (project.0, project.1, Ink::Plain),
-            ("  ".to_owned(), None, Ink::Plain),
-            (everywhere.0, everywhere.1, Ink::Plain),
-            (
-                format!("  {:<8}  {}", row.state, row.size),
-                None,
-                Ink::Plain,
-            ),
+            (format!("{head}{project}"), None, Ink::Plain),
+            switch(SwitchScope::Project, 0),
+            (everywhere.to_owned(), None, Ink::Plain),
+            switch(SwitchScope::Everywhere, 1),
         ]
     }
-}
-
-/// One group's heading cells: its name over the name column, the switch
-/// names over theirs, and the state and size names.
-fn heading_cells(group: &Option<ToolGroup>, switches: bool) -> Vec<(String, Option<Spot>, Ink)> {
-    let (project, everywhere) = if switches {
-        ("this project", "everywhere")
-    } else {
-        ("", "")
-    };
-    vec![(
-        format!(
-            "{}{:^12}  {:^10}  {:<8}  {}",
-            crate::text::fit(&heading_of(group), NAME + 2),
-            project,
-            everywhere,
-            "state",
-            "size"
-        ),
-        None,
-        Ink::Heading,
-    )]
 }
 
 #[cfg(test)]

@@ -623,11 +623,17 @@ fn the_answer_to_the_sent_id_fills_the_view() {
     ));
     let frame = app.config_view_screen().expect("the view is open");
     assert!(
-        frame.rows.iter().any(|row| row[0].0.contains("read")),
+        frame
+            .rows
+            .iter()
+            .any(|row| row.first().is_some_and(|cell| cell.0.contains("read"))),
         "{frame:?}"
     );
     assert!(
-        frame.rows.iter().any(|row| row[0].0.contains('x')),
+        frame
+            .rows
+            .iter()
+            .any(|row| row.first().is_some_and(|cell| cell.0.contains('x'))),
         "{frame:?}"
     );
 }
@@ -690,21 +696,136 @@ fn a_click_on_the_panels_tools_line_opens_the_tools_view() {
 
 #[test]
 fn left_and_right_reach_the_tools_view_not_the_draft() {
-    let mut app = connected(Some(fake()));
+    let seam = fake();
+    let mut app = connected(Some(seam.clone()));
     let id = open_tools(&mut app);
     app.on_line(session_line(
         "command_accepted",
         serde_json::json!({"command_id": id, "result": tools_answer()}),
     ));
-    // Select the MCP row: heading, read, heading, x.
-    for _ in 0..3 {
-        app.on_key(Key::Down, now());
-    }
     app.on_edit(Edit::Right);
-    let frame = app.config_view_screen().expect("the view is open");
-    assert!(frame.rows[3][3].0.contains('›'), "{frame:?}");
     assert!(app.input().is_empty());
+    app.on_key(Key::Char(' '), now());
+    let switched = seam.switched.lock().unwrap().clone();
+    assert_eq!(switched.len(), 1);
+    assert_eq!(switched[0].2, crate::configure::SwitchScope::Everywhere);
 }
+
+/// A `preamble_built` naming `model`.
+fn preamble(model: &str) -> Line {
+    session_line(
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": model, "context_window": 200000,
+            "trigger_at": 150000, "thinking": null,
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    )
+}
+
+/// A `usage_recorded` whose prompt is `input` tokens.
+fn usage_of(input: u64) -> Line {
+    session_line(
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": input, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": null}),
+    )
+}
+
+/// A catalogue entry for `reference`, priced at `micros` per million
+/// tokens when given.
+fn priced(reference: &str, micros: Option<u64>) -> crate::catalogue::ModelEntry {
+    let (provider, id) = reference.split_once('/').unwrap();
+    crate::catalogue::ModelEntry {
+        reference: reference.to_owned(),
+        provider: provider.to_owned(),
+        id: id.to_owned(),
+        levels: Vec::new(),
+        default_level: None,
+        configured: None,
+        roles: Vec::new(),
+        name: None,
+        price: micros.map(|micros| crate::catalogue::Price {
+            micros_per_mtok: micros,
+            input: micros,
+            output: micros,
+            tiers: Vec::new(),
+        }),
+    }
+}
+
+/// The tools view's last row on an app that made a call of `usage` tokens
+/// on model `a/b`, with `entry` in the catalogue.
+fn tools_footer(usage: Option<u64>, entry: Option<crate::catalogue::ModelEntry>) -> String {
+    let mut app = connected(Some(fake()));
+    app.on_line(preamble("a/b"));
+    if let Some(tokens) = usage {
+        app.on_line(usage_of(tokens));
+    }
+    app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
+        models: entry.into_iter().collect(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+    }));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    app.config_view_screen().expect("the view is open").footer
+}
+
+#[test]
+fn the_tools_last_row_says_what_the_rebuild_costs() {
+    // 84,000 tokens at $3.69 per million is $0.30996.
+    assert_eq!(
+        tools_footer(Some(84_000), Some(priced("a/b", Some(3_690_000)))),
+        "a change rebuilds the cache (~84k tokens · $0.31) on reload"
+    );
+    assert_eq!(
+        tools_footer(Some(84_000), Some(priced("a/b", None))),
+        "a change rebuilds the cache (~84k tokens) on reload"
+    );
+    // Another model's price is not this one's.
+    assert_eq!(
+        tools_footer(Some(84_000), Some(priced("a/c", Some(3_690_000)))),
+        "a change rebuilds the cache (~84k tokens) on reload"
+    );
+    assert_eq!(
+        tools_footer(None, Some(priced("a/b", Some(3_690_000)))),
+        "a change rebuilds the cache on reload"
+    );
+}
+
+#[test]
+fn the_tools_last_row_counts_only_the_session_on_screen() {
+    let mut app = connected(Some(fake()));
+    app.on_line(usage_of(84_000));
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    let lines = sent(slash_tools(&mut app));
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "result": tools_answer()})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    assert_eq!(
+        app.config_view_screen().expect("the view is open").footer,
+        "a change rebuilds the cache on reload"
+    );
+}
+
 /// A seam with one global rule on line 1.
 fn rules_fake() -> (Arc<Fake>, String) {
     let fake = fake();
