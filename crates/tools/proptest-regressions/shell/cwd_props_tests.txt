@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8f6d2afb9bf87b6dcf928d4adf9c5ece63795687c1e7941cf53514577b260774 # shrinks to steps = [Step { join: And, cd: true, arg: "a" }], symlinked = false
+cc 81076ef55e1229d5ea7850ac9f95b8a9d4cb0a44e9aafcbf0095f7bb9a2173a9 # shrinks to steps = [Step { join: And, cd: true, arg: ".." }, Step { join: And, cd: false, arg: "a" }], symlinked = false
