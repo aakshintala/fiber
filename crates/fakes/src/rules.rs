@@ -2,6 +2,7 @@
 //! remembered (`contract::rules::Rules`).
 
 use std::sync::Mutex;
+use support::lock;
 
 use contract::SessionId;
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -38,10 +39,7 @@ impl RecordingRules {
 
     /// Every (`tool`, `prefix`, `session`) remembered, in order.
     pub fn calls(&self) -> Vec<(String, String, SessionId)> {
-        self.remembered
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        lock(&self.remembered).clone()
     }
 }
 
@@ -59,10 +57,7 @@ impl Rules for RecordingRules {
     }
 
     fn remember(&self, tool: &str, prefix: &str, session: &SessionId) -> Result<(), RulesError> {
-        self.remembered
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((tool.into(), prefix.into(), session.clone()));
+        lock(&self.remembered).push((tool.into(), prefix.into(), session.clone()));
         Ok(())
     }
 }

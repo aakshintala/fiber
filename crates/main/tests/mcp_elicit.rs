@@ -243,7 +243,7 @@ fn read_held(
         Err(error) => {
             let requests_log = fs::read_to_string(dir.join("requests.log"))
                 .unwrap_or_else(|error| format!("requests.log is unreadable: {error}"));
-            match support::kill_group(cleanup, running.group, "KILL") {
+            match fakes::kill_group(running.group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
             let stderr = match cleanup.cleanup_phase().recv(&running.stderr) {

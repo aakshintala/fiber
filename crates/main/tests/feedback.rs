@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::Watchdog;
 use serde_json::json;
-use support::{Setup, expired, group_alive};
+use support::{Setup, expired};
 
 /// Runs `fiber` with `args`: `stdin` writes the text on a thread, as
 /// `ask`'s runner does, since a child that never reads still ends the
@@ -63,7 +63,7 @@ fn wait(setup: &Setup, what: &str, child: Child) -> Output {
         Err(_) => expired(setup.deadline, group, &finished, &format!("{what} to exit")),
     };
     assert!(
-        !group_alive(setup.deadline, group),
+        !fakes::group_alive(group),
         "{what} left a process in its group behind"
     );
     watchdog.stand_down(setup.deadline.cleanup_phase());

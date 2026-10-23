@@ -532,9 +532,7 @@ pub(super) fn withhold_hook_completion(
     point: &str,
     release: std::sync::mpsc::Receiver<()>,
 ) {
-    *WITHHELD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+    *support::lock(&WITHHELD) = Some(Withheld {
         extension: extension.to_owned(),
         target: WithheldTarget::Hook(point.to_owned()),
         release: Arc::new(Mutex::new(release)),
@@ -551,9 +549,7 @@ pub(super) fn withhold_command_completion(
     command: &str,
     release: std::sync::mpsc::Receiver<()>,
 ) {
-    *WITHHELD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+    *support::lock(&WITHHELD) = Some(Withheld {
         extension: extension.to_owned(),
         target: WithheldTarget::Command(command.to_owned()),
         release: Arc::new(Mutex::new(release)),
@@ -570,9 +566,7 @@ pub(super) fn withhold_watcher_completion(
     index: usize,
     release: std::sync::mpsc::Receiver<()>,
 ) {
-    *WITHHELD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Withheld {
+    *support::lock(&WITHHELD) = Some(Withheld {
         extension: extension.to_owned(),
         target: WithheldTarget::Watcher(index),
         release: Arc::new(Mutex::new(release)),
@@ -582,18 +576,14 @@ pub(super) fn withhold_watcher_completion(
 /// Stops withholding hook, command or watcher completions.
 #[cfg(test)]
 pub(super) fn release_hook_completion() {
-    *WITHHELD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *support::lock(&WITHHELD) = None;
 }
 
 /// Waits for the test's release when `target` is a withheld hook or command
 /// completion, and passes everything else through.
 #[cfg(test)]
 fn await_completion_release(extension: &str, target: &Target) {
-    let waiter = WITHHELD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    let waiter = support::lock(&WITHHELD)
         .as_ref()
         .filter(|withheld| {
             withheld.extension == extension
@@ -610,10 +600,7 @@ fn await_completion_release(extension: &str, target: &Target) {
         })
         .map(|withheld| Arc::clone(&withheld.release));
     if let Some(waiter) = waiter {
-        let _ignored = waiter
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .recv();
+        let _ignored = support::lock(&waiter).recv();
     }
 }
 
@@ -803,24 +790,17 @@ static FAIL_SPAWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 /// Arms the spawn-failure seam for the next spawned work of `provider`.
 #[cfg(test)]
 pub(crate) fn fail_next_spawn_for(provider: &str) {
-    *FAIL_SPAWN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(provider.to_owned());
+    *support::lock(&FAIL_SPAWN) = Some(provider.to_owned());
 }
 
 /// Takes a pending spawn failure for `target`, disarming the seam when it
 /// fires. Any other target passes through and leaves the arming in place.
 #[cfg(test)]
 fn take_spawn_failure(target: &Target) -> bool {
-    let armed = FAIL_SPAWN
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let armed = support::lock(&FAIL_SPAWN).clone();
     match (armed, target) {
         (Some(provider), Target::Provider { name, .. }) if *name == provider => {
-            *FAIL_SPAWN
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            *support::lock(&FAIL_SPAWN) = None;
             true
         }
         _ => false,

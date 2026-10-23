@@ -3,6 +3,7 @@
 
 use super::{SessionExtensions, notice};
 use contract::ErrorCode;
+use support::lock;
 
 impl contract::extension::ExtensionDoor for SessionExtensions {
     fn command(
@@ -39,10 +40,7 @@ impl contract::extension::ExtensionDoor for SessionExtensions {
     }
 
     fn seal(&self) {
-        self.emitter
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        lock(&self.emitter).take();
         #[cfg(test)]
         self.at_late(super::LatePoint::Cleared);
         for extension in self.attached_vms() {

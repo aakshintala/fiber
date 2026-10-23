@@ -147,10 +147,34 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     let second = Setup::new();
     second.tools(&json!([{"name": "alpha"}]));
     second.result("alpha", r#"{"content":[]}"#);
-    let specs = vec![first.spec("one"), second.spec("two")];
-    let started = first.start(specs);
+    let (held_one, release_one, reached_one) = held_spec_with_reached(&first, "one");
+    let (held_two, release_two, reached_two) = held_spec_with_reached(&second, "two");
+    // Detached, not scoped: a scope joins its thread even after a
+    // receive panic, so a hung start would hang the test.
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(first.start(vec![held_one, held_two]))
+            .unwrap_or(());
+    });
+    // Each spawn signals it reached the test's release before it
+    // blocks, so the test waits for the spawns, never for a budget.
+    // One deadline for the whole wait (`docs/testing.md`, "Waits and
+    // timeouts"): the two receives are consecutive parts of one wait.
+    let wait = Deadline::after(WITHIN);
+    wait.recv_or_fail(&reached_one, "one reaches its spawn");
+    wait.recv_or_fail(&reached_two, "two reaches its spawn");
+    release_one.send(()).expect("the one spawn is released");
+    release_two.send(()).expect("the two spawn is released");
+    let started = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"));
     assert!(started.failed.is_empty());
+    // `docs/mcp.md:82`: tools are sorted by name.
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
+    // The infos run parallel to the sorted tools: `start` sorts the
+    // tools by name and unzips the infos from the same sorted list
+    // (`crates/mcp/src/start.rs:678-682`). `docs/mcp.md` promises tool
+    // order only; the infos order follows from that construction.
     assert_eq!(
         started
             .infos
@@ -189,6 +213,37 @@ fn held_spec(setup: &Setup, name: &str) -> (super::ServerSpec, std::sync::mpsc::
         }),
     });
     (spec, release)
+}
+
+/// A held spec that also signals when its spawn reaches the test's
+/// release: the guard sends on `reached` before it blocks on the
+/// release, so the test waits for the spawn, never for a budget.
+fn held_spec_with_reached(
+    setup: &Setup,
+    name: &str,
+) -> (
+    super::ServerSpec,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+) {
+    let (release, held) = std::sync::mpsc::channel();
+    let (reached, arrived) = std::sync::mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let mut spec = setup.spec(name);
+    spec.stdio_mut().run = Some(super::Program {
+        command: fakes::mcp_fixture().display().to_string(),
+        args: vec![setup.dir.path().display().to_string()],
+        guard: std::sync::Arc::new(move || {
+            reached
+                .send(())
+                .map_err(|_| "the test dropped the reached signal".to_owned())?;
+            held.lock()
+                .expect("the test holds the release")
+                .recv()
+                .map_err(|_| "the test dropped the release".to_owned())
+        }),
+    });
+    (spec, release, arrived)
 }
 
 /// A start where one server never answers `initialize` still declares

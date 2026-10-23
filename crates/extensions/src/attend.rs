@@ -2,7 +2,8 @@
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
+use support::lock;
 
 use crate::Browser;
 use contract::events::{Event, Notice};
@@ -16,13 +17,10 @@ pub(crate) struct SessionBrowser(Mutex<Option<Installed>>);
 
 impl SessionBrowser {
     pub(crate) fn set(&self, browser: Arc<dyn Browser>, attended: Attended) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some((browser, attended));
+        *lock(&self.0) = Some((browser, attended));
     }
     fn installed(&self) -> Option<Installed> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.0).clone()
     }
 }
 impl Browser for SessionBrowser {

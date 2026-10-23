@@ -21,7 +21,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use support::{Deadline, KillGroup, Output, Setup, git, group_alive, is_status, spawn_watched};
+use support::{Deadline, KillGroup, Output, Setup, git, is_status, spawn_watched};
 
 impl Setup {
     /// Runs `fiber` with `args` and the extra environment `env`, stdin
@@ -57,7 +57,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);

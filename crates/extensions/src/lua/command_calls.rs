@@ -2,6 +2,7 @@
 //! (`docs/extensions.md`, "Running a tool").
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use support::lock;
 
 use contract::clock::Wake;
 use contract::events::{CallStatus, ToolCallCompleted};
@@ -20,7 +21,7 @@ pub(super) struct Ended {
 impl Ended {
     pub(super) fn end(&self) {
         let subscribers = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = lock(&self.state);
             if state.0 {
                 return;
             }
@@ -35,11 +36,11 @@ impl Ended {
 
 impl Cancel for Ended {
     fn is_cancelled(&self) -> bool {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).0
+        lock(&self.state).0
     }
 
     fn subscribe(&self, wake: Weak<dyn Wake>) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         if !state.0 {
             state.1.push(wake);
         }
@@ -70,14 +71,11 @@ struct Reply {
 
 impl Reply {
     fn pending(&self) -> bool {
-        matches!(
-            *self.state.lock().unwrap_or_else(PoisonError::into_inner),
-            State::Waiting
-        )
+        matches!(*lock(&self.state), State::Waiting)
     }
 
     fn resolve(&self, completed: Box<ToolCallCompleted>) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         if matches!(*state, State::Waiting) {
             *state = State::Answered(completed);
             self.changed.notify_all();
@@ -85,7 +83,7 @@ impl Reply {
     }
 
     fn wait(&self) -> Box<ToolCallCompleted> {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         loop {
             if matches!(*state, State::Answered(_))
                 && let State::Answered(completed) = std::mem::replace(&mut *state, State::Returned)
@@ -187,12 +185,7 @@ impl InnerCalls for CommandCalls {
         }));
         let completed = reply.wait();
         #[cfg(test)]
-        if let Some((entered, held)) = self
-            .pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
+        if let Some((entered, held)) = lock(&self.pause).take() {
             let _sent = entered.send(());
             // The test owns the release sender: it sends, or drops it on exit.
             match held.recv() {
