@@ -833,7 +833,7 @@ fn sigterm_on_a_session_pending_on_a_form_exits_143_suspended_and_a_reply_throug
     let session_match = format!("--workspace={}", hubbed.workspace);
     let pids = fakes::matching(&session_match).unwrap();
     assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
-    assert!(kill_pid(hubbed.setup.deadline, pids[0], "TERM").unwrap());
+    assert!(fakes::kill_pid(pids[0], "TERM").unwrap());
     let exited = until(&hubbed.a, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });

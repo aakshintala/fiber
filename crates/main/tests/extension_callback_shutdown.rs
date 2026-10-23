@@ -119,7 +119,7 @@ impl Fiber {
     /// Sends `signal` to `fiber`'s pid alone.
     #[track_caller]
     fn signal(&self, signal: &'static str) {
-        assert!(support::kill_pid(self.deadline, self.child.id(), signal).unwrap());
+        assert!(fakes::kill_pid(self.child.id(), signal).unwrap());
     }
 
     /// Waits for the exit under the test's [`Deadline`], reads the rest of
@@ -157,7 +157,7 @@ impl Fiber {
             }
         }
         assert!(
-            !support::group_alive(deadline, group),
+            !fakes::group_alive(group),
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
@@ -354,7 +354,7 @@ fn is_stopped(deadline: Deadline, pid: u32) -> bool {
     let output = match Deadline::after(wait).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => {
-            match support::kill_group(deadline, ps_group, "KILL") {
+            match fakes::kill_group(ps_group, "KILL") {
                 Ok(_) | Err(_) => {}
             }
             watchdog.stand_down(deadline.cleanup_phase());
@@ -385,13 +385,13 @@ fn wait_stopped(deadline: Deadline, pid: u32) {
     }
 }
 
-/// Sends SIGCONT to process `pid` through `support::kill_pid`, starting
+/// Sends SIGCONT to process `pid` through `fakes::kill_pid`, starting
 /// no process: the shell stopped itself, and SIGTERM stays pending until
 /// SIGCONT resumes it. An id of 1 or less panics before anything runs,
 /// since the signal would reach processes the test does not own.
 #[track_caller]
-fn continue_pid(deadline: Deadline, pid: u32) {
-    assert!(support::kill_pid(deadline, pid, "CONT").unwrap());
+fn continue_pid(pid: u32) {
+    assert!(fakes::kill_pid(pid, "CONT").unwrap());
 }
 
 #[test]
@@ -424,8 +424,8 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
     // The shell stopped inside the blocking command's expansion: SIGTERM
     // stays pending until SIGCONT resumes it into the read.
     wait_stopped(setup.deadline, pid);
-    assert!(support::kill_pid(setup.deadline, pid, "TERM").unwrap());
-    continue_pid(setup.deadline, pid);
+    assert!(fakes::kill_pid(pid, "TERM").unwrap());
+    continue_pid(pid);
     // This write-end open blocks until the exec program's `read` opens the
     // FIFO: it runs on a thread, and the receive below carries the
     // deadline. The binding holds the write end until the test ends.
@@ -466,7 +466,7 @@ fn a_sigterm_landing_inside_the_blocking_read_still_runs_the_trap() {
     );
     // The background `read` outlives the shell: kill the group, check it
     // emptied, and stand the watchdog down.
-    match support::kill_group(setup.deadline, group, "KILL") {
+    match fakes::kill_group(group, "KILL") {
         Ok(_) | Err(_) => {}
     }
     assert!(

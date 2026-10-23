@@ -21,9 +21,7 @@ use std::thread;
 use contract::events::CommandResult;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{
-    HELLO_KINDS, Running, Setup, Socket, answered, expired, group_alive, hello, session_dir, until,
-};
+use support::{HELLO_KINDS, Running, Setup, Socket, answered, expired, hello, session_dir, until};
 
 #[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
@@ -242,7 +240,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
     };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     drop(stdout);

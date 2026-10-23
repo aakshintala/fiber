@@ -14,7 +14,7 @@ use std::process::{Child, ChildStdin, ExitStatus, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use crate::support::{Deadline, KillGroup, Setup, group_alive};
+use crate::support::{Deadline, KillGroup, Setup};
 use fakes::Watchdog;
 use serde_json::{Value, json};
 
@@ -269,7 +269,7 @@ impl Running {
             }
         };
         assert!(
-            !group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(self.guard);
