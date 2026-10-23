@@ -1,7 +1,8 @@
 //! Paired device tables and revocation (`docs/invocation.md`, "Remote clients").
-use crate::{failed, finish, sessions::request, sessions_search::utc, table::pad, write_line};
+use crate::{
+    CliError, finish, sessions::request_value, sessions_search::utc, table::pad, write_line,
+};
 use contract::commands::hub::{Device, HubCommand, NoArgs};
-use contract::{ErrorCode, shapes::Failure};
 use serde_json::Value;
 use std::io::{self, BufReader, Write};
 
@@ -19,19 +20,14 @@ pub fn hub_token_revoke(
 fn list(
     out: &mut dyn Write,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    let result = request(
+) -> Result<(), CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    let result = request_value(
         &mut BufReader::new(stream),
         "c_devices",
         HubCommand::Devices(NoArgs {}),
     )?;
-    let malformed = || {
-        failed(
-            ErrorCode::IoFailed,
-            "the hub's answer to `devices` is not a device list",
-        )
-    };
+    let malformed = || CliError::DevicesMalformed;
     let devices = result
         .get("devices")
         .and_then(Value::as_array)
@@ -46,7 +42,7 @@ fn list(
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(malformed)?;
-        let time = |key| -> Result<String, Failure> {
+        let time = |key| -> Result<String, CliError> {
             match device.get(key) {
                 None => Ok("-".to_owned()),
                 Some(value) => Ok(utc(value.as_u64().ok_or_else(malformed)? / 1000)),
@@ -67,16 +63,17 @@ fn revoke(
     out: &mut dyn Write,
     device: &str,
     connect: &mut dyn FnMut() -> Result<doors::hub::Hub, doors::Error>,
-) -> Result<(), Failure> {
-    let (stream, _) = connect().map_err(crate::sessions::hub_failure)?;
-    request(
+) -> Result<(), CliError> {
+    let (stream, _) = connect().map_err(CliError::Hub)?;
+    request_value(
         &mut BufReader::new(stream),
         "c_revoke",
         HubCommand::Revoke(Device {
             device: device.to_owned(),
         }),
     )?;
-    write_line(out, device)
+    write_line(out, device)?;
+    Ok(())
 }
 #[cfg(test)]
 #[path = "hub_token_tests.rs"]
