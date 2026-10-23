@@ -4364,3 +4364,70 @@ fn a_kept_key_naming_no_message_inserts_nothing() {
     ]);
     assert_eq!(after_opening(&conversation), ["NOTE"]);
 }
+
+fn completed_line(action: &str) -> Envelope {
+    let event = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: Vec::new(),
+        details: None,
+        artifact: None,
+        kept: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+        hosts_surfaced: Vec::new(),
+        loaded: None,
+    });
+    line("tool_call_completed", &event, Some(action))
+}
+
+/// A line of `kind` whose payload reads as no event.
+fn unreadable_line(kind: &str) -> Envelope {
+    let mut broken = line(
+        kind,
+        &Event::TurnStarted(TurnStarted { input: Vec::new() }),
+        None,
+    );
+    broken.kind = kind.into();
+    broken.payload = serde_json::Map::from_iter([("input".to_owned(), json!("not a list"))]);
+    broken
+}
+
+#[test]
+fn completed_actions_collects_the_completions_and_parses_no_other_kind() {
+    let lines = [
+        unreadable_line("turn_started"),
+        completed_line("a_1"),
+        unreadable_line("usage_recorded"),
+        completed_line("a_2"),
+    ];
+    let completed = super::completed_actions(&lines).unwrap();
+    assert_eq!(
+        completed,
+        std::collections::HashSet::from([ActionId("a_1".into()), ActionId("a_2".into())])
+    );
+}
+
+#[test]
+fn completed_actions_fails_a_completion_that_does_not_read() {
+    let lines = [
+        completed_line("a_1"),
+        unreadable_line("tool_call_completed"),
+    ];
+    assert!(matches!(
+        super::completed_actions(&lines),
+        Err(crate::Error::Unreadable(_))
+    ));
+}
+
+#[test]
+fn completed_actions_skips_a_completion_with_no_action() {
+    let mut anonymous = completed_line("a_1");
+    anonymous.action_id = None;
+    let completed = super::completed_actions(&[anonymous]).unwrap();
+    assert!(completed.is_empty());
+}

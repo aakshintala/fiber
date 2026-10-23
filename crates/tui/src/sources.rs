@@ -37,9 +37,7 @@ struct Gate {
 impl Gate {
     /// The state, even after a thread panicked holding it.
     fn lock(&self) -> MutexGuard<'_, ReaderState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        support::lock(&self.state)
     }
 
     /// Waits on the condition variable while `blocked` holds.

@@ -675,7 +675,14 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     assert_eq!(sent[4], assistant("B"));
     assert!(matches!(&sent[5], Input::ToolResult { text, .. } if text == "Sunny."));
 
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        None,
+    )
+    .unwrap();
     let exited = log::read(&session.dir).unwrap();
     assert_eq!(exited.last().unwrap().kind, "fiber_exited");
     assert_eq!(exited.last().unwrap().payload["text"], "AB");
@@ -700,7 +707,7 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     session.inbox.send(steer("and")).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = std::sync::mpsc::channel();
-    let ran = std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
+    let ran = std::thread::spawn(move || done.send(looped.run().result.is_ok()).unwrap());
     let lines = session.lines();
     assert_eq!(lines[3].payload["input"].as_array().unwrap().len(), 2);
     session.inbox.send(delivery("bye")).unwrap();
@@ -794,7 +801,14 @@ fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
     assert_eq!(usage.payload["subscription"], true);
     assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
 
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        None,
+    )
+    .unwrap();
     let exited = log::read(&session.dir).unwrap();
     let totals = &exited.last().unwrap().payload["usage"];
     assert_eq!(totals["cost"], 0.0);
@@ -1547,7 +1561,14 @@ fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines();
     assert_eq!(jobs.stop_delegates_calls(), 0);
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
@@ -1663,7 +1684,14 @@ fn a_copy_without_its_job_lines_still_counts() {
     );
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     assert!(
         all.iter()
@@ -1686,23 +1714,29 @@ fn a_restored_copy_without_a_job_end_counts_once_with_its_origin() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines();
-    session
-        .log
-        .append(
-            &contract::events::Event::UsageRecorded(child_usage(
-                "g_child",
-                Some(0.04),
-                Some(SessionId("s_child".into())),
-                None,
-            )),
+    // As the resume's backfill writes it: through the loop, so the exit
+    // folds it.
+    send_child(
+        &session,
+        "s_child",
+        child_usage(
+            "g_child",
+            Some(0.04),
+            Some(SessionId("s_child".into())),
             None,
-            None,
-        )
-        .unwrap();
+        ),
+    );
     session.inbox.send(delivery("again")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines();
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let copies: Vec<_> = all
         .iter()
@@ -1732,7 +1766,14 @@ fn a_late_cost_for_a_copy_applies_only_its_delta() {
     );
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");

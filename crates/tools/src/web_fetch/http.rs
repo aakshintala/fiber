@@ -12,7 +12,7 @@
 
 use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::Instant;
 
@@ -88,7 +88,7 @@ impl Wake for Hop {
 impl Hop {
     fn lock(&self) -> MutexGuard<'_, State> {
         // Release builds abort on panic, so no holder can poison the lock.
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.state)
     }
 
     /// Why the hop was stopped, if it was.

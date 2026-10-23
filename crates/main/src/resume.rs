@@ -667,7 +667,10 @@ fn resumed_session(
         cancel,
         &diag,
         &current,
-        |inbox, cancel| {
+        |inbox, cancel, slot| {
+            // A resume that fails leaves no loop to take the summary from:
+            // the earlier process's open requests still reach the exit.
+            *slot = Some(folded.exit_seed());
             crate::finish(
                 Loop::resume(
                     r#loop::Session {
@@ -724,6 +727,7 @@ fn resumed_session(
                 limits,
                 retry,
                 cancel,
+                slot,
             )
             .map(|()| None)
         },
