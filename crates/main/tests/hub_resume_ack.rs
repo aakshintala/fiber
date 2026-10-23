@@ -82,7 +82,7 @@ fn pipelined_subscribe_is_kept_across_resume() {
     client.send(&format!(
         "{{\"id\":\"c_next\",\"session_id\":\"{id}\",\"command\":\"tools\"}}"
     ));
-    let ack = support::recv_reply(&client, "the acknowledgement after resume");
+    let ack = support::recv_answer(&client, "c_next", "the acknowledgement after resume");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_next");
     drop(client);
