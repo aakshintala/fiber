@@ -549,12 +549,16 @@ fn a_thirty_line_screen_keeps_the_focused_row_in_view_with_one_barred_row() {
 
 // ----------------------------------------------------- the height budget
 
+/// Exactly 400 characters, with no trailing space: 79 words and a last one.
+fn long_text() -> String {
+    format!("{}words", "word ".repeat(79))
+}
+
 fn long_proposal() -> Fixture {
     let mut fx = Fixture::empty();
-    let text = "word ".repeat(80);
     fx.ask(
         json!([{"kind": "files", "text": "its git remotes: origin github.com/acme/fiber"}]),
-        cite_first(text.trim()),
+        cite_first(&long_text()),
     );
     fx
 }
@@ -585,6 +589,7 @@ fn a_long_focused_line_stays_within_the_capacity_and_ends_in_an_ellipsis() {
 /// many rows the focused line wraps to.
 #[test]
 fn a_400_character_focused_proposal_bars_exactly_one_row() {
+    assert_eq!(long_text().chars().count(), 400);
     let fx = long_proposal();
     for height in [9u16, 12] {
         let framed = frame(fx.setup(), overlay::question_inner(120), height);
