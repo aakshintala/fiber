@@ -289,6 +289,10 @@ fn a_transcript_longer_than_one_page_is_paged_whole() {
     );
     // Every rendered line is a prompt quote or its one-word reply, so the
     // whole file is fixed: no rendered line may go missing or repeat.
+    // docs/testing.md:74-75: the test asserts the file left behind, built
+    // from `history` lines in `seq` order (docs/events.md:1367); each
+    // prompt ran its own turn to completion, so quotes and replies pair
+    // up in prompt order.
     let mut whole = format!("# Session {id}\n\n");
     for text in &asked {
         whole.push_str(&format!("> {text}\n\nok\n\n"));
@@ -428,8 +432,11 @@ fn steering_and_a_failed_call_are_written() {
         .lines()
         .filter(|line| line.starts_with("- `read` {"))
         .collect();
-    // The extension writes one line per completed model tool call and nothing
-    // for the inner `ran_by` call (init.lua header); two `read` calls ran.
+    // docs/testing.md:74-75 and docs/events.md:116: the file mirrors the
+    // log's durable lines. Each requested call ends in one
+    // `tool_call_completed`, failed or not (docs/events.md:629-635), and
+    // the test drove exactly two `read` calls to turn completion, so two
+    // `- `read`` lines appear.
     assert_eq!(reads.len(), 2, "{written}");
     let odd = reads[1];
     assert!(odd.contains("null"), "{odd}");
