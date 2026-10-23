@@ -131,21 +131,11 @@ fn unwrap_xargs(rest: &[Word]) -> Unwrapped<'_> {
 /// Whether `cooked` is a `timeout` duration: digits with an optional
 /// fraction and one optional `s`, `m`, `h` or `d` suffix.
 fn is_duration(cooked: &str) -> bool {
-    let digits = cooked
-        .strip_suffix(|suffix| matches!(suffix, 's' | 'm' | 'h' | 'd'))
-        .unwrap_or(cooked);
-    let mut parts = digits.split('.');
-    let int = parts.next();
-    let int_ok =
-        int.is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
-    match parts.next() {
-        None => int_ok,
-        Some(frac) => {
-            int_ok
-                && !frac.is_empty()
-                && frac.bytes().all(|byte| byte.is_ascii_digit())
-                && parts.next().is_none()
-        }
+    let digits = cooked.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(cooked);
+    let digits_ok = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    match digits.split_once('.') {
+        Some((int, frac)) => digits_ok(int) && digits_ok(frac),
+        None => digits_ok(digits),
     }
 }
 

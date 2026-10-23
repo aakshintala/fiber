@@ -121,19 +121,23 @@ fn env_needs_allowed_assignments_and_a_command() {
 
 #[test]
 fn xargs_reads_only_into_six_commands() {
+    // A target that never opens files reads on its own; a path-reading
+    // target reads only on proven stdin (below).
     for command in [
         "xargs echo a",
         "xargs printf %s a",
-        "xargs wc -l f",
-        "xargs grep x f",
-        "xargs head -5 f",
-        "xargs tail -3 f",
+        "echo /path/to/credentials | xargs echo",
         "git ls-files | xargs wc -l",
+        "ls | xargs wc -l",
+        "find . -name x | xargs grep y f",
+        "ls sub | xargs head",
     ] {
         assert_reads(command);
     }
     // Any other target, a path-qualified target, a flag of `xargs`'s own
     // and a bare `xargs` all execute, as does the target's unlisted flag.
+    // So does a path-reading target on unproven stdin: terminal stdin,
+    // a redirect file of its own, or a producer that does not list paths.
     for command in [
         "xargs",
         "xargs git status",
@@ -145,6 +149,14 @@ fn xargs_reads_only_into_six_commands() {
         "xargs -n1 wc f",
         "xargs -I{} wc f",
         "xargs grep -R x f",
+        "xargs wc -l f",
+        "xargs grep x f",
+        "xargs head -5 f",
+        "xargs tail -3 f",
+        "xargs head < f",
+        "ls sub | xargs head < f",
+        "echo /path/to/credentials | xargs head",
+        "cat f | xargs head",
     ] {
         assert_closed(command);
     }
@@ -185,10 +197,15 @@ fn a_wrapped_git_after_a_cd_executes() {
 }
 
 #[test]
-fn a_wrapped_cd_executes() {
-    // A wrapper around `cd` moves nothing the directory states track, so
-    // the call is reviewed, whatever the assignment name.
-    for command in ["LC_ALL=C cd x", "timeout 5 cd x", "env LC_ALL=C cd x"] {
+fn an_assignment_prefix_before_cd_reads_through_the_cd_path() {
+    // An allow-listed assignment prefix is not a subprocess: `LC_ALL=C cd`
+    // uses the `cd` verdict and preserves directory tracking for later
+    // commands. An `env` or `timeout` wrapper around `cd` moves nothing
+    // the directory states track, so the call is reviewed.
+    assert_reads_paths("LC_ALL=C cd x", &["/work/x"]);
+    assert_reads("LC_ALL=C cd sub && ls");
+    assert_reads_paths("LC_ALL=C cd sub && ls f", &["/work/sub", "/work/sub/f"]);
+    for command in ["timeout 5 cd x", "env LC_ALL=C cd x"] {
         assert_closed(command);
     }
 }

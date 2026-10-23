@@ -141,15 +141,35 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
         {
             cd_target = cd_operand(simple);
         }
+        let mut fed: Vec<String> = Vec::new();
+        let mut fed_any = false;
+        let mut fed_listed = true;
         for stage in &element.stages {
             if let Stage::Simple(simple) = stage
                 && is_cd(simple)
             {
                 saw_cd = true;
             }
-            match stage_outcome(stage, &dirs, configured, saw_cd) {
+            // Filenames earlier stages of this element fed the pipeline:
+            // the only stdin-fed paths an `xargs` stage may read. They are
+            // proven only when at least one earlier stage ran and every
+            // one lists paths; any other producer leaves stdin unproven
+            // and its `xargs` reader reviewed.
+            match stage_outcome(
+                stage,
+                &dirs,
+                configured,
+                saw_cd,
+                &fed,
+                fed_any && fed_listed,
+            ) {
                 Outcome::Executes => saw_executes = true,
-                Outcome::Reads(mut more) => paths.append(&mut more),
+                Outcome::Reads(more) => {
+                    fed_any = true;
+                    fed_listed = fed_listed && lists_paths(stage);
+                    fed.extend(more.iter().cloned());
+                    paths.extend(more);
+                }
             }
         }
         cwd.leave(element.join, cd_target);
@@ -166,6 +186,8 @@ fn stage_outcome(
     dirs: &[String],
     configured: &[(String, Vec<String>)],
     saw_cd: bool,
+    stdin_paths: &[String],
+    stdin_proven: bool,
 ) -> Outcome {
     let Stage::Simple(simple) = stage else {
         // An unlisted or refused stage: a loop body, a heredoc with a body,
@@ -177,14 +199,13 @@ fn stage_outcome(
     // inner command, which the same verdict classifies below; anything
     // the wrappers refuse is `executes`.
     let mut words: &[Word] = &simple.words;
-    let mut wrapped = false;
+    let mut stepped = false;
     if !simple.assignments.is_empty() {
         // A leading `NAME=value` prefix reads only for names on the fixed
         // list; any other name makes the call `executes`.
         if !wrap::assignments_allowed(&simple.assignments) {
             return Outcome::Executes;
         }
-        wrapped = true;
     }
     let mut depth = 0;
     loop {
@@ -197,22 +218,24 @@ fn stage_outcome(
                     return Outcome::Executes;
                 }
                 words = inner;
-                wrapped = true;
+                stepped = true;
             }
             Unwrapped::Xargs(inner) => {
                 depth += 1;
                 if depth > wrap::MAX_WRAPPER_DEPTH {
                     return Outcome::Executes;
                 }
-                return xargs_outcome(inner, simple, dirs);
+                return xargs_outcome(inner, simple, dirs, stdin_paths, stdin_proven);
             }
         }
     }
-    // A wrapper around `cd` moves nothing the directory states track:
-    // the join sees only a leading `cd`, so the call is reviewed. A bare
-    // `cd` is a read-only step and declares its directory.
+    // A bare `cd`, or one with an allow-listed assignment prefix, is a
+    // read-only step through the existing `cd` path: the prefix is not a
+    // subprocess, so the join still tracks the directory for later
+    // commands. An `env` or `timeout` wrapper around `cd` moves nothing
+    // the directory states track, so the call is reviewed.
     if words.first().is_some_and(|word| word.cooked == "cd") {
-        if wrapped {
+        if stepped {
             return Outcome::Executes;
         }
         return cd_outcome(simple, dirs);
@@ -247,18 +270,66 @@ fn stage_outcome(
 }
 
 /// An `xargs` stage: the target must name one of the six read-only
-/// commands, classified by its own flags; anything else executes. Paths
-/// come from the target's operands, with the stage's input redirects.
-fn xargs_outcome(inner: &[Word], simple: &Simple, dirs: &[String]) -> Outcome {
+/// commands, classified by its own flags; anything else executes. A target
+/// that never opens files (`echo`, `printf`) reads with no paths. A
+/// path-reading target (`wc`, `grep`, `head`, `tail`) opens filenames fed
+/// on stdin, so it reads only when those filenames are proven: at least
+/// one earlier stage ran, every one lists paths, and the stage reads no
+/// redirect file of its own. Proven paths join the declared operands;
+/// anything else is reviewed, declaring nothing.
+fn xargs_outcome(
+    inner: &[Word],
+    simple: &Simple,
+    dirs: &[String],
+    stdin_paths: &[String],
+    stdin_proven: bool,
+) -> Outcome {
     let Some(entry) = inner
         .first()
         .and_then(|target| wrap::xargs_entry(&target.cooked))
     else {
         return Outcome::Executes;
     };
-    let mut rest = inner.iter();
-    rest.next();
-    with_inputs(builtin_tail(rest, entry, dirs), simple, dirs)
+    if entry.paths {
+        if !stdin_proven || has_input(simple) {
+            return Outcome::Executes;
+        }
+        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs) else {
+            return Outcome::Executes;
+        };
+        declared.extend(stdin_paths.iter().cloned());
+        return with_inputs(Outcome::Reads(declared), simple, dirs);
+    }
+    with_inputs(builtin_outcome(inner, entry, dirs), simple, dirs)
+}
+
+/// Whether a stage reads stdin from a redirect file of its own, rather
+/// than from the pipeline.
+fn has_input(simple: &Simple) -> bool {
+    simple
+        .redirects
+        .iter()
+        .any(|redirect| matches!(redirect, Redirect::Input(_)))
+}
+
+/// Whether a stage lists paths on stdout: `ls`, `find` and `git ls-files`
+/// name only paths their declared paths bound, so filenames they feed an
+/// `xargs` stage are proven. Any other stage's filenames are unproven.
+fn lists_paths(stage: &Stage) -> bool {
+    let Stage::Simple(simple) = stage else {
+        return false;
+    };
+    let mut words = simple.words.iter();
+    let Some(first) = words.next() else {
+        return false;
+    };
+    if first.cooked == "ls" || first.cooked == "find" {
+        return true;
+    }
+    if first.cooked == "git" {
+        return words.next().is_some_and(|word| word.cooked == "ls-files");
+    }
+    false
 }
 
 /// Whether a stage runs `cd`: its first word is exactly `cd`.
@@ -367,19 +438,7 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
 /// the first operand the pattern for `grep` and `rg`. The entry's path
 /// words never reach the walk: `git status -s` walks from `-s`.
 fn builtin_outcome(words: &[Word], entry: &Command, dirs: &[String]) -> Outcome {
-    builtin_tail(
-        rest_after(words, entry.name.split(' ').count()),
-        entry,
-        dirs,
-    )
-}
-
-/// The flag walk over the words past the command path.
-fn builtin_tail(
-    mut words: std::slice::Iter<'_, Word>,
-    entry: &Command,
-    dirs: &[String],
-) -> Outcome {
+    let mut words = rest_after(words, entry.name.split(' ').count());
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;
