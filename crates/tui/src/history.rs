@@ -396,10 +396,7 @@ impl App {
             return false;
         };
         if let Edit::Paste(text) = edit {
-            search.query.extend(
-                text.chars()
-                    .map(|ch| if ch.is_control() { ' ' } else { ch }),
-            );
+            search.query.push_str(&crate::text::controls_to_space(text));
             search.selected = 0;
         }
         true

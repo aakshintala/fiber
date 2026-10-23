@@ -1,6 +1,7 @@
 //! Tests for `!` commands.
 
 use super::{answered, item, parse};
+use contract::events::CommandResult;
 use contract::shapes::Process;
 
 /// A process that exited with `code`.
@@ -62,4 +63,12 @@ fn only_a_show_only_answer_with_its_output_is_an_item() {
     assert_eq!(answered("!!ls", None), None);
     let other = serde_json::from_value(serde_json::json!({"tools": []})).ok();
     assert_eq!(answered("!!ls", other), None);
+}
+
+#[test]
+fn a_stop_answer_is_never_a_shell_item() {
+    let stopped = Some(CommandResult::Stop {
+        sessions_stopped: 2,
+    });
+    assert_eq!(answered("!!ls", stopped), None);
 }

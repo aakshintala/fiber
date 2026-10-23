@@ -910,6 +910,20 @@ pub(crate) fn start_session(client: &Socket, workspace: &str, content: &str) -> 
         .to_owned()
 }
 
+/// Waits for the fake provider's first model request under `deadline`:
+/// the session sends it only after the pre-send fsync, which is the
+/// fsync that makes the appended `session_started` first line durable.
+/// A stop after this point always leaves a record the resume finds.
+/// A subscribe ack proves only that the loop serves, not that the line
+/// reached the disk, so it cannot stand in for this wait.
+#[track_caller]
+pub(crate) fn await_first_request(server: &ProviderServer, deadline: Deadline) {
+    assert!(
+        server.await_requests(1, deadline),
+        "the session sends its first model request"
+    );
+}
+
 /// Subscribes `full` to `session` through the hub.
 #[track_caller]
 pub(crate) fn subscribe(client: &Socket, session: &str) {

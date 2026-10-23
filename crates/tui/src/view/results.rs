@@ -9,10 +9,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::to_u16;
 use crate::app::Snippet;
 use crate::app::results::ResultsView;
 use crate::mouse::{Target, TargetId};
+use crate::text::to_u16;
 
 /// The selected entry's style.
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);

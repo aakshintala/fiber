@@ -96,8 +96,8 @@ pub(crate) fn parse(payload: &Map<String, Value>) -> Option<Line> {
 /// it to `len` characters, never by column width: a name or a summary can
 /// never end the escape sequence or start another.
 fn scrub(text: &str, len: usize) -> String {
-    text.chars()
-        .filter(|ch| !ch.is_control())
+    crate::text::strip_controls(text)
+        .chars()
         .take(len)
         .collect()
 }

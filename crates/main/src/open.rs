@@ -257,11 +257,11 @@ fn select_latest(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Result<S
     }
 }
 
-/// The project test `resolve` and `most_recent` take for `project`: the
-/// identity of each workspace, through `identity`. Each distinct
-/// workspace runs it once, so a project of many sessions in one
-/// workspace runs one `git`.
-fn in_project<'a>(
+/// The project test `resolve` and `most_recent` take for `project`, and
+/// the launch-project check in `resume` reuses: the identity of each
+/// workspace, through `identity`. Each distinct workspace runs it once,
+/// so a project of many sessions in one workspace runs one `git`.
+pub(crate) fn in_project<'a>(
     project: &'a Path,
     identity: &'a dyn Fn(&Path) -> PathBuf,
 ) -> impl Fn(&str) -> bool + 'a {

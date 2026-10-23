@@ -996,10 +996,7 @@ pub(crate) fn title(row: &Row) -> String {
     if row.name.is_empty() {
         row.id.0.clone()
     } else {
-        row.name
-            .chars()
-            .map(|ch| if ch.is_control() { ' ' } else { ch })
-            .collect()
+        crate::text::controls_to_space(&row.name)
     }
 }
 

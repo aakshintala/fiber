@@ -471,8 +471,8 @@ impl Approval {
     pub(super) fn on_edit(&mut self, edit: &Edit) {
         match edit {
             Edit::Paste(text) => {
-                for ch in text.chars() {
-                    self.type_char(if ch.is_control() { ' ' } else { ch });
+                for ch in crate::text::controls_to_space(text).chars() {
+                    self.type_char(ch);
                 }
             }
             Edit::Left

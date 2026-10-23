@@ -120,6 +120,7 @@ the code and the list disagree.
 | `support` | `crates/support/src/group.rs` | `pre_exec` calls `setsid`, and for a `tty` command the `TIOCSCTTY` ioctl on fd 0, between fork and exec |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
 | `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `peak_memory` line |
+| `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
@@ -238,5 +239,10 @@ Only what no tool can:
 - every code a doc says something fails with, is rejected with, or carries
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
+- in each test the pull request adds or changes: every asserted order or
+  count cites the doc line that promises it (`docs/testing.md`, "Event
+  streams"); every pointer input follows a readiness signal, not a grid
+  match (`docs/testing/screens.md`); every fake's signal is sent after the
+  state it announces
 
 Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docscode-qualitymd).

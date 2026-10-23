@@ -680,6 +680,145 @@ fn a_resumed_process_that_never_binds_fails_at_the_start_deadline() {
 }
 
 #[test]
+fn a_resume_in_flight_is_refused_within_one_pass_of_the_store() {
+    // No socket bound: the attempt reaches the starter, which holds the
+    // resume until the test releases it, so the store lands mid-flight.
+    struct GateStarter {
+        inner: FakeStarter,
+        entered: mpsc::Sender<()>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+    impl Starter for GateStarter {
+        fn start(
+            &self,
+            id: &SessionId,
+            workspace: &std::path::Path,
+            model: Option<&str>,
+            overrides: &[&str],
+            worktree: bool,
+            continues: Option<&SessionId>,
+        ) -> std::io::Result<Box<dyn Started>> {
+            self.inner
+                .start(id, workspace, model, overrides, worktree, continues)
+        }
+        fn resume(
+            &self,
+            id: &SessionId,
+            workspace: &std::path::Path,
+            credential: Option<&str>,
+        ) -> std::io::Result<Box<dyn Started>> {
+            self.entered.send(()).unwrap_or(());
+            if let Some(release) = support::lock(&self.release).take() {
+                release.recv().unwrap_or(());
+            }
+            self.inner.resume(id, workspace, credential)
+        }
+        fn rewind(
+            &self,
+            id: &SessionId,
+            workspace: &std::path::Path,
+            from: &SessionId,
+        ) -> std::io::Result<Box<dyn Started>> {
+            self.inner.rewind(id, workspace, from)
+        }
+    }
+    let temp = Temp::new();
+    temp.recorded();
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let inner = FakeStarter::hang(&temp.dir);
+    let hub = temp.hub_with(Arc::new(GateStarter {
+        inner: inner.clone(),
+        entered: entered_tx,
+        release: Mutex::new(Some(release)),
+    }));
+    let finished = resuming(&hub);
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the resume reaches the starter"
+    );
+    // Admitted before the store: one bind in flight.
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 1);
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    release_tx.send(()).unwrap();
+    let Err(refused) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the resume answers")
+    else {
+        panic!("the resume in flight is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    // The guard dropped with the refusal; the wait never advanced the clock.
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+    // The bind the store interrupted is killed.
+    assert_eq!(inner.kills(), [sid()]);
+}
+
+#[test]
+fn a_resume_parked_on_its_held_wait_leaves_within_one_pass() {
+    // The session exited but still holds its socket: no socket bound,
+    // so the resume waits the exiting process out instead of binding.
+    let temp = Temp::new();
+    temp.recorded();
+    temp.append("fiber_exited");
+    let hub = temp.hub(FakeStarter::held_then_bind(&temp.dir, 1));
+    let finished = resuming(&hub);
+    let until = temp.clock.origin() + HELD_POLL;
+    assert!(
+        temp.clock
+            .await_parked(until, fakes::Deadline::after(DEADLINE)),
+        "the resume waits out the exiting process"
+    );
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 1);
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    temp.clock
+        .advance_when_parked(Some(until), None, HELD_POLL, &Deadline::after(DEADLINE));
+    let Err(refused) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the resume answers")
+    else {
+        panic!("the parked resume is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert_eq!(temp.clock.now(), temp.clock.origin() + HELD_POLL);
+}
+
+#[test]
+fn a_resume_after_the_store_is_refused_at_entry() {
+    let temp = Temp::new();
+    temp.recorded();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    // Admitted after the store: refused at once, the starter never run.
+    let finished = resuming(&hub);
+    let Err(refused) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the resume answers")
+    else {
+        panic!("the resume after the store is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
+#[test]
+fn a_resume_exited_after_the_store_is_refused_at_entry() {
+    let temp = Temp::new();
+    temp.recorded();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    let Err(refused) = resume_exited(&hub, &sid(), None) else {
+        panic!("the exited resume after the store is refused");
+    };
+    assert_eq!(refused, crate::connection::stopping());
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+    assert_eq!(temp.clock.now(), temp.clock.origin());
+}
+
+#[test]
 fn a_held_resume_of_an_exited_session_retries_until_the_lock_is_released() {
     let temp = Temp::new();
     temp.recorded();

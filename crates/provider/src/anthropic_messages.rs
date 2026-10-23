@@ -21,6 +21,7 @@ use contract::events::CacheLifetime;
 use contract::provider::{Input, ModelCall, ModelRequest, Provider, TOOL_SEARCH, ToolDefinition};
 use serde_json::{Map, Value, json};
 
+#[cfg(any(test, feature = "test-hooks"))]
 pub use crate::anthropic_messages_decode::decode;
 use crate::anthropic_messages_decode::{decode_bedrock_tracked, decode_tracked};
 pub use crate::call::Call;

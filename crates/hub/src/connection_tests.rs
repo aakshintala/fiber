@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -301,7 +302,205 @@ fn stop_with_arguments_is_invalid_arguments_and_stops_nothing() {
 }
 
 #[test]
-fn stop_from_a_device_is_unknown_command() {
+fn stop_with_false_sessions_is_accepted_with_no_result_and_exits_at_once() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({"sessions": false})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, Value::Null);
+    // A false `sessions` is the base path: the store lands with no loop.
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_sessions_and_none_running_answers_zero() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::exit_on_close(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, json!({"sessions_stopped": 0}));
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_sessions_and_an_unreadable_list_answers_io_failed() {
+    let temp = Temp::new();
+    // A file where `run/` belongs: the listing fails, so the stop names
+    // no session as stopped and answers `io_failed` instead of a count.
+    fs::write(temp.dir.join("run"), b"").unwrap();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (code, id, message) = rejected(&client.next("the acknowledgement"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(id, Some("c_stop".to_owned()));
+    assert_eq!(message, "The session list could not be read.");
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn stop_with_sessions_stops_the_running_session() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::exit_on_close(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Resume bleed: another connection subscribes before the stop; the
+    // session is still stopped once, through its own shutdown.
+    let mut other = Client::connect(&hub);
+    other.hello();
+    other.send(&json!({
+        "id": "c_bleed",
+        "session_id": session,
+        "command": "subscribe",
+        "args": {"level": "summary"},
+    }));
+    let (bleed, _) = accepted(&other.next("the bleed subscribe"));
+    assert_eq!(bleed, "c_bleed");
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, json!({"sessions_stopped": 1}));
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn start_is_refused_while_a_sessions_stop_runs() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    hub.sessions_stopping
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "the hub is stopping.");
+    assert!(starter.received().is_empty());
+}
+
+#[test]
+fn a_subscribe_to_an_exited_session_is_refused_while_a_sessions_stop_runs() {
+    // Through `resume_exited`, which reaches the refusal with no opener:
+    // the log ends in `fiber_exited`, and a session answering `closing`
+    // binds its socket so the relay sees the exited window.
+    const SID: &str = "s_0123456789abcdef";
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    crate::testkit::write_log(
+        &temp.dir,
+        SID,
+        &workspace,
+        None,
+        &[json!({
+            "kind": "fiber_exited",
+            "session_id": SID,
+            "ts": 2,
+            "schema_version": 1,
+            "payload": {},
+        })],
+    );
+    let dying = FakeStarter::closing_every_command(&temp.dir);
+    crate::Starter::start(
+        &dying,
+        &SessionId(SID.to_owned()),
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        None,
+    )
+    .expect("the closing session binds");
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    hub.sessions_stopping
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&json!({
+        "id": "c_1",
+        "session_id": SID,
+        "command": "subscribe",
+        "args": {"level": "summary"},
+    }));
+    let (code, echoed, message) = rejected(&client.next("the refusal"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "the hub is stopping.");
+}
+
+#[test]
+fn stop_rejects_a_non_boolean_sessions() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    for (id, sessions) in [
+        ("c_1", json!({"sessions": "yes"})),
+        ("c_2", json!({"sessions": Value::Null})),
+        ("c_3", json!({"sessions": true, "extra": 1})),
+    ] {
+        client.send(&command(id, "stop", sessions));
+        let (code, echoed, message) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments");
+        assert_eq!(echoed.as_deref(), Some(id));
+        assert_eq!(message, "The arguments do not fit this command.");
+    }
+    // The hub keeps running: a fresh accept still counts.
+    let (served, _peer) = UnixStream::pair().unwrap();
+    assert!(matches!(
+        hub.poll_accept(&served, &AtomicBool::new(false)),
+        Accept::Counted(_)
+    ));
+}
+
+#[test]
+fn stop_from_a_device_is_accepted_and_records_the_stop() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
     let dir = temp.dir.join("hub").join("devices");
@@ -342,13 +541,486 @@ fn stop_from_a_device_is_unknown_command() {
             .unwrap_or_else(|_| panic!("never received the rejection"));
         outcome.unwrap_or_else(|_| panic!("the hub never answers"));
         let line: Value = serde_json::from_str(&text).unwrap();
-        let (code, echoed, message) = rejected(&line);
-        assert_eq!(code, "unknown_command");
-        assert_eq!(echoed.as_deref(), Some("c_1"));
-        assert_eq!(message, "`stop` is not a hub command.");
+        let (id, result) = accepted(&line);
+        assert_eq!(id, "c_1");
+        assert_eq!(result, Value::Null);
+    });
+    await_true("the hub to stop after answering", {
+        let hub = Arc::clone(&hub);
+        move || hub.stop_requested()
     });
 }
 
+#[test]
+fn stop_with_sessions_from_a_device_is_accepted() {
+    let temp = Temp::new();
+    let dir = temp.dir.join("hub").join("devices");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("phone"),
+        format!(
+            "{{\"token_sha256\":\"{}\"}}",
+            crate::devices::sha256_hex(b"tok-planted")
+        ),
+    )
+    .unwrap();
+    let hub = temp.hub(FakeStarter::exit_on_close(&temp.dir));
+    let who = hub
+        .pairing
+        .authenticate(&hub, 1, "tok-planted")
+        .expect("the device authenticates");
+    // An authenticated connection hears no `hub_hello`, as on the port.
+    let (served, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let hub_for_thread = Arc::clone(&hub);
+    thread::Builder::new()
+        .name("hub-conn".to_owned())
+        .spawn(move || serve_authenticated(served, hub_for_thread, 1, who, None))
+        .unwrap();
+    let mut bytes = serde_json::to_vec(&command("c_1", "stop", json!({"sessions": true}))).unwrap();
+    bytes.push(b'\n');
+    peer.try_clone().unwrap().write_all(&bytes).unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let mut read = BufReader::new(peer);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut text = String::new();
+            let outcome = read.read_line(&mut text);
+            done_tx.send((outcome, text)).unwrap_or(());
+        });
+        let (outcome, text) = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .unwrap_or_else(|_| panic!("never received the acknowledgement"));
+        outcome.unwrap_or_else(|_| panic!("the hub never answers"));
+        let line: Value = serde_json::from_str(&text).unwrap();
+        let (id, result) = accepted(&line);
+        assert_eq!(id, "c_1");
+        assert_eq!(result, json!({"sessions_stopped": 0}));
+    });
+    await_true("the hub to stop after answering", {
+        let hub = Arc::clone(&hub);
+        move || hub.stop_requested()
+    });
+}
+
+/// A written but undrained answer waits out the bound: the write and
+/// its flag land before the wait starts, the wait holds to the bound,
+/// and the answer goes out whole. An `||` mutant would return as soon
+/// as the write lands.
+#[test]
+fn a_written_but_undrained_answer_waits_out_the_bound() {
+    let temp = Temp::new();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
+    // The spawn refusal runs the writer on the driving thread: the
+    // answer and the written flag land before the wait starts.
+    *hub.fail_spawn.lock().unwrap() = Some("hub-stop-out");
+    let web = crate::port::Web::never_drained(false);
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("drain-web-test".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let web = Arc::clone(&web);
+            let writer = Arc::clone(&writer);
+            move || {
+                drain_web(
+                    &hub,
+                    &writer,
+                    &web,
+                    "command_accepted",
+                    serde_json::Map::from_iter([(
+                        "command_id".to_owned(),
+                        Value::String("c_1".to_owned()),
+                    )]),
+                );
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The answer is out while the wait still parks on the bound: the
+    // mutant would have returned already.
+    let mut read = BufReader::new(peer);
+    let mut text = String::new();
+    read.read_line(&mut text).unwrap();
+    let end = clock.origin() + crate::port::STOP_CLOSE_WAIT;
+    assert!(
+        clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "the answer waits for the drain"
+    );
+    clock.advance(crate::port::STOP_CLOSE_WAIT + Duration::from_secs(1));
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends at the bound");
+    let line: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        line.get("kind").and_then(Value::as_str),
+        Some("command_accepted")
+    );
+    assert_eq!(
+        line.pointer("/payload/command_id").and_then(Value::as_str),
+        Some("c_1")
+    );
+    // EOF after the answer: the writer shut its side down.
+    let mut rest = String::new();
+    read.read_to_string(&mut rest).unwrap();
+    assert!(rest.is_empty());
+}
+
+/// An unwritten answer with a drained web still waits: the writer blocks
+/// in a full socket, so `written` stays unset while `drained` holds. An
+/// `||` mutant would return at once.
+#[test]
+fn an_unwritten_answer_with_a_drained_web_still_waits() {
+    let temp = Temp::new();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
+    let web = crate::port::Web::never_drained(true);
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    // Fill the writer's direction past its buffer: the writer blocks in
+    // its write, so `written` stays unset deterministically.
+    writer.set_nonblocking(true).unwrap();
+    let filler = vec![0u8; 65_536];
+    for _ in 0..128 {
+        match (&writer).write(&filler) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("filling the send buffer: {error}"),
+        }
+    }
+    writer.set_nonblocking(false).unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("drain-web-test".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let web = Arc::clone(&web);
+            let writer = Arc::clone(&writer);
+            move || {
+                drain_web(
+                    &hub,
+                    &writer,
+                    &web,
+                    "command_accepted",
+                    serde_json::Map::from_iter([(
+                        "command_id".to_owned(),
+                        Value::String("c_2".to_owned()),
+                    )]),
+                );
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    let end = clock.origin() + crate::port::STOP_CLOSE_WAIT;
+    assert!(
+        clock.await_parked(end, fakes::Deadline::after(DEADLINE)),
+        "the unwritten answer waits"
+    );
+    // Drain the filler past the answer to EOF: the freed room unblocks
+    // the writer, and the shutdown ends the read.
+    let mut all = Vec::new();
+    BufReader::new(peer).read_to_end(&mut all).unwrap();
+    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the wait ends after the drain");
+    let text = String::from_utf8(all).unwrap();
+    // The filler carries no newline, so the answer is not the last
+    // line: it starts where the JSON starts.
+    let start = text
+        .find("{\"kind\"")
+        .expect("the answer follows the filler");
+    let line: Value = serde_json::from_str(&text[start..]).unwrap();
+    assert_eq!(
+        line.get("kind").and_then(Value::as_str),
+        Some("command_accepted")
+    );
+    assert_eq!(
+        line.pointer("/payload/command_id").and_then(Value::as_str),
+        Some("c_2")
+    );
+}
+
+/// A hub on `clock`, held by the test for advances: the stop loop parks
+/// on the injected clock, so bound-expiry tests drive it from here.
+fn hub_with_clock(
+    dir: &Path,
+    starter: impl Starter + 'static,
+    clock: Arc<fakes::clock::FakeClock>,
+) -> Arc<Hub> {
+    let timed: Arc<dyn Clock> = clock;
+    Arc::new(crate::testkit::hub(dir, Arc::new(starter), timed))
+}
+
+#[test]
+fn stop_with_sessions_names_the_survivor_past_the_close_bound() {
+    // A strict session answers `subscribe` and `close` but never exits:
+    // the loop's close-wait expires with the socket still open.
+    let temp = Temp::new();
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let hub = hub_with_clock(
+        &temp.dir,
+        FakeStarter::strict(&temp.dir),
+        Arc::clone(&clock),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The hook records the loop thread before the stop is sent, so the
+    // advance below can name its wait: under load the session worker's
+    // read wait can park at the same bound.
+    let (fanout_tx, fanout_rx) = mpsc::channel();
+    *hub.on_fanout_wait.lock().unwrap() = Some(Box::new(move || {
+        fanout_tx.send(thread::current().id()).unwrap_or(());
+    }));
+    client.send(&command("c_stop", "stop", json!({"sessions": true})));
+    // The loop's fan-out wait parks on the scan bound with the session
+    // unconfirmed; expiring it names the survivor.
+    let bound = clock.origin() + crate::sessions_stop::SESSIONS_STOP_WITHIN;
+    assert!(
+        clock.await_parked(bound, fakes::Deadline::after(DEADLINE)),
+        "the loop waits for the close"
+    );
+    let loop_thread = Deadline::after(DEADLINE)
+        .recv(&fanout_rx)
+        .unwrap_or_else(|_| panic!("the loop enters its fan-out wait"));
+    clock.advance_when_parked(
+        Some(bound),
+        Some(loop_thread),
+        crate::sessions_stop::SESSIONS_STOP_WITHIN,
+        &Deadline::after(DEADLINE),
+    );
+    let (code, echoed, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_stop"));
+    assert!(
+        message.contains(&session),
+        "the rejection names the survivor: {message}"
+    );
+    // The hub still exits after the partial answer.
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+/// A starter that holds each `start` at a gate, then runs the inner
+/// starter: the test stores the sessions-stop flag mid-bind.
+struct GateStarter {
+    inner: FakeStarter,
+    entered: mpsc::Sender<()>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Starter for GateStarter {
+    fn start(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        model: Option<&str>,
+        overrides: &[&str],
+        worktree: bool,
+        continues: Option<&SessionId>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.entered.send(()).unwrap_or(());
+        if let Some(release) = support::lock(&self.release).take() {
+            release.recv().unwrap_or(());
+        }
+        self.inner
+            .start(id, workspace, model, overrides, worktree, continues)
+    }
+
+    fn resume(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        credential: Option<&str>,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.resume(id, workspace, credential)
+    }
+
+    fn rewind(
+        &self,
+        id: &SessionId,
+        workspace: &Path,
+        from: &SessionId,
+    ) -> std::io::Result<Box<dyn Started>> {
+        self.inner.rewind(id, workspace, from)
+    }
+}
+
+#[test]
+fn a_start_paused_between_admit_steps_is_refused_after_the_store() {
+    let temp = Temp::new();
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    // The start pauses after its increment, before its flag load.
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *hub.between_admit_steps.lock().unwrap() = Some(Box::new(move || {
+        entered_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    // The stop's zero-wait fires when it first sees the nonzero count.
+    let (waiting_tx, waiting) = mpsc::channel();
+    *hub.on_inflight_wait.lock().unwrap() = Some(Box::new(move || {
+        waiting_tx.send(()).unwrap_or(());
+    }));
+    let mut starter_client = Client::connect(&hub);
+    starter_client.hello();
+    let workspace = temp.workspace();
+    starter_client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the start pauses between the admit steps"
+    );
+    let mut stopper = Client::connect(&hub);
+    stopper.hello();
+    stopper.send(&command("c_stop", "stop", json!({"sessions": true})));
+    assert!(
+        Deadline::after(DEADLINE).recv(&waiting).is_ok(),
+        "the stop parks on the nonzero count"
+    );
+    drop(release_tx);
+    // The released start loads the flag set: refused, never started.
+    let (code, echoed, message) = rejected(&starter_client.next("the refusal"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "the hub is stopping.");
+    assert!(
+        starter.started_worktrees().is_empty(),
+        "the starter never ran"
+    );
+    // The stop then scans nothing and answers zero: never an orphan.
+    let (id, result) = accepted(&stopper.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, json!({"sessions_stopped": 0}));
+    assert!(!temp.dir.join("run").exists(), "no session socket accepts");
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+}
+
+#[test]
+fn a_start_caught_mid_bind_is_stopped_and_refused() {
+    let temp = Temp::new();
+    let inner = FakeStarter::hang(&temp.dir);
+    let (entered_tx, entered) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    let hub = temp.hub(GateStarter {
+        inner: inner.clone(),
+        entered: entered_tx,
+        release: Mutex::new(Some(release)),
+    });
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    assert!(
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        "the start reaches the starter"
+    );
+    // The store lands mid-bind: the first retry stops and refuses.
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    drop(release_tx);
+    let (code, echoed, message) = rejected(&client.next("the refusal"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_1"));
+    assert_eq!(message, "the hub is stopping.");
+    assert_eq!(inner.started_worktrees().len(), 1);
+    assert_eq!(inner.kills().len(), 1, "the started session is killed");
+    assert!(!temp.dir.join("run").exists(), "no session socket accepts");
+    assert_eq!(hub.inflight_binds.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn resume_is_refused_at_entry_after_the_store() {
+    let temp = Temp::new();
+    let starter = FakeStarter::exit_on_close(&temp.dir);
+    let hub = temp.hub(starter.clone());
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The socket is gone but the session is resumable: a subscribe
+    // takes the resume path, not the rejoin.
+    assert!(
+        starter.stop(&SessionId(session.clone()), DEADLINE),
+        "the session socket goes away"
+    );
+    hub.sessions_stopping.store(true, Ordering::SeqCst);
+    let mut other = Client::connect(&hub);
+    other.hello();
+    other.send(&json!({
+        "id": "c_2",
+        "session_id": session,
+        "command": "subscribe",
+        "args": {"level": "summary"},
+    }));
+    let (code, echoed, message) = rejected(&other.next("the refusal"));
+    assert_eq!(code, "io_failed");
+    assert_eq!(echoed.as_deref(), Some("c_2"));
+    assert_eq!(message, "the hub is stopping.");
+    assert!(starter.resumed().is_empty(), "the starter never resumes");
+}
+
+#[test]
+fn a_bare_stop_leaves_a_running_session_alone() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::exit_on_close(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command("c_1", "start", json!({"workspace": workspace})));
+    let (_, result) = accepted(&client.next("the acknowledgement"));
+    let session = result
+        .get("session_id")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+    client.send(&command("c_stop", "stop", json!({})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_stop");
+    assert_eq!(result, Value::Null, "a bare stop carries no result");
+    assert!(matches!(
+        hub.idle_wait(
+            Duration::from_secs(60),
+            &AtomicBool::new(false),
+            &AtomicI32::new(0)
+        ),
+        Idle::Signal(signal_hook::consts::SIGTERM)
+    ));
+    // The session outlives the hub: its socket still accepts.
+    assert!(
+        UnixStream::connect(temp.dir.join("run").join(&session)).is_ok(),
+        "the session socket still accepts"
+    );
+}
 /// The import answer the driver answers with, scripted through the
 /// machine: names and reasons only, never secret values.
 fn import_report() -> Value {

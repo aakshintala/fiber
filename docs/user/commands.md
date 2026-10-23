@@ -28,7 +28,8 @@ Fiber itself:
   login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   doctor                                    Says whether a session can start, and how to fix it when it cannot
-  feedback [<prompt>] [-]                   Write a feedback report and print the issue link.
+  stop [--hub <name>]                       Shut down every running session, then the hub
+  feedback [<prompt>] [-] [--session <id>]  Write a feedback report and print the issue link.
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
   version                                   Print the version
@@ -563,18 +564,31 @@ Options:
   -h, --help  Print help
 ```
 
+## fiber stop
+
+```text
+Shut down every running session, then the hub
+
+Usage: fiber stop [OPTIONS]
+
+Options:
+      --hub <name>  Use a hub from this client's list
+  -h, --help        Print help
+```
+
 ## fiber feedback
 
 ```text
 Write a feedback report and print the issue link
 
-Usage: fiber feedback [prompt]...
+Usage: fiber feedback [OPTIONS] [prompt]...
 
 Arguments:
   [prompt]...  The description. A final `-` reads stdin
 
 Options:
-  -h, --help  Print help
+      --session <session_id>  The session whose diagnostics the report carries: any session in Fiber home. Without it, the newest session in this project
+  -h, --help                  Print help
 ```
 
 ## fiber completion
