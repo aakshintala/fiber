@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, reason = "tests unwrap")]
 
-use super::{MAX_COMMAND_BYTES, Redirect, Script, Simple, Stage, parse};
+use super::{MAX_COMMAND_BYTES, Redirect, Script, Simple, Stage, cook_quoted, parse};
 
 fn parsed(command: &str) -> Script {
     parse(command).unwrap_or_else(|| panic!("{command:?} parsed to nothing"))
@@ -149,6 +149,20 @@ fn double_quotes_keep_everything_but_dollar_backtick_and_quote() {
 }
 
 #[test]
+fn quoted_parts_cook_inside_a_concatenation() {
+    let simple = only_simple("echo a\"b\"c");
+    assert_eq!(word_cooked(&simple), ["echo", "abc"]);
+    assert_eq!(simple.words.get(1).unwrap().raw, "a\"b\"c");
+}
+
+#[test]
+fn cook_quoted_rejects_a_lopsided_spelling() {
+    assert_eq!(cook_quoted("\"ab\"", '"'), Some("ab".to_string()));
+    assert_eq!(cook_quoted("ab\"", '"'), None);
+    assert_eq!(cook_quoted("\"ab", '"'), None);
+}
+
+#[test]
 fn a_pipeline_builds_one_element_with_one_stage_per_command() {
     let script = parsed("cat README.md | head -50");
     assert_eq!(script.elements.len(), 1);
@@ -166,6 +180,14 @@ fn a_pipeline_builds_one_element_with_one_stage_per_command() {
     let script = parsed("ls | head | tail");
     let element = script.elements.first().unwrap();
     assert_eq!(element.stages.len(), 3);
+}
+
+#[test]
+fn a_redirect_around_a_compound_body_opaques_the_pipeline() {
+    // The redirect's body holds two elements (a list) or one element with
+    // two stages (a pipeline), so the stage never stands alone.
+    assert_opaque("a && b >f | cat");
+    assert_opaque("a | b >f | cat");
 }
 
 #[test]
@@ -199,6 +221,13 @@ fn lists_build_one_element_per_command_in_source_order() {
     assert_eq!(quoted.words.len(), 2);
     assert_eq!(quoted.words.get(1).unwrap().cooked, "a&&b");
     assert_eq!(quoted.words.get(1).unwrap().raw, "'a&&b'");
+}
+
+#[test]
+fn a_comment_inside_a_list_opaques_it() {
+    // The comment is a fourth child of the `list` node, which only the
+    // three-child shape stands for.
+    assert_opaque("a && # c\nb");
 }
 
 #[test]
@@ -282,6 +311,16 @@ fn attached_words_are_operands_not_descriptors() {
     let simple = only_simple("ls \"2\">/dev/null");
     assert_eq!(word_cooked(&simple), ["ls", "2"]);
     assert_eq!(simple.words.get(1).unwrap().raw, "\"2\"");
+    assert_eq!(redirect_kinds(&simple), ["discard"]);
+}
+
+#[test]
+fn a_spaced_digit_before_a_redirect_stays_an_operand() {
+    // The digit is spaced from the redirect, so it is not spelled against
+    // it and stays an operand: stealing it would bless descriptor `"3"`.
+    let simple = only_simple("ls 3 >/dev/null");
+    assert_eq!(word_cooked(&simple), ["ls", "3"]);
+    assert_eq!(simple.tokens, ["ls", "3", ">/dev/null"]);
     assert_eq!(redirect_kinds(&simple), ["discard"]);
 }
 
