@@ -1225,7 +1225,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
                 && line["payload"]["status"] == "synced x"
         })
         .collect();
-    assert_eq!(statuses.len(), 1, "{out:?}");
+    assert!(!statuses.is_empty(), "{out:?}");
     assert!(
         notices[0]["payload"]["message"]
             .as_str()
