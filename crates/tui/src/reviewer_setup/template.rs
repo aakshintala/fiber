@@ -402,14 +402,14 @@ fn common<'a>(before: &[&'a str], after: &[&'a str]) -> Vec<Op<'a>> {
     let mut found = Vec::new();
     while let (Some(b), Some(a)) = (before.get(row), after.get(col)) {
         if b == a {
-            found.push(Op::Equal(*b));
+            found.push(Op::Equal(b));
             row += 1;
             col += 1;
         } else if table.at(row + 1, col) >= table.at(row, col + 1) {
-            found.push(Op::Removed(*b));
+            found.push(Op::Removed(b));
             row += 1;
         } else {
-            found.push(Op::Added(*a));
+            found.push(Op::Added(a));
             col += 1;
         }
     }

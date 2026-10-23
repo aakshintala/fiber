@@ -36,6 +36,7 @@ mod quit;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
+mod reviewer_setup;
 pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 mod steering_queue;
@@ -142,6 +143,22 @@ fn draw_framed(
             app.frames().note(Surface::Quit, slab);
         }
     }
+}
+
+/// Drops the click targets of what an overlay covers: the conversation's
+/// lines, links, results, offer and turns.
+fn drop_conversation_targets(targets: &mut Vec<Target>) {
+    targets.retain(|target| {
+        !matches!(
+            target.id,
+            TargetId::Line(_)
+                | TargetId::Link { .. }
+                | TargetId::FindResult(_)
+                | TargetId::NewBelow
+                | TargetId::Turn(_)
+                | TargetId::Offer(_)
+        )
+    });
 }
 
 /// Notes the slab `swapped::draw` drew: the model picker's under the
@@ -390,18 +407,15 @@ pub(crate) fn render(
     // (`docs/tui.md`, "Overlays"). The conversation's own targets go
     // away under it, as under the notices overlay. The quit question
     // draws above the report, as it takes every key while open.
+    // The reviewer setup draws first among them: the report and the quit
+    // question draw over it, as they take every key before it does.
+    let setup = reviewer_setup::draw(app, conversation, buf, &mut targets);
+    if !setup.is_empty() {
+        drop_conversation_targets(&mut targets);
+    }
+    app.frames().note(Surface::ReviewerSetup, setup);
     draw_framed(app, area, buf, &mut targets, |targets, buf| {
-        targets.retain(|target| {
-            !matches!(
-                target.id,
-                TargetId::Line(_)
-                    | TargetId::Link { .. }
-                    | TargetId::FindResult(_)
-                    | TargetId::NewBelow
-                    | TargetId::Turn(_)
-                    | TargetId::Offer(_)
-            )
-        });
+        drop_conversation_targets(targets);
         crate::import_report::draw_report(app, conversation, buf, targets)
     });
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {

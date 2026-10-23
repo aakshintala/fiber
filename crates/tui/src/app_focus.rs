@@ -308,6 +308,10 @@ impl App {
                 self.keymap_key(&Key::Esc);
                 return;
             }
+            if surface == Surface::ReviewerSetup {
+                self.reviewer_setup_close();
+                return;
+            }
             if surface == Surface::Search {
                 self.close_search();
                 return;

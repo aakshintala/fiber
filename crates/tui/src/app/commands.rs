@@ -177,6 +177,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_rules,
     },
     CommandEntry {
+        name: "reviewer-setup",
+        description: "Sets up the reviewer's notes with you.",
+        hint: None,
+        run: run_reviewer_setup,
+    },
+    CommandEntry {
         name: "settings",
         description: "Opens the configuration keys.",
         hint: None,
@@ -318,7 +324,7 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
     Some(app.send_command("name", Some(json!({ "text": rest }))).0)
 }
 
-fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
+pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
     Some(app.send_command("reload", None).0)
@@ -441,6 +447,10 @@ fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
 
+fn run_reviewer_setup(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.open_reviewer_setup())
+}
+
 fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Login))
 }
@@ -488,6 +498,11 @@ impl App {
         let top = self.top_surface();
         if matches!(top, Surface::Quit | Surface::Report) {
             return Effect::None;
+        }
+        // The reviewer setup takes every edit while it is on top: a paste
+        // goes into its field, the rest do nothing behind it.
+        if top == Surface::ReviewerSetup {
+            return self.reviewer_setup_edit(&edit);
         }
         // The key map above the picker takes the edit: Left and Right
         // move between its tabs, every other edit does nothing behind it.
@@ -625,6 +640,7 @@ impl App {
     /// draft cleared, the old session left running. While a `start` waits
     /// for its answer only the draft is cleared.
     pub(super) fn go_home(&mut self) {
+        self.reviewer_setup_left();
         if self.reset_session() {
             self.attached_screen_mut().clear();
         }

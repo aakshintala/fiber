@@ -394,30 +394,34 @@ impl Setup {
     }
 
     fn question_key(&mut self, key: &Key) -> Act {
-        match key {
-            Key::Char(c) => self.topics.get_mut(self.topic).answer.push(*c),
-            Key::Backspace => {
-                self.topics.get_mut(self.topic).answer.pop();
-            }
-            Key::Enter => return self.propose(),
-            Key::Esc => {
-                self.error = None;
-                let at = Topic::ALL.iter().position(|t| *t == self.topic);
-                let previous = at
-                    .and_then(|at| at.checked_sub(1))
-                    .and_then(|at| Topic::ALL.get(at));
-                return match previous {
-                    None => Act::Close,
-                    Some(topic) => {
-                        self.topic = *topic;
-                        self.screen = Screen::Lines;
-                        Act::None
-                    }
-                };
-            }
-            _ => {}
+        if let Key::Char(c) = key {
+            self.topics.get_mut(self.topic).answer.push(*c);
+        } else if *key == Key::Backspace {
+            self.topics.get_mut(self.topic).answer.pop();
+        } else if *key == Key::Enter {
+            return self.propose();
+        } else if *key == Key::Esc {
+            return self.back_from_question();
         }
         Act::None
+    }
+
+    /// Esc on a question: the previous topic's lines, or close on the
+    /// first topic.
+    fn back_from_question(&mut self) -> Act {
+        self.error = None;
+        let at = Topic::ALL.iter().position(|t| *t == self.topic);
+        let previous = at
+            .and_then(|at| at.checked_sub(1))
+            .and_then(|at| Topic::ALL.get(at));
+        match previous {
+            None => Act::Close,
+            Some(topic) => {
+                self.topic = *topic;
+                self.screen = Screen::Lines;
+                Act::None
+            }
+        }
     }
 
     /// The request for the topic: the answer only when it holds more than
@@ -479,59 +483,52 @@ impl Setup {
             return self.edit_key(key);
         }
         let empty = self.run_mut().is_none_or(|run| run.items.is_empty());
-        match key {
-            Key::Esc => {
-                self.topics.get_mut(self.topic).run = None;
-                self.screen = Screen::Question;
-            }
-            Key::Enter => {
-                self.decide(Decision::Keep);
-                return self.advance();
-            }
-            Key::Char('x') if !empty => {
-                self.decide(Decision::Strike);
-                return self.advance();
-            }
-            Key::Char('e') => self.start_edit(),
-            Key::Tab => self.flip(),
-            Key::Up => self.focus_by(-1),
-            Key::Down => self.focus_by(1),
-            _ => {}
+        if *key == Key::Esc {
+            self.topics.get_mut(self.topic).run = None;
+            self.screen = Screen::Question;
+        } else if *key == Key::Enter {
+            self.decide(Decision::Keep);
+            return self.advance();
+        } else if *key == Key::Char('x') && !empty {
+            self.decide(Decision::Strike);
+            return self.advance();
+        } else if *key == Key::Char('e') {
+            self.start_edit();
+        } else if *key == Key::Tab {
+            self.flip();
+        } else if *key == Key::Up {
+            self.focus_by(-1);
+        } else if *key == Key::Down {
+            self.focus_by(1);
         }
         Act::None
     }
 
     fn edit_key(&mut self, key: &Key) -> Act {
-        match key {
-            Key::Char(c) => {
-                if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
-                    field.push(*c);
-                }
+        if let Key::Char(c) = key {
+            if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
+                field.push(*c);
             }
-            Key::Backspace => {
-                if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
-                    field.pop();
-                }
+        } else if *key == Key::Backspace {
+            if let Some(field) = self.run_mut().and_then(|run| run.edit.as_mut()) {
+                field.pop();
             }
-            Key::Esc => {
-                if let Some(run) = self.run_mut() {
-                    run.edit = None;
-                }
+        } else if *key == Key::Esc {
+            if let Some(run) = self.run_mut() {
+                run.edit = None;
             }
-            Key::Enter => {
-                let field = self
-                    .run_mut()
-                    .and_then(|run| run.edit.take())
-                    .unwrap_or_default();
-                let text = clean_line(&field);
-                if text.is_empty() {
-                    self.decide(Decision::Strike);
-                } else {
-                    self.decide(Decision::Edited(text));
-                }
-                return self.advance();
+        } else if *key == Key::Enter {
+            let field = self
+                .run_mut()
+                .and_then(|run| run.edit.take())
+                .unwrap_or_default();
+            let text = clean_line(&field);
+            if text.is_empty() {
+                self.decide(Decision::Strike);
+            } else {
+                self.decide(Decision::Edited(text));
             }
-            _ => {}
+            return self.advance();
         }
         Act::None
     }
@@ -682,14 +679,18 @@ impl Setup {
         let (total, capacity) = self.viewport.get();
         let farthest = total.saturating_sub(capacity);
         let page = capacity.saturating_sub(1).max(1);
-        match key {
-            Key::Esc => return Act::Close,
-            Key::Enter => return self.save(),
-            Key::Up => self.scroll = self.scroll.saturating_sub(1),
-            Key::Down => self.scroll = (self.scroll + 1).min(farthest),
-            Key::PageUp => self.scroll = self.scroll.saturating_sub(page),
-            Key::PageDown => self.scroll = (self.scroll + page).min(farthest),
-            _ => {}
+        if *key == Key::Esc {
+            return Act::Close;
+        } else if *key == Key::Enter {
+            return self.save();
+        } else if *key == Key::Up {
+            self.scroll = self.scroll.saturating_sub(1);
+        } else if *key == Key::Down {
+            self.scroll = (self.scroll + 1).min(farthest);
+        } else if *key == Key::PageUp {
+            self.scroll = self.scroll.saturating_sub(page);
+        } else if *key == Key::PageDown {
+            self.scroll = (self.scroll + page).min(farthest);
         }
         Act::None
     }
@@ -724,11 +725,12 @@ impl Setup {
     }
 
     fn saved_key(&mut self, key: &Key) -> Act {
-        match key {
-            Key::Esc => Act::Close,
-            Key::Char('r') if self.any_saved() => Act::Reload,
-            Key::Char('n') if self.any_saved() => Act::Close,
-            _ => Act::None,
+        if *key == Key::Esc || (*key == Key::Char('n') && self.any_saved()) {
+            Act::Close
+        } else if *key == Key::Char('r') && self.any_saved() {
+            Act::Reload
+        } else {
+            Act::None
         }
     }
 

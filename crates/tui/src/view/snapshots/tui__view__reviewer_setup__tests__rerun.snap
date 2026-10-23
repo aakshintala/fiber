@@ -1,0 +1,44 @@
+---
+source: crates/tui/src/view/reviewer_setup_tests.rs
+expression: "checked(rerun(), \"rerun\", 1)"
+---
+
+
+
+
+
+
+
+
+
+
+
+             ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+               Reviewer setup                                              ✕
+
+               Topic 1 of 5 · Source control
+               Earlier lines
+               ✓ [global] my account amogh-dev is mine
+               ✓ [per-project] github.com/acme/* are ours
+⋮              New proposals                                                              ⋮
+⋮              its git remotes: upstream github.com/acme-labs/fiber                       ⋮
+⋮              › [per-project]  github.com/acme-labs/* are ours                           ⋮
+
+               Tab flip layer · Enter confirm · e edit · x strike · Esc back
+
+             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+
+
+
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

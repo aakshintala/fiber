@@ -120,10 +120,10 @@ fn states(setup: &Setup) -> Vec<LineState> {
 }
 
 fn save_of(act: Act) -> (Option<NotesWrite>, Option<NotesWrite>) {
-    match act {
-        Act::Save { global, project } => (global, project),
-        other => panic!("not a save: {other:?}"),
-    }
+    let Act::Save { global, project } = act else {
+        panic!("not a save: {act:?}");
+    };
+    (global, project)
 }
 
 /// Walks every remaining topic with no lines, to the diff.

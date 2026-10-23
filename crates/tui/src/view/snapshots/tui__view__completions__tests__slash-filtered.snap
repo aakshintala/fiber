@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/completions_tests.rs
-assertion_line: 169
 expression: "screen(&app, 160, 48)"
 ---
 
@@ -39,13 +38,13 @@ expression: "screen(&app, 160, 48)"
 
 
 
-
                                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                  › resume     Goes home, focused on the first exited row.                             command
-                                    name       /rename Names the session. <text>                                       command
-                                    reload     Reloads configuration, MCP servers and extensions.                      command
-                                    credential Switches the credential label, or opens the credential picke… [<label>] command
+                                  › resume         Goes home, focused on the first exited row.                         command
+                                    reviewer-setup Sets up the reviewer's notes with you.                              command
+                                    name           /rename Names the session. <text>                                   command
+                                    reload         Reloads configuration, MCP servers and extensions.                  command
+                                    credential     Switches the credential label, or opens the credential p… [<label>] command
 
                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
