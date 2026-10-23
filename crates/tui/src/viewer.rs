@@ -9,15 +9,16 @@ use std::fs::{self, OpenOptions};
 use std::hash::BuildHasher;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use contract::clock::Clock;
 
 use crate::Input;
+use crate::helper::Ended;
 use crate::image::View;
 
 /// The program opening a file: `open` on macOS, `xdg-open` elsewhere.
@@ -30,17 +31,24 @@ pub(crate) fn command(macos: bool) -> Vec<String> {
 /// failed write removes its temporary file, and a second open
 /// replaces the copy through a rename, so a viewer reading the
 /// previous copy sees it whole.
-pub(crate) fn spawn(argv: &[String], dir: &Path, view: View, out: &Sender<Input>) {
+pub(crate) fn spawn(
+    argv: &[String],
+    dir: &Path,
+    view: View,
+    out: &Sender<Input>,
+    clock: &Arc<dyn Clock>,
+) {
     let argv = argv.to_owned();
     let dir = dir.to_path_buf();
     let out = out.clone();
+    let clock = Arc::clone(clock);
     // The worker outlives the frame that asked: it answers on the
     // loop's channel, which a closed loop drops.
     drop(crate::sources::builder("tui-viewer").spawn(move || {
         let id = view.id;
         let name = view.name.clone();
         let generation = view.generation;
-        let result = open(&argv, &dir, &view);
+        let result = open(&argv, &dir, &view, &clock);
         drop(out.send(Input::Viewed {
             id,
             name,
@@ -51,13 +59,13 @@ pub(crate) fn spawn(argv: &[String], dir: &Path, view: View, out: &Sender<Input>
 }
 
 /// Writes `view`'s copy, then runs the viewer over it.
-fn open(argv: &[String], dir: &Path, view: &View) -> Result<(), String> {
+fn open(argv: &[String], dir: &Path, view: &View, clock: &Arc<dyn Clock>) -> Result<(), String> {
     let name = file_name(&view.name)?;
     let bytes = STANDARD
         .decode(&view.data)
         .map_err(|error| format!("`{name}` is not base64: {error}"))?;
     let path = write_copy(dir, &view.session, name, &bytes)?;
-    run(argv, &path)
+    run(argv, &path, clock)
 }
 
 /// The file name the copy is written under: only the last path
@@ -109,28 +117,25 @@ fn write_copy(
     Ok(path)
 }
 
-/// Runs the viewer over `path` with nothing on any stdio, and reaps
-/// it: a spawn error, a write error or a non-zero exit is why the
-/// open failed, and nothing retries.
-fn run(argv: &[String], path: &Path) -> Result<(), String> {
-    let (program, args) = argv
-        .split_first()
+/// Runs the viewer over `path` under the helper's deadline and reaps it: a
+/// spawn error or a non-zero exit is why the open failed, and nothing
+/// retries. A viewer still running at the deadline is stopped and is not a
+/// failure.
+fn run(argv: &[String], path: &Path, clock: &Arc<dyn Clock>) -> Result<(), String> {
+    let program = argv
+        .first()
         .ok_or_else(|| "no program opens images".to_owned())?;
-    let status = std::process::Command::new(program)
-        .args(args)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        // Its own process group, as a copy runs: quitting the
-        // terminal never takes the viewer with it.
-        .process_group(0)
-        .status()
-        .map_err(|error| format!("`{program}` could not run: {error}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("`{program}` exited with {status}"))
+    let path = path
+        .to_str()
+        .ok_or_else(|| format!("`{}` is not valid UTF-8", path.display()))?;
+    let mut argv = argv.to_vec();
+    argv.push(path.to_owned());
+    match crate::helper::run_bounded(&argv, None, clock) {
+        Ok(Ended::Exited(status)) if !status.success() => {
+            Err(format!("`{program}` exited with {status}"))
+        }
+        Ok(Ended::Exited(_) | Ended::DeadlinePassed) => Ok(()),
+        Err(error) => Err(format!("`{program}` could not run: {error}")),
     }
 }
 

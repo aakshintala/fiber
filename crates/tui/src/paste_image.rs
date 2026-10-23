@@ -11,7 +11,9 @@
 use std::ffi::OsString;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+#[cfg(test)]
+use std::sync::PoisonError;
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -19,10 +21,11 @@ use base64::engine::general_purpose::STANDARD;
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
-use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
+use rustix::process::{Pid, Signal};
 use support::group::GROUP_POLL;
 
 use crate::Input;
+use crate::helper::{PipeWake, drain, wait_for_exit};
 
 /// How long a clipboard read may take, on the injected clock.
 pub(crate) const READ_LIMIT: Duration = Duration::from_secs(10);
@@ -264,39 +267,6 @@ enum End {
     TooLarge,
 }
 
-/// The wake pipe's writer: every clock move writes one byte to it, so the
-/// worker's poll wakes. A write that fails, on a full pipe or once the
-/// worker has gone, is ignored: a byte already waiting wakes as well.
-struct PipeWake {
-    write: Mutex<std::io::PipeWriter>,
-}
-
-impl Wake for PipeWake {
-    fn wake(&self) {
-        use std::os::unix::io::AsFd as _;
-        let write = self.write.lock().unwrap_or_else(PoisonError::into_inner);
-        match rustix::io::write(write.as_fd(), b"x") {
-            Ok(_) | Err(_) => {}
-        }
-    }
-}
-
-/// Drains the wake pipe after each wake, until it would block: the pipe
-/// holds at most its capacity, so the drain ends.
-fn drain(read: &std::io::PipeReader) {
-    use std::os::unix::io::AsFd as _;
-    let mut buf = [0u8; 64];
-    loop {
-        match rustix::io::read(read.as_fd(), &mut buf) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(Errno::AGAIN) => return,
-            Err(Errno::INTR) => {}
-            Err(_) => return,
-        }
-    }
-}
-
 /// Reads standard output while it has bytes: end-of-file, or any read
 /// error but an interrupted or empty read, ends the output. Stops past
 /// `cap`, so the draft never holds more than the cap plus one byte.
@@ -317,24 +287,6 @@ fn read_stdout(stdout: &mut impl std::io::Read, out: &mut Vec<u8>, eof: &mut boo
                 *eof = true;
                 return;
             }
-        }
-    }
-}
-
-/// Blocks in `waitid` for the child `id`, seeing its exit without reaping
-/// it. An interrupted wait retries; any other error counts as exited.
-fn wait_for_exit(id: u32) {
-    let Some(pid) = pid_of(id) else {
-        return;
-    };
-    loop {
-        match rustix::process::waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED.union(WaitIdOptions::NOWAIT),
-        ) {
-            Ok(_) => return,
-            Err(Errno::INTR) => {}
-            Err(_) => return,
         }
     }
 }
