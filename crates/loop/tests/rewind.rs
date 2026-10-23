@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use contract::commands::{Reply, ReplyAnswer, RewindArgs};
 use contract::events::{
     CommandResult, Parent, SessionStarted, TurnOutcome, Variables, VariablesSource,
@@ -911,6 +913,14 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     assert_eq!(images[0].path, expected);
     assert_eq!(fs::read(&images[0].path).unwrap(), bytes);
     assert!(!dir.join("artifacts/i.png").exists());
+    // The child's request carries the parent's file, keyed by the absolute
+    // path the conversation holds, as the same base64.
+    assert_eq!(
+        first.media.keys().collect::<Vec<_>>(),
+        [&expected],
+        "only the one image is resolved"
+    );
+    assert_eq!(&*first.media[&expected], STANDARD.encode(bytes));
     drop(session);
 }
 
@@ -1023,6 +1033,21 @@ fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     );
     assert_eq!(fs::read(&pdfs[0].path).unwrap(), pdf_bytes);
     assert!(!dir.join("artifacts/p_3f2a9c0d1e4b5a67.pdf").exists());
+    // The PDF and both rendered pages resolve to the parent's bytes.
+    let media = |name: &str| first.media[&session.dir.join(name).display().to_string()].to_string();
+    assert_eq!(first.media.len(), 3);
+    assert_eq!(
+        media("artifacts/p_3f2a9c0d1e4b5a67.pdf"),
+        STANDARD.encode(pdf_bytes)
+    );
+    assert_eq!(
+        media("artifacts/i_0a1b2c3d4e5f6071.png"),
+        STANDARD.encode(b"page-one")
+    );
+    assert_eq!(
+        media("artifacts/i_8090a0b0c0d0e0f0.png"),
+        STANDARD.encode(b"page-two")
+    );
     drop(session);
 }
 
