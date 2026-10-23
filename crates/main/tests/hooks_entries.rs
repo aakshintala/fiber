@@ -240,14 +240,19 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
 
     let starts = captured(&setup, "start.log");
     assert_eq!(starts.len(), 1);
+    // `clients` is set aside: written when the connection attaches, with
+    // no position against the session's other lines (`docs/testing.md`,
+    // "Event streams"); one attach writes exactly one.
     assert_eq!(
-        support::kinds(&lines),
+        support::kinds(&lines)
+            .into_iter()
+            .filter(|kind| *kind != "clients")
+            .collect::<Vec<_>>(),
         [
             "command_accepted",
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "extension_state_set",
@@ -294,6 +299,13 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
             "command_accepted",
             "fiber_exited",
         ]
+    );
+    assert_eq!(
+        support::kinds(&lines)
+            .iter()
+            .filter(|kind| **kind == "clients")
+            .count(),
+        1
     );
     let first: Value = serde_json::from_str(&starts[0]).unwrap();
     assert_eq!(first["reason"], "start");
