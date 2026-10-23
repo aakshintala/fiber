@@ -14,177 +14,11 @@ use contract::inbox::{Ack, Delivery, Rejection};
 use fakes::{Deadline, Scripted};
 use r#loop::{PrepareReload, PromptPatch, ReloadPrepared, ReloadSettings};
 use std::sync::{Arc, Mutex, mpsc};
-use support::{DEADLINE, ENDED, REPLY, STEP, Session, assert_kinds, delivery, of_kind};
+use support::{
+    DEADLINE, ENDED, REPLY, STEP, Session, assert_kinds, deferred, deferring, delivery, of_kind,
+};
 
 use contract::hook::*;
-
-/// A provider that defers, delegating every call to the scripted provider
-/// that records the requests.
-struct Deferring {
-    inner: Arc<fakes::ScriptedProvider>,
-}
-
-impl contract::provider::Provider for Deferring {
-    fn call(
-        &self,
-        request: &contract::provider::ModelRequest,
-    ) -> Box<dyn contract::provider::ModelCall> {
-        self.inner.call(request)
-    }
-
-    fn wire_tools(
-        &self,
-        tools: &[contract::provider::ToolDefinition],
-    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
-        self.inner.wire_tools(tools)
-    }
-
-    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
-        self.inner.cost_lookup()
-    }
-
-    fn defers(&self) -> bool {
-        true
-    }
-}
-
-/// A registered tool with its own deferral flag set, delegating every
-/// call to the inner test tool.
-struct Deferred {
-    inner: Arc<support::TestTool>,
-}
-
-impl contract::tool::Tool for Deferred {
-    fn definition(&self) -> contract::provider::ToolDefinition {
-        let mut definition = self.inner.definition();
-        definition.deferred = true;
-        definition
-    }
-
-    fn effects(
-        &self,
-        arguments: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
-        self.inner.effects(arguments)
-    }
-
-    fn run(
-        &self,
-        arguments: &serde_json::Map<String, serde_json::Value>,
-        cancel: &dyn contract::tool::Cancel,
-        emit: &dyn contract::emit::Emit,
-    ) -> contract::tool::Output {
-        self.inner.run(arguments, cancel, emit)
-    }
-
-    fn bound(&self) -> contract::tool::Bound {
-        self.inner.bound()
-    }
-}
-
-/// A session on the deferring provider with the factory wired, so a
-/// reload's deferrals reach the rebuilt preamble.
-struct DeferHarness {
-    inbox: mpsc::Sender<Delivery>,
-    looped: Option<r#loop::Loop>,
-    lines: Option<log::Watcher>,
-    _home: fakes::TempDir,
-}
-
-impl DeferHarness {
-    fn start(script: Vec<Scripted>, factory: r#loop::ToolSearchFactory) -> Self {
-        let home = fakes::TempDir::new("fiber-reload-deferrals");
-        let workspace = home.path().join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let credentials = home.path().join("credentials");
-        std::fs::create_dir_all(&credentials).unwrap();
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(
-            log::Log::create(
-                home.path(),
-                contract::SessionId("s_test".into()),
-                clock.clone(),
-            )
-            .unwrap(),
-        );
-        let lines = Some(log.watch());
-        let scripted = Arc::new(fakes::ScriptedProvider::new(script));
-        let provider: Arc<dyn contract::provider::Provider> = Arc::new(Deferring {
-            inner: Arc::clone(&scripted),
-        });
-        let (inbox, rx) = mpsc::channel();
-        let dir = home.path().join("s_test");
-        let prompt_clock: Arc<dyn contract::clock::Clock> = clock;
-        let rules = Arc::new(support::FakeRules::empty());
-        let cancel = Arc::new(r#loop::TurnCancel::default());
-        let looped = r#loop::Loop::start(
-            r#loop::Session {
-                log: Arc::clone(&log),
-                provider,
-                model: r#loop::Model {
-                    reference: support::MODEL.into(),
-                    cost: None,
-                    subscription: false,
-                },
-                prompt: {
-                    let mut prompt = r#loop::PromptInputs::new(
-                        home.path().to_path_buf(),
-                        "/bin/sh".into(),
-                        dir.join("events.jsonl").display().to_string(),
-                        prompt_clock,
-                        fakes::CONTEXT_WINDOW,
-                    );
-                    prompt.credential = Some("work".into());
-                    prompt
-                },
-                inbox: rx,
-                tools: Vec::new(),
-                permissions: r#loop::Permissions {
-                    workspace: workspace.display().to_string(),
-                    credentials: credentials.clone(),
-                    credential_files: Vec::new(),
-                    rules: rules as _,
-                },
-            },
-            None,
-        )
-        .unwrap()
-        .tool_search(factory)
-        .cancelled_by(cancel);
-        Self {
-            inbox,
-            looped: Some(looped),
-            lines,
-            _home: home,
-        }
-    }
-
-    fn turn(&mut self, prompt: &str) {
-        self.inbox.send(delivery(prompt)).unwrap();
-        let mut looped = self.looped.take().unwrap();
-        let (done, finished) = mpsc::channel();
-        std::thread::spawn(move || {
-            let outcome = looped.turn().unwrap();
-            done.send((looped, outcome)).unwrap();
-        });
-        let (looped, _) = Deadline::after(DEADLINE)
-            .recv(&finished)
-            .expect("the turn ended in time");
-        self.looped = Some(looped);
-    }
-
-    fn lines(&mut self) -> Vec<contract::Envelope> {
-        let watcher = self.lines.take().unwrap();
-        let (watcher, lines) = support::read_until(watcher, "a turn_completed line", |line| {
-            line.kind == "turn_completed"
-        });
-        self.lines = Some(watcher);
-        lines
-            .into_iter()
-            .filter(|line| line.kind != "session_status")
-            .collect()
-    }
-}
 
 /// A reload setting `{x: false}` rebuilds `x` in full; one removing it
 /// rebuilds `x` deferred. A server in `full_servers` rebuilds its tools
@@ -195,40 +29,40 @@ fn reload_replaces_the_deferrals_whole() {
     let factory: r#loop::ToolSearchFactory = Arc::new(|_, _| {
         Arc::new(support::TestTool::reads("tool_search", "found")) as Arc<dyn contract::tool::Tool>
     });
-    let mut harness = DeferHarness::start(
+    let mut session = Session::wrapped(
         vec![
             Scripted::text("one"),
             Scripted::text("two"),
             Scripted::text("three"),
         ],
-        factory,
+        CacheLifetime::FiveMinutes,
+        |scripted, _| deferring(scripted),
     );
+    session.looped = Some(session.looped.take().unwrap().tool_search(factory));
     let step = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let tool = Arc::clone(&x);
-    harness.looped = Some(harness.looped.take().unwrap().reloader(Arc::new(move |_| {
-        let at = step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let mut next = prepared();
-        next.tools.push((
-            "fx".into(),
-            Arc::new(Deferred {
-                inner: Arc::clone(&tool),
-            }) as Arc<dyn contract::tool::Tool>,
-        ));
-        // Reload 1 turns `x` off by key, reload 2 by server, and
-        // reload 3 removes both, so `x` defers again.
-        next.prompt.deferrals = match at {
-            0 => r#loop::Deferrals {
-                tools: [("x".to_owned(), false)].into_iter().collect(),
-                full_servers: std::collections::BTreeSet::new(),
-            },
-            1 => r#loop::Deferrals {
-                tools: std::collections::BTreeMap::new(),
-                full_servers: ["fx".to_owned()].into_iter().collect(),
-            },
-            _ => r#loop::Deferrals::default(),
-        };
-        Ok(next)
-    })));
+    attach(
+        &mut session,
+        Arc::new(move |_| {
+            let at = step.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut next = prepared();
+            next.tools.push(("fx".into(), deferred(Arc::clone(&tool))));
+            // Reload 1 turns `x` off by key, reload 2 by server, and
+            // reload 3 removes both, so `x` defers again.
+            next.prompt.deferrals = match at {
+                0 => r#loop::Deferrals {
+                    tools: [("x".to_owned(), false)].into_iter().collect(),
+                    full_servers: std::collections::BTreeSet::new(),
+                },
+                1 => r#loop::Deferrals {
+                    tools: std::collections::BTreeMap::new(),
+                    full_servers: ["fx".to_owned()].into_iter().collect(),
+                },
+                _ => r#loop::Deferrals::default(),
+            };
+            Ok(next)
+        }),
+    );
     let deferred_of = |lines: &[contract::Envelope], name: &str| {
         of_kind(lines, "preamble_built")[0].payload["tools"]
             .as_array()
@@ -247,12 +81,13 @@ fn reload_replaces_the_deferrals_whole() {
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>()
     };
-    harness
+    session
         .inbox
         .send(Delivery::Reload(support::ignore()))
         .unwrap();
-    harness.turn("one");
-    let lines = harness.lines();
+    session.inbox.send(delivery("one")).unwrap();
+    session.turn();
+    let lines = session.lines();
     assert_kinds(
         &lines,
         &[
@@ -271,12 +106,13 @@ fn reload_replaces_the_deferrals_whole() {
     );
     assert!(!deferred_of(&lines, "x"));
     assert!(!declared(&lines).contains(&"tool_search".to_owned()));
-    harness
+    session
         .inbox
         .send(Delivery::Reload(support::ignore()))
         .unwrap();
-    harness.turn("two");
-    let lines = harness.lines();
+    session.inbox.send(delivery("two")).unwrap();
+    session.turn();
+    let lines = session.lines();
     assert_kinds(
         &lines,
         &[
@@ -293,12 +129,13 @@ fn reload_replaces_the_deferrals_whole() {
     );
     assert!(!deferred_of(&lines, "x"));
     assert!(!declared(&lines).contains(&"tool_search".to_owned()));
-    harness
+    session
         .inbox
         .send(Delivery::Reload(support::ignore()))
         .unwrap();
-    harness.turn("three");
-    let lines = harness.lines();
+    session.inbox.send(delivery("three")).unwrap();
+    session.turn();
+    let lines = session.lines();
     assert_kinds(
         &lines,
         &[

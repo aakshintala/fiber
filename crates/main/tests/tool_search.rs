@@ -3,7 +3,7 @@
 //! its own process group with its own `FIBER_HOME`, holding a provider on
 //! `openai-responses` with `deferred_tools` on at the fake server unless the
 //! case says otherwise, and a configured fixture server. Every wait runs
-//! under the test's [`Deadline`] with the setup's [`Watchdog`] beside it.
+//! under the test's `Deadline` with the test's [`Watchdog`] beside it.
 //! Every case asserts the full ordered list of event kinds.
 #![allow(
     clippy::unwrap_used,
@@ -17,101 +17,33 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::Child;
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, Run, Socket, first_line, function_call, group_alive, hello,
-    is_status, kinds, read_kinds, spawn_watched, stream, until, until_close,
+    HELLO_KINDS, KillGroup, Setup, Socket, StdoutRun, first_line, function_call, group_alive,
+    hello, kinds, read_kinds, run_to_exit, spawn_watched, stream, until, until_close, write_json,
 };
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-    /// Kills every process whose command line names the test's root,
-    /// and their groups, when the setup drops: every fixture server runs
-    /// with its directory under the root as its argument, so a hang or a
-    /// failing exit still kills the server and its grandchild.
-    #[allow(dead_code, reason = "held only for its drop")]
-    guard: Watchdog,
-}
-
 impl Setup {
-    fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fa");
+    /// Arms the watchdog killing every process whose command line names
+    /// the test's root, and their groups: every fixture server runs with
+    /// its directory under the root as its argument, so a hang or a
+    /// failing exit still kills the server and its grandchild. Each test
+    /// holds one beside the shared setup, which carries no guard itself.
+    fn guard(&self) -> Watchdog {
         // Armed before any start or run: the root is known here, while
         // no server pid is.
-        let guard = Watchdog::matching(&root.path().display().to_string());
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self {
-            root,
-            deadline,
-            guard,
-        }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model. `deferred`
-    /// decides whether the model's data sets `deferred_tools`.
-    fn provider_with_deferral(&self, server: &ProviderServer, deferred: bool) {
-        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000});
-        if deferred {
-            model["deferred_tools"] = json!(true);
-        }
-        let source = self.root.path().join("src");
-        write(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
-        );
-        write(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [model]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
-    }
-
-    /// Installs the provider with `deferred_tools` on.
-    fn provider(&self, server: &ProviderServer) {
-        self.provider_with_deferral(server, true);
+        Watchdog::matching(&self.root.path().display().to_string())
     }
 
     /// Adds `servers` under `mcp.servers` and `tools` under `tools` to the
     /// global configuration, keeping the configured model.
     fn configure_with(&self, servers: &Value, tools: &Value) {
-        write(
+        write_json(
             &self.home().join("config.json"),
             &json!({"model": "fake/m", "tools": tools, "mcp": {"servers": servers}}),
         );
@@ -122,87 +54,28 @@ impl Setup {
     fn fixture(&self, tools: &Value, calls: &[(&str, &str)]) -> PathBuf {
         let dir = self.root.path().join("fx");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("tools.json"), tools.to_string()).unwrap();
+        write_json(&dir.join("tools.json"), tools);
         for (name, body) in calls {
             fs::write(dir.join(name), body).unwrap();
         }
         dir
     }
 
-    /// One `fiber` invocation with `args`: the environment every test
-    /// runs under. Stdio is piped; the caller decides how to wait.
-    fn fiber(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.workspace())
-            .env_clear()
-            .envs(fakes::check_run())
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command
-    }
-
-    fn session_socket(&self, id: &str) -> PathBuf {
-        self.home().join("run").join(id)
-    }
-
     /// Runs `fiber ask` in its own process group, waits for it under the
-    /// test's [`Deadline`], and asserts that nothing it started is left in the
+    /// test's `Deadline`, and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
-    /// The fixture server runs detached from Fiber's group; the setup's
-    /// guard kills it and its grandchild with the setup when the test
-    /// ends, after the asserts below.
+    /// The fixture server runs detached from Fiber's group; the test's
+    /// guard kills it and its grandchild with the test when it ends,
+    /// after the asserts below.
     #[track_caller]
-    fn run(&self, args: &[&str]) -> Run {
-        let (child, watchdog) = spawn_watched(&mut self.fiber(args));
-        let group = child.id();
-        let guard = KillGroup(group);
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match self.deadline.recv(&finished) {
-            Ok(output) => output.unwrap(),
-            Err(_) => support::expired(
-                self.deadline,
-                group,
-                &finished,
-                &format!("`fiber {}` to exit", args.join(" ")),
-            ),
-        };
-        assert!(
-            fakes::group_empties(group, self.deadline),
-            "`fiber` left a process in its group behind"
-        );
-        std::mem::forget(guard);
-        watchdog.stand_down(self.deadline.cleanup_phase());
-        Run::new(output)
-    }
-}
-
-fn write(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
-}
-
-impl Run {
-    fn new(output: Output) -> Self {
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines = stdout
-            .lines()
-            .filter(|l| !is_status(l))
-            .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-            .collect();
-        Self {
-            code: output.status.code(),
-            lines,
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+    fn run(&self, args: &[&str]) -> StdoutRun {
+        run_to_exit(
+            self.deadline,
+            &format!("`fiber {}` to exit", args.join(" ")),
+            self.fiber(args),
+        )
+        .into()
     }
 }
 
@@ -313,6 +186,7 @@ fn search_then_call_kinds() -> Vec<&'static str> {
 #[test]
 fn a_deferred_search_loads_before_the_call_it_loads() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(
         &json!([echo_tool()]),
         &[(
@@ -330,7 +204,7 @@ fn a_deferred_search_loads_before_the_call_it_loads() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_deferral(&server, true);
     configure_fx(&setup, &dir);
 
     let run = setup.run(&["ask", "echo hi"]);
@@ -385,9 +259,10 @@ fn a_deferred_search_loads_before_the_call_it_loads() {
 #[test]
 fn a_declare_in_full_server_declares_whole_with_no_search() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_deferral(&server, true);
     let mut fx = fx_server(&dir);
     fx["declare_in_full"] = json!(true);
     setup.configure_with(&json!({"fx": fx}), &json!({}));
@@ -419,6 +294,7 @@ fn a_declare_in_full_server_declares_whole_with_no_search() {
 #[test]
 fn without_deferred_tools_everything_is_full_with_no_search() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_deferral(&server, false);
@@ -445,9 +321,10 @@ fn without_deferred_tools_everything_is_full_with_no_search() {
 #[test]
 fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_deferral(&server, true);
     setup.configure_with(
         &json!({"fx": fx_server(&dir)}),
         &json!({"mcp__fx__echo": {"deferred": false}}),
@@ -480,9 +357,10 @@ fn an_echo_deferral_key_sends_echo_whole_with_no_search() {
 #[test]
 fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_deferral(&server, true);
     setup.configure_with(
         &json!({"fx": fx_server(&dir)}),
         &json!({"tool_search": {"deferred": false}}),
@@ -518,9 +396,10 @@ fn a_tool_search_deferral_key_logs_one_notice_and_declares() {
 #[test]
 fn a_reload_applies_an_echo_deferral_key() {
     let setup = Setup::new();
+    let _guard = setup.guard();
     let dir = setup.fixture(&json!([echo_tool()]), &[]);
     let server = ProviderServer::start([hello(), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_deferral(&server, true);
     configure_fx(&setup, &dir);
 
     let mut session = Session::start(setup);
@@ -590,7 +469,8 @@ fn a_reload_applies_an_echo_deferral_key() {
     session.finish();
 }
 
-/// One `fiber session` under the test's [`Deadline`]: prompted, reloaded
+// debt: this session driver duplicates crates/main/tests/reload.rs's `Session` (round-2 P3); upgrade trigger: one shared binary-session driver covering both files, which needs `reload.rs` outside this part's fence.
+/// One `fiber session` under the test's `Deadline`: prompted, reloaded
 /// and asked for its rows, then closed. The stream's kinds must run the
 /// full expected list: startup, the first turn (a search, a call, hello),
 /// the rows answer, the reload, the second turn (hello), the rows answer

@@ -389,6 +389,68 @@ impl Tool for TestTool {
     }
 }
 
+/// A provider that defers, delegating every call to the scripted provider
+/// that records the requests. Reload tests wrap their scripted provider in
+/// this to drive deferral rebuilds through [`Session::wrapped`].
+struct Deferring {
+    inner: Arc<ScriptedProvider>,
+}
+
+impl Provider for Deferring {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        self.inner.call(request)
+    }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
+        self.inner.cost_lookup()
+    }
+
+    fn defers(&self) -> bool {
+        true
+    }
+}
+
+/// Wraps `inner` in the deferring provider above.
+pub(crate) fn deferring(inner: Arc<ScriptedProvider>) -> Arc<dyn Provider> {
+    Arc::new(Deferring { inner })
+}
+
+/// A registered tool with its own deferral flag set, delegating every call
+/// to the inner test tool. Reload tests register this to drive the
+/// preamble's deferred set through the reloader.
+struct Deferred {
+    inner: Arc<TestTool>,
+}
+
+impl Tool for Deferred {
+    fn definition(&self) -> ToolDefinition {
+        let mut definition = self.inner.definition();
+        definition.deferred = true;
+        definition
+    }
+
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        self.inner.effects(arguments)
+    }
+
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
+        self.inner.run(arguments, cancel, emit)
+    }
+
+    fn bound(&self) -> Bound {
+        self.inner.bound()
+    }
+}
+
+/// Wraps `inner` as a deferred tool.
+pub(crate) fn deferred(inner: Arc<TestTool>) -> Arc<dyn Tool> {
+    Arc::new(Deferred { inner })
+}
+
 /// A tool named `name` whose calls overwrite `target` with `content`,
 /// declaring the absolute path. A stand-in for the `write` and `edit`
 /// tools in section-file tests.
@@ -726,6 +788,14 @@ impl Provider for Seam {
 
     fn warms(&self, request: &ModelRequest) -> bool {
         self.inner.warms(request)
+    }
+
+    /// Passes the deferral probe through like [`Seam::warms`]: every
+    /// existing inner answers it false, so this changes nothing for them,
+    /// and a deferring inner wrapped for [`Session::wrapped`] stays
+    /// deferring at the loop.
+    fn defers(&self) -> bool {
+        self.inner.defers()
     }
 }
 
