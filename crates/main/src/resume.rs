@@ -667,7 +667,7 @@ fn resumed_session(
         cancel,
         &diag,
         &current,
-        |inbox, cancel| {
+        |inbox, cancel, slot| {
             crate::finish(
                 Loop::resume(
                     r#loop::Session {
@@ -724,6 +724,7 @@ fn resumed_session(
                 limits,
                 retry,
                 cancel,
+                slot,
             )
             .map(|()| None)
         },

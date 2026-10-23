@@ -121,6 +121,11 @@ pub struct Resumed {
     /// runs in, when Fiber created one for it or for the session it
     /// continues (`docs/events.md`, `session_started`).
     pub worktree: Option<contract::shapes::Worktree>,
+    /// What an earlier process left open in the own segment: the requests
+    /// and extension asks `fiber_exited` still reports. The ledger stays
+    /// empty: each process reports its own calls (`docs/events.md`,
+    /// `fiber_exited`).
+    pub(crate) exit: crate::Summary,
 }
 
 /// Folds the log in the session directory `dir` over its chain, root
@@ -319,6 +324,7 @@ impl Loop {
             fired,
             settings,
             model: recorded_model,
+            exit,
             ..
         } = resumed;
         let mut lines = crate::history::read_window(&session.log, window, end)?;
@@ -406,6 +412,7 @@ impl Loop {
                 fired,
                 context,
                 ledger,
+                summary: exit,
                 carry,
                 chosen: thinking.and_then(|level| level.parse().ok()),
                 is_delegate,

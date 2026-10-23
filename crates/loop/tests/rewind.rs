@@ -26,7 +26,7 @@ use contract::events::{
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, StandingRules};
-use contract::shapes::{ContentPart, Origin, Point, Sender, Worktree};
+use contract::shapes::{ContentPart, Failure, Origin, Point, Sender, Worktree};
 use contract::tool::Tool;
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
 use fakes::Deadline;
@@ -2421,10 +2421,31 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     );
     // The process ends with nothing more written.
     let count = log::read(&session.dir).unwrap().len();
-    session.looped.take().unwrap().run().unwrap();
+    let ran = session.looped.take().unwrap().run();
+    ran.result.unwrap();
     let after = log::read(&session.dir).unwrap();
     assert_eq!(after.len(), count, "`run` writes nothing after `rewound`");
     assert_eq!(after.last().unwrap().kind, "rewound");
+    // The exit knows the session rewound from the run's own summary: it
+    // writes nothing and reports the run's error.
+    let exited = r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), false, None).unwrap();
+    assert_eq!((exited.code, exited.error), (0, None));
+    let failure = Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "The run failed.".into(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let exited = r#loop::fiber_exited(
+        &session.log,
+        &ran.summary,
+        Err(failure.clone()),
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!((exited.code, exited.error), (1, Some(failure)));
+    assert_eq!(log::read(&session.dir).unwrap().len(), count);
 }
 
 #[test]
@@ -2463,7 +2484,7 @@ fn a_message_after_rewound_is_refused() {
         "admission closed under the ack, with the send never running"
     );
     // The process ends with nothing more written, and admission stays shut.
-    session.looped.take().unwrap().run().unwrap();
+    session.looped.take().unwrap().run().result.unwrap();
     let mut called = false;
     let done = admission.admit(|| {
         called = true;

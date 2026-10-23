@@ -88,6 +88,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         naming: crate::naming::Naming::default(),
         fired: crate::quota_notice::Fired::default(),
         preamble: None,
+        exit: crate::Summary::default(),
     };
     let mut pass = Pass {
         own_segment: false,
