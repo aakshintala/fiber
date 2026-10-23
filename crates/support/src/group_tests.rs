@@ -90,6 +90,19 @@ fn signal_kill_ends_a_live_group() {
 }
 
 #[test]
+fn a_killed_child_keeps_its_group_alive_until_reaped() {
+    let child = sleep();
+    let pgid = child.id();
+    let watchdog = Watchdog::group(pgid);
+
+    assert!(signal(pgid, Signal::KILL).is_ok(), "the kill landed");
+    assert!(alive(pgid), "the killed, unreaped group still probes live");
+    reap(child);
+    assert!(!alive(pgid), "the reaped group probes empty");
+    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+}
+
+#[test]
 fn signal_to_a_gone_group_is_ok() {
     assert!(
         signal(UNUSED, Signal::TERM).is_ok(),

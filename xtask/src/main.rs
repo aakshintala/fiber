@@ -297,9 +297,13 @@ fn run(args: &[String]) -> Result<bool, String> {
             "no crate but tui and main links ratatui or crossterm",
         ),
         "preserve-order" => {
-            // The whole workspace build at once, every target and feature:
-            // Cargo features apply to the whole build, so one crate
-            // enabling preserve_order anywhere poisons it everywhere.
+            // What ships in a Fiber binary, over every target and feature:
+            // Cargo unifies features across every crate linked into one
+            // binary, so one normal dependency enabling preserve_order
+            // anywhere poisons it everywhere. A build script is resolved
+            // and compiled separately, so its serde_json never serialises
+            // a request: `-e features,no-build` leaves build edges out of
+            // the tree.
             // research/tui-prototype is not a workspace member, so its own
             // preserve_order never reaches this tree.
             let tree = output(
@@ -311,7 +315,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                     "all",
                     "--all-features",
                     "-e",
-                    "features",
+                    "features,no-build",
                     "--prefix",
                     "depth",
                     "-i",

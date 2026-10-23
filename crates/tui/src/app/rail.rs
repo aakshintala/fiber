@@ -11,14 +11,36 @@ use serde_json::{Map, Value, json};
 use super::{App, Effect, Phase, mint};
 use crate::focus::Area;
 use crate::home::{Left, Row, State};
-use crate::keys::{Event, Key, default_event};
-use crate::keyset::Context;
+use crate::keys::{Edit, Event, Key, default_event};
+use crate::keyset::{Context, Resolved};
 use crate::stroke::{Code, Mods, Stroke};
 use crate::view::rail::{CARD_ROWS, rows};
 
 /// The foot row while the rail holds focus (`docs/tui.md`, "The rail").
-pub(crate) const RAIL_HINT: &str =
-    "← full screen · ↑↓ move · Enter switch · → or Esc back to the session · ⌥1–9 jump";
+pub(crate) const RAIL_HINT: &str = "← full screen · ↑↓ move · Enter switch · Delete stop · → or Esc back to the session · ⌥1–9 jump";
+
+/// Whether `stroke` types into the input box: a character with no
+/// modifier or only Shift, Space, or Backspace.
+fn types_text(stroke: &Stroke) -> bool {
+    match stroke.code {
+        Code::Char(_) => stroke.mods == Mods::NONE || stroke.mods == Mods::SHIFT,
+        Code::Space | Code::Backspace => true,
+        Code::Enter
+        | Code::Esc
+        | Code::Tab
+        | Code::Delete
+        | Code::Insert
+        | Code::Home
+        | Code::End
+        | Code::PageUp
+        | Code::PageDown
+        | Code::Up
+        | Code::Down
+        | Code::Left
+        | Code::Right
+        | Code::F(_) => false,
+    }
+}
 
 /// A rail item that does something when clicked (`docs/tui.md`, "The
 /// rail").
@@ -338,6 +360,20 @@ impl App {
                 return Some(Effect::None);
             }
         }
+        // A stroke that types nothing and resolves as Delete in the
+        // conversation, `delete_session`'s context, asks to stop the
+        // focused card. A typing stroke goes to the draft, so a rebound
+        // character types and Backspace edits; Delete with the box
+        // focused never gets here.
+        if self.rail_state.focus.is_some()
+            && !types_text(stroke)
+            && self.keys().resolve(stroke, Context::Conversation) == Resolved::Edit(Edit::Delete)
+        {
+            let effect = self.stop_focused_card();
+            self.edited();
+            self.settle();
+            return Some(effect);
+        }
         // Shift+Tab walks the walk back ahead of a rebound `navigate`,
         // as the plain keys do for `focus_rail`.
         if self.rail_state.focus.is_some()
@@ -388,6 +424,15 @@ impl App {
             return Some(self.leave());
         }
         None
+    }
+
+    /// Delete on the focused stop: the stop question for a card, nothing
+    /// for a crashed card, a "+", an "N ✓" or a ✕.
+    fn stop_focused_card(&mut self) -> Effect {
+        match self.rail_state.focus {
+            Some(Spot::Card(key)) => self.ask_stop(key),
+            Some(Spot::Dismiss(_) | Spot::Start(_) | Spot::Done(_)) | None => Effect::None,
+        }
     }
 
     /// The rail's keys (`docs/tui.md`, "Bindings"), ahead of every

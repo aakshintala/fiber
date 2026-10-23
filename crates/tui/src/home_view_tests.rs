@@ -957,7 +957,7 @@ fn the_box_sits_on_the_last_rows_above_the_foot() {
 #[test]
 fn the_foot_draws_bold_keys_dim_labels_centred_and_cut() {
     use ratatui::style::Modifier;
-    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit";
+    let foot = "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete stops a live one, deletes an exited one · F1 the key map · Ctrl+C twice to quit";
     // Wide: the whole foot fits, centred, each key bold and the rest dim.
     let app = home(160, 48);
     let area = Rect::new(0, 0, 160, 48);
