@@ -756,8 +756,11 @@ a click on it returns too. The views are:
   Each source is a bold heading ("Built-in", "MCP · linear", "Extension ·
   notes"), then one row per tool: "<name> · full · ~1.2k", or "deferred",
   then " · this project " and its switch and " · everywhere " and its switch.
-  A switch reads "[on]" bold or "[off]" dim. The last row is "a change
-  rebuilds the cache (~84k tokens · $0.31) on reload", dim.
+  A switch reads "[on]" bold or "[off]" dim. On the focused row, a bold "›"
+  marks the focused switch, and ← and → move it between the two. The mark
+  takes the place of the space before the switch, so columns do not move. It
+  shows on the focused row only. The last row is "a change rebuilds the
+  cache (~84k tokens · $0.31) on reload", dim.
 - **The MCP view,** `/mcp`: one row per configured server: its name, where it
   is declared (`global`, `project` or this repository), its state and its
   tool count. The state is `connecting` for a server never started this
