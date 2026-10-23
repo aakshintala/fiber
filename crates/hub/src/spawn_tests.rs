@@ -146,13 +146,42 @@ fn drain_keeps_the_last_fiber_exited_line() {
     let child = printing(&[
         exited_line("no_model", "No model is configured."),
         exited_line("invalid_request", "The request was bad."),
-        "noise".to_owned(),
     ]);
     let (_, state) = drained(child);
     assert!(support::lock(&state.0).exited);
     let failure = failure_of(&state).expect("the last verdict");
     assert_eq!(failure.code, ErrorCode::InvalidRequest);
     assert_eq!(failure.message, "The request was bad.");
+}
+
+#[test]
+fn drain_ignores_a_fiber_exited_line_that_is_not_last() {
+    let child = printing(&[
+        exited_line("no_model", "No model is configured."),
+        "noise".to_owned(),
+    ]);
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
+}
+
+#[test]
+fn drain_ignores_a_malformed_last_line() {
+    let child = printing(&[
+        exited_line("no_model", "No model is configured."),
+        "{\"kind\":\"fiber_exited\"".to_owned(),
+    ]);
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
+}
+
+#[test]
+fn drain_with_an_empty_stream_sets_no_failure() {
+    let child = printing(&[]);
+    let (_, state) = drained(child);
+    assert!(support::lock(&state.0).exited);
+    assert!(failure_of(&state).is_none());
 }
 
 #[test]
