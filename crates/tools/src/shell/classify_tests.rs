@@ -356,24 +356,28 @@ fn the_longest_built_in_path_wins() {
 
 #[test]
 fn an_assignment_after_the_name_is_an_operand() {
-    // `ls FOO=1` reads the `FOO=1` operand; a leading assignment
-    // executes, whatever its name (#1497 task 1.3).
+    // `ls FOO=1` reads the `FOO=1` operand; a leading assignment reads
+    // only for a name on the fixed list (#1497).
     assert_eq!(
         classified("ls FOO=1").declared.paths,
         Some(vec!["/work/FOO=1".to_owned()])
     );
     assert_closed("FOO=1 ls");
-    assert_closed("LC_ALL=C git status");
+    let status = classified("LC_ALL=C git status");
+    assert_eq!(status.declared.effects, vec![Effect::Reads]);
+    assert!(status.declared.reversible);
+    assert!(status.declared.paths.is_none());
 }
 
 #[test]
-fn assignment_prefixes_execute_despite_takes_value_flags() {
-    // No built-in entry blesses an assignment name (#1497 task 1.3): not
-    // `LC_ALL`, and not a bare letter matching a takes-value flag such
-    // as `head -n`. `docs/tools.md`, "Shell", "Effects" promises the
-    // call declares `executes` with no paths.
+fn only_listed_assignment_names_read() {
+    // A leading assignment reads only for a name on the fixed list
+    // (#1497): `LC_ALL` reads, while `FOO`, a bare letter matching a
+    // takes-value flag such as `head -n`, and any other name execute.
+    // `docs/tools.md`, "Shell", "Effects" promises the refused call
+    // declares `executes` with no paths.
+    assert_reads("LC_ALL=C git status");
     assert_closed("FOO=1 git status");
-    assert_closed("LC_ALL=C git status");
     assert_closed("n=1 head -5");
 }
 

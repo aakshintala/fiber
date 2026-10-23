@@ -2767,7 +2767,12 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
     let workspace = dir.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
     let shell = Shell::new(workspace, FakeClock::new());
-    for command in ["git status", "git stash list", "git branch --show-current"] {
+    for command in [
+        "git status",
+        "git stash list",
+        "git branch --show-current",
+        "LC_ALL=C git status",
+    ] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -2778,13 +2783,8 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
     }
     // A writing form executes: `git init` creates or updates `.git` state,
     // `git push --dry-run` reaches the remote, and a leading assignment
-    // executes whatever its name (#1497 task 1.3).
-    for command in [
-        "git init",
-        "git push --dry-run",
-        "LC_ALL=C git status",
-        "FOO=1 ls",
-    ] {
+    // with an unlisted name (#1497).
+    for command in ["git init", "git push --dry-run", "FOO=1 ls"] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -2858,6 +2858,57 @@ fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
         "cd -",
         "cd -P",
         "cd a b",
+        "timeout 5 cd sub",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
+fn a_shell_reads_wrapper_calls_with_paths_from_the_inner_command() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-wrap");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let file = workspace.join("f").to_str().unwrap().to_owned();
+    // A wrapper is classified by the command it runs: an assignment for
+    // a listed name, `env` with listed assignments, and `timeout` with a
+    // duration all read, declaring the inner command's paths. A
+    // path-reading `xargs` target reads only on proven static stdin, so
+    // names from command output stay reviewed (fail-closed).
+    for command in ["LC_ALL=C cat f", "env LC_ALL=C cat f", "timeout 5 cat f"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert!(effects.declared.reversible, "{command}");
+    }
+    assert_eq!(
+        effects_of(&shell, "LC_ALL=C cat f").declared.paths,
+        Some(vec![file.clone()])
+    );
+    // Any other assignment name, a flag of `env`'s own, a refused
+    // duration, an `xargs` target outside its six commands, and an
+    // `xargs` reader fed names from command output execute.
+    for command in [
+        "FOO=1 cat f",
+        "env PATH=/x cat f",
+        "env -i cat f",
+        "timeout -k 1 5 cat f",
+        "timeout 5x cat f",
+        "xargs rm f",
+        "xargs /usr/bin/wc -l f",
+        "xargs grep -R x f",
+        "git ls-files | xargs wc -l",
     ] {
         let effects = effects_of(&shell, command);
         assert_eq!(
