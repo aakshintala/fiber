@@ -5,8 +5,11 @@
 
 use super::App;
 use crate::catalogue::{Catalogue, Refresh};
+use crate::configure::{ConfigureError, ProviderInstall};
 use crate::keys::{Edit, Key};
-use crate::model_picker::{Choice, Mode, command_args, saves, scoped_save};
+use crate::model_picker::{
+    Choice, InstallStart, Landed, Mode, Progress, command_args, saves, scoped_save,
+};
 use crate::swapped::{Spot, about};
 
 /// The thinking levels `/thinking` takes, in order.
@@ -161,10 +164,15 @@ impl App {
                 self.model_picker.select_frame_row(at);
                 super::Effect::None
             }
-            Spot::Cell(row, cell) => match self.model_picker.click_cell(row, cell) {
-                Some(choice) => self.choose(choice),
-                None => super::Effect::None,
-            },
+            Spot::Cell(row, cell) => {
+                if let Some(provider) = self.model_picker.install_click(row, cell) {
+                    return self.start_install(provider);
+                }
+                match self.model_picker.click_cell(row, cell) {
+                    Some(choice) => self.choose(choice),
+                    None => super::Effect::None,
+                }
+            }
             // The picker draws no switches, rule rows or item rows.
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => super::Effect::None,
         }
@@ -762,14 +770,114 @@ impl App {
         } else {
             None
         };
-        self.model_picker.view(&crate::model_picker::PickerCtx {
+        let view = self.model_picker.view(&crate::model_picker::PickerCtx {
             usage: self.usage_on_screen(),
             wall_ms: self.rail_state().wall(),
             spinner: self.motion().spinner(),
             current: on_screen,
             home_only,
-        })
+        })?;
+        // The spinner of a running install moves between inputs.
+        if view
+            .installs
+            .iter()
+            .any(|row| row.progress == Some(Progress::Installing))
+        {
+            self.motion().ask_frame();
+        }
+        Some(view)
     }
+    /// The install the loop has not started yet, once.
+    pub(crate) fn take_install_start(&mut self) -> Option<InstallStart> {
+        self.model_picker.installs.take_start()
+    }
+
+    /// Starts installing `provider`: choosing its row is the approval, so
+    /// nothing asks. One install runs at a time, so a choice while one
+    /// runs does nothing. The row fails at once, with no job, when there
+    /// is no seam, no hub link on a remote terminal (a dispatched call
+    /// would wait for the link with no end), or no workspace to install
+    /// into.
+    fn start_install(&mut self, provider: String) -> super::Effect {
+        if self.model_picker.installs.busy() {
+            return super::Effect::None;
+        }
+        let Some(seam) = self.configure_seam() else {
+            self.model_picker.installs.fail(
+                &provider,
+                "Installing is not available in this terminal.".to_owned(),
+            );
+            return super::Effect::None;
+        };
+        let remote = self.remote();
+        if remote.is_some() && !self.outbox.is_up() {
+            self.model_picker
+                .installs
+                .fail(&provider, "The hub is not connected.".to_owned());
+            return super::Effect::None;
+        }
+        let workspace = match (self.workspace(), remote) {
+            (Some(workspace), _) => workspace,
+            // With no local workspace the hub-global parent stands in for
+            // it, resolved here on the loop thread as `write_global` does.
+            (None, Some(remote)) => match remote.global_parent() {
+                Ok(parent) => parent,
+                Err(error) => {
+                    self.model_picker.installs.fail(&provider, error.message);
+                    return super::Effect::None;
+                }
+            },
+            (None, None) => {
+                self.model_picker
+                    .installs
+                    .fail(&provider, "No workspace to install into.".to_owned());
+                return super::Effect::None;
+            }
+        };
+        let _ = self.model_picker.installs.start(InstallStart {
+            provider,
+            workspace,
+            seam,
+        });
+        super::Effect::None
+    }
+
+    /// Folds an install's result. With the picker not showing its rows a
+    /// failure is a notice under the error's own code, and a success
+    /// pushes its credential lines as notices.
+    pub(crate) fn on_install(
+        &mut self,
+        provider: String,
+        result: Result<ProviderInstall, ConfigureError>,
+    ) {
+        let code = result
+            .as_ref()
+            .err()
+            .map(|error| crate::format::code(&error.code))
+            .filter(|code| !code.is_empty())
+            .unwrap_or_else(|| "io_failed".to_owned());
+        match self.model_picker.land_install(provider, result) {
+            Landed::Installed { notices } => {
+                for (code, text) in notices {
+                    self.push_notice(code, text);
+                }
+            }
+            Landed::Notice(text) => self.push_notice(&code, text),
+            Landed::Shown | Landed::Ignored => {}
+        }
+    }
+
+    /// Whether a provider installs on the hub now. The install holds the
+    /// terminal's one hub connection, so the config views' asks wait
+    /// behind it: they are refused instead.
+    pub(in crate::app) fn installing(&self) -> bool {
+        self.model_picker.installs.busy() && self.remote().is_some()
+    }
+
+    /// The refusal the config views give while a provider installs.
+    pub(in crate::app) const INSTALLING_TEXT: &str =
+        "a provider is installing; try again when it finishes";
+
     /// Whether the model picker is open.
     pub(crate) fn model_picker_open(&self) -> bool {
         self.model_picker.is_open()
@@ -848,6 +956,11 @@ impl App {
                 if self.model_picker.is_scope() {
                     self.model_picker.toggle_mark();
                     return Some(super::Effect::None);
+                }
+                // A focused not-installed row installs: choosing it is the
+                // approval.
+                if let Some(provider) = self.model_picker.install_target() {
+                    return Some(self.start_install(provider));
                 }
                 Some(match self.model_picker.choice(false) {
                     Some(choice) => self.choose(choice),
@@ -940,3 +1053,7 @@ pub(crate) fn canonical_thinking_key(reference: &str) -> String {
 #[cfg(test)]
 #[path = "model_picker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "model_picker_install_tests.rs"]
+mod install_tests;
