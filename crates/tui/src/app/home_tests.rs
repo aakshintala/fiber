@@ -3062,10 +3062,11 @@ fn backspace_with_focus_on_another_stop_is_still_swallowed() {
     let mut app = home();
     two_rows(&mut app);
     drawn(&mut app);
-    app.focus = Some(crate::mouse::TargetId::Home(Spot::Entry(keys(&app)[0])));
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::Workspace));
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
+    assert!(!app.quit_open());
     assert_eq!(
         foot(&app),
         "Enter opens the focused session, or starts one from the box · ↑↓ move · Delete deletes an exited one · F1 the key map · Ctrl+C twice to quit"

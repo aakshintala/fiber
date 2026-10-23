@@ -66,15 +66,27 @@ pub(super) enum Prompt {
         /// Sessions is `sessions.len()`.
         counts: (usize, usize),
     },
+    /// Asking to stop one live session: Enter sends it `close` with
+    /// `now`, Esc cancels. It holds what the question drew when it
+    /// opened, and the overlay never live-updates.
+    Stop {
+        id: SessionId,
+        /// The session's name, or its id without one.
+        name: String,
+        /// Whether the session was working when the question opened.
+        working: bool,
+        /// Whether the session was open elsewhere when it opened.
+        elsewhere: bool,
+    },
 }
 
 impl Prompt {
-    /// The session the question asks about; none for the import offer
-    /// or quitting.
+    /// The session the delete question asks about; none for the import
+    /// offer, quitting, or stopping, whose answers never clear a delete.
     fn id(&self) -> Option<&SessionId> {
         match self {
             Prompt::Delete { id, .. } => Some(id),
-            Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } => None,
+            Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. } => None,
         }
     }
 }
@@ -365,7 +377,10 @@ impl App {
             .as_ref()
             .and_then(|home| match &home.questions.prompt {
                 Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-                Some(Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. }) | None => None,
+                Some(
+                    Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. },
+                )
+                | None => None,
             });
         let Some((id, expect)) = ask else {
             return Effect::None;
