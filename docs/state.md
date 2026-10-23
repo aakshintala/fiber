@@ -214,7 +214,10 @@ message, thread name and backtrace, named by the process id instead when the
 process has no session id, written by the panic hook before the
 process aborts (`docs/code-quality.md`, "Panics"). A report describes a bug
 in Fiber, not a session, so nothing reads one to decide anything, and
-deleting them is always safe. They are pruned with the diagnostic logs.
+deleting them is always safe. `fiber doctor` names the newest one, and
+`fiber feedback` copies a session's reports into its report with the panic
+message left out ("What feedback reads" below). They are pruned with the diagnostic
+logs.
 
 **Diagnostic logs.** `logs/` records what happens outside any session, where
 no session log could hold it. It is always on, because the failures it exists
@@ -414,13 +417,42 @@ or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
 with its code, never its content.
 
+**What feedback reads.** `fiber feedback` and `/feedback` copy content-free
+lines from `logs/` and `crashes/` into the Diagnostics section of the report
+file, on the person's machine; the issue link never carries them. For the
+selected session they read `logs/session-<id>.log`, `logs/ask-<id>.log` and
+`logs/tui-<id>.log`, in that order, never a file named by process id or a
+delegate's, and `logs/hub.log.1` then `logs/hub.log`. A line is copied only
+when it is one JSON object with an integer `ts`, a `level` of `error`, `warn`,
+`info` or `debug`, the `process` of its file, and string `code` and `message`;
+a session file's line also names the selected session, and a hub line names it
+or names no session. Every `extension_log` line is left out, and so is any
+line that does not meet this. A hub line also needs a `ts` no later than now,
+and unless it names the selected session, no more than 24 hours old. Without a
+selected session, the report holds hub lines with no session id only.
+
+A report holds the newest 500 hub lines and the newest 2,000 session lines,
+oldest first, equal times in the order above. The session cap keeps every
+`error` and `warn` line before any other, and if those alone pass 2,000 it
+keeps their newest 2,000; the report then says how many earlier lines it left
+out, counting only lines that would otherwise have been copied. Both numbers
+were chosen, not measured. Each crash report named for the session is copied
+without a cap, as its first line, which names the thread and the source
+location, and the text after its last `stack backtrace:` line: the panic
+message is dropped, because it can hold anything. A report with no such line
+keeps only its first line. A session with no lines on this machine, such as
+one on a remote hub, still gets its id, how to export its log privately
+(`docs/invocation.md`, "Deleting and pruning") and the hub lines, with a notice
+that the machine has no diagnostic lines for it.
+
 **Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
 10 MiB, replacing any older one; its single writer makes the rename safe.
 Files in `logs/` and `crashes/` older than 30 days, and all but the newest 100
 in each, are deleted by `fiber sessions prune` and when the hub starts. These
 numbers were chosen, not measured. Fiber sends nothing from `logs/` anywhere
 ([ADR 0010](adr/0010-fiber-never-phones-home.md));
-`fiber doctor` reads it (`docs/invocation.md`, "Commands and flags").
+`fiber doctor` and `fiber feedback` read it (`docs/invocation.md`, "Commands and
+flags").
 
 **Worktrees.** Per project, `worktrees/<id>/`: the git worktree of a delegate
 started with `isolation: worktree`, of `fiber ask --worktree` or of the

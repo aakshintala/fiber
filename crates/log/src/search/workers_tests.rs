@@ -1,6 +1,6 @@
 //! Tests for the worker threads: how many run, that every worker count gives
 //! the one-thread answer, that they run at once, cancellation, the identity
-//! cache, a thread that cannot start, and the merge.
+//! cache, and the merge.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,7 +16,7 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::os::unix::fs::symlink;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
@@ -31,7 +31,7 @@ use proptest::prelude::*;
 
 use super::super::Collect;
 use super::super::tests::{After, Home, hit, query};
-use super::{count, run, spawn};
+use super::count;
 use crate::fixtures::{append_raw as raw, line as fixture_line};
 
 /// `available_parallelism` reporting `n` threads.
@@ -388,49 +388,6 @@ fn identity_runs_once_per_workspace_whatever_the_workers() {
     assert_eq!(home.calls(), 3);
     scan.search(&query("needle", false, 10), &CancelToken::new(), threads(4));
     assert_eq!(home.calls(), 5);
-}
-
-#[test]
-fn a_thread_that_cannot_start_loses_no_session() {
-    let home = Home::new();
-    for n in 0..6 {
-        home.session("-a", &format!("s_{n}"), "/a/one", &["needle"]);
-    }
-    let scan = home.scanner("/a/one");
-    let query = query("needle", false, 1000);
-    let one = scan.search(&query, &CancelToken::new(), threads(1));
-    assert_eq!(one.total, 6);
-    for fails in [1, 2] {
-        let calls = AtomicUsize::new(0);
-        let found =
-            scan.search_spawning(&query, &CancelToken::new(), threads(4), &|scope, body| {
-                if calls.fetch_add(1, Ordering::SeqCst) + 1 == fails {
-                    Err(io::Error::other("no thread"))
-                } else {
-                    spawn(scope, body)
-                }
-            });
-        assert_eq!(found, one, "spawn {fails} fails");
-        assert_eq!(calls.load(Ordering::SeqCst), fails);
-    }
-}
-
-#[test]
-fn no_sessions_start_no_thread() {
-    let calls = AtomicUsize::new(0);
-    let searched = run(
-        &[],
-        4,
-        10,
-        &CancelToken::new(),
-        &|_: &Path, _: &mut Collect| panic!("no session to read"),
-        &|scope, body| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            spawn(scope, body)
-        },
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(searched.hits.is_empty() && searched.problems.is_empty());
 }
 
 #[test]

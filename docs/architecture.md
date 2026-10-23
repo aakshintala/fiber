@@ -56,7 +56,7 @@ ephemeral event where it is display-only.
 | `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees, through `worktree` (`docs/delegates.md`). Reached only through the tool seam. |
 | `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`), and the connector that keeps each request's socket so another thread can close it ("Cancellation"), with the connect and idle limits (`docs/model-routing.md`, "When a model call fails"), and the hub client's websocket transport (`docs/invocation.md`, "What the hub speaks"). |
 | `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
-| `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
+| `extensions` | The runtime loads and hosts extension code, and wires what extensions register into the three seams; the installer installs, updates, removes and resolves extensions from a local path, git or a release; the approvals store keeps repository approvals for code a repository ships (`docs/extensions.md`, "Code a repository ships"); the model catalog holds the providers extensions register as data and the session's model chosen from them (`docs/model-routing.md`, "Naming a model") |
 | `routing` | Model routing: picks the model for a session or a switch, looks up its credential, starts its Lua provider, builds its `Provider`, and finds the reviewer. The one module that uses `config`, `extensions` and `provider` together. `main` calls it at startup and when a session switches models. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
@@ -252,6 +252,7 @@ Fiber uses blocking threads and no async runtime.
 | status | `session_status`: it folds the log as it is written into the session's status line (`docs/events.md`) | the session |
 | printer | the session's stdout, as a watcher: the `fiber ask` run's output, and the hub's drain of a hub-started session | the session |
 | one per blocking wait | one wait and nothing else: a command's exit, a web fetch's deadline, one Lua host call's HTTP request, a background refresh, a switch's credential read, the shutdown bound | the wait |
+| late-cost | Pending cost lookups: a call recorded without the vendor's own figure gets one lookup 30 seconds later on the session's clock (`docs/model-routing.md`, "Cost"). The thread calls `cost()` and hands any figure back; only the loop writes it | the session, from the first deferred lookup until the loop stops; an in-flight lookup may finish after the loop stops |
 
 A client is a reader and a writer on the session's socket, and every client
 is the same code. `fiber ask`'s stdout is not a client: it only receives, so

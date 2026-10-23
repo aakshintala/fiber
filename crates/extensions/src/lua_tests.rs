@@ -2543,3 +2543,39 @@ fn hook_refusals_name_the_entry_when_given() {
     // refusals.
     assert_eq!(declared.by_point.get("before_tool").map(Vec::len), Some(1));
 }
+
+/// Test-only wrappers over the hub's probes: each reaches hub state no
+/// public API exposes, so the rendezvous and drain proofs call them.
+impl LuaExtension {
+    /// The installed diagnostic sink, if any. Test-only: no public API
+    /// exposes it, and attachment is otherwise observable only through
+    /// HTTP observation.
+    pub(crate) fn hub_diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
+        self.hub.diagnostics()
+    }
+
+    /// Whether the hub lock is free right now. Test-only: the rendezvous
+    /// proof reads it while an observed worker waits past it. No public
+    /// API exposes the lock, and the ordering is otherwise unobservable.
+    pub(crate) fn hub_unlocked(&self) -> bool {
+        self.hub.try_lock().is_some()
+    }
+
+    /// Fires `hook` once when the drain's pre-replay wait parks with a
+    /// watcher delivery still queued or running: the test's proof the wait
+    /// engaged before it releases the parked delivery.
+    pub(crate) fn pause_at_drain_wait(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.hub.pause_at_windows(Arc::new(move |_, window| {
+            if matches!(window, hub::Window::DrainWait) {
+                hook();
+            }
+        }));
+    }
+
+    /// Runs the hook `index` registered at `point`, in registration order
+    /// from 0, passing `arg`, and returns what its `run` returned as JSON.
+    pub(crate) fn hook(&self, point: &str, index: usize, arg: Value) -> Result<Value, Error> {
+        self.hook_with(point, index, arg, |value| Ok((value, false)))
+            .map(|(value, _, _)| value)
+    }
+}

@@ -10,9 +10,10 @@ use std::io::BufRead;
 
 use contract::ProviderCallId;
 use contract::diag::PrefixHashes;
+#[cfg(any(test, feature = "test-hooks"))]
+use contract::events::CacheLifetime;
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallRequested,
+    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
     CallUsage, Delta, Finish, HostedCall, InputSize, ModelCall, ModelRequest, Provider, Reply,
@@ -228,6 +229,7 @@ fn tool_choice(choice: &str) -> Value {
 /// returns the reply once `[DONE]` arrives. A cache write is counted under
 /// `5m`, whatever the request's cache lifetime. A stream that fails keeps
 /// nothing it streamed, finished tool calls included.
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn decode(
     stream: impl BufRead,
     _lifetime: &CacheLifetime,
@@ -238,7 +240,7 @@ pub fn decode(
     decode_tracked(stream, sink).map_err(|(error, _)| error)
 }
 
-/// As [`decode`], also carrying what the stream had seen when it failed:
+/// As `decode`, also carrying what the stream had seen when it failed:
 /// the generation and its usage once a chunk named them, else none.
 #[allow(
     clippy::result_large_err,
