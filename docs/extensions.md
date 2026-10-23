@@ -1483,10 +1483,6 @@ or stale list uses the same path; its VM is dropped after discovery unless
 another provider or the extension's hooks, tools or commands still hold it.
 Fresh cached lists are read without loading provider Lua.
 
-A command-only package starts no VM until the first run of one of its
-commands. That run starts the extension under the 2 s `init.lua` bound,
-before the command is accepted ("Commands and screens").
-
 A provider file runs at most once per VM, including when it fails. A load that
 expires while still queued has not run and can be retried. Pending loads run
 before queued jobs. A load error, wrong or missing registration, or the 2 s
@@ -1769,9 +1765,7 @@ Fiber does not pass
 own install scripts run too, and the install summary says so. A pure-data
 provider is only ever read. A provider's `providers/<name>.lua` waits for first
 use or model discovery. Other enabled Lua extensions run `init.lua` at session
-start ("Loading, and cost when nothing is loaded"), except a lazy extension
-whose manifest declares `commands`, which starts on the first run of one of
-its commands.
+start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 

@@ -558,8 +558,11 @@ lists the built-in tools and commands the extension replaces, `providers`
 maps each provider it registers to its base URLs, and `commands` maps each
 command it registers to its description and optional argument hint; all three
 default to none, and a
-registration beyond them stops the extension loading (`docs/extensions.md`,
-"What a package holds"). A `commands` key makes the extension lazy: its
+registration beyond what the manifest declares stops the extension loading
+(`docs/extensions.md`, "What a package holds"); for `commands` that bound
+holds only on a lazy start with a declared `commands` key, and an extension
+without that key registers commands at session start as today. A `commands`
+key makes the extension lazy: its
 `init.lua` runs on the first run of one of its commands instead of at session
 start, and it registers only the commands the manifest declares
 (`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `prompt` names a
