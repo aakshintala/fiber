@@ -1,6 +1,7 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
+use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
 use std::io::{self, BufRead, Write};
@@ -50,7 +51,7 @@ fn authenticate_accepts_only_its_ack_and_keeps_the_wire_token_secret() {
                 writeln!(server, "{}", json!({"ts":1,"schema_version":1,"kind":reply["kind"],"payload":reply["payload"]})).unwrap();
             }
         });
-        let deadline = Deadline::after(Duration::from_secs(5));
+        let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
         assert_eq!(
             deadline.recv_or_fail(&wire_rx, "the authentication command"),
             json!({"id":"c_authenticate","command":"authenticate","args":{"token":"device-token"}})
@@ -93,7 +94,7 @@ fn authentication_kernel_timeout_needs_no_fake_time_advance() {
         ))
         .unwrap();
     });
-    let error = Deadline::after(Duration::from_secs(5))
+    let error = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&done_rx, "authentication times out on a silent peer")
         .unwrap_err();
     assert!(
@@ -135,7 +136,7 @@ fn listed_unix_connect_reads_hello_and_never_starts_a_hub() {
         ))
         .unwrap();
     });
-    let deadline = Deadline::after(Duration::from_secs(5));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let (_, hello) = deadline
         .recv_or_fail(&done_rx, "the forwarded hub hello")
         .unwrap();
@@ -201,7 +202,7 @@ fn unpaired_connect_reads_only_the_hello() {
         ))
         .unwrap();
     });
-    let deadline = Deadline::after(Duration::from_secs(5));
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let (_, hello) = deadline
         .recv_or_fail(&done_rx, "the unpaired hello without authentication")
         .unwrap();
@@ -249,7 +250,7 @@ fn load_target_uses_the_workspaces_layered_config_and_propagates_load_errors() {
         let named = named.map(str::to_owned);
         fakes::within(
             "loading the workspace's hub target",
-            Deadline::after(Duration::from_secs(5)),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || load_target(&home, &workspace, named.as_deref()),
         )
     };

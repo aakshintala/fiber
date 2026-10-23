@@ -3,6 +3,7 @@
 //! test-local [`TestClock`]; every result receive goes through
 //! `fakes::Deadline::after(..).recv(..)`, and no test sleeps.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -105,11 +106,11 @@ fn a_done_predicate_returns_at_once_with_the_guard() {
         let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
     assert_eq!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&result_rx),
         Ok(Some(0))
     );
 }
@@ -129,7 +130,7 @@ fn a_park_that_is_not_done_blocks_until_a_notify() {
         let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
     // The park has not answered yet. A park replaced with `None` answers
@@ -149,7 +150,7 @@ fn a_park_that_is_not_done_blocks_until_a_notify() {
         cv.notify_all();
     }
     assert_eq!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&result_rx),
         Ok(Some(1))
     );
 }
@@ -168,7 +169,7 @@ fn a_zero_bound_returns_without_a_notify() {
         let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&result_rx),
         Ok(Some(0)),
         "a zero bound returns its guard with no notify"
     );
@@ -193,11 +194,11 @@ fn done_writes_to_the_state_are_visible_in_the_returned_guard() {
         let _sent = result_tx.send(guard.map(|guard| *guard));
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&result_rx),
         Ok(Some(7))
     );
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
 }
@@ -243,11 +244,11 @@ fn a_bump_between_generation_and_park_returns_at_once() {
         let _sent = result_tx.send(());
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&result_rx)
             .is_ok(),
         "the bump before the park wakes it at once"
@@ -266,7 +267,7 @@ fn a_parked_thread_returns_after_a_bump() {
         let _sent = result_tx.send(());
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
     // The park has not answered yet. A `park` replaced with `()` answers at
@@ -280,7 +281,7 @@ fn a_parked_thread_returns_after_a_bump() {
     );
     parker.bump();
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&result_rx)
             .is_ok(),
         "the bump wakes the parked thread"
@@ -310,12 +311,12 @@ fn a_poll_bound_wakes_a_parked_thread_with_no_bump() {
         let _sent = result_tx.send(());
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(2)).recv(&entered),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&entered),
         Ok("entered")
     );
     // A `park` without the bound would wait here until the deadline.
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&result_rx)
             .is_ok(),
         "the poll bound wakes the parked thread"

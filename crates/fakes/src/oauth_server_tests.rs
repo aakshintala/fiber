@@ -1,3 +1,4 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
@@ -12,9 +13,7 @@ use crate::deadline::Deadline;
 fn post(server: &OauthServer, path: &str, form: &str) -> (u16, String) {
     let addr = server.url().trim_start_matches("http://").to_owned();
     let mut stream = TcpStream::connect(addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    stream.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     write!(
         stream,
         "POST {path} HTTP/1.1\r\nHost: localhost\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: {}\r\n\r\n{form}",
@@ -216,9 +215,6 @@ fn percent_decode_handles_each_kind_of_byte() {
     assert_eq!(percent_decode("%%41"), "%A");
 }
 
-/// How long a test waits for something that should happen.
-const WAIT: Duration = Duration::from_secs(5);
-
 /// How long a test watches for something that should not happen.
 const QUIET: Duration = Duration::from_millis(200);
 
@@ -229,7 +225,7 @@ fn post_later(server: &OauthServer) -> mpsc::Receiver<(u16, String)> {
     thread::spawn(move || {
         let addr = url.trim_start_matches("http://").to_owned();
         let mut stream = TcpStream::connect(addr).unwrap();
-        stream.set_read_timeout(Some(WAIT)).unwrap();
+        stream.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
         stream
             .write_all(b"POST /token HTTP/1.1\r\nHost: localhost\r\ncontent-length: 3\r\n\r\na=b")
             .unwrap();
@@ -252,7 +248,7 @@ fn hold_records_the_request_and_replies_only_after_release() {
     let rx = post_later(&server);
 
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the held request is recorded"
     );
     assert_eq!(
@@ -265,7 +261,7 @@ fn hold_records_the_request_and_replies_only_after_release() {
     );
 
     server.release();
-    let (status, body) = Deadline::after(WAIT)
+    let (status, body) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("release sends the reply");
     assert_eq!(status, 200);
@@ -296,10 +292,10 @@ fn dropping_a_holding_server_releases_its_client() {
     let server = OauthServer::start(vec![OauthReply::pending()]);
     server.hold();
     let rx = post_later(&server);
-    assert!(server.await_requests(1, Deadline::after(WAIT)));
+    assert!(server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)));
 
     drop(server);
-    let (status, _) = Deadline::after(WAIT)
+    let (status, _) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the drop sends the held reply");
     assert_eq!(status, 400);
@@ -391,9 +387,7 @@ fn base64url_decode(text: &str) -> Vec<u8> {
 fn post_chunked(server: &OauthServer, path: &str, form: &str) -> (u16, String) {
     let addr = server.url().trim_start_matches("http://").to_owned();
     let mut stream = TcpStream::connect(addr).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    stream.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     write!(
         stream,
         "POST {path} HTTP/1.1\r\nHost: localhost\r\ncontent-type: application/x-www-form-urlencoded\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{form}\r\n0\r\n\r\n",

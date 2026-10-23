@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 #![allow(clippy::expect_used, reason = "test code; a failure is the test's")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -15,10 +16,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{LOOKUP_AFTER, LateCost, Settled};
-
-/// How long a test waits on the wall clock for the worker to park, call or
-/// let go of a lookup.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// The channels a blocking lookup says it was called on, and waits on.
 type Block = (Mutex<Sender<()>>, Mutex<Receiver<()>>);
@@ -71,7 +68,7 @@ impl Seen {
     /// queue is gone.
     #[track_caller]
     fn await_dropped(&self) {
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&self.dropped)
             .expect("waited for the worker to let go of the lookup");
     }
@@ -145,10 +142,14 @@ fn a_lookup_runs_only_once_30_seconds_pass_and_settles_a_copy_with_its_cost() {
         Some(due),
         None,
         LOOKUP_AFTER.saturating_sub(Duration::from_millis(1)),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(
+            &mark,
+            Some(due),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "a millisecond early, the worker parks at the due again"
     );
     assert!(late.take_settled().is_empty());
@@ -158,10 +159,10 @@ fn a_lookup_runs_only_once_30_seconds_pass_and_settles_a_copy_with_its_cost() {
         Some(due),
         None,
         Duration::from_millis(1),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue once it has pushed"
     );
     assert_eq!(seen.calls(), ["gen-1"]);
@@ -186,9 +187,14 @@ fn a_lookup_returning_nothing_settles_nothing() {
     let mut late = LateCost::default();
     late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
         .unwrap();
-    let mark = clock.advance_when_parked(Some(due), None, LOOKUP_AFTER, &Deadline::after(WAIT));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        LOOKUP_AFTER,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue after the call"
     );
     assert_eq!(seen.calls(), ["gen-1"]);
@@ -204,7 +210,7 @@ fn a_stop_before_the_due_means_the_lookup_is_never_called() {
     late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
         .unwrap();
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at the due"
     );
     late.stop();
@@ -228,8 +234,13 @@ fn a_stop_while_the_lookup_runs_drops_its_result() {
     let mut late = LateCost::default();
     late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
         .unwrap();
-    clock.advance_when_parked(Some(due), None, LOOKUP_AFTER, &Deadline::after(WAIT));
-    Deadline::after(WAIT)
+    clock.advance_when_parked(
+        Some(due),
+        None,
+        LOOKUP_AFTER,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&entered)
         .expect("waited for the lookup to start");
     late.stop();
@@ -251,12 +262,12 @@ fn two_lookups_run_in_due_order() {
         Some(start + LOOKUP_AFTER),
         None,
         Duration::from_secs(10),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(clock.await_parked_since(
         &mark,
         Some(start + LOOKUP_AFTER),
-        fakes::Deadline::after(WAIT)
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
     ));
     // Both lookups share one record of calls, so their order shows.
     let (second_lookup, _second_seen) = lookup_with(Some(2.0), None);
@@ -265,7 +276,10 @@ fn two_lookups_run_in_due_order() {
         calls: Arc::clone(&first_seen.calls),
     });
     let mark = clock
-        .mark_parked(start + LOOKUP_AFTER, fakes::Deadline::after(WAIT))
+        .mark_parked(
+            start + LOOKUP_AFTER,
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN),
+        )
         .expect("the worker parks at the first due");
     late.schedule(second_lookup, first("gen-b"), None, None, &dyn_clock)
         .unwrap();
@@ -273,7 +287,7 @@ fn two_lookups_run_in_due_order() {
         clock.await_parked_since(
             &mark,
             Some(start + LOOKUP_AFTER),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "woken by the schedule, the worker parks at the earlier due"
     );
@@ -282,10 +296,14 @@ fn two_lookups_run_in_due_order() {
         Some(start + LOOKUP_AFTER),
         None,
         Duration::from_secs(20),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, Some(second_due), fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(
+            &mark,
+            Some(second_due),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the worker parks at the second due after the first lookup"
     );
     assert_eq!(first_seen.calls(), ["gen-a"]);
@@ -293,10 +311,10 @@ fn two_lookups_run_in_due_order() {
         Some(second_due),
         None,
         Duration::from_secs(10),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue after both calls"
     );
     assert_eq!(first_seen.calls(), ["gen-a", "gen-b"]);
@@ -328,21 +346,30 @@ fn two_lookups_due_together_both_run_in_scheduling_order() {
     late.schedule(first_lookup, first("gen-a"), turn(), action(), &dyn_clock)
         .unwrap();
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at the due"
     );
     let mark = clock
-        .mark_parked(due, fakes::Deadline::after(WAIT))
+        .mark_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("the worker parks at the due");
     late.schedule(second_lookup, first("gen-b"), None, None, &dyn_clock)
         .unwrap();
     assert!(
-        clock.await_parked_since(&mark, Some(due), fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(
+            &mark,
+            Some(due),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "woken by the schedule, the worker parks at the same due"
     );
-    let mark = clock.advance_when_parked(Some(due), None, LOOKUP_AFTER, &Deadline::after(WAIT));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        LOOKUP_AFTER,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue after both calls"
     );
     assert_eq!(seen.calls(), ["gen-a", "gen-b"]);
@@ -378,9 +405,14 @@ fn a_generation_scheduled_twice_is_looked_up_once() {
     .unwrap();
     late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
         .unwrap();
-    let mark = clock.advance_when_parked(Some(due), None, LOOKUP_AFTER, &Deadline::after(WAIT));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        LOOKUP_AFTER,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue after the call"
     );
     assert_eq!(seen.calls(), ["gen-1"]);
@@ -396,7 +428,7 @@ fn dropping_the_queue_stops_the_worker_before_the_due() {
     late.schedule(lookup, first("gen-1"), turn(), action(), &dyn_clock)
         .unwrap();
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT)),
+        clock.await_parked(due, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks at the due"
     );
     drop(late);
@@ -418,9 +450,14 @@ fn a_settled_record_keeps_the_reviewer_use() {
     let mut late = LateCost::default();
     late.schedule(lookup, first.clone(), turn(), action(), &dyn_clock)
         .unwrap();
-    let mark = clock.advance_when_parked(Some(due), None, LOOKUP_AFTER, &Deadline::after(WAIT));
+    let mark = clock.advance_when_parked(
+        Some(due),
+        None,
+        LOOKUP_AFTER,
+        &Deadline::after(MUST_SUCCEED_WITHIN),
+    );
     assert!(
-        clock.await_parked_since(&mark, None, fakes::Deadline::after(WAIT)),
+        clock.await_parked_since(&mark, None, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker parks with an empty queue after the call"
     );
     assert_eq!(seen.calls(), ["gen-9"]);

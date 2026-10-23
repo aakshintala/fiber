@@ -9,9 +9,9 @@
 mod common;
 
 use common::write_record;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use common::{Setup, install_lua, provider, write};
 use config::{Config, ProjectKey, Secret, Sources, store_secret};
@@ -21,10 +21,6 @@ use extensions::{Providers, SessionExtensions};
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, Value, json};
-
-/// How long a test waits for the extensions to load or a hook to answer
-/// before failing.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// The string `host.secret` raises for `other.key`, which no manifest here
 /// lists.
@@ -50,7 +46,7 @@ fn load(setup: &Setup) -> Arc<SessionExtensions> {
         overrides: Vec::new(),
     })
     .unwrap();
-    // On its own thread under `WAIT`: the fake clock never ends a wait the
+    // On its own thread under `MUST_SUCCEED_WITHIN`: the fake clock never ends a wait the
     // runtime does not end itself.
     let home = setup.home();
     let (tx, rx) = mpsc::channel();
@@ -60,14 +56,14 @@ fn load(setup: &Setup) -> Arc<SessionExtensions> {
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the extensions to load"),
     )
 }
 
 /// The content the hooks return for a completed call, asked on its own
-/// thread under `WAIT`.
+/// thread under `MUST_SUCCEED_WITHIN`.
 #[track_caller]
 fn content(session: &Arc<SessionExtensions>) -> Option<String> {
     let (tx, rx) = mpsc::channel();
@@ -88,7 +84,7 @@ fn content(session: &Arc<SessionExtensions>) -> Option<String> {
         });
         let _sent = tx.send(answer);
     });
-    let answer = Deadline::after(WAIT)
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the hook");
     match answer.outcome {

@@ -7,6 +7,7 @@
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
 use crate::test_support::write_record;
+use fakes::MUST_SUCCEED_WITHIN;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -30,10 +31,6 @@ use crate::login::{LoginIo, Plain, login};
 
 /// How long a test waits for one call or one child.
 const WAIT: Duration = Duration::from_secs(10);
-
-/// How long a test waits for the package to open the authorize URL or for
-/// its callback listener to bind: one wall-clock deadline for both waits.
-const BROWSER_WAIT: Duration = Duration::from_secs(4);
 
 /// The test account id and email.
 const ACCOUNT: &str = "acct_1";
@@ -168,7 +165,7 @@ fn copy_tree(source: &Path, dest: &Path, replacements: &[(&str, &str)]) {
 /// A browser that records the authorize URL and opens nothing: the test
 /// thread performs the redirect once the callback listens. Each `open` also
 /// reports on the channel, so the wait for it is a notification under
-/// [`BROWSER_WAIT`] instead of an attempt count. It binds a loopback
+/// [`MUST_SUCCEED_WITHIN`] instead of an attempt count. It binds a loopback
 /// listener at port 0 and holds it: `port` is the package's callback port,
 /// handed over when the package binds through `callback_listener`, so
 /// choosing and binding leave no gap for another listener.
@@ -240,25 +237,25 @@ impl Browser for RedirectBrowser {
 }
 
 /// Waits for the package's `open` notification, without reading the clock:
-/// nothing here parks on it. The bound is the wall-clock [`BROWSER_WAIT`],
+/// nothing here parks on it. The bound is the wall-clock [`MUST_SUCCEED_WITHIN`],
 /// so a package that never opens fails there instead of hanging.
 #[track_caller]
 fn await_opened(opened: &mpsc::Receiver<String>, wait: &Deadline) -> String {
     wait.recv_or_fail(
         opened,
-        &format!("the package never opened the authorize URL within {BROWSER_WAIT:?}"),
+        &format!("the package never opened the authorize URL within {MUST_SUCCEED_WITHIN:?}"),
     )
 }
 
 /// GETs the callback's `target` on `port`, retrying a refused connection
-/// until the listener binds. The bound is the wall-clock [`BROWSER_WAIT`],
+/// until the listener binds. The bound is the wall-clock [`MUST_SUCCEED_WITHIN`],
 /// so a listener that never binds fails there instead of hanging.
 #[track_caller]
 fn redirect(port: u16, target: &str) {
     let target = target.to_owned();
     fakes::within(
         "the callback to listen",
-        Deadline::after(BROWSER_WAIT),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 match TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
@@ -344,7 +341,7 @@ fn browser_flow(
             Ok(()) | Err(_) => {}
         }
     });
-    let wait = Deadline::after(BROWSER_WAIT);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     let url = await_opened(opened, &wait);
     let port = port_of(&url);
     assert_eq!(
@@ -1000,7 +997,6 @@ fn a_cancel_after_registration_runs_the_stop_once() {
 #[test]
 fn a_cancel_during_the_store_waits_for_it() {
     use std::sync::Mutex as StdMutex;
-    const WAIT: Duration = Duration::from_secs(4);
     const STILL_HELD: Duration = Duration::from_millis(500);
     let cancel = Arc::new(LoginCancel::default());
     let log = Arc::new(StdMutex::new(Vec::<String>::new()));
@@ -1109,7 +1105,7 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
             Ok(()) | Err(_) => {}
         }
     });
-    let wait = Deadline::after(BROWSER_WAIT);
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN);
     let url = await_opened(&opened, &wait);
     assert_eq!(
         port_of(&url),
@@ -1118,7 +1114,8 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     );
     // Taken, so `listen` bound: a cancel now ends the wait instead of
     // racing its start, which would leave the held listener behind.
-    Deadline::after(BROWSER_WAIT).recv_or_fail(&taken, "the package to take the callback listener");
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&taken, "the package to take the callback listener");
     cancel.cancel();
     let result = Deadline::after(WAIT)
         .recv(&rx)
@@ -1131,7 +1128,7 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     let callback_port = browser.port();
     fakes::within(
         "the callback port to bind again",
-        Deadline::after(BROWSER_WAIT),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {

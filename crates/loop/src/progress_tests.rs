@@ -2,6 +2,7 @@
 //! when it is due, and what a write costs. `Instant`s come from the caller;
 //! the pacer never reads a clock.
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -253,9 +254,6 @@ fn a_stream_is_answerable_as_it_was_built() {
     assert!(!no.answerable());
 }
 
-/// Wall-clock bound on every wait for a helper thread.
-const DEADLINE: Duration = Duration::from_secs(5);
-
 /// A forward target that counts its wakes.
 #[derive(Default)]
 struct Counting(AtomicUsize);
@@ -381,11 +379,11 @@ fn forwarding_passes_on_a_bump_that_landed_before_it_once() {
     let clock = FakeClock::new();
     let parked = park_on(&wake, &clock);
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_unbounded(fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the park waits"
     );
     wake.wake();
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("a later bump ends the park");
 }
@@ -409,7 +407,7 @@ fn clearing_the_forward_keeps_the_flag_and_drops_the_target() {
     wake.wake();
     wake.forward(None);
     let clock = FakeClock::new();
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&park_on(&wake, &clock))
         .expect("the bump while forwarding ends the next park at once");
     wake.wake();

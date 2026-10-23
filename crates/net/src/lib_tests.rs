@@ -1,3 +1,4 @@
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, OnceLock, mpsc};
@@ -44,9 +45,6 @@ use fakes::Deadline;
 const CA_PEM: &[u8] = include_bytes!("../fixtures/ca.pem");
 const LEAF_DER: &[u8] = include_bytes!("../fixtures/leaf.der");
 const LEAF_KEY_DER: &[u8] = include_bytes!("../fixtures/leaf.key.der");
-
-/// One TLS call's deadline: the client's reply and the server's outcome.
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// One child test's bound, applied twice by `fakes::rerun_within`: the
 /// child's exit, then its reaping after a kill.
@@ -122,10 +120,10 @@ fn serve_once(listener: &TcpListener) -> Result<(), String> {
         .accept()
         .map_err(|err| format!("accepting the test connection: {err}"))?;
     stream
-        .set_read_timeout(Some(DEADLINE))
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
         .map_err(|err| format!("arming the read deadline: {err}"))?;
     stream
-        .set_write_timeout(Some(DEADLINE))
+        .set_write_timeout(Some(MUST_SUCCEED_WITHIN))
         .map_err(|err| format!("arming the write deadline: {err}"))?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let server_config = rustls::ServerConfig::builder_with_provider(provider)
@@ -250,15 +248,15 @@ fn an_empty_store_connects_through_the_fallback_roots() {
         tls_config_with(&OnceLock::new(), || 0, test_ca_roots()),
         server.port,
     );
-    match Deadline::after(DEADLINE).recv(&reply) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&reply) {
         Ok(Ok(body)) => assert_eq!(body, "ok", "the fallback roots reach the test server"),
         Ok(Err(err)) => panic!("requesting through the fallback roots: {err}"),
-        Err(_) => panic!("the client answers within {DEADLINE:?}"),
+        Err(_) => panic!("the client answers within {MUST_SUCCEED_WITHIN:?}"),
     }
-    match Deadline::after(DEADLINE).recv(&server.outcome) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(&server.outcome) {
         Ok(Ok(())) => {}
         Ok(Err(err)) => panic!("serving the test connection: {err}"),
-        Err(_) => panic!("the server answers within {DEADLINE:?}"),
+        Err(_) => panic!("the server answers within {MUST_SUCCEED_WITHIN:?}"),
     }
 }
 

@@ -26,7 +26,7 @@ use fakes::{Deadline, NoLock};
 use serde_json::{Value, json};
 
 /// How long a test waits for one result before failing.
-const WAIT: Duration = Duration::from_secs(5);
+const WAIT: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// What `ExtensionDoor::command` returns.
 type Called = Result<Box<dyn FnOnce() + Send>, Rejection>;

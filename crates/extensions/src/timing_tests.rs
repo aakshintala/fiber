@@ -8,6 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 #![allow(clippy::indexing_slicing, reason = "test code")]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
@@ -125,7 +126,7 @@ impl Home {
         std::thread::spawn(move || {
             let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
         });
-        fakes::Deadline::after(Duration::from_secs(5))
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the extensions to load")
     }
@@ -302,9 +303,6 @@ use crate::lua::{
     CredentialFor, Pause, fail_next_spawn_for, pause_observed_execution, pause_settle,
     provider_purpose, unpause_observed_execution, unpause_settle,
 };
-
-/// How long a test waits for one exchange or signal before failing.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A clock returning `stamps` in order, then repeating the last: controlled
 /// milestones with no real time and no asynchronous advance.
@@ -1005,8 +1003,8 @@ fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
 /// and re-panics with its text, so a wrong instant fails with the
 /// helper's park report instead of the receive timeout.
 fn gate_reached(arrived: &mpsc::Receiver<()>, outcome: &mpsc::Receiver<Result<(), String>>) {
-    if Deadline::after(WAIT).recv(arrived).is_err() {
-        match Deadline::after(WAIT).recv(outcome) {
+    if Deadline::after(MUST_SUCCEED_WITHIN).recv(arrived).is_err() {
+        match Deadline::after(MUST_SUCCEED_WITHIN).recv(outcome) {
             Ok(Err(text)) => panic!("the advance helper failed: {text}"),
             _ => panic!("the caller reached the gated park window"),
         }
@@ -1065,7 +1063,7 @@ fn worker_emits_only_after_the_guard_releases() {
     let models_caller = std::thread::spawn(move || {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the worker reached its pause");
     // Freeze the scheduler at its outside-lock pause before permitting
@@ -1078,7 +1076,7 @@ fn worker_emits_only_after_the_guard_releases() {
             let _sent = hook_tx.send(answer);
         });
     }
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&paused)
         .expect("the scheduler reached its pause");
     // Both callers settled past every lock acquisition before the guard is
@@ -1087,11 +1085,17 @@ fn worker_emits_only_after_the_guard_releases() {
     // deadline plus the grace for a suspended call, while its callback
     // stays suspended. A transient hold no longer fails the read below.
     assert!(
-        fake.await_parked(mark + Duration::from_secs(60), fakes::Deadline::after(WAIT)),
+        fake.await_parked(
+            mark + Duration::from_secs(60),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the hook caller parked at its deadline"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
+        fake.await_parked(
+            mark + Duration::from_secs(61),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the caller parked past its check"
     );
     // Gate the models caller's next park past its check: the window where
@@ -1118,7 +1122,7 @@ fn worker_emits_only_after_the_guard_releases() {
                     Some(mark + Duration::from_secs(61)),
                     Some(models_caller),
                     Duration::ZERO,
-                    &Deadline::after(WAIT),
+                    &Deadline::after(MUST_SUCCEED_WITHIN),
                 );
             }))
             .map_err(panic_text);
@@ -1131,7 +1135,7 @@ fn worker_emits_only_after_the_guard_releases() {
         {
             let ext = Arc::clone(&ext);
             std::thread::spawn(move || {
-                await_unlocked(&ext, WAIT);
+                await_unlocked(&ext, MUST_SUCCEED_WITHIN);
                 let _ignored = done_tx.send(());
             });
         }
@@ -1148,16 +1152,19 @@ fn worker_emits_only_after_the_guard_releases() {
         gated_release
             .send(())
             .expect("the gated window takes its release");
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("await_unlocked completes after the release");
     }
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&advanced_rx)
         .expect("the zero advance returns after the release")
         .expect("the zero advance succeeded");
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
+        fake.await_parked(
+            mark + Duration::from_secs(61),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the caller parked past its check"
     );
     // With the scheduler frozen past the rendezvous and the worker gated
@@ -1173,18 +1180,18 @@ fn worker_emits_only_after_the_guard_releases() {
         Some(mark + Duration::from_secs(61)),
         Some(models_caller.thread().id()),
         Duration::from_millis(5000),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     // Both releases go out before either answer is awaited: the frozen
     // scheduler delivers the worker's reply only once the hook resumes it.
     release.send(()).expect("the worker takes its release");
     resume.send(()).expect("the hook takes its release");
-    let (models, _) = Deadline::after(WAIT)
+    let (models, _) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the models")
         .expect("the observed models() succeeds");
     assert_eq!(models.len(), 1);
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&hook_rx)
         .expect("waited for the hook")
         .expect("the released hook completes");
@@ -1222,11 +1229,14 @@ fn gated_park_holds_the_hub_guard() {
         let _sent = tx.send(provider.list_models(&ModelsArg::default()));
     });
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the worker suspended on HTTP"
     );
     assert!(
-        fake.await_parked(mark + Duration::from_secs(61), fakes::Deadline::after(WAIT)),
+        fake.await_parked(
+            mark + Duration::from_secs(61),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the caller parked past its check"
     );
     let (gated_arrived, gated_release) = clock.arm(Some(mark + Duration::from_secs(61)));
@@ -1243,7 +1253,7 @@ fn gated_park_holds_the_hub_guard() {
                     Some(mark + Duration::from_secs(61)),
                     Some(models_caller),
                     Duration::ZERO,
-                    &Deadline::after(WAIT),
+                    &Deadline::after(MUST_SUCCEED_WITHIN),
                 );
             }))
             .map_err(panic_text);
@@ -1258,12 +1268,12 @@ fn gated_park_holds_the_hub_guard() {
     gated_release
         .send(())
         .expect("the gated window takes its release");
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&notified_rx)
         .expect("the hub notify returns after the release")
         .expect("the zero advance succeeded");
     server.release();
-    let (models, _) = Deadline::after(WAIT)
+    let (models, _) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the models")
         .expect("the models() succeeds after the release");
@@ -1358,7 +1368,7 @@ fn expired_before_admission_starts_nothing() {
             let _sent = hook_tx.send(answer);
         });
     }
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the hook reached admission");
     // Queued behind the held thread, the provider call expires before the
@@ -1375,7 +1385,7 @@ fn expired_before_admission_starts_nothing() {
     assert!(
         clock.await_parked(
             mark + Duration::from_millis(1000),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the queued call parked at its deadline"
     );
@@ -1383,9 +1393,9 @@ fn expired_before_admission_starts_nothing() {
         Some(mark + Duration::from_millis(1000)),
         Some(call_thread.thread().id()),
         Duration::from_millis(1000),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&expired_rx)
         .expect("waited for the expiry")
         .unwrap_err();
@@ -1394,7 +1404,7 @@ fn expired_before_admission_starts_nothing() {
         "the queued call takes its timeout: {err:?}"
     );
     release.send(()).expect("the hook takes its release");
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&hook_rx)
         .expect("waited for the hook")
         .expect("the released hook completes");
@@ -1425,12 +1435,12 @@ fn stopped_before_admission_starts_nothing() {
             let _sent = hook_tx.send(answer);
         });
     }
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrived)
         .expect("the hook reached admission");
     ext.dispose();
     release.send(()).expect("the hook takes its release");
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&hook_rx)
         .expect("waited for the hook")
         .unwrap_err();
@@ -1485,13 +1495,13 @@ fn late_workers_emit_once_and_drop_late_replies() {
         })
     };
     assert!(
-        hook_server.await_requests(1, Deadline::after(WAIT)),
+        hook_server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the hook suspended on HTTP"
     );
     assert!(
         clock.await_parked(
             mark + Duration::from_millis(2000),
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the hook caller parked past its check on the suspended callback"
     );
@@ -1501,9 +1511,9 @@ fn late_workers_emit_once_and_drop_late_replies() {
         Some(mark + Duration::from_millis(2000)),
         Some(hook_thread.thread().id()),
         Duration::from_millis(1500),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let err = Deadline::after(WAIT)
+    let err = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&hook_rx)
         .expect("waited for the expired hook")
         .unwrap_err();
@@ -1531,11 +1541,11 @@ fn late_workers_emit_once_and_drop_late_replies() {
         let _sent = models_tx.send(observer.list_models(&ModelsArg::default()));
     });
     assert!(
-        models_server.await_requests(1, Deadline::after(WAIT)),
+        models_server.await_requests(1, Deadline::after(MUST_SUCCEED_WITHIN)),
         "the provider suspended on HTTP"
     );
     ext.dispose();
-    let stopped = Deadline::after(WAIT)
+    let stopped = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&models_rx)
         .expect("waited for the stopped call")
         .unwrap_err();
@@ -1546,7 +1556,7 @@ fn late_workers_emit_once_and_drop_late_replies() {
     // The late observed worker still emits its one accurate record once
     // its held request is released, and its reply is discarded.
     models_server.release();
-    let record = Deadline::after(WAIT)
+    let record = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&arrivals)
         .expect("the late worker emitted its record");
     assert_eq!(record.provider, "p");

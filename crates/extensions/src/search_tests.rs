@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -19,9 +20,6 @@ use fakes::clock::FakeClock;
 
 use super::*;
 use crate::lua::LuaExtension;
-
-/// Wall-clock bound on every wait for the extension.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// How long past a deadline the caller waits before it abandons the VM.
 const GRACE: Duration = Duration::from_secs(1);
@@ -325,13 +323,13 @@ fn a_timeout_maps_to_timeout() {
             &fakes::CancelToken::new(),
         )
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&went)
         .expect("waited for the backend to start");
     assert!(
         clock.await_parked(
             asked + Duration::from_millis(50) + GRACE,
-            fakes::Deadline::after(WAIT)
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         ),
         "the caller parked at the grace"
     );
@@ -339,9 +337,9 @@ fn a_timeout_maps_to_timeout() {
         Some(asked + Duration::from_millis(50) + GRACE),
         None,
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let Err(failed) = Deadline::after(WAIT)
+    let Err(failed) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&ran)
         .expect("the search returned")
     else {

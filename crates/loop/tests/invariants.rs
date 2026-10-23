@@ -14,10 +14,10 @@
 
 mod support;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
 
 use contract::Envelope;
 use contract::ErrorCode;
@@ -34,10 +34,6 @@ use serde_json::{Map, Value};
 
 use support::{Gate, Script, Session, TestTool, calls_reply, delivery, message, paris, text_all};
 
-/// One wait per case: the turn runs on a thread, and the test receives
-/// it with this deadline.
-const CASE_DEADLINE: Duration = Duration::from_secs(2);
-
 /// The tools' names, one per call index. `TestTool.name` takes
 /// `&'static str`.
 const NAMES: [&str; 4] = ["t0", "t1", "t2", "t3"];
@@ -45,6 +41,9 @@ const NAMES: [&str; 4] = ["t0", "t1", "t2", "t3"];
 fn config() -> ProptestConfig {
     ProptestConfig {
         cases: 24,
+        // A failing run is the failing case (10 s), the 6 s shrink search and
+        // one final shrink attempt (10 s): about 26 s, under the 120 s stop
+        // that mutation testing gives a test run.
         max_shrink_time: 6_000,
         ..ProptestConfig::default()
     }
@@ -63,7 +62,7 @@ fn spawn_turn(session: &mut Session) -> mpsc::Receiver<(Loop, Option<TurnOutcome
 }
 
 /// The turn's outcome and every line through its `turn_completed`: one
-/// [`CASE_DEADLINE`] for both ("A wait's deadline is made once"). Plain
+/// [`MUST_SUCCEED_WITHIN`] for both ("A wait's deadline is made once"). Plain
 /// `recv` inside `within` is the shape `support::read_until` uses. The
 /// caller puts the returned `Loop` back as `session.looped`.
 fn finish_turn(
@@ -72,7 +71,7 @@ fn finish_turn(
 ) -> (log::Watcher, Vec<Envelope>, Loop, Option<TurnOutcome>) {
     fakes::within(
         "the turn's end and its lines",
-        Deadline::after(CASE_DEADLINE),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
             let (looped, outcome) = ended.recv().unwrap();
             let mut lines = Vec::new();
@@ -94,7 +93,7 @@ fn finish_turn(
 }
 
 /// Every line until `done` accepts the lines accumulated so far, under one
-/// [`CASE_DEADLINE`]. The predicate runs on the lines already accumulated
+/// [`MUST_SUCCEED_WITHIN`]. The predicate runs on the lines already accumulated
 /// before another is received, so results written while an earlier wait
 /// ran still count; every line is kept for the final asserts.
 fn read_lines_until(
@@ -104,7 +103,7 @@ fn read_lines_until(
     done: impl Fn(&[Envelope]) -> bool + Send + 'static,
 ) -> (log::Watcher, Vec<Envelope>) {
     let what_owned = what.to_owned();
-    fakes::within(what, Deadline::after(CASE_DEADLINE), move || {
+    fakes::within(what, Deadline::after(MUST_SUCCEED_WITHIN), move || {
         loop {
             if done(&lines) {
                 return (watcher, lines);
@@ -929,7 +928,7 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
     *planned.cancel.lock().unwrap() = Some(Arc::clone(&session.cancel));
 
     // The watcher is subscribed before the first turn, so it sees every
-    // turn. Each turn gets one `CASE_DEADLINE` for its outcome and its
+    // turn. Each turn gets one `MUST_SUCCEED_WITHIN` for its outcome and its
     // lines through its `turn_completed`.
     let mut watcher = session.log.watch();
     let mut all: Vec<Envelope> = Vec::new();

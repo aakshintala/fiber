@@ -4,8 +4,8 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
 
 use common::{Setup, install_lua};
 use config::{Config, ProjectKey, Sources};
@@ -19,9 +19,6 @@ use extensions::SessionExtensions;
 use fakes::clock::FakeClock;
 use fakes::{Deadline, NoLock};
 use serde_json::{Map, json};
-
-/// How long a test waits for one delivery before failing.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A [`HostDelegate`] handing out queued ids, recording every start.
 struct Fake {
@@ -85,7 +82,7 @@ fn load(setup: &Setup, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
     Arc::new(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the extensions to load"),
     )
@@ -107,10 +104,10 @@ fn run(session: &Arc<SessionExtensions>, name: &str) {
 #[allow(clippy::panic, reason = "a test helper; a missing line is the test's")]
 #[track_caller]
 fn next_log(inbox: &mpsc::Receiver<Delivery>, what: &str) -> String {
-    match Deadline::after(WAIT).recv(inbox) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(inbox) {
         Ok(Delivery::ExtensionLog(ExtensionLog { message, .. })) => message,
         Ok(other) => panic!("expected {what}, got {other:?}"),
-        Err(_) => panic!("waited {WAIT:?} for {what}"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
     }
 }
 

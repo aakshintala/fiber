@@ -10,6 +10,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -21,9 +22,6 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use crate::{Error, LuaExtension};
-
-/// Wall-clock bound on a wait for the extension's thread.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// `clock` as the extension's clock.
 fn clocked(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
@@ -129,7 +127,7 @@ fn an_answerable_confirm_round_trips() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let requested = interaction(&rx, &Deadline::after(WAIT));
+    let requested = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     assert_eq!(requested.extension.as_deref(), Some("ext"));
     assert!(
         requested.request_id.0.starts_with("r_"),
@@ -138,20 +136,20 @@ fn an_answerable_confirm_round_trips() {
     let accepted = answer(
         &ext,
         &rx,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         Reply {
             request_id: requested.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: true },
         },
     );
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&accepted)
             .expect("the reply is answered"),
         "the reply is accepted once the line is in the log"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),
@@ -200,19 +198,19 @@ fn each_kinds_answer_table_round_trips_to_lua() {
         std::thread::spawn(move || {
             let _sent = done_tx.send(held.command("go", ""));
         });
-        let requested = interaction(&rx, &Deadline::after(WAIT));
+        let requested = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
         let accepted = answer(
             &ext,
             &rx,
-            &Deadline::after(WAIT),
+            &Deadline::after(MUST_SUCCEED_WITHIN),
             Reply {
                 request_id: requested.request_id,
                 answer: answered,
             },
         );
-        assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
+        assert!(Deadline::after(MUST_SUCCEED_WITHIN).recv(&accepted).is_ok());
         assert_eq!(
-            Deadline::after(WAIT)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&done_rx)
                 .expect("the command returns")
                 .unwrap(),
@@ -243,11 +241,11 @@ fn a_form_answer_with_a_note_round_trips() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let requested = interaction(&rx, &Deadline::after(WAIT));
+    let requested = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     let accepted = answer(
         &ext,
         &rx,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         Reply {
             request_id: requested.request_id,
             answer: ReplyAnswer::Form {
@@ -264,9 +262,9 @@ fn a_form_answer_with_a_note_round_trips() {
             },
         },
     );
-    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
+    assert!(Deadline::after(MUST_SUCCEED_WITHIN).recv(&accepted).is_ok());
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the command returns")
             .unwrap(),
@@ -298,17 +296,21 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
         let _sent = done_tx.send(held.command("go", ""));
     });
     let caller_id = caller_handle.thread().id();
-    let requested = interaction(&rx, &Deadline::after(WAIT));
+    let requested = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     // The caller waits at the deadline plus the grace once the callback parks;
     // the scheduler parks its wake at the deadline itself.
     let deadline = clock.origin() + Duration::from_millis(200);
     let grace = clock.origin() + Duration::from_millis(1200);
     assert!(
-        clock.await_thread_parked(caller_id, Some(grace), fakes::Deadline::after(WAIT)),
+        clock.await_thread_parked(
+            caller_id,
+            Some(grace),
+            fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        ),
         "the caller parks at the command deadline plus the grace"
     );
     let parked = clock
-        .mark_parked(deadline, fakes::Deadline::after(WAIT))
+        .mark_parked(deadline, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("the scheduler parks at the command deadline");
     let parked = parked.threads();
     assert_eq!(
@@ -321,9 +323,9 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
         Some(deadline),
         Some(vm),
         Duration::from_millis(200),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
+    let Delivery::Resolved(resolved, _) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the decline arrives")
     else {
@@ -331,7 +333,7 @@ fn a_timed_out_ask_is_declined_by_fiber_and_late_answers_hand_back() {
     };
     assert_eq!(resolved.request_id, requested.request_id);
     assert_eq!(resolved.by, ResolvedBy::Fiber);
-    let Err(Error::Timeout { .. }) = Deadline::after(WAIT)
+    let Err(Error::Timeout { .. }) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the command ends")
     else {
@@ -380,16 +382,16 @@ fn a_timer_that_asks_and_expires_is_declined_the_same_way() {
         Some(clock.origin() + Duration::from_millis(50)),
         None,
         Duration::from_millis(50),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let requested = interaction(&rx, &Deadline::after(WAIT));
+    let requested = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     clock.advance_when_parked(
         Some(clock.origin() + Duration::from_millis(150)),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let Delivery::Resolved(resolved, _) = Deadline::after(WAIT)
+    let Delivery::Resolved(resolved, _) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the decline arrives")
     else {
@@ -428,7 +430,7 @@ fn two_commands_asking_in_sequence_keep_the_stream() {
     std::thread::spawn(move || {
         let _sent = first_tx.send(first_ext.command("first", ""));
     });
-    let first = interaction(&rx, &Deadline::after(WAIT));
+    let first = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         matches!(&first.interaction, Interaction::Confirm { prompt } if prompt == "one?"),
         "the first ask's request is observed before the second starts"
@@ -446,33 +448,33 @@ fn two_commands_asking_in_sequence_keep_the_stream() {
     let accepted = answer(
         &ext,
         &rx,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         Reply {
             request_id: first.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: true },
         },
     );
-    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
+    assert!(Deadline::after(MUST_SUCCEED_WITHIN).recv(&accepted).is_ok());
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&first_rx)
             .expect("the first returns")
             .unwrap(),
         "first-true"
     );
-    let second = interaction(&rx, &Deadline::after(WAIT));
+    let second = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     let accepted = answer(
         &ext,
         &rx,
-        &Deadline::after(WAIT),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
         Reply {
             request_id: second.request_id,
             answer: ReplyAnswer::Confirmed { confirmed: false },
         },
     );
-    assert!(Deadline::after(WAIT).recv(&accepted).is_ok());
+    assert!(Deadline::after(MUST_SUCCEED_WITHIN).recv(&accepted).is_ok());
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&second_rx)
             .expect("the second returns")
             .unwrap(),
@@ -495,10 +497,10 @@ fn disposing_with_an_ask_held_routes_nothing() {
     std::thread::spawn(move || {
         let _sent = done_tx.send(held.command("go", ""));
     });
-    let _ = interaction(&rx, &Deadline::after(WAIT));
+    let _ = interaction(&rx, &Deadline::after(MUST_SUCCEED_WITHIN));
     ext.dispose();
     assert!(
-        Deadline::after(WAIT)
+        Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("the command ends")
             .is_err(),

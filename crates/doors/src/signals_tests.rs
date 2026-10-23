@@ -8,6 +8,7 @@
     reason = "test code"
 )]
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -772,11 +773,6 @@ fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
 /// SIGTERM while booting.
 const CHILD: &str = "FIBER_DOORS_SIGNALS_CHILD";
 
-/// How long the real-SIGTERM child may run, and how long `mkfifo` may
-/// run: the wait is this long, then the cleanup is this long again, so
-/// the worst case is twice this.
-const CHILD_WITHIN: Duration = Duration::from_secs(5);
-
 /// After `attach` the bound line lands in the session-named file with
 /// `session_id` and nothing lands in the pid-named one; with no `attach`
 /// it lands in the pid-named file, saying the process's own exit code.
@@ -887,7 +883,7 @@ fn a_real_sigterm_while_booting_exits_143() {
     let output = fakes::rerun_within(
         &format!("{name}::a_real_sigterm_while_booting_exits_143"),
         &[(CHILD, "1")],
-        Deadline::after(CHILD_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }
@@ -1583,7 +1579,7 @@ fn install_with_a_writer_records_a_real_sigterm() {
     let output = fakes::rerun_within(
         &format!("{name}::install_with_a_writer_records_a_real_sigterm"),
         &[(WRITER_CHILD, "1"), (WRITER_HOME, held.as_str())],
-        Deadline::after(CHILD_WITHIN),
+        Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(output.status.code(), Some(143), "{}", output.status);
     // The child runs in its own process group under the rerun's watchdog,

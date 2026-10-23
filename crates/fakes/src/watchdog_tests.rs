@@ -1,16 +1,14 @@
+use crate::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use super::Watchdog;
 use crate::deadline::Deadline;
 use crate::{group_alive, kill_group};
-
-const DEADLINE: Duration = Duration::from_secs(5);
 
 /// A process in the test's own group that a stray group signal would kill.
 fn sentinel() -> Child {
@@ -48,9 +46,9 @@ fn dropping_the_watchdog_kills_the_group() {
     drop(Watchdog::group(group));
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match Deadline::after(DEADLINE).recv(&finished) {
+    let status = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the process group to die"),
     };
     assert_eq!(status.signal(), Some(9));
     assert!(!group_alive(group));
@@ -70,7 +68,7 @@ fn stand_down_leaves_the_group_alive() {
     let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
     // `stand_down` returns once the watchdog is reaped: from here nothing
     // else can signal the group.
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         !crate::kill_pid(watchdog_pid, "0").unwrap(),
         "stand_down returned before reaping the watchdog"
@@ -80,9 +78,9 @@ fn stand_down_leaves_the_group_alive() {
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match Deadline::after(DEADLINE).recv(&finished) {
+    let status = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the group to end on SIGTERM"),
     };
     // A SIGKILL the watchdog sent before it exited would still be pending,
     // and it wins over the later SIGTERM.
@@ -139,24 +137,24 @@ impl Piped {
         Self(rx)
     }
 
-    /// Waits [`DEADLINE`] for the forked `sleep`'s pid line.
+    /// Waits [`MUST_SUCCEED_WITHIN`] for the forked `sleep`'s pid line.
     #[track_caller]
     fn forked(&self, what: &str) {
-        match Deadline::after(DEADLINE).recv(&self.0) {
+        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.0) {
             Ok(Some(_)) => {}
-            _ => panic!("waited {DEADLINE:?} for {what}"),
+            _ => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
         }
     }
 
-    /// Waits [`DEADLINE`] for end-of-file, proving the `sleep` exited.
+    /// Waits [`MUST_SUCCEED_WITHIN`] for end-of-file, proving the `sleep` exited.
     #[track_caller]
     fn closed(self, what: &str) {
-        let wait = Deadline::after(DEADLINE);
+        let wait = Deadline::after(MUST_SUCCEED_WITHIN);
         loop {
             match wait.recv(&self.0) {
                 Ok(Some(_)) => {}
                 Ok(None) => return,
-                Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+                Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for {what}"),
             }
         }
     }
@@ -173,9 +171,9 @@ fn dropping_a_matching_watchdog_kills_every_match() {
     drop(Watchdog::matching(&marker));
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match Deadline::after(DEADLINE).recv(&finished) {
+    let status = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the matching process to die"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the matching process to die"),
     };
     assert_eq!(status.signal(), Some(9));
     piped.closed("the matching process's group to empty");
@@ -191,7 +189,7 @@ fn stand_down_leaves_matching_processes_alive() {
     let watchdog_pid = watchdog.child.as_ref().expect("a running watchdog").id();
     // `stand_down` returns once the watchdog is reaped: from here nothing
     // else can signal the group.
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
     assert!(
         !crate::kill_pid(watchdog_pid, "0").unwrap(),
         "stand_down returned before reaping the watchdog"
@@ -201,9 +199,9 @@ fn stand_down_leaves_matching_processes_alive() {
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match Deadline::after(DEADLINE).recv(&finished) {
+    let status = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(status) => status.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
+        Err(_) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the group to end on SIGTERM"),
     };
     // A SIGKILL the watchdog sent before it exited would still be pending,
     // and it wins over the later SIGTERM.

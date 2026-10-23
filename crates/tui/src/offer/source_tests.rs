@@ -1,5 +1,6 @@
 use super::*;
 use contract::events::OfferedKind;
+use fakes::MUST_SUCCEED_WITHIN;
 
 fn item() -> OfferedItem {
     serde_json::from_value(serde_json::json!({"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "", "files": ["tools/db.sh", "tools/other.sh"]})).unwrap()
@@ -155,8 +156,8 @@ fn width_zero_and_one_consume_each_character_without_hanging() {
         source.answered("c1", "界x".into());
         tx.send((text(&source, 0), text(&source, 1))).unwrap();
     });
-    let rows = fakes::Deadline::after(std::time::Duration::from_secs(5))
-        .recv_or_fail(&rx, "wrap source at zero width");
+    let rows =
+        fakes::Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "wrap source at zero width");
     assert_eq!(rows.0, ["界", "x"]);
     assert_eq!(rows.1, ["界", "x"]);
 }

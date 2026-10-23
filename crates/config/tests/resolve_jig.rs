@@ -9,6 +9,7 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -22,8 +23,8 @@ use fakes::Deadline;
 use serde_json::{Value, json};
 
 /// How long the resolve jig may take. `.config/nextest.toml` kills a slow
-/// test after a 30s period times 4 (120s total); with the 5s watchdog stand-down
-/// the deadlines sum to 55s, so 120s is at least twice them:
+/// test after a 30s period times 4 (120s total); with the 10s watchdog stand-down
+/// the deadlines sum to 60s, so 120s is at least twice them:
 /// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be
 /// at least twice the test's own deadlines, so a hang reports which wait
 /// expired.
@@ -58,7 +59,7 @@ fn resolve(setup: &Setup, args: &[&str]) -> Output {
         .recv(&finished)
         .expect("the resolve jig finished: the resolve example")
         .unwrap();
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
     output
 }
 

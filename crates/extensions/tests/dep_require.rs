@@ -14,9 +14,9 @@
 
 mod common;
 
+use fakes::MUST_SUCCEED_WITHIN;
 use std::collections::BTreeSet;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use common::{Repos, Setup, approve, dep_dir, manifest, project, write};
 use config::{Config, ProjectKey, Sources};
@@ -27,9 +27,6 @@ use fakes::clock::FakeClock;
 use fakes::git::git;
 use fakes::{Deadline, NoLock};
 use serde_json::Map;
-
-/// How long a test waits for the session load or one answer before failing.
-const WAIT: Duration = Duration::from_secs(5);
 
 const DEP: &str = "example.com/acme/dep";
 const ROOT: &str = "example.com/acme/root";
@@ -92,9 +89,9 @@ fn install_pair(setup: &Setup, root_init: &str) {
 }
 
 /// Loads `setup`'s home the way a session start does: on its own thread
-/// under `WAIT`, so a hang fails the test instead of hanging it.
+/// under `MUST_SUCCEED_WITHIN`, so a hang fails the test instead of hanging it.
 /// Loads `home` with `workspace` the way a session start does: on its own
-/// thread under `WAIT`, so a hang fails the test instead of hanging it.
+/// thread under `MUST_SUCCEED_WITHIN`, so a hang fails the test instead of hanging it.
 fn load_at(
     home: &std::path::Path,
     workspace: &std::path::Path,
@@ -113,7 +110,7 @@ fn load_at(
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
         let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks, None));
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .map(Arc::new)
         .expect("waited for the extensions to load")
@@ -156,7 +153,7 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
 
 /// The hook chain's answer, failing the test on a hang instead of hanging it.
 fn answer(rx: mpsc::Receiver<AfterToolAnswer>) -> AfterToolAnswer {
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the answer")
 }
@@ -485,7 +482,7 @@ fn load_set(setup: &Setup, repos: &Repos) -> Arc<SessionExtensions> {
             set,
         ));
     });
-    Deadline::after(WAIT)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .map(Arc::new)
         .expect("waited for the extensions to load")

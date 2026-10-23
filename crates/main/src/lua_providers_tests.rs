@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
 use crate::test_support::{Rig, install_extension, load};
+use fakes::MUST_SUCCEED_WITHIN;
 use std::io::{BufRead, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
@@ -19,9 +20,6 @@ use tools::PathLocks;
 
 use super::{add_lua, session_credential};
 use fakes::Deadline;
-
-/// How long the test waits for the credential lookup.
-const WAIT: Duration = Duration::from_secs(5);
 
 fn setup_home(name: &str) -> (fakes::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let rig = Rig::new(name);
@@ -203,7 +201,7 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
             || panic!("no key is read when credential() is registered"),
         )))
     });
-    let (key, signer) = Deadline::after(WAIT)
+    let (key, signer) = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&looked_up)
         .expect("the lookup ended in time")
         .unwrap();

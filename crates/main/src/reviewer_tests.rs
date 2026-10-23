@@ -10,6 +10,7 @@
 use crate::settings::block_limits;
 use crate::test_support;
 use fakes::Deadline;
+use fakes::MUST_SUCCEED_WITHIN;
 
 fn config(overrides: Vec<String>) -> config::Config {
     test_support::config("fiber-reviewer-limits", overrides)
@@ -209,9 +210,6 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
     }
 }
 
-/// How long a test waits for the quota fetch.
-const QUOTA_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// A model call through the reviewer `choose_reviewer` builds fetches quota
 /// for the label its lookup returned, which proves `choose_reviewer` hands
 /// that label to `connect` (`docs/tools.md`, "Provider quota").
@@ -269,7 +267,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
             None,
         )));
     });
-    let session_extensions = fakes::Deadline::after(QUOTA_WAIT)
+    let session_extensions = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&ext_ready)
         .expect("extensions loaded in time");
     let lua = session_extensions
@@ -302,7 +300,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
             None,
         )));
     });
-    let reviewer = fakes::Deadline::after(QUOTA_WAIT)
+    let reviewer = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&rev_ready)
         .expect("choose_reviewer ended in time")
         .unwrap()
@@ -310,7 +308,7 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
     assert_eq!(reviewer.model.reference, "qp/m2");
     let _call = reviewer.provider.call(&reviewer_request());
     assert!(
-        server.await_requests(1, fakes::Deadline::after(QUOTA_WAIT)),
+        server.await_requests(1, fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the reviewer call never fetched quota"
     );
     let paths: Vec<String> = server
