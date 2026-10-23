@@ -721,11 +721,10 @@ fn an_unwritten_answer_with_a_drained_web_still_waits() {
     );
 }
 
-/// Idle-wait passes until one is not `Woken`, as the hub's own loop does:
-/// a stop is acknowledged before its store lands, so a pass that runs
-/// between the two parks and returns `Woken` once the store wakes it. The
-/// passes run on a thread and the result is received under one deadline.
-fn idle_until_signal(hub: &Arc<Hub>) -> Idle {
+/// Idle-wait passes on a thread until one is not `Woken`, as the hub's own
+/// loop does: a pass parked before a stop's store returns `Woken` when the
+/// wake lands, and the next pass sees the stop.
+fn spawn_idle_until_signal(hub: &Arc<Hub>) -> mpsc::Receiver<Idle> {
     let (done_tx, done) = mpsc::channel();
     let hub = Arc::clone(hub);
     thread::spawn(move || {
@@ -741,7 +740,15 @@ fn idle_until_signal(hub: &Arc<Hub>) -> Idle {
         };
         done_tx.send(outcome).unwrap_or(());
     });
-    Deadline::after(DEADLINE).recv_or_fail(&done, "the idle wait to see the stop")
+    done
+}
+
+/// [`spawn_idle_until_signal`], received under one deadline.
+fn idle_until_signal(hub: &Arc<Hub>) -> Idle {
+    Deadline::after(DEADLINE).recv_or_fail(
+        &spawn_idle_until_signal(hub),
+        "the idle wait to see the stop",
+    )
 }
 
 /// A hub on `clock`, held by the test for advances: the stop loop parks
@@ -1014,7 +1021,7 @@ fn a_bare_stop_leaves_a_running_session_alone() {
 }
 
 #[test]
-fn a_waiter_parked_before_the_bare_stop_store_wakes_and_then_sees_the_stop() {
+fn an_idle_wait_parked_before_the_bare_stop_store_still_ends_on_the_stop() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let hub = hub_with_clock(&temp.dir, FakeStarter::hang(&temp.dir), Arc::clone(&clock));
@@ -1031,36 +1038,20 @@ fn a_waiter_parked_before_the_bare_stop_store_wakes_and_then_sees_the_stop() {
     let (id, _) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_stop");
     Deadline::after(DEADLINE).recv_or_fail(&entered, "the stop to pause before its store");
-    // One pass, on a thread: it parks on the clock with no stop stored.
-    let (pass_tx, pass) = mpsc::channel();
-    let waiter = {
-        let hub = Arc::clone(&hub);
-        thread::spawn(move || {
-            let first = hub.idle_wait(
-                Duration::from_secs(60),
-                &AtomicBool::new(false),
-                &AtomicI32::new(0),
-            );
-            pass_tx.send(first).unwrap_or(());
-        })
-    };
+    // The helper's first pass parks on the clock with no stop stored.
+    let done = spawn_idle_until_signal(&hub);
     assert!(
         clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
         "the idle wait parks before the store"
     );
     drop(release_tx);
-    // The store wakes the parked pass: it returns `Woken`, not the stop.
-    let first = Deadline::after(DEADLINE).recv_or_fail(&pass, "the parked pass to wake");
-    assert!(
-        matches!(first, Idle::Woken),
-        "a pass that parked before the store returns Woken"
-    );
-    waiter.join().unwrap();
+    // Whatever the first pass returns, the helper ends on the stop.
     assert!(matches!(
-        idle_until_signal(&hub),
+        Deadline::after(DEADLINE).recv_or_fail(&done, "the idle wait to see the stop"),
         Idle::Signal(signal_hook::consts::SIGTERM)
     ));
 }
+
 /// The import answer the driver answers with, scripted through the
 /// machine: names and reasons only, never secret values.
 fn import_report() -> Value {

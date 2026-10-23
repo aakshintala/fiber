@@ -1049,11 +1049,12 @@ fn on_status(
 /// lock and shuts the bridge write side; the serving thread parks on the
 /// tick until written and `web.drained()`, or `STOP_CLOSE_WAIT`. A
 /// `sessions` that is not a boolean, an explicit null, or any unknown
-/// key is `invalid_arguments` and the hub keeps running. The store runs
-/// under the tick hold before the acknowledgement is written, and the
-/// wake after it, so the client always reads the acceptance before the
-/// exit closes its socket, and a waiter that has checked and not yet
-/// parked cannot miss the store.
+/// key is `invalid_arguments` and the hub keeps running. Both paths write
+/// the answer first, then store under the tick hold, then wake, so the
+/// client always reads the acceptance before the exit closes its socket,
+/// and a waiter that has checked and not yet parked cannot miss the
+/// store. A waiter already parked wakes on the wake alone and may return
+/// `Woken` once before the next pass sees the store.
 fn on_stop(
     id: &CommandId,
     args: &Map<String, Value>,
