@@ -1,0 +1,44 @@
+---
+source: crates/tui/src/view/reviewer_setup_tests.rs
+expression: "checked(flipped(), \"flipped\", 1)"
+---
+
+
+
+
+
+
+
+
+
+
+
+          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+            Reviewer setup                                                    ✕
+
+            Topic 4 of 5 · Routine actions
+            What routine actions, such as squash-merging your own pull requests
+            once CI passes, should the reviewer allow?
+            14 escalations answered allow for `gh pr merge … --squash`
+⋮           › [global]       squash-merging my own pull requests once CI passes           ⋮
+⋮           was per-project · Tab flipped it                                              ⋮
+⋮                                                                                         ⋮
+            Tab flip layer · Enter confirm · e edit · x strike · Esc back
+
+          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+
+
+
+
+
+
+
+
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

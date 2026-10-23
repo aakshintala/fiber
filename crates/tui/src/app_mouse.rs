@@ -235,6 +235,11 @@ impl App {
             self.scroll_report_rows(!up, WHEEL_ROWS);
             return;
         }
+        // The reviewer setup takes the wheel and does nothing with it: the
+        // conversation under the panel stays where it is.
+        if order.contains(&Surface::ReviewerSetup) {
+            return;
+        }
         // The quit question and the notice overlay have nothing to
         // scroll, and their frames cover the rows beneath: the wheel
         // over a frame is theirs and moves nothing.

@@ -520,6 +520,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "panel",
     "rail",
     "rules",
+    "reviewer-setup",
     "settings",
     "config",
     "theme",

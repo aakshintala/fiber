@@ -16,6 +16,7 @@ ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 rustix.workspace = true
 serde_json.workspace = true
 signal-hook.workspace = true
+similar.workspace = true
 support = { path = "../support" }
 thiserror.workspace = true
 
