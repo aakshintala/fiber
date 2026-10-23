@@ -34,6 +34,9 @@ const LAYER_COLUMN: usize = 10;
 /// The gap between two columns.
 const GAP: usize = 2;
 
+/// The columns the two gaps of a row take.
+const GAPS: usize = 2 * GAP;
+
 /// When a written key takes effect (`docs/configuration.md`, "When Fiber
 /// reads configuration").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -663,7 +666,7 @@ impl Settings {
             .unwrap_or(0)
             .min(KEY_COLUMN);
         let values: Vec<String> = self.rows.iter().map(shown_value).collect();
-        let room = width.saturating_sub(key_col + LAYER_COLUMN + 2 * GAP + GUTTER);
+        let room = width.saturating_sub(key_col + LAYER_COLUMN + GAPS + GUTTER);
         let value_col = values
             .iter()
             .map(|value| text::width(value))

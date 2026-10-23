@@ -283,6 +283,30 @@ fn rows_that_arrive_after_a_failed_read_start_on_the_first_key() {
 }
 
 #[test]
+fn a_move_clears_what_the_last_action_said_and_a_stay_keeps_it() {
+    let fake = Fake::new(rows());
+    let mut settings = Settings::open(&ctx(&fake));
+    // On the first key, Up stays: the line stays too.
+    settings.said = vec!["Saved.".to_owned()];
+    press(&mut settings, &fake, &[Key::Up]);
+    assert_eq!(settings.list.selected(), 1);
+    assert_eq!(settings.frame(80, None).below, ["Saved."]);
+    // Down moves: the line goes, and the selected key's timing shows.
+    press(&mut settings, &fake, &[Key::Down]);
+    assert_eq!(settings.list.selected(), 2);
+    assert!(settings.said.is_empty());
+    assert_eq!(
+        settings.frame(80, None).below,
+        ["changing handoff.tokens needs a reload"]
+    );
+    // And back up, the same.
+    settings.said = vec!["Saved.".to_owned()];
+    press(&mut settings, &fake, &[Key::Up]);
+    assert_eq!(settings.list.selected(), 1);
+    assert!(settings.said.is_empty());
+}
+
+#[test]
 fn a_string_draws_bare_and_anything_else_as_its_json() {
     let fake = Fake::new(vec![
         row("a", value("\"a/b\""), "global", WriteScope::GlobalOnly),
