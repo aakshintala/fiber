@@ -756,7 +756,13 @@ is the log's first line, `fiber_started` follows it in a new session,
 `extensions_loaded` is written before the first model request, and `fiber_exited`
 is the last line the process writes. That is the whole durable stream the
 export command cases observe: no turn runs, so nothing writes between
-`extensions_loaded` and `fiber_exited`.
+`extensions_loaded` and `fiber_exited`. The `expect` lists in
+`extensions/export/tests/export-writes-no-durable-line.json` and
+`extensions/export/tests/export-text-reaches-the-extension.json` pin this
+order under `docs/testing.md`, "What a test asserts" ("A test asserts an order
+or a count only where a doc promises it"): the promise is `expect` lists the
+complete ordered durable event stream above, and each position is proved by
+`docs/events.md` as the preceding sentences cite.
 
 ```json
 {
