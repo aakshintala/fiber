@@ -14,11 +14,12 @@
 //! never reads it, or a descendant that holds the pipe, never holds the
 //! helper past the deadline.
 
+use std::ffi::OsStr;
 use std::io;
 use std::os::unix::io::AsFd as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use contract::clock::{Clock, Wake};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -43,18 +44,16 @@ pub(crate) enum Ended {
 /// SIGKILL and is reaped; its process group is never signalled. An empty
 /// `argv`, a command that cannot start, or a wake pipe or watcher thread
 /// that cannot start is the error.
-pub(crate) fn run_bounded(
-    argv: &[String],
+pub(crate) fn run_bounded<S: AsRef<OsStr>>(
+    argv: &[S],
     stdin: Option<String>,
     clock: &Arc<dyn Clock>,
 ) -> io::Result<Ended> {
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| io::Error::other("no command"))?;
-    let deadline = clock
-        .now()
-        .checked_add(READ_LIMIT)
-        .unwrap_or_else(|| clock.now());
+    let now = clock.now();
+    let deadline = now.checked_add(READ_LIMIT).unwrap_or(now);
     let (wake_read, wake_write) = std::io::pipe()?;
     nonblocking(&wake_read);
     nonblocking(&wake_write);
@@ -70,19 +69,25 @@ pub(crate) fn run_bounded(
         .process_group(0)
         .spawn()?;
     let id = child.id();
-    let mut feed = stdin.zip(child.stdin.take()).map(|(text, stdin)| {
-        nonblocking(&stdin);
-        Feed {
+    let mut feed = None;
+    if let Some((text, stdin)) = stdin.zip(child.stdin.take()) {
+        // Fail closed: a blocking write end could hold `Feed::pump` past the
+        // deadline.
+        if let Err(error) = rustix::io::ioctl_fionbio(stdin.as_fd(), true) {
+            drop(stdin);
+            stop(&mut child);
+            return Err(error.into());
+        }
+        feed = Some(Feed {
             stdin,
             text: text.into_bytes(),
             sent: 0,
-        }
-    });
+        });
+    }
     let wake: Arc<dyn Wake> = Arc::new(PipeWake {
         write: Mutex::new(wake_write),
     });
-    let weak: Weak<dyn Wake> = Arc::downgrade(&wake);
-    clock.subscribe(weak);
+    clock.subscribe(Arc::downgrade(&wake));
     let watcher_wake = Arc::clone(&wake);
     let watcher = match crate::sources::builder("tui-helper-watch").spawn(move || {
         wait_for_exit(id);
@@ -111,23 +116,12 @@ pub(crate) fn run_bounded(
         }
         clock.wait_until(Some(deadline), &mut |bound| {
             let timeout = bound.map(|left| Timespec::try_from(left).unwrap_or_default());
-            match feed.as_ref() {
-                Some(feed) => {
-                    let mut fds = [
-                        PollFd::new(&wake_read, PollFlags::IN),
-                        PollFd::new(&feed.stdin, PollFlags::OUT),
-                    ];
-                    match poll(&mut fds, timeout.as_ref()) {
-                        Ok(_) | Err(_) => {}
-                    }
-                }
-                None => {
-                    let mut fds = [PollFd::new(&wake_read, PollFlags::IN)];
-                    match poll(&mut fds, timeout.as_ref()) {
-                        Ok(_) | Err(_) => {}
-                    }
-                }
-            }
+            let mut fds = vec![PollFd::new(&wake_read, PollFlags::IN)];
+            fds.extend(
+                feed.as_ref()
+                    .map(|feed| PollFd::new(&feed.stdin, PollFlags::OUT)),
+            );
+            poll(&mut fds, timeout.as_ref()).unwrap_or(0);
             drain(&wake_read);
         });
     };
@@ -137,9 +131,7 @@ pub(crate) fn run_bounded(
         drop(feed);
         stop(&mut child);
     }
-    match watcher.join() {
-        Ok(()) | Err(_) => {}
-    }
+    drop(watcher.join());
     outcome
 }
 
@@ -161,17 +153,13 @@ pub(crate) fn spawn_detached(
 /// discarded: the child may have exited already.
 fn stop(child: &mut std::process::Child) {
     drop(support::group::signal_process(child.id(), Signal::KILL));
-    match child.wait() {
-        Ok(_) | Err(_) => {}
-    }
+    drop(child.wait());
 }
 
-/// Sets `fd` non-blocking. A failure is ignored: a blocking descriptor only
-/// loses the bound the poll gives, never the kill.
+/// Sets a wake pipe end non-blocking. A failure is ignored: a blocking end
+/// only loses the bound the poll gives, never the kill.
 fn nonblocking(fd: &impl std::os::unix::io::AsFd) {
-    match rustix::io::ioctl_fionbio(fd.as_fd(), true) {
-        Ok(_) | Err(_) => {}
-    }
+    rustix::io::ioctl_fionbio(fd.as_fd(), true).unwrap_or(());
 }
 
 /// The text still to write to the command's standard input.
@@ -215,9 +203,7 @@ pub(crate) struct PipeWake {
 impl Wake for PipeWake {
     fn wake(&self) {
         let write = self.write.lock().unwrap_or_else(PoisonError::into_inner);
-        match rustix::io::write(write.as_fd(), b"x") {
-            Ok(_) | Err(_) => {}
-        }
+        rustix::io::write(write.as_fd(), b"x").unwrap_or(0);
     }
 }
 

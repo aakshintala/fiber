@@ -279,15 +279,21 @@ fn a_viewer_past_the_deadline_is_not_a_failure() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn a_path_that_is_not_utf8_is_an_error() {
+fn a_path_that_is_not_utf8_reaches_the_viewer_whole() {
     use std::os::unix::ffi::OsStrExt;
     let dir = fakes::TempDir::new("fiber-viewer-bytes");
     let images = dir.path().join(std::ffi::OsStr::from_bytes(b"images-\xff"));
-    let result = opened(&["true".to_owned()], &images, view("shot.png", b"bytes"));
-    assert!(
-        result
-            .as_ref()
-            .is_err_and(|why| why.contains("is not valid UTF-8")),
-        "{result:?}"
+    let marker = dir.path().join("opened");
+    let program = fakes::script(dir.path(), "viewer", "printf %s \"$2\" > \"$1\"\n");
+    let argv = [
+        "/bin/sh".to_owned(),
+        program.to_str().unwrap_or_default().to_owned(),
+        marker.to_str().unwrap_or_default().to_owned(),
+    ];
+    assert_eq!(opened(&argv, &images, view("shot.png", b"bytes")), Ok(()));
+    let path = images.join("s_aaaaaaaaaaaaaaaa-shot.png");
+    assert_eq!(
+        std::fs::read(&marker).unwrap_or_else(|err| panic!("read: {err}")),
+        path.as_os_str().as_bytes()
     );
 }

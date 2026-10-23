@@ -5,6 +5,7 @@
 //! safe to delete.
 
 use std::collections::hash_map::RandomState;
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::hash::BuildHasher;
 use std::io::Write;
@@ -125,11 +126,11 @@ fn run(argv: &[String], path: &Path, clock: &Arc<dyn Clock>) -> Result<(), Strin
     let program = argv
         .first()
         .ok_or_else(|| "no program opens images".to_owned())?;
-    let path = path
-        .to_str()
-        .ok_or_else(|| format!("`{}` is not valid UTF-8", path.display()))?;
-    let mut argv = argv.to_vec();
-    argv.push(path.to_owned());
+    let argv: Vec<OsString> = argv
+        .iter()
+        .map(OsString::from)
+        .chain([path.as_os_str().to_owned()])
+        .collect();
     match crate::helper::run_bounded(&argv, None, clock) {
         Ok(Ended::Exited(status)) if !status.success() => {
             Err(format!("`{program}` exited with {status}"))
