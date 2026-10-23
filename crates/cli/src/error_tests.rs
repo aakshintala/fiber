@@ -1118,26 +1118,57 @@ fn launchd_still_loaded_names_the_service() {
     );
 }
 
-#[test]
-fn manager_not_found_names_launchd_for_launchctl() {
-    check(
-        &CliError::ManagerNotFound {
-            program: "launchctl".to_owned(),
-        },
-        ErrorCode::IoFailed,
-        "`launchctl` was not found; an installed hub needs launchd.",
-    );
+fn manager_not_found(program: &str) -> CliError {
+    CliError::ManagerNotFound {
+        program: program.to_owned(),
+    }
+}
+
+fn manager_failed(program: &str, args: &[&str], exit: Option<i32>, said: Option<&str>) -> CliError {
+    CliError::ManagerFailed {
+        program: program.to_owned(),
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        exit,
+        said: said.map(str::to_owned),
+    }
 }
 
 #[test]
-fn manager_not_found_names_systemd_for_any_other_program() {
-    check(
-        &CliError::ManagerNotFound {
-            program: "systemctl".to_owned(),
-        },
-        ErrorCode::IoFailed,
-        "`systemctl` was not found; an installed hub needs systemd's user instance.",
-    );
+fn manager_errors_name_the_manager_and_each_failure_branch() {
+    let restart = ["--user", "restart", "x.service"];
+    let rows = [
+        (
+            manager_not_found("launchctl"),
+            "`launchctl` was not found; an installed hub needs launchd.",
+        ),
+        (
+            manager_not_found("systemctl"),
+            "`systemctl` was not found; an installed hub needs systemd's user instance.",
+        ),
+        (
+            manager_failed("systemctl", &restart, Some(5), None),
+            "`systemctl --user restart x.service` failed with exit code 5.",
+        ),
+        (
+            manager_failed("systemctl", &restart, Some(5), Some("boom")),
+            "`systemctl --user restart x.service` failed with exit code 5: boom.",
+        ),
+        (
+            manager_failed("systemctl", &restart, None, None),
+            "`systemctl --user restart x.service` failed with no exit code.",
+        ),
+        (
+            manager_failed("systemctl", &restart, None, Some("boom")),
+            "`systemctl --user restart x.service` failed with no exit code: boom.",
+        ),
+        (
+            manager_failed("launchctl", &[], Some(1), None),
+            "`launchctl ` failed with exit code 1.",
+        ),
+    ];
+    for (error, message) in &rows {
+        check(error, ErrorCode::IoFailed, message);
+    }
 }
 
 #[test]
@@ -1149,69 +1180,6 @@ fn manager_run_names_the_program_and_the_cause() {
         },
         ErrorCode::IoFailed,
         "running `systemctl`: denied",
-    );
-}
-
-fn manager_failed(exit: Option<i32>, said: Option<&str>) -> CliError {
-    CliError::ManagerFailed {
-        program: "systemctl".to_owned(),
-        args: vec![
-            "--user".to_owned(),
-            "restart".to_owned(),
-            "x.service".to_owned(),
-        ],
-        exit,
-        said: said.map(str::to_owned),
-    }
-}
-
-#[test]
-fn manager_failed_with_an_exit_code_and_no_stderr() {
-    check(
-        &manager_failed(Some(5), None),
-        ErrorCode::IoFailed,
-        "`systemctl --user restart x.service` failed with exit code 5.",
-    );
-}
-
-#[test]
-fn manager_failed_with_an_exit_code_and_a_stderr_line() {
-    check(
-        &manager_failed(Some(5), Some("boom")),
-        ErrorCode::IoFailed,
-        "`systemctl --user restart x.service` failed with exit code 5: boom.",
-    );
-}
-
-#[test]
-fn manager_failed_with_no_exit_code_and_no_stderr() {
-    check(
-        &manager_failed(None, None),
-        ErrorCode::IoFailed,
-        "`systemctl --user restart x.service` failed with no exit code.",
-    );
-}
-
-#[test]
-fn manager_failed_with_no_exit_code_and_a_stderr_line() {
-    check(
-        &manager_failed(None, Some("boom")),
-        ErrorCode::IoFailed,
-        "`systemctl --user restart x.service` failed with no exit code: boom.",
-    );
-}
-
-#[test]
-fn manager_failed_with_no_arguments_keeps_the_space_before_the_closing_tick() {
-    check(
-        &CliError::ManagerFailed {
-            program: "launchctl".to_owned(),
-            args: Vec::new(),
-            exit: Some(1),
-            said: None,
-        },
-        ErrorCode::IoFailed,
-        "`launchctl ` failed with exit code 1.",
     );
 }
 

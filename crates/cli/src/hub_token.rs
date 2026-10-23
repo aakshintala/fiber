@@ -27,11 +27,10 @@ fn list(
         "c_devices",
         HubCommand::Devices(NoArgs {}),
     )?;
-    let malformed = || CliError::DevicesMalformed;
     let devices = result
         .get("devices")
         .and_then(Value::as_array)
-        .ok_or_else(malformed)?;
+        .ok_or(CliError::DevicesMalformed)?;
     let mut rows = vec![vec![
         "name".to_owned(),
         "paired".to_owned(),
@@ -41,11 +40,11 @@ fn list(
         let name = device
             .get("name")
             .and_then(Value::as_str)
-            .ok_or_else(malformed)?;
+            .ok_or(CliError::DevicesMalformed)?;
         let time = |key| -> Result<String, CliError> {
             match device.get(key) {
                 None => Ok("-".to_owned()),
-                Some(value) => Ok(utc(value.as_u64().ok_or_else(malformed)? / 1000)),
+                Some(value) => Ok(utc(value.as_u64().ok_or(CliError::DevicesMalformed)? / 1000)),
             }
         };
         rows.push(vec![
