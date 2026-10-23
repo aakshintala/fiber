@@ -146,6 +146,7 @@ credential a session uses"). A new session takes its label from
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `import <claude-code \| codex>` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `stop [--hub <name>]` | Shuts down every running session, then the hub. It waits for the sockets to close, then prints what it stopped. With nothing running it prints `Nothing running.`. With `--hub`, it stops the sessions and the hub process: a login service on that machine may start the hub again, and the output does not say so. |
 | `feedback [<prompt>] [-]` | Writes a feedback report with the description, version, platform and `fiber doctor` output, and prints the issue link. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
@@ -1051,7 +1052,7 @@ websocket for everything it does.
 | `write_config` | `workspace` (absolute string), `path`, `text`, `version` (strings) | Writes the text only while the file still has that version; otherwise rejects `stale_request` without writing. Parses no text. |
 | `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
-| `stop` | none | On the local socket only: ends the hub as SIGTERM does. |
+| `stop` | `sessions` (boolean, optional) | Ends the hub as SIGTERM does. With `sessions` true, first shuts down every running session the hub knows of in `run/`, each through its own shutdown (`close` with `now`), bounded, then exits. Any authenticated connection may send it. |
 | `placeholder_env` | `names` (array of strings) | Answers with the hub's captured values for the named placeholders, absent names omitted, so the list and the session agree (`docs/model-routing.md`, "Model discovery"). |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |
