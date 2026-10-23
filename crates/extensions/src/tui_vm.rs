@@ -170,6 +170,21 @@ impl TuiVm {
     /// holding the slots it registered. `fiber.slot` works only while the
     /// script runs.
     pub fn load(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, Error> {
+        // A Lua error while loading is a failure to start, not a renderer's
+        // (`docs/errors.md`, `extension_failed` and `hook_failed`).
+        Self::start(name, source, clock).map_err(|error| {
+            if let Error::TuiLua(message) = error {
+                Error::Lua {
+                    extension: name.to_owned(),
+                    message,
+                }
+            } else {
+                error
+            }
+        })
+    }
+
+    fn start(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, Error> {
         let lua = Lua::new_with(
             // table, string, math, utf8 and coroutine: Lua's safe set, which
             // leaves out debug, less its I/O and module loader. `require` is

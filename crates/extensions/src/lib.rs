@@ -527,8 +527,9 @@ pub enum Error {
     /// A `credential()` call failed. Only from [`LuaProvider::fetch_token`].
     #[error(transparent)]
     Credential(Box<Error>),
-    /// A TUI extension's script or renderer raised a Lua error
-    /// (`docs/tui.md`, "When an extension fails").
+    /// A TUI extension's renderer raised a Lua error
+    /// (`docs/tui.md`, "When an extension fails"). A Lua error while the
+    /// extension loads is [`Error::Lua`].
     #[error("{0}")]
     TuiLua(String),
     /// A TUI extension's callback passed its declared timeout.
@@ -612,12 +613,13 @@ impl Error {
             | Self::UnknownCallback { .. }
             | Self::BadReturn { .. }
             | Self::Stopped { .. }
-            | Self::TuiLua(_)
             | Self::TuiTimeout
             | Self::TuiOff
             | Self::TuiNoSlot(_)
-            | Self::TuiShape(_)
             | Self::TuiRegistration(_) => ErrorCode::ExtensionFailed,
+            // A renderer that errored or returned the wrong shape
+            // (`docs/errors.md`, `hook_failed`).
+            Self::TuiLua(_) | Self::TuiShape(_) => ErrorCode::HookFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. }
             | Self::ModelMissing { .. }

@@ -385,9 +385,10 @@ fn animate_is_accepted() {
 fn a_script_error_is_a_lua_error_naming_the_cause() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "error('broken script')", clock);
-    let Err(Error::TuiLua(message)) = result else {
+    let Err(Error::Lua { extension, message }) = result else {
         panic!("expected a Lua error, got {result:?}");
     };
+    assert_eq!(extension, "test");
     assert!(message.contains("broken script"), "{message}");
 }
 
@@ -395,14 +396,14 @@ fn a_script_error_is_a_lua_error_naming_the_cause() {
 fn a_syntax_error_is_a_lua_error() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "fiber.slot(", clock);
-    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::Lua { .. })), "{result:?}");
 }
 
 #[test]
 fn a_script_that_yields_is_a_lua_error() {
     let clock = FakeClock::new();
     let result = TuiVm::load("test", "coroutine.yield()", clock);
-    assert!(matches!(result, Err(Error::TuiLua(_))), "{result:?}");
+    assert!(matches!(result, Err(Error::Lua { .. })), "{result:?}");
 }
 
 #[test]
@@ -577,18 +578,24 @@ fn the_slot_table_in_the_doc_is_the_slot_set_in_the_code() {
 }
 
 #[test]
-fn every_failure_a_vm_reports_is_an_extension_failure() {
+fn a_renderer_failure_is_hook_failed_and_the_rest_are_extension_failed() {
     let (clock, mut vm) = notice("builtin({}) return {}");
-    let mut errors = vec![
+    let failed = [
         TuiVm::load("test", "error('x')", FakeClock::new()).unwrap_err(),
         TuiVm::load("test", "fiber.slot('banner', {})", FakeClock::new()).unwrap_err(),
         vm.call("home", "s1", &json!({}), 80, &none).unwrap_err(),
-        vm.call("notice", "s1", &json!(1), 80, &none).unwrap_err(),
         call_advancing(&mut vm, &clock, 100 * MS).unwrap_err(),
+        call(&mut vm, &json!({})).unwrap_err(),
     ];
-    errors.push(call(&mut vm, &json!({})).unwrap_err());
-    assert_eq!(errors.len(), 6);
-    for error in errors {
+    for error in failed {
         assert_eq!(error.code(), ErrorCode::ExtensionFailed, "{error:?}");
+    }
+    let (_, mut vm) = notice("if input.fail then error('x') end return {}");
+    let errored = call(&mut vm, &json!({ "fail": true })).unwrap_err();
+    let shaped = call(&mut vm, &json!(1)).unwrap_err();
+    assert!(matches!(errored, Error::TuiLua(_)), "{errored:?}");
+    assert!(matches!(shaped, Error::TuiShape(_)), "{shaped:?}");
+    for error in [errored, shaped] {
+        assert_eq!(error.code(), ErrorCode::HookFailed, "{error:?}");
     }
 }
