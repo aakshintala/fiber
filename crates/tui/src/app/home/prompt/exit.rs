@@ -46,7 +46,9 @@ impl App {
     /// live-updates; Enter closes the counted sessions still live.
     pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize)> {
         match self.home.as_ref().and_then(|home| home.questions.prompt()) {
-            Some(Prompt::CloseAll { counts, .. }) => Some(*counts),
+            Some(Prompt::CloseAll { sessions, counts }) => {
+                Some((sessions.len(), counts.0, counts.1))
+            }
             _ => None,
         }
     }
@@ -67,7 +69,6 @@ impl App {
         }
         let working = self.working();
         let counts = (
-            sessions.len(),
             sessions.iter().filter(|id| working.contains(id)).count(),
             self.elsewhere(&sessions),
         );
@@ -78,7 +79,7 @@ impl App {
     }
 
     /// The live top-level sessions on this hub closing asks about, in
-    /// list order with the attached one last: live rows that read, plus
+    /// list order with the attached one last: every live row, plus
     /// the attached session when no live row names it, unless it left
     /// after the attach.
     fn live_sessions(&self) -> Vec<SessionId> {
@@ -89,7 +90,6 @@ impl App {
             .sessions
             .live()
             .iter()
-            .filter(|row| row.state != crate::home::State::Unreadable)
             .map(|row| row.id.clone())
             .collect();
         if let Phase::Attached { session, .. } = &self.phase
@@ -123,48 +123,17 @@ impl App {
         if !self.quit_open() {
             return None;
         }
-        if matches!(
+        let closing = matches!(
             self.home.as_ref().and_then(|home| home.questions.prompt()),
             Some(Prompt::CloseAll { .. })
-        ) {
-            return Some(match key {
-                Key::Enter => self.confirm_close_all(),
-                Key::Esc => {
-                    self.close_prompt();
-                    Effect::None
-                }
-                Key::Char(_)
-                | Key::Backspace
-                | Key::Up
-                | Key::Down
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlO
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::CtrlC
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => Effect::None,
-            });
-        }
-        match key {
-            Key::Enter => Some(Effect::Quit),
-            Key::Char('c') => Some(self.close_all()),
+        );
+        Some(match key {
+            Key::Enter if closing => self.confirm_close_all(),
+            Key::Enter => Effect::Quit,
+            Key::Char('c') if !closing => self.close_all(),
             Key::Esc => {
                 self.close_prompt();
-                Some(Effect::None)
+                Effect::None
             }
             Key::Char(_)
             | Key::Backspace
@@ -189,8 +158,8 @@ impl App {
             | Key::AltX
             | Key::AltP
             | Key::AltR
-            | Key::AltDigit(_) => Some(Effect::None),
-        }
+            | Key::AltDigit(_) => Effect::None,
+        })
     }
 
     /// The quit question's choice, on home or over a session: leaving
@@ -207,14 +176,11 @@ impl App {
             Some(Prompt::CloseAll { .. })
         ) {
             return match choice {
-                // `Leave` draws no row in the close-all question: a click
-                // routed to it anyway does nothing.
                 QuitChoice::CloseAll => self.confirm_close_all(),
-                QuitChoice::Stay => {
+                QuitChoice::Leave | QuitChoice::Stay => {
                     self.close_prompt();
                     Effect::None
                 }
-                QuitChoice::Leave => Effect::None,
             };
         }
         match choice {
@@ -327,33 +293,23 @@ impl App {
     /// a job or a delegate, or waiting on the person, and the attached
     /// session while its turn runs, whatever its feed row says.
     /// Unreadable rows never count, and neither do rows
-    /// that left. A session with a `close` already going out counts as
-    /// stopped: `/quit` after `/close all` asks nothing while the hub's
-    /// lines are still landing.
+    /// that left.
     fn working(&self) -> Vec<SessionId> {
         let Some(home) = self.home.as_ref() else {
             return Vec::new();
-        };
-        let stopping = |id: &SessionId| {
-            home.questions
-                .asks
-                .values()
-                .any(|ask| matches!(ask, Ask::Stop(stop) if stop == id))
         };
         let mut working: Vec<SessionId> = home
             .sessions
             .live()
             .iter()
             .filter(|row| {
-                !stopping(&row.id)
-                    && (matches!(
-                        row.state,
-                        crate::home::State::Working
-                            | crate::home::State::Retrying
-                            | crate::home::State::Waiting
-                            | crate::home::State::Jobs
-                    ) || (row.state == crate::home::State::Idle
-                        && (row.jobs > 0 || row.delegates > 0)))
+                matches!(
+                    row.state,
+                    crate::home::State::Working
+                        | crate::home::State::Retrying
+                        | crate::home::State::Waiting
+                        | crate::home::State::Jobs
+                ) || (row.state == crate::home::State::Idle && (row.jobs > 0 || row.delegates > 0))
             })
             .map(|row| row.id.clone())
             .collect();
@@ -362,7 +318,6 @@ impl App {
             busy: true,
         } = &self.phase
             && !working.contains(session)
-            && !stopping(session)
         {
             working.push(session.clone());
         }

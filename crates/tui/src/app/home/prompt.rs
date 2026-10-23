@@ -62,8 +62,9 @@ pub(super) enum Prompt {
         /// The live top-level sessions counted when the question opened,
         /// in list order with the attached one last.
         sessions: Vec<SessionId>,
-        /// The counts drawn under the title: sessions, working, elsewhere.
-        counts: (usize, usize, usize),
+        /// The counts drawn under the title: working, elsewhere.
+        /// Sessions is `sessions.len()`.
+        counts: (usize, usize),
     },
 }
 
