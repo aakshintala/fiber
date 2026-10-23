@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use contract::ErrorCode;
 use contract::events::{Event, OnFork};
@@ -257,7 +257,7 @@ impl StateRegistry {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.inner)
     }
 
     pub(crate) fn take_outbox(&self) -> Vec<Event> {
@@ -316,7 +316,7 @@ impl Default for ExtensionState {
 
 impl ExtensionState {
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.inner)
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<Value> {

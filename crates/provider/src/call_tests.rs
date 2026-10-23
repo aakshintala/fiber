@@ -421,7 +421,7 @@ fn test_request() -> contract::provider::ModelRequest {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

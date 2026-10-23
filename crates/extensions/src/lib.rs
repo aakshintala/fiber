@@ -40,19 +40,14 @@ pub fn observe_login_wait(
     extension: String,
     notify: Box<dyn FnOnce(std::thread::ThreadId) + Send>,
 ) {
-    LOGIN_WAIT_OBSERVERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push((extension, notify));
+    support::lock(&LOGIN_WAIT_OBSERVERS).push((extension, notify));
 }
 
 /// Fires one login-wait observer, holding no lock while it runs.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn login_wait_recorded(extension: &str) {
     let notify = {
-        let mut observers = LOGIN_WAIT_OBSERVERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut observers = support::lock(&LOGIN_WAIT_OBSERVERS);
         observers
             .iter()
             .position(|(name, _)| name == extension)

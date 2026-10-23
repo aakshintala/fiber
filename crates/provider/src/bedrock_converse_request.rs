@@ -4,10 +4,9 @@
 //! Converse wire facts").
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use contract::diag::PrefixHashes;
-use contract::provider::{Input, ModelRequest, ToolDefinition};
+use contract::provider::{Input, Media, ModelRequest, ToolDefinition};
 use contract::{ActionId, ThinkingLevel};
 use serde_json::{Map, Value, json};
 
@@ -231,7 +230,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             input,
             &reference,
             &call_ids,
-            &request.session_dir,
+            &request.media,
             endpoint.text_only,
         );
         if blocks.is_empty() {
@@ -306,13 +305,13 @@ fn blocks_of(
     input: &Input,
     reference: &str,
     call_ids: &BTreeMap<&ActionId, &str>,
-    session_dir: &Path,
+    media: &Media,
     text_only: bool,
 ) -> Vec<Value> {
     match input {
         Input::User { text, images } => {
             let prepared =
-                crate::images::prepare(text, images, &[], session_dir, text_only, PdfForm::Pages);
+                crate::images::prepare(text, images, &[], media, text_only, PdfForm::Pages);
             let mut blocks = Vec::new();
             if !prepared.text.is_empty() || prepared.images.is_empty() {
                 blocks.push(json!({"text": prepared.text}));
@@ -348,7 +347,7 @@ fn blocks_of(
             false,
             &[],
             &[],
-            session_dir,
+            media,
             text_only,
         ),
         Input::ToolResult {
@@ -366,7 +365,7 @@ fn blocks_of(
             *is_error,
             images,
             pdfs,
-            session_dir,
+            media,
             text_only,
         ),
     }
@@ -382,11 +381,10 @@ fn result_blocks(
     is_error: bool,
     images: &[contract::provider::ImageRef],
     pdfs: &[contract::provider::PdfRef],
-    session_dir: &Path,
+    media: &Media,
     text_only: bool,
 ) -> Vec<Value> {
-    let prepared =
-        crate::images::prepare(text, images, pdfs, session_dir, text_only, PdfForm::Pages);
+    let prepared = crate::images::prepare(text, images, pdfs, media, text_only, PdfForm::Pages);
     let mut result = json!({"toolUseId": id, "content": [{"text": prepared.text}]});
     if is_error && let Some(map) = result.as_object_mut() {
         map.insert("status".into(), json!("error"));

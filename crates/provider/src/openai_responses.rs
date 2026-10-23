@@ -311,7 +311,7 @@ fn input(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<Va
                     text,
                     images,
                     &[],
-                    &request.session_dir,
+                    &request.media,
                     endpoint.text_only,
                     crate::images::PdfForm::Native,
                 );
@@ -409,7 +409,7 @@ fn input(endpoint: &Endpoint, request: &ModelRequest, deferring: bool) -> Vec<Va
                     text,
                     images,
                     pdfs,
-                    &request.session_dir,
+                    &request.media,
                     endpoint.text_only,
                     crate::images::PdfForm::Native,
                 );

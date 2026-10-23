@@ -223,6 +223,20 @@ const GIT_BLAME: &[Flag] = &[
     flag("--line-porcelain"),
 ];
 
+/// `printf` under `xargs` only: a direct `printf` stays `executes`, so
+/// this row never reaches `COMMANDS`. It takes no flag of its own and
+/// names no path: every operand after it is a format or an argument.
+pub(super) const XARGS_PRINTF: Command = Command {
+    name: "printf",
+    flags: &[],
+    paths: false,
+    pattern: false,
+    pattern_flags: &[],
+    ends_flags: true,
+    prints: false,
+    counts: false,
+};
+
 /// Parts whose cooked words, redirects removed, equal one row exactly read
 /// with no paths. `git branch` has no row: bare `git branch` lists and
 /// `git branch <name>` creates, so only `--show-current` reads.

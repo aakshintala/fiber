@@ -25,7 +25,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ErrorCode, GenerationId};
-use fakes::{Deadline, ProviderServer, Response, TempDir};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
 
@@ -475,13 +475,10 @@ fn gemini_user(body: &Value) -> (Vec<String>, usize) {
     user_parts(&content, gemini_text, gemini_image)
 }
 
-/// A session dir holding `artifacts/i_1.png` (`b"abcd"`), with a request
-/// whose one user message carries `text` with that image.
-fn imaged_user_request(text: &str) -> (TempDir, ModelRequest) {
-    let session = TempDir::new("fiber-common-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
+/// A request whose one user message carries `text` with the image
+/// `artifacts/i_1.png` (`b"abcd"`).
+fn imaged_user_request(text: &str) -> ModelRequest {
+    ModelRequest {
         conversation: (vec![Input::User {
             text: text.into(),
             images: vec![ImageRef {
@@ -492,10 +489,9 @@ fn imaged_user_request(text: &str) -> (TempDir, ModelRequest) {
             }],
         }])
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..harness::request()
-    };
-    (session, request)
+    }
 }
 
 fn body_len(server: &ProviderServer) -> u64 {
@@ -1019,7 +1015,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
 #[test]
 fn a_reply_carries_the_size_of_the_body_it_sent() {
     for wire in wires() {
-        let (_session, request) = imaged_user_request("look");
+        let request = imaged_user_request("look");
         let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         let reply = harness::run((wire.protocol.call)(&endpoint, &request))
@@ -1082,7 +1078,7 @@ fn sent_tools_are_sent_verbatim_in_order() {
 #[test]
 fn a_users_empty_text_sends_no_text_part() {
     for wire in wires() {
-        let (_session, request) = imaged_user_request("");
+        let request = imaged_user_request("");
         let server = ProviderServer::start([(wire.completed)()]).unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         harness::run((wire.protocol.call)(&endpoint, &request))
@@ -1100,7 +1096,7 @@ fn a_users_empty_text_sends_no_text_part() {
 #[test]
 fn a_users_image_is_left_out_for_a_text_only_model() {
     for wire in wires() {
-        let (_session, request) = imaged_user_request("look");
+        let request = imaged_user_request("look");
         let server = ProviderServer::start([(wire.completed)()]).unwrap();
         let endpoint = Endpoint {
             text_only: true,
@@ -1128,7 +1124,6 @@ fn a_users_image_is_left_out_for_a_text_only_model() {
 fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
     for wire in wires() {
         // No file is written: the image cannot be read.
-        let session = TempDir::new("fiber-common-request-image");
         let imaged = |text: &str| ModelRequest {
             conversation: (vec![Input::User {
                 text: text.into(),
@@ -1140,7 +1135,7 @@ fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
                 }],
             }])
             .into(),
-            session_dir: session.path().to_path_buf(),
+            media: Default::default(),
             ..harness::request()
         };
         let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();

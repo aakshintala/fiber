@@ -261,7 +261,7 @@ impl Store {
         spawn: impl FnOnce(Arc<Self>) -> std::io::Result<()>,
     ) -> (bool, Vec<Label>, Vec<QuotaInfo>, Vec<Silent>) {
         let (start, checked, labels, failed, silent) = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = support::lock(&self.state);
             let start = !state.started;
             state.started = true;
             (
@@ -273,17 +273,14 @@ impl Store {
             )
         };
         if start && spawn(Arc::clone(self)).is_err() {
-            self.state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .started = false;
+            support::lock(&self.state).started = false;
         }
         (checked, labels, failed, silent)
     }
 
     fn cached(self: &Arc<Self>) -> (Vec<QuotaInfo>, f64) {
         let (labels, mut quota) = {
-            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let state = support::lock(&self.state);
             (state.labels.clone(), state.failed.clone())
         };
         quota.extend(labels.into_iter().filter_map(|label| {
@@ -361,16 +358,10 @@ impl Store {
     /// under the lock, so a notify that landed before the wait and a
     /// spurious wakeup both resnapshot harmlessly.
     fn wait_loaded(self: &Arc<Self>) -> Option<(Vec<Label>, Vec<QuotaInfo>)> {
-        let clock = self
-            .now
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .loader
-            .clock
-            .clone();
+        let clock = support::lock(&self.now).loader.clock.clone();
         let start = clock.now();
         let end = start.checked_add(LOADER_BUDGET).unwrap_or(start);
-        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut guard = support::lock(&self.state);
         loop {
             if guard.checked {
                 return Some((guard.labels.clone(), guard.failed.clone()));
@@ -417,12 +408,7 @@ impl Store {
     )]
     fn with_threshold(&self, mut quota: Vec<QuotaInfo>) -> (Vec<QuotaInfo>, f64) {
         quota.sort_by(|a, b| (&a.provider, &a.credential).cmp(&(&b.provider, &b.credential)));
-        let config = self
-            .now
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .config
-            .clone();
+        let config = support::lock(&self.now).config.clone();
         let notice_at = config
             .get("quota.notice_at", None)
             .and_then(|(value, _)| value.as_f64())
@@ -436,12 +422,7 @@ impl Store {
         let _loaded = NotifyLoaded(self);
         #[cfg(test)]
         let _ended = Loaded(self);
-        let loader = self
-            .now
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .loader
-            .clone();
+        let loader = support::lock(&self.now).loader.clone();
         for (extension, data) in &self.providers {
             let labels = self.startup_config.credentials().labels(data);
             if labels.is_empty() {
@@ -523,7 +504,7 @@ impl Store {
             #[cfg(not(test))]
             let outcome = self.reads.run("credential read", read);
             let (keep_going, held) = {
-                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut state = support::lock(&self.state);
                 apply_outcome(&mut state, &provider, &names, outcome)
             };
             if !keep_going {
@@ -536,10 +517,7 @@ impl Store {
         // Every provider checked without a shutdown: later readers list
         // labels instead of loading. A dropped session leaves it false.
         if self.started.upgrade().is_some() {
-            self.state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .checked = true;
+            support::lock(&self.state).checked = true;
         }
     }
 

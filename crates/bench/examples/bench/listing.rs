@@ -184,7 +184,7 @@ fn list_once(ctx: &Ctx<'_>, home: &Home) -> Result<(run::Finished, Duration), St
 /// Generates one real session, clones it to 1,000, then lists the project
 /// once untimed and `runs` times timed, through the installed hub.
 fn sessions_list(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let home = Home::scripted(ctx.home.fiber(), SEED.script())?;
+    let home = ctx.home.child(SEED.script())?;
     in_home(home, |home| {
         init_git(ctx, home)?;
         let seed = doors::mint("s_");

@@ -86,7 +86,7 @@ pub(crate) struct Glyph {
 }
 
 /// The analytic smooth wave: a vertical sine stroke down the mask's left,
-/// shaped like the pixel logo's zigzag wave (`crates/tui/src/logo.rs`)
+/// shaped like the pixel logo's zigzag wave (`crates/tui/src/view/logo.rs`)
 /// and spanning its full height. Confined to `x < WAVE_PX`.
 pub(crate) fn wave(width: u32, height: u32) -> Vec<u8> {
     let row_len = width as usize;

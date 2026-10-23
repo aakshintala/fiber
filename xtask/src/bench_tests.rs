@@ -4124,3 +4124,148 @@ fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         true,
     );
 }
+
+// --- #1212 Part 16 the debug-run section, from the head's op_breakdown ---
+
+/// `op_breakdown` for two workloads: busy turn with operations and provider
+/// requests, and paging with nothing recorded.
+fn breakdown() -> Value {
+    json!([
+        {
+            "workload": "busy turn", "ms": 81234.5,
+            "ops": {
+                "tool.run": {"count": 429, "ms": 512},
+                "log.append": {"count": 862, "ms": 40}
+            },
+            "provider_request": {"count": 430, "total_ms": 2210},
+            "notes": []
+        },
+        {
+            "workload": "paging", "ms": 1234.0, "ops": {},
+            "provider_request": {"count": 0, "total_ms": 0},
+            "notes": []
+        }
+    ])
+}
+
+/// The table rows, sorted: the report promises each operation's row, not an
+/// order of rows (`docs/performance.md`, "Measuring").
+fn debug_rows(comment: &str) -> Vec<&str> {
+    let section = comment
+        .split("### Debug run")
+        .nth(1)
+        .expect("Debug run section");
+    let section = section.split("### Not measured").next().unwrap_or_default();
+    let mut rows: Vec<&str> = section
+        .lines()
+        .filter(|line| line.starts_with("| ") && !line.starts_with("| Workload"))
+        .collect();
+    rows.sort_unstable();
+    rows
+}
+
+#[test]
+fn the_debug_run_section_lists_each_operation_next_to_its_workload() {
+    let out = judge(
+        &with_metric(head(), "op_breakdown", breakdown()),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(out.comment.contains("### Debug run\n\nEach timing and busy workload ran once more at `diagnostics.level: \"debug\"`; never a sample, never gated (`docs/performance.md`, \"Measuring\").\n"), "{}", out.comment);
+    assert!(
+        out.comment.contains(
+            "| Workload | Run ms | Operation | Count | Total ms |\n|---|---|---|---|---|\n"
+        ),
+        "{}",
+        out.comment
+    );
+    let mut want = vec![
+        "| busy turn | 81234.5 | log.append | 862 | 40 |",
+        "| busy turn | 81234.5 | tool.run | 429 | 512 |",
+        "| busy turn | 81234.5 | provider_request total_ms | 430 | 2210 |",
+        "| paging | 1234.0 | none recorded | — | — |",
+    ];
+    want.sort_unstable();
+    assert_eq!(debug_rows(&out.comment), want, "{}", out.comment);
+}
+
+#[test]
+fn a_failed_or_noted_workload_adds_bullets_and_no_failure() {
+    let metric = json!([{
+        "workload": "busy turn", "ms": 5.0, "ops": {},
+        "provider_request": {"count": 0, "total_ms": 0},
+        "notes": ["n1"], "error": "boom"
+    }]);
+    let with = judge(
+        &with_metric(head(), "op_breakdown", metric),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    let without = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(with.failures, without.failures);
+    assert!(
+        with.comment.contains("- busy turn: failed: boom\n"),
+        "{}",
+        with.comment
+    );
+    assert!(
+        with.comment.contains("- busy turn: n1\n"),
+        "{}",
+        with.comment
+    );
+}
+
+#[test]
+fn a_malformed_breakdown_says_it_could_not_be_read_and_adds_no_failure() {
+    let without = judge(&head(), Some(&base()), Event::PullRequest);
+    let nameless = json!([{
+        "ms": 1.0, "ops": {},
+        "provider_request": {"count": 0, "total_ms": 0}, "notes": []
+    }]);
+    for (metric, why) in [
+        (json!("oops"), "op_breakdown is not a list"),
+        (nameless, "an entry has no workload name"),
+    ] {
+        let out = judge(
+            &with_metric(head(), "op_breakdown", metric),
+            Some(&base()),
+            Event::PullRequest,
+        );
+        let line = format!("The debug run could not be read: {why}.");
+        assert!(out.comment.contains(&line), "{}", out.comment);
+        assert_eq!(out.failures, without.failures);
+    }
+}
+
+#[test]
+fn a_head_without_breakdown_renders_no_debug_run_section() {
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(out.comment.contains("### Not measured"), "{}", out.comment);
+    assert!(!out.comment.contains("Debug run"), "{}", out.comment);
+    assert!(
+        !out.comment.contains("could not be read"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn a_single_provider_request_is_recorded_not_none_recorded() {
+    let metric = json!([{
+        "workload": "web_fetch", "ms": 2.0, "ops": {},
+        "provider_request": {"count": 1, "total_ms": 7},
+        "notes": []
+    }]);
+    let out = judge(
+        &with_metric(head(), "op_breakdown", metric),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        out.comment
+            .contains("| web_fetch | 2.0 | provider_request total_ms | 1 | 7 |"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("none recorded"), "{}", out.comment);
+}

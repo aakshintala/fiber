@@ -105,20 +105,14 @@ impl Browser for SystemBrowser {
     fn show(&self, url: &str, code: &str) {
         // Told, never opened: the person types the code at the URL
         // (`docs/extensions.md`, "Host calls").
-        let mut stderr = self
-            .stderr
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stderr = support::lock(&self.stderr);
         match writeln!(stderr, "Go to {url} and enter the code {code}") {
             Ok(()) | Err(_) => {}
         }
     }
 
     fn open(&self, url: &str) {
-        let mut stderr = self
-            .stderr
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stderr = support::lock(&self.stderr);
         match writeln!(stderr, "{url}") {
             Ok(()) | Err(_) => {}
         }

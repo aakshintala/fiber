@@ -92,12 +92,10 @@ fn native_session() -> (Session, Arc<fakes::ScriptedProvider>, String) {
 }
 
 /// The native reviewer's request at `at`, with the session-bound fields
-/// blanked: cache key and session directory name the live session, never
-/// the reviewed input.
+/// blanked: the cache key names the live session, never the reviewed input.
 fn native_request(requests: &[ModelRequest], at: usize) -> ModelRequest {
     let mut request = requests.get(at).unwrap().clone();
     request.cache_key = String::new();
-    request.session_dir = Default::default();
     request
 }
 
@@ -105,7 +103,6 @@ fn native_request(requests: &[ModelRequest], at: usize) -> ModelRequest {
 fn replayed_request(requests: &[(RequestKind, ModelRequest)], at: usize) -> ModelRequest {
     let mut request = requests.get(at).unwrap().1.clone();
     request.cache_key = String::new();
-    request.session_dir = Default::default();
     request
 }
 

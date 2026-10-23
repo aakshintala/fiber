@@ -8,8 +8,9 @@ use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
+use support::lock;
 
 use contract::clock::Clock;
 use rustix::process::Signal;
@@ -109,10 +110,6 @@ impl contract::clock::Wake for Shared {
     fn wake(&self) {
         self.cv.notify_all();
     }
-}
-
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Latency only: `park` never blocks past `support::group::GROUP_POLL`,

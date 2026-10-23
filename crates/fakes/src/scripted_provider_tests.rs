@@ -17,7 +17,7 @@ fn request(text: &str) -> ModelRequest {
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

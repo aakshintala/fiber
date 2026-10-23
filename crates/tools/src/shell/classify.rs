@@ -16,6 +16,7 @@ use super::cwd::Cwd;
 use super::entry::{self, Found};
 use super::read_only::{Command, EXACT};
 use super::syntax::{Redirect, Script, Simple, Stage, Word};
+use super::wrap::{self, Unwrapped};
 
 /// Effects of `command` run in `workdir`. A command the tree-sitter parse
 /// rejects, or any element not on the read-only list, is `executes` with no
@@ -140,15 +141,34 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
         {
             cd_target = cd_operand(simple);
         }
+        let mut stdin_words: Vec<String> = Vec::new();
+        let mut stdin_known = false;
+        let mut stdin_static = true;
         for stage in &element.stages {
             if let Stage::Simple(simple) = stage
                 && is_cd(simple)
             {
                 saw_cd = true;
             }
-            match stage_outcome(stage, &dirs, configured, saw_cd) {
+            // Filenames earlier stages of this element fed the pipeline:
+            // the only stdin-fed paths an `xargs` stage may read. They are
+            // proven only when at least one earlier stage ran and every
+            // one printed statically-known words; any other producer
+            // leaves stdin unproven and its `xargs` reader reviewed.
+            match stage_outcome(
+                stage,
+                &dirs,
+                configured,
+                saw_cd,
+                &stdin_words,
+                stdin_known && stdin_static,
+            ) {
                 Outcome::Executes => saw_executes = true,
-                Outcome::Reads(mut more) => paths.append(&mut more),
+                Outcome::Reads(more) => {
+                    stdin_known = true;
+                    stdin_static = stdin_static && static_words(stage, &mut stdin_words);
+                    paths.extend(more);
+                }
             }
         }
         cwd.leave(element.join, cd_target);
@@ -165,6 +185,8 @@ fn stage_outcome(
     dirs: &[String],
     configured: &[(String, Vec<String>)],
     saw_cd: bool,
+    stdin_words: &[String],
+    stdin_proven: bool,
 ) -> Outcome {
     let Stage::Simple(simple) = stage else {
         // An unlisted or refused stage: a loop body, a heredoc with a body,
@@ -172,47 +194,210 @@ fn stage_outcome(
         // allow-list.
         return Outcome::Executes;
     };
-    // An assignment prefix executes: no built-in entry blesses an
-    // assignment name, so `LC_ALL=C git status` and `FOO=1 ls` both do.
-    // The wrapper part reintroduces named blessings with its own tests.
+    // An assignment prefix, `env`, `timeout` and `xargs` unwrap to the
+    // inner command, which the same verdict classifies below; anything
+    // the wrappers refuse is `executes`.
+    let mut words: &[Word] = &simple.words;
+    let mut stepped = false;
     if !simple.assignments.is_empty() {
-        return Outcome::Executes;
+        // A leading `NAME=value` prefix reads only for names on the fixed
+        // list; any other name makes the call `executes`.
+        if !wrap::assignments_allowed(&simple.assignments) {
+            return Outcome::Executes;
+        }
     }
-    // A `git` after any earlier `cd` is reviewed: the new directory can
-    // hold hooks or configuration the person never saw.
-    if saw_cd && is_git(simple) {
-        return Outcome::Executes;
+    let mut depth = 0;
+    loop {
+        match wrap::unwrap(words) {
+            Unwrapped::Plain => break,
+            Unwrapped::Refused => return Outcome::Executes,
+            Unwrapped::Inner(inner) => {
+                depth += 1;
+                if depth > wrap::MAX_WRAPPER_DEPTH {
+                    return Outcome::Executes;
+                }
+                words = inner;
+                stepped = true;
+            }
+            Unwrapped::Xargs(inner) => {
+                depth += 1;
+                if depth > wrap::MAX_WRAPPER_DEPTH {
+                    return Outcome::Executes;
+                }
+                return xargs_outcome(inner, simple, dirs, stdin_words, stdin_proven);
+            }
+        }
     }
-    // `cd <dir>` is a read-only step, and its directory is a path the
-    // call reads.
-    if is_cd(simple) {
+    // A bare `cd`, or one with an allow-listed assignment prefix, is a
+    // read-only step through the existing `cd` path: the prefix is not a
+    // subprocess, so the join still tracks the directory for later
+    // commands. An `env` or `timeout` wrapper around `cd` moves nothing
+    // the directory states track, so the call is reviewed.
+    if words.first().is_some_and(|word| word.cooked == "cd") {
+        if stepped {
+            return Outcome::Executes;
+        }
         return cd_outcome(simple, dirs);
     }
+    // A `git` after any earlier `cd` is reviewed, whatever wrapper leads
+    // it: the new directory can hold hooks or configuration the person
+    // never saw.
+    if saw_cd && is_git(words) {
+        return Outcome::Executes;
+    }
     // An exact form reads with no paths: `git status`, `git stash list`
-    // or `git branch --show-current`.
-    if EXACT.iter().any(|row| cooked_equals(&simple.words, row)) {
+    // or `git branch --show-current`, whatever wrapper leads it.
+    if EXACT.iter().any(|row| cooked_equals(words, row)) {
         return with_inputs(Outcome::Reads(Vec::new()), simple, dirs);
     }
     // `sed` has its own print-only grammar, not a table row.
-    if simple
-        .words
-        .first()
-        .is_some_and(|word| word.cooked == "sed")
-    {
-        let files = simple.words.iter().skip(1).map(|word| word.cooked.as_str());
+    if words.first().is_some_and(|word| word.cooked == "sed") {
+        let files = words.iter().skip(1).map(|word| word.cooked.as_str());
         let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
         };
         return with_inputs(path_tail(&files, dirs), simple, dirs);
     }
-    let verdict = match entry::find(&simple.words, configured) {
-        Found::Builtin(entry) => builtin_outcome(simple, entry, dirs),
+    let verdict = match entry::find(words, configured) {
+        Found::Builtin(entry) => builtin_outcome(words, entry, dirs),
         Found::Configured(flags, consumed) => {
-            entry::configured_outcome(flags, rest_after(&simple.words, consumed), dirs)
+            entry::configured_outcome(flags, rest_after(words, consumed), dirs)
         }
         Found::None => Outcome::Executes,
     };
     with_inputs(verdict, simple, dirs)
+}
+
+/// An `xargs` stage: the target must name one of the six read-only
+/// commands, classified by its own flags; anything else executes. A target
+/// that never opens files (`echo`, `printf`) reads with no paths. A
+/// path-reading target (`wc`, `grep`, `head`, `tail`) opens filenames fed
+/// on stdin, so it reads only when every one is statically known: at
+/// least one earlier stage ran, every one printed its words, each word
+/// holds no `xargs` metacharacter, and each word resolves, exactly as the
+/// credential deny holds it, to a path inside a canonical running
+/// directory. Proven paths join the declared operands; anything else is
+/// reviewed, declaring nothing.
+fn xargs_outcome(
+    inner: &[Word],
+    simple: &Simple,
+    dirs: &[String],
+    stdin_words: &[String],
+    stdin_proven: bool,
+) -> Outcome {
+    let Some(entry) = inner
+        .first()
+        .and_then(|target| wrap::xargs_entry(&target.cooked))
+    else {
+        return Outcome::Executes;
+    };
+    if entry.paths {
+        if !stdin_proven || has_input(simple) {
+            return Outcome::Executes;
+        }
+        let Outcome::Reads(mut declared) = builtin_outcome(inner, entry, dirs) else {
+            return Outcome::Executes;
+        };
+        let Some(canonical_dirs) = canonical_dirs(dirs) else {
+            return Outcome::Executes;
+        };
+        for word in stdin_words {
+            if !static_word(word) {
+                return Outcome::Executes;
+            }
+            for dir in dirs {
+                let Some(path) = resolve_canonical(&Path::new(dir).join(word)) else {
+                    return Outcome::Executes;
+                };
+                if !canonical_dirs.iter().any(|base| path.starts_with(base)) {
+                    return Outcome::Executes;
+                }
+                let Some(path) = path.to_str().map(str::to_owned) else {
+                    return Outcome::Executes;
+                };
+                declared.push(path);
+            }
+        }
+        return with_inputs(Outcome::Reads(declared), simple, dirs);
+    }
+    with_inputs(builtin_outcome(inner, entry, dirs), simple, dirs)
+}
+
+/// Whether a stage reads stdin from a redirect file of its own, rather
+/// than from the pipeline.
+fn has_input(simple: &Simple) -> bool {
+    simple
+        .redirects
+        .iter()
+        .any(|redirect| matches!(redirect, Redirect::Input(_)))
+}
+
+/// Whether a stage prints statically-known words: a simple `echo`, whose
+/// every operand word reaches `xargs` stdin as written. Any other stage's
+/// filenames are unproven, including a `printf` whose format string
+/// transforms its operands and any listing whose names come from command
+/// output. Appends the operand words when static.
+fn static_words(stage: &Stage, words: &mut Vec<String>) -> bool {
+    let Stage::Simple(simple) = stage else {
+        return false;
+    };
+    let Some(first) = simple.words.first() else {
+        return false;
+    };
+    if first.cooked != "echo" {
+        return false;
+    }
+    words.extend(simple.words.iter().skip(1).map(|word| word.cooked.clone()));
+    true
+}
+
+/// Whether a stdin word is statically known: it holds no `xargs`
+/// metacharacter, so the pipeline feeds it whole, and it names no flag:
+/// a leading `-` would read as a flag at runtime, following links the
+/// call never declares. A blank or a newline would split it, a quote
+/// would re-quote it, and a backslash would escape the next character,
+/// so any of them leaves the word unproven.
+fn static_word(word: &str) -> bool {
+    !word.is_empty()
+        && !word.starts_with('-')
+        && !word.chars().any(|ch| {
+            matches!(
+                ch,
+                ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C' | '\\' | '\'' | '"'
+            )
+        })
+}
+
+/// Each running directory as the credential deny holds it, or nothing
+/// when one does not resolve: stdin proof has nothing to land in.
+fn canonical_dirs(dirs: &[String]) -> Option<Vec<PathBuf>> {
+    dirs.iter()
+        .map(|dir| resolve_canonical(Path::new(dir)))
+        .collect()
+}
+
+/// `path` with symlinks resolved and `..` removed, exactly as the
+/// credential deny holds it (`docs/permissions.md`, "Credentials",
+/// `loop::calls::resolve`): the longest existing prefix canonicalised,
+/// the rest appended word for word. Anything but a plain name past the
+/// existing prefix (`.`, `..`, `/`) resolves to nothing, and a path with
+/// no existing prefix does too.
+fn resolve_canonical(path: &Path) -> Option<PathBuf> {
+    let parts: Vec<Component<'_>> = path.components().collect();
+    (0..=parts.len()).rev().find_map(|split| {
+        let (existing, rest) = parts.split_at(split);
+        let real = existing.iter().collect::<PathBuf>().canonicalize().ok()?;
+        Some(
+            rest.iter()
+                .try_fold(real, |path, component| match component {
+                    Component::Normal(name) => Some(path.join(name)),
+                    Component::Prefix(_)
+                    | Component::RootDir
+                    | Component::CurDir
+                    | Component::ParentDir => None,
+                }),
+        )
+    })?
 }
 
 /// Whether a stage runs `cd`: its first word is exactly `cd`.
@@ -220,10 +405,9 @@ fn is_cd(simple: &Simple) -> bool {
     simple.words.first().is_some_and(|word| word.cooked == "cd")
 }
 
-/// Whether a stage runs `git`: its first word's basename is `git`.
-fn is_git(simple: &Simple) -> bool {
-    simple
-        .words
+/// Whether a stage's words run `git`: the first word's basename is `git`.
+fn is_git(words: &[Word]) -> bool {
+    words
         .first()
         .is_some_and(|word| word.cooked.rsplit('/').next() == Some("git"))
 }
@@ -319,11 +503,10 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
 
 /// The built-in flag walk, kept from the hand lexer: flags by the table,
 /// `--` where the entry says so, any other `-` word an operand for `echo`,
-/// the first operand the pattern for `grep` and `rg`.
-fn builtin_outcome(simple: &Simple, entry: &Command, dirs: &[String]) -> Outcome {
-    // The built-in path words never reach the walk: `git status -s` walks
-    // from `-s`.
-    let mut words = rest_after(&simple.words, entry.name.split(' ').count());
+/// the first operand the pattern for `grep` and `rg`. The entry's path
+/// words never reach the walk: `git status -s` walks from `-s`.
+fn builtin_outcome(words: &[Word], entry: &Command, dirs: &[String]) -> Outcome {
+    let mut words = rest_after(words, entry.name.split(' ').count());
     let mut operands = Vec::new();
     let mut ended = false;
     let mut pattern_given = false;

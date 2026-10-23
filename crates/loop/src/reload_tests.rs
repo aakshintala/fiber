@@ -15,7 +15,6 @@ use fakes::{Deadline, Scripted, ScriptedProvider};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 
-const WAIT: Duration = Duration::from_secs(5);
 thread_local! { static FAIL_RELOAD_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 pub(super) fn fail_reload_write() -> bool {
     FAIL_RELOAD_WRITE.with(|fail| fail.replace(false))
@@ -29,7 +28,7 @@ fn failed_reload_append_drops_the_ack_without_accepting_it() {
     let (ack, rx) = ack();
     assert!(w.looped.take_reload(ack).is_err());
     assert!(matches!(
-        Deadline::after(WAIT).recv(&rx),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&rx),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
     assert_eq!(kinds(&w.looped), ["session_started"]);
@@ -88,17 +87,35 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
         .send(contract::inbox::Delivery::Close(Ack(Box::new(|_| {}))))
         .unwrap();
     assert!(w.looped.turn().unwrap().is_none());
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // `docs/events.md` promises `session_started` first, an offer before its
+    // `repository_code_resolved`, and `extensions_loaded` and `preamble_built`
+    // after `reloaded` ("Repository code", "`reloaded`", "`extensions_loaded`");
+    // it leaves the rest open, so the rest is a set.
+    let seen = kinds(&w.looped);
+    let at = |name: &str| seen.iter().position(|kind| kind == name).unwrap();
+    assert_eq!(seen[0], "session_started");
+    assert!(at("repository_code_offered") < at("repository_code_resolved"));
+    assert!(at("reloaded") < at("extensions_loaded"));
+    assert!(at("reloaded") < at("preamble_built"));
+    let mut set = seen.clone();
+    set.sort();
     assert_eq!(
-        kinds(&w.looped),
+        set,
         [
-            "session_started",
+            "extensions_loaded",
+            "preamble_built",
+            "reloaded",
             "repository_code_offered",
             "repository_code_resolved",
-            "reloaded",
-            "extensions_loaded",
-            "preamble_built"
+            "session_started"
         ]
     );
 }
@@ -383,7 +400,10 @@ fn closing_busy_and_rewound_refuse_without_preparing_or_writing() {
                     .unwrap();
             }
         }
-        let rejection = Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err();
+        let rejection = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap_err();
         if state == "busy" {
             assert_eq!(rejection.message, "A turn is running; reload once it ends.");
         }
@@ -406,7 +426,11 @@ fn no_reloader_is_invalid_arguments() {
     let (ack, rx) = ack();
     w.looped.take_reload(ack).unwrap();
     assert_eq!(
-        Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err().code,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap_err()
+            .code,
         ErrorCode::InvalidArguments
     );
     assert_eq!(kinds(&w.looped), ["session_started"]);
@@ -433,7 +457,13 @@ fn applied_reload_swaps_settings_before_installation_and_accepts_after_the_event
             tx.send(answer).unwrap();
         })))
         .unwrap();
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(*seen.lock().unwrap(), [1]);
     assert_eq!(
         kinds(&w.looped),
@@ -469,7 +499,13 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
     crate::timing_tests::arm_fail_preamble_write();
     let (ack, rx) = ack();
     assert!(w.looped.take_reload(ack).is_err());
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         kinds(&w.looped),
         ["session_started", "reloaded", "extensions_loaded"]
@@ -490,7 +526,11 @@ fn a_preparer_cancel_rejects_without_applying() {
     let (ack, rx) = ack();
     w.looped.take_reload(ack).unwrap();
     assert_eq!(
-        Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err().code,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap_err()
+            .code,
         ErrorCode::Closing
     );
     assert_eq!(kinds(&w.looped), ["session_started"]);
@@ -532,7 +572,11 @@ fn take_reconnect_without_a_reconnector_rejects_invalid_arguments() {
     let (ack, rx) = ack();
     w.looped.take_reconnect("db".into(), ack).unwrap();
     assert_eq!(
-        Deadline::after(WAIT).recv(&rx).unwrap().unwrap_err().code,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap_err()
+            .code,
         ErrorCode::InvalidArguments
     );
     assert_eq!(kinds(&w.looped), ["session_started"]);
@@ -568,7 +612,12 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
     }));
     let (ack, rx) = ack();
     w.looped.take_reconnect("db".into(), ack).unwrap();
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().is_ok());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .is_ok()
+    );
     assert!(w.looped.tools.contains_key("db__list"));
     assert!(!w.looped.tools.contains_key("db__old"));
     assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
@@ -614,7 +663,12 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
     }));
     let (ack, rx) = ack();
     w.looped.take_reload(ack).unwrap();
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().is_ok());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .is_ok()
+    );
     assert_eq!(
         kinds(&w.looped),
         [
@@ -703,7 +757,13 @@ fn an_appended_prompt_row_fetches_through_the_carried_sources() {
     }));
     let (ack, rx) = ack();
     w.looped.take_reload(ack).unwrap();
-    assert!(Deadline::after(WAIT).recv(&rx).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&rx)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     let prompts = w
         .looped
         .server_prompts

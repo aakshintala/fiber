@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// The extension set installed in a running session.
 pub(crate) struct Current(Mutex<Arc<SessionExtensions>>);
@@ -14,13 +14,10 @@ impl Current {
         Self(Mutex::new(extensions))
     }
     pub(crate) fn get(&self) -> Arc<SessionExtensions> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        support::lock(&self.0).clone()
     }
     pub(crate) fn swap(&self, extensions: Arc<SessionExtensions>) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = extensions;
+        *support::lock(&self.0) = extensions;
     }
 }
 

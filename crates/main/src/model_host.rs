@@ -455,6 +455,15 @@ impl ModelHost {
     /// pause is reported; the drops-every-delta sink in `attempt_once`
     /// discards what streams.
     fn request(&self, extension: &str, request: &HostModelRequest) -> ModelRequest {
+        let conversation: Vec<Input> = request
+            .messages
+            .iter()
+            .map(|message| self.input(&request.model, message))
+            .collect();
+        // The images are read from the session's own directory, by the
+        // loop's rule, so an image part reaches the model as it does in a
+        // turn.
+        let media = r#loop::resolve_media(&self.dir, &conversation);
         ModelRequest {
             system_prompt: request.system.clone().unwrap_or_default(),
             tools: Vec::new(),
@@ -463,17 +472,11 @@ impl ModelHost {
             tool_choice: "none".to_owned(),
             cache_lifetime: CacheLifetime::FiveMinutes,
             cache_key: format!("{}:extension:{extension}", self.id.0),
-            conversation: request
-                .messages
-                .iter()
-                .map(|message| self.input(&request.model, message))
-                .collect(),
+            conversation: conversation.into(),
             sent_tools: None,
             previous_end: None,
             max_output_tokens: Some(request.max_tokens),
-            // No image part rides the conversation, so no session file is
-            // read when the request builds.
-            session_dir: PathBuf::new(),
+            media,
         }
     }
 

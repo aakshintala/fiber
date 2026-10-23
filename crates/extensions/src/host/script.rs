@@ -1,8 +1,9 @@
 //! Scripted `host.http` and `host.exec` calls for extension cases (`docs/testing.md`, "Testing an extension").
 
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+use support::lock;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -436,10 +437,6 @@ fn no_reply(kind: &str) -> (ErrorCode, String) {
         code,
         format!("host.{kind}: the case scripts no reply for this request"),
     )
-}
-
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl HttpRequest {

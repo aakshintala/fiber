@@ -10,7 +10,6 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 use fakes::Deadline;
 use fakes::TempDir;
@@ -263,9 +262,6 @@ fn a_stop_takes_no_further_piece() {
     assert_eq!(sink.html.unwrap().finish(), "one\n", "nor converted");
 }
 
-/// How long the quadratic-tag stop test may take on the wall clock.
-const STOP_WITHIN: Duration = Duration::from_secs(5);
-
 /// A tag with a million distinct short attribute names, under the 10 MiB
 /// download cap: html5ever checks each new attribute against every
 /// earlier one, so converting the whole tag takes time quadratic in its
@@ -276,7 +272,7 @@ const STOP_WITHIN: Duration = Duration::from_secs(5);
 fn a_stop_after_the_first_piece_takes_no_further_piece_of_a_quadratic_tag() {
     within(
         "the stopped copy",
-        Deadline::after(STOP_WITHIN),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             let mut page = String::from("<a");
             for n in 0..1_000_000u32 {

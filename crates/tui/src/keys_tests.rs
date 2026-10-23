@@ -589,8 +589,8 @@ fn esc_with_a_byte_names_alt_with_that_stroke() {
         (b"\x1ba", Some(modified(Code::Char('a'), alt))),
         (b"\x1bA", Some(modified(Code::Char('a'), alt | Mods::SHIFT))),
         (b"\x1b\x7f", Some(modified(Code::Backspace, alt))),
-        // `ESC 0x08` is Ctrl+H under ESC, not Alt+Backspace: the old parser
-        // dropped it, so it reads as an unbound Ctrl+Alt+H stroke.
+        // `ESC 0x08` is Ctrl+H under ESC, not Alt+Backspace: it reads as
+        // an unbound Ctrl+Alt+H stroke.
         (
             b"\x1b\x08",
             Some(modified(Code::Char('h'), alt | Mods::CTRL)),
@@ -671,8 +671,8 @@ fn csi_letters_name_strokes() {
         (b"\x1b[1;5C", Some(modified(Code::Right, ctrl))),
         (b"\x1b[1;9C", Some(modified(Code::Right, super_))),
         (b"\x1b[1;9D", Some(modified(Code::Left, super_))),
-        // A bare `1` is no modifiers for `C` and `D`, as the old `arrow`
-        // read it; a bare `1` with `A`, `B`, `H` or `F` is nothing.
+        // A bare `1` is no modifiers for `C` and `D`; a bare `1` with `A`,
+        // `B`, `H` or `F` is nothing.
         (b"\x1b[1A", None),
         (b"\x1b[1B", None),
         (b"\x1b[1C", Some(plain(Code::Right))),
