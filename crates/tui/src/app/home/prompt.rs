@@ -54,6 +54,18 @@ pub(super) enum Prompt {
     /// `c` closes them all now, Esc stays. It stores nothing: the
     /// question recomputes from the current rows on every frame.
     Quit,
+    /// Asking to close every live top-level session: Enter closes them
+    /// now, Esc cancels. It holds the sessions counted when the question
+    /// opened, with the counts it drew: Enter closes those still live,
+    /// and the overlay never live-updates.
+    CloseAll {
+        /// The live top-level sessions counted when the question opened,
+        /// in list order with the attached one last.
+        sessions: Vec<SessionId>,
+        /// The counts drawn under the title: working, elsewhere.
+        /// Sessions is `sessions.len()`.
+        counts: (usize, usize),
+    },
 }
 
 impl Prompt {
@@ -62,7 +74,7 @@ impl Prompt {
     fn id(&self) -> Option<&SessionId> {
         match self {
             Prompt::Delete { id, .. } => Some(id),
-            Prompt::Import | Prompt::Quit => None,
+            Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } => None,
         }
     }
 }
@@ -353,7 +365,7 @@ impl App {
             .as_ref()
             .and_then(|home| match &home.questions.prompt {
                 Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-                Some(Prompt::Import | Prompt::Quit) | None => None,
+                Some(Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. }) | None => None,
             });
         let Some((id, expect)) = ask else {
             return Effect::None;
