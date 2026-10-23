@@ -1609,15 +1609,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     // the child's `read` parked until the release below.
     let ready = fakes::children::Ready::new(dir.path());
     let block = dir.path().join("block.fifo");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&block)
-            .status()
-            .unwrap()
-            .success(),
-        "mkfifo {}",
-        block.display()
-    );
+    fakes::fifo(&block);
     let mut hold = HoldExec::hold(&block);
     let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
@@ -1696,15 +1688,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     let gate = dir.path().join("gate.fifo");
     let block = dir.path().join("block.fifo");
     for fifo in [&gate, &block] {
-        assert!(
-            std::process::Command::new("mkfifo")
-                .arg(fifo)
-                .status()
-                .unwrap()
-                .success(),
-            "mkfifo {}",
-            fifo.display()
-        );
+        fakes::fifo(fifo);
     }
     let mut hold = HoldExec::hold(&block);
     let (hub, armed) =

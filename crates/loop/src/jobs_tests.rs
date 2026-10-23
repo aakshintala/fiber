@@ -5660,16 +5660,6 @@ fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     );
 }
 
-/// `path` as a FIFO, as a swapped-in job output.
-#[cfg(unix)]
-fn mkfifo(path: &std::path::Path) {
-    let status = std::process::Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success(), "mkfifo {path:?} exited {status}");
-}
-
 #[test]
 #[cfg(unix)]
 fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
@@ -5679,7 +5669,7 @@ fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
     std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
-    mkfifo(&world.dir.join(OUT));
+    fakes::fifo(world.dir.join(OUT));
     // The non-blocking open refuses to wait for a writer: the turn ends
     // at the deadline below instead of hanging on the FIFO.
     world.send(held(JOB));

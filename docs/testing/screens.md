@@ -83,7 +83,8 @@ condition to a wait is not a readiness signal.
 
 The driver reads the terminal on a thread from the first frame to end of
 file, and takes the markers it waits for over a channel, as `watch` in
-`crates/tui/src/pty_watch.rs` does. A reader that stops after a marker
+`crates/tui/src/pty_watch.rs` does. The pair comes from
+`fakes::pty::open`. A reader that stops after a marker
 lets the terminal's output queue fill, so the code under test blocks
 writing a frame and the test hangs on a wait it caused itself. On quit
 the driver reaps the binary, then reads to end of file, so every byte
