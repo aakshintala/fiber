@@ -644,3 +644,62 @@ fn a_cancelled_response_ends_the_switch_as_an_error() {
     assert_eq!(lines.len(), 1, "the drain is written; nothing after it");
     assert_eq!(lines[0].kind, "step_started");
 }
+
+#[test]
+fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
+    use contract::events::{CommandRejected, Event};
+
+    struct SharedOut(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedOut {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let (_temp, log, id, clock) = open_log();
+    let watcher = log.watch_all();
+    let injector = watcher.injector();
+    let (_switch_tx, switches) = mpsc::channel();
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let out = Arc::clone(&out);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(SharedOut(out)), false, switches);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    drop(log);
+    // The writer has met the log's end: a short receive gets its end,
+    // so a kept line pushed afterwards reaches nobody.
+    let short = Deadline::after(std::time::Duration::from_secs(1));
+    assert!(
+        short.recv(&done_rx).is_ok(),
+        "the writer ends at the log's end before the kept line is pushed"
+    );
+    let answer = crate::session::envelope(
+        &id,
+        clock.as_ref(),
+        &Event::CommandRejected(CommandRejected {
+            command_id: Some(CommandId("c_held".into())),
+            code: contract::ErrorCode::Closing,
+            message: crate::client::ENDED.into(),
+        }),
+    );
+    injector.push_kept(answer);
+    injector.push(control_line(&id, crate::client::STOP, 0));
+    drop(_switch_tx);
+    let lines = envelopes(&String::from_utf8(lock(&out).clone()).unwrap());
+    assert_eq!(
+        lines.len(),
+        1,
+        "the kept answer pushed after the end is written before stop; got {lines:?}"
+    );
+    assert_eq!(lines[0].kind, "command_rejected");
+}
