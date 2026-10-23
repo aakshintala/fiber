@@ -239,10 +239,6 @@ pub(crate) fn take(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the moved command, the jobs, the clock and the call's own cancel and emit are one hand-off, with the timing stamp alongside"
-)]
 /// The job's stop: cancelling the job's own signal. The closure may run
 /// more than once and must not wake twice (`Token` idempotence).
 fn stop_of(token: &Token) -> Stop {
@@ -250,6 +246,10 @@ fn stop_of(token: &Token) -> Stop {
     Stop(Box::new(move || token.cancel()))
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the moved command, the jobs, the clock and the call's own cancel and emit are one hand-off, with the timing stamp alongside"
+)]
 fn hand_off(
     mut moved: Moved,
     opened: Opened,
