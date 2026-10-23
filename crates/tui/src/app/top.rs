@@ -7,6 +7,8 @@ use super::{App, Effect};
 use crate::approvals::PanelKey;
 use crate::keys::Key;
 use crate::keyset::Context;
+use ratatui::layout::Rect;
+use std::cell::RefCell;
 
 /// One surface that can hold the keyboard, topmost first: declaration
 /// order is the precedence, so a surface compares less than every
@@ -63,6 +65,45 @@ impl Surface {
     }
 }
 
+/// The slabs the last frame drew for its framed surfaces, keyed by
+/// surface: what a click outside the overlay on top reads
+/// (`docs/tui.md`, "Bindings"). The draw writes it and a later input
+/// reads it, so it shares the interior-mutability shape of the other
+/// frame-written state; `render` clears it before anything else, and a
+/// surface is noted once per frame from the `Rect` its draw returned.
+#[derive(Default)]
+pub(crate) struct Frames(RefCell<Vec<(Surface, Rect)>>);
+
+impl Frames {
+    /// Drops the last frame's slabs, before the next frame notes its own.
+    pub(crate) fn clear(&self) {
+        self.0.borrow_mut().clear();
+    }
+
+    /// Notes `surface`'s slab, replacing its earlier note; an empty slab
+    /// notes nothing, so a frame squeezed to nothing takes the old path.
+    pub(crate) fn note(&self, surface: Surface, slab: Rect) {
+        if slab.is_empty() {
+            return;
+        }
+        let mut frames = self.0.borrow_mut();
+        if let Some(slot) = frames.iter_mut().find(|(open, _)| *open == surface) {
+            slot.1 = slab;
+        } else {
+            frames.push((surface, slab));
+        }
+    }
+
+    /// `surface`'s slab in the last frame, if it drew one.
+    pub(crate) fn slab_of(&self, surface: Surface) -> Option<Rect> {
+        self.0
+            .borrow()
+            .iter()
+            .find(|(open, _)| *open == surface)
+            .map(|(_, slab)| *slab)
+    }
+}
+
 /// The open surfaces of `order` strictly below `above` and down to
 /// `through`, both optional: `None` for `above` starts at the top, `None`
 /// for `through` runs to the end.
@@ -77,6 +118,11 @@ pub(super) fn between(
 }
 
 impl App {
+    /// The slabs the last frame drew for its framed surfaces.
+    pub(crate) fn frames(&self) -> &Frames {
+        &self.frames
+    }
+
     /// The surfaces open now, topmost first, ending with the input box.
     pub(crate) fn top_surfaces(&self) -> Vec<Surface> {
         let open = [

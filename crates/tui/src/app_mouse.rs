@@ -3,15 +3,51 @@
 
 use super::{App, Effect, Surface, Target};
 use crate::app::rail::Spot;
-use crate::keys::{Key, Mouse, MouseKind};
-use crate::mouse::TargetId;
+use crate::keys::{Button, Key, Mouse, MouseKind};
+use crate::mouse::{Pointer, TargetId};
 use ratatui::layout::{Position, Rect};
+use std::time::Instant;
 
 /// A wheel step over the conversation scrolls it this many rows: a
 /// starting point, not a measurement (`docs/tui.md`, "Turns").
 pub(super) const WHEEL_ROWS: usize = 3;
 
 impl App {
+    /// Handles one mouse report against the last frame's `targets`:
+    /// every left press clears "Copied" and ends a finished attention
+    /// title, then the press feeds the drag, the wheel, the selection
+    /// and the pointer in order; a click's effect wins over the
+    /// selection's (`docs/tui.md`, "Mouse and hover", "Getting the
+    /// person's attention").
+    pub(crate) fn on_mouse(
+        &mut self,
+        mouse: &Mouse,
+        targets: &[crate::mouse::Target],
+        pointer: &mut Pointer,
+        hover: bool,
+        now: Instant,
+    ) -> Effect {
+        let _ = now;
+        // Every left click, on a target or not, clears "Copied" and
+        // ends a finished attention title (`docs/tui.md`, "Getting the
+        // person's attention"); a click on `copy` sets it again.
+        if mouse.kind == MouseKind::Press(Button::Left) {
+            self.clear_copied();
+            self.attention_seen();
+        }
+        self.on_drag(mouse);
+        self.on_wheel(mouse);
+        let selected = self.on_select(mouse, targets);
+        let clicked = pointer.on_mouse(mouse, targets, hover);
+        // A click's effect, else the selection's.
+        let effect = clicked.map_or(Effect::None, |target| self.on_click(target));
+        if effect == Effect::None {
+            selected
+        } else {
+            effect
+        }
+    }
+
     /// Handles a click on `target` (`docs/tui.md`, "Bindings"): the badge
     /// reopens the approval queue, "↓ New messages below" jumps to the end,
     /// a conversation line opens or closes what it names, a code block's

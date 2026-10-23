@@ -3,21 +3,24 @@
 //! and the context a stroke arrives in is the head's.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use serde_json::json;
 
 use contract::clock::Clock;
 
 use super::{Surface, between};
-use crate::app::App;
 use crate::app::config_views::ConfigView;
 use crate::app::items::testkit::{job_started, mark_tty};
 use crate::app::session_views::SessionView;
+use crate::app::{App, Effect};
 use crate::home::{Launch, Spot};
-use crate::keys::Key;
+use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::keyset::Context;
 use crate::link::Line;
-use crate::mouse::TargetId;
+use crate::mouse::{self, Pointer, TargetId};
 use contract::events::ImportedNames;
 use contract::{JobId, SessionId};
 
@@ -509,4 +512,494 @@ fn the_keys_screen_gives_the_context_below_it() {
     open(&mut app, Surface::Notice);
     assert_eq!(app.top_surface(), Surface::KeysScreen);
     assert_eq!(app.key_context(), Context::Overlay);
+}
+
+/// The injected clock's now, as the input handling takes it.
+fn now() -> std::time::Instant {
+    fakes::clock::FakeClock::new().now()
+}
+
+/// The app drawn at its size: the buffer and the last frame's targets,
+/// as the loop holds them.
+fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(app, area, &mut buf, None);
+    (buf, targets)
+}
+
+/// A left press at (`col`, `row`) through the loop's mouse path, with a
+/// fresh pointer.
+fn press_at(app: &mut App, targets: &[crate::mouse::Target], col: u16, row: u16) -> Effect {
+    let mut pointer = Pointer::default();
+    app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        },
+        targets,
+        &mut pointer,
+        true,
+        now(),
+    )
+}
+
+/// The first screen corner outside `slab` that is no model-picker header
+/// cell: the header's whole top row closes the picker outright instead.
+#[track_caller]
+fn outside_corner(
+    label: &str,
+    targets: &[crate::mouse::Target],
+    slab: Rect,
+    width: u16,
+    height: u16,
+) -> (u16, u16) {
+    [
+        (0, 0),
+        (width - 1, 0),
+        (0, height - 1),
+        (width - 1, height - 1),
+    ]
+    .into_iter()
+    .find(|&(col, row)| {
+        !slab.contains(Position::new(col, row))
+            && !matches!(
+                mouse::hit(targets, col, row),
+                Some(TargetId::View(crate::swapped::Spot::Close))
+            )
+    })
+    .unwrap_or_else(|| panic!("{label}: no screen corner outside {slab:?}"))
+}
+
+fn open_quit(app: &mut App) {
+    open(app, Surface::Quit);
+}
+
+fn open_report(app: &mut App) {
+    open(app, Surface::Report);
+}
+
+fn open_keymap(app: &mut App) {
+    open(app, Surface::Keymap);
+}
+
+fn open_picker(app: &mut App) {
+    open(app, Surface::Picker);
+}
+
+fn open_search(app: &mut App) {
+    open(app, Surface::Search);
+}
+
+fn open_completion(app: &mut App) {
+    open(app, Surface::Completion);
+}
+
+fn open_notice(app: &mut App) {
+    open(app, Surface::Notice);
+}
+
+fn open_delete(app: &mut App) {
+    open(app, Surface::DeleteQuestion);
+    assert!(
+        !app.home_screen()
+            .as_ref()
+            .map_or(true, |screen| screen.question_import),
+        "the delete question, not the import offer"
+    );
+}
+
+fn open_import(app: &mut App) {
+    app.set_import_offer(true);
+    assert!(
+        app.top_surfaces().contains(&Surface::DeleteQuestion),
+        "the import offer opened"
+    );
+    assert!(
+        app.home_screen()
+            .as_ref()
+            .is_some_and(|screen| screen.question_import),
+        "the import offer, not the delete question"
+    );
+}
+
+fn open_login(app: &mut App) {
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(Vec::new())) as Arc<dyn crate::Configure>
+    ));
+    let _ = app.open_config_view(ConfigView::Login);
+    assert!(
+        app.top_surfaces().contains(&Surface::ConfigView),
+        "/login opened"
+    );
+}
+
+fn open_logout(app: &mut App) {
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(Vec::new())) as Arc<dyn crate::Configure>
+    ));
+    let _ = app.open_config_view(ConfigView::Logout);
+    assert!(
+        app.top_surfaces().contains(&Surface::ConfigView),
+        "/logout opened"
+    );
+}
+
+fn open_picker_typed(app: &mut App) {
+    open(app, Surface::WorkspacePicker);
+    assert!(
+        app.home_screen().as_ref().is_some_and(|screen| screen
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.typed.is_some())),
+        "the typed picker opens typed"
+    );
+}
+
+fn open_picker_recents(app: &mut App) {
+    open(app, Surface::WorkspacePicker);
+    for _ in 0..16 {
+        if app.home_screen().as_ref().is_some_and(|screen| {
+            screen
+                .picker
+                .as_ref()
+                .is_some_and(|picker| picker.typed.is_none())
+        }) {
+            break;
+        }
+        app.on_key(Key::Backspace, now());
+    }
+    assert!(
+        app.home_screen().as_ref().is_some_and(|screen| screen
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.typed.is_none())),
+        "the recents-only picker"
+    );
+}
+
+/// One row of the outside-click table: how to build the app, open the
+/// overlay, and which surface the press must close.
+const OUTSIDE_CASES: &[(&str, fn() -> App, fn(&mut App), Surface)] = &[
+    ("session quit", session_app, open_quit, Surface::Quit),
+    ("session report", session_app, open_report, Surface::Report),
+    ("session keymap", session_app, open_keymap, Surface::Keymap),
+    ("session picker", session_app, open_picker, Surface::Picker),
+    (
+        "session login",
+        session_app,
+        open_login,
+        Surface::ConfigView,
+    ),
+    (
+        "session logout",
+        session_app,
+        open_logout,
+        Surface::ConfigView,
+    ),
+    ("session search", session_app, open_search, Surface::Search),
+    (
+        "session completion",
+        session_app,
+        open_completion,
+        Surface::Completion,
+    ),
+    ("session notice", session_app, open_notice, Surface::Notice),
+    ("home quit", home_app, open_quit, Surface::Quit),
+    ("home report", home_app, open_report, Surface::Report),
+    (
+        "home delete",
+        home_app,
+        open_delete,
+        Surface::DeleteQuestion,
+    ),
+    (
+        "home import",
+        home_app,
+        open_import,
+        Surface::DeleteQuestion,
+    ),
+    (
+        "home picker typed",
+        home_app,
+        open_picker_typed,
+        Surface::WorkspacePicker,
+    ),
+    (
+        "home picker recents",
+        home_app,
+        open_picker_recents,
+        Surface::WorkspacePicker,
+    ),
+    ("home picker", home_app, open_picker, Surface::Picker),
+    ("home login", home_app, open_login, Surface::ConfigView),
+    (
+        "home completion",
+        home_app,
+        open_completion,
+        Surface::Completion,
+    ),
+    ("home search", home_app, open_search, Surface::Search),
+    ("home notice", home_app, open_notice, Surface::Notice),
+];
+
+#[test]
+fn a_press_outside_the_top_frame_closes_it_for_each_overlay() {
+    for (label, make, opener, surface) in OUTSIDE_CASES {
+        let mut app = make();
+        opener(&mut app);
+        assert!(
+            app.top_surfaces().contains(surface),
+            "{label}: {surface:?} open"
+        );
+        let (width, height) = app.screen_size();
+        let (_, targets) = drawn(&app);
+        let slab = app
+            .frames()
+            .slab_of(*surface)
+            .unwrap_or_else(|| panic!("{label}: {surface:?} drew no frame"));
+        assert!(!slab.is_empty(), "{label}: the frame is not empty");
+        let (col, row) = outside_corner(label, &targets, slab, width, height);
+        let mut twin = make();
+        opener(&mut twin);
+        let esc = twin.on_key(Key::Esc, now());
+        let effect = press_at(&mut app, &targets, col, row);
+        assert_eq!(effect, esc, "{label}: the press closes as Esc does");
+        assert!(
+            !app.top_surfaces().contains(surface),
+            "{label}: {surface:?} closed"
+        );
+    }
+}
+
+#[test]
+fn a_press_outside_the_quit_question_on_the_reports_cross_closes_only_the_quit() {
+    for make in [home_app as fn() -> App, session_app as fn() -> App] {
+        let mut app = make();
+        open(&mut app, Surface::Report);
+        open(&mut app, Surface::Quit);
+        let (_, targets) = drawn(&app);
+        let quit = app
+            .frames()
+            .slab_of(Surface::Quit)
+            .expect("the quit question drew");
+        let (col, row) = targets
+            .iter()
+            .find_map(|target| {
+                (target.id == TargetId::CloseOverlay
+                    && !quit.contains(Position::new(target.rect.x, target.rect.y)))
+                .then_some((target.rect.x, target.rect.y))
+            })
+            .expect("the report's cross outside the quit question");
+        assert_eq!(
+            mouse::hit(&targets, col, row),
+            Some(TargetId::CloseOverlay),
+            "the cross is on top there"
+        );
+        press_at(&mut app, &targets, col, row);
+        let listed = app.top_surfaces();
+        assert!(
+            !listed.contains(&Surface::Quit),
+            "the question closed: {listed:?}"
+        );
+        assert!(
+            listed.contains(&Surface::Report),
+            "the report stays: {listed:?}"
+        );
+    }
+}
+
+#[test]
+fn the_frame_edge_is_the_boundary() {
+    let slab = {
+        let mut app = session_app();
+        open(&mut app, Surface::Notice);
+        let (_, _) = drawn(&app);
+        app.frames().slab_of(Surface::Notice).expect("notice slab")
+    };
+    assert!(!slab.is_empty());
+    let middle_row = slab.y + slab.height / 2;
+    let middle_col = slab.x + slab.width / 2;
+    let x0 = slab.x.checked_sub(1).expect("room left of the frame");
+    let y0 = slab.y.checked_sub(1).expect("room above the frame");
+    for (col, row, inside) in [
+        (x0, middle_row, false),
+        (slab.x, middle_row, true),
+        (slab.right() - 1, middle_row, true),
+        (slab.right(), middle_row, false),
+        (middle_col, y0, false),
+        (middle_col, slab.y, true),
+        (middle_col, slab.bottom() - 1, true),
+        (middle_col, slab.bottom(), false),
+    ] {
+        let mut app = session_app();
+        open(&mut app, Surface::Notice);
+        let (_, targets) = drawn(&app);
+        press_at(&mut app, &targets, col, row);
+        assert_eq!(
+            app.top_surfaces().contains(&Surface::Notice),
+            inside,
+            "at ({col}, {row})"
+        );
+    }
+}
+
+#[test]
+fn only_a_left_press_is_intercepted() {
+    let mut app = session_app();
+    open(&mut app, Surface::Notice);
+    let (width, height) = app.screen_size();
+    let (_, targets) = drawn(&app);
+    let slab = app.frames().slab_of(Surface::Notice).expect("notice slab");
+    let (col, row) = outside_corner("notice", &targets, slab, width, height);
+    for kind in [
+        MouseKind::Release,
+        MouseKind::Drag(Button::Left),
+        MouseKind::Motion,
+        MouseKind::WheelUp,
+        MouseKind::WheelDown,
+        MouseKind::Press(Button::Right),
+    ] {
+        let mut pointer = Pointer::default();
+        app.on_mouse(
+            &Mouse { kind, col, row },
+            &targets,
+            &mut pointer,
+            true,
+            now(),
+        );
+        assert!(
+            app.top_surfaces().contains(&Surface::Notice),
+            "{kind:?} leaves the overlay open"
+        );
+    }
+    press_at(&mut app, &targets, col, row);
+    assert!(
+        !app.top_surfaces().contains(&Surface::Notice),
+        "a left press at the same cell closes it"
+    );
+}
+
+#[test]
+fn the_picker_clears_its_query_first_then_closes() {
+    let mut app = session_app();
+    open(&mut app, Surface::Picker);
+    app.on_key(Key::Char('m'), now());
+    app.on_key(Key::Char('o'), now());
+    assert!(!app.model_picker.query().is_empty(), "a query is typed");
+    let (width, height) = app.screen_size();
+    let (_, targets) = drawn(&app);
+    let slab = app.frames().slab_of(Surface::Picker).expect("picker slab");
+    let (col, row) = outside_corner("picker", &targets, slab, width, height);
+    press_at(&mut app, &targets, col, row);
+    assert_eq!(
+        app.model_picker.query(),
+        "",
+        "the first press clears the query"
+    );
+    assert!(
+        app.top_surfaces().contains(&Surface::Picker),
+        "the picker stays for the first press"
+    );
+    let (_, targets) = drawn(&app);
+    let slab = app.frames().slab_of(Surface::Picker).expect("picker slab");
+    let (col, row) = outside_corner("picker", &targets, slab, width, height);
+    press_at(&mut app, &targets, col, row);
+    assert!(
+        !app.top_surfaces().contains(&Surface::Picker),
+        "the second press closes it"
+    );
+}
+
+#[test]
+fn the_control_under_the_press_does_not_fire() {
+    let mut app = session_app();
+    open(&mut app, Surface::Panel);
+    app.put_aside();
+    assert!(app.panel().is_none(), "the approval waits on its badge");
+    open(&mut app, Surface::Notice);
+    let (_, targets) = drawn(&app);
+    let slab = app.frames().slab_of(Surface::Notice).expect("notice slab");
+    let badge = targets
+        .iter()
+        .find(|target| target.id == TargetId::Badge)
+        .expect("the badge draws")
+        .rect;
+    assert!(
+        !slab.contains(Position::new(badge.x, badge.y)),
+        "the badge shows outside the notice frame"
+    );
+    let (col, row) = (badge.left()..badge.right())
+        .flat_map(|col| (badge.top()..badge.bottom()).map(move |row| (col, row)))
+        .find(|&(col, row)| mouse::hit(&targets, col, row) == Some(TargetId::Badge))
+        .expect("a badge cell on top");
+    let mut pointer = Pointer::default();
+    app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now(),
+    );
+    app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now(),
+    );
+    assert!(
+        !app.top_surfaces().contains(&Surface::Notice),
+        "the overlay closed"
+    );
+    assert!(app.panel().is_none(), "the badge never reopened the panel");
+}
+
+#[test]
+fn no_frame_drawn_yet_means_no_intercept() {
+    let mut twin = session_app();
+    open(&mut twin, Surface::Notice);
+    let (width, height) = twin.screen_size();
+    let (_, targets) = drawn(&twin);
+    let slab = twin.frames().slab_of(Surface::Notice).expect("notice slab");
+    let (col, row) = outside_corner("notice", &targets, slab, width, height);
+    let mut app = session_app();
+    open(&mut app, Surface::Notice);
+    press_at(&mut app, &targets, col, row);
+    assert!(
+        app.top_surfaces().contains(&Surface::Notice),
+        "with no frame drawn the press takes the old path"
+    );
+    let (_, targets) = drawn(&app);
+    press_at(&mut app, &targets, col, row);
+    assert!(
+        !app.top_surfaces().contains(&Surface::Notice),
+        "after the frame the same press closes"
+    );
+}
+
+#[test]
+fn frames_note_replace_clear_and_ignore_an_empty_slab() {
+    let frames = super::Frames::default();
+    assert_eq!(frames.slab_of(Surface::Quit), None);
+    let slab = Rect::new(16, 5, 48, 13);
+    frames.note(Surface::Quit, slab);
+    assert_eq!(frames.slab_of(Surface::Quit), Some(slab));
+    let moved = Rect::new(10, 4, 20, 8);
+    frames.note(Surface::Quit, moved);
+    assert_eq!(frames.slab_of(Surface::Quit), Some(moved));
+    frames.note(Surface::Notice, Rect::default());
+    assert_eq!(frames.slab_of(Surface::Notice), None);
+    frames.clear();
+    assert_eq!(frames.slab_of(Surface::Quit), None);
 }

@@ -3405,3 +3405,95 @@ mod stacked {
         assert_eq!(app.import_report().map(|report| report.top()), Some(3));
     }
 }
+
+mod outside_click {
+    use crate::app::top::tests::session_app;
+    use crate::app::{App, Surface};
+    use crate::keys::{Button, Key, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    use contract::clock::Clock;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::{Position, Rect};
+
+    fn now() -> std::time::Instant {
+        fakes::clock::FakeClock::new().now()
+    }
+
+    /// A session app with a conversation long enough to show rows, the
+    /// `long_session` shape of `mod stacked`.
+    fn selected_session() -> App {
+        let mut app = session_app();
+        let mut seq = 0;
+        for at in 0..40 {
+            for next in super::turn(&mut seq, &format!("a_m{at}"), "a one-line reply") {
+                app.on_line(next);
+            }
+        }
+        assert_eq!(app.top(), None, "following the bottom");
+        app
+    }
+
+    /// The app drawn at its size: the buffer and the last frame's targets.
+    fn drawn(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
+        let (width, height) = app.screen_size();
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(app, area, &mut buf, None);
+        (buf, targets)
+    }
+
+    #[test]
+    fn a_shown_selection_does_not_keep_the_completion_panel_open() {
+        let mut app = selected_session();
+        let (_, targets) = drawn(&app);
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col: 6,
+                row: 3,
+            },
+            &targets,
+        );
+        app.on_select(
+            &Mouse {
+                kind: MouseKind::Drag(Button::Left),
+                col: 14,
+                row: 4,
+            },
+            &targets,
+        );
+        assert!(app.select.span().is_some(), "a selection shows");
+        app.on_key(Key::Char('/'), now());
+        assert!(app.select.span().is_some(), "typing keeps the selection");
+        assert_eq!(app.top_surface(), Surface::Completion);
+        let (width, height) = app.screen_size();
+        let (_, targets) = drawn(&app);
+        let slab = app
+            .frames()
+            .slab_of(Surface::Completion)
+            .expect("the completion panel drew");
+        let (col, row) = [
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        ]
+        .into_iter()
+        .find(|&(col, row)| !slab.contains(Position::new(col, row)))
+        .expect("a corner outside the panel");
+        let mut pointer = Pointer::default();
+        app.on_mouse(
+            &Mouse {
+                kind: MouseKind::Press(Button::Left),
+                col,
+                row,
+            },
+            &targets,
+            &mut pointer,
+            true,
+            now(),
+        );
+        assert!(app.completions().is_none(), "the panel closed");
+        assert!(app.select.span().is_none(), "the selection cleared");
+    }
+}
