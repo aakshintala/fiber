@@ -214,8 +214,7 @@ fn rest_after(words: &[Word], skip: usize) -> std::slice::Iter<'_, Word> {
 }
 
 /// Whether a stage's leading assignments may stand: every name takes a
-/// value in the built-in entry, such as `LC_ALL` for `git status`. Part 3
-/// widens this to the wrapper allow-list.
+/// value in the built-in entry. None does today, so any prefix executes.
 fn assignments_allowed(assignments: &[(String, String)], entry: &Command) -> bool {
     assignments.iter().all(|(name, _)| {
         entry

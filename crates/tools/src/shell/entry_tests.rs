@@ -146,8 +146,10 @@ fn an_owned_name_is_never_consulted() {
 
 #[test]
 fn a_configured_subcommand_path_must_match_word_for_word() {
-    // Every subcommand word must equal its part: `other` never stands in
-    // for `tool`, even with words to spare.
+    // Every subcommand word must equal its part (`docs/tools.md`,
+    // "Shell", "Effects": a subcommand with no entry of its own
+    // makes the call `executes`): `other` never stands in for `tool`,
+    // even with words to spare.
     assert_eq!(
         configured_flags(&ws(&["my", "other"]), &[configured("my tool", &[])]),
         None

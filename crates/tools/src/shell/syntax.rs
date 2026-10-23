@@ -25,7 +25,7 @@ use tree_sitter::Node;
 pub(super) const MAX_COMMAND_BYTES: usize = 10_000;
 
 /// One parsed call: its `&&`/`||`/`;` elements in source order. There is no
-/// join information; part 1 treats every element as one more stage.
+/// join information: every element is one more stage.
 pub(super) struct Script {
     pub(super) elements: Vec<Element>,
 }

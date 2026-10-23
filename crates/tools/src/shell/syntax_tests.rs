@@ -150,6 +150,8 @@ fn double_quotes_keep_everything_but_dollar_backtick_and_quote() {
 
 #[test]
 fn quoted_parts_cook_inside_a_concatenation() {
+    // `docs/tools.md`, "Shell", "Effects": quoted and unquoted words
+    // are listed syntax, so their concatenation cooks.
     let simple = only_simple("echo a\"b\"c");
     assert_eq!(word_cooked(&simple), ["echo", "abc"]);
     assert_eq!(simple.words.get(1).unwrap().raw, "a\"b\"c");
@@ -158,11 +160,15 @@ fn quoted_parts_cook_inside_a_concatenation() {
 #[test]
 fn a_bare_dollar_in_a_concatenation_opaques_it() {
     // `$` is anonymous and outside the plain set, so the word never cooks.
+    // `docs/tools.md`, "Shell", "Effects": variable expansion makes
+    // the call `executes`.
     assert_opaque("echo a$");
 }
 
 #[test]
 fn cook_quoted_rejects_a_lopsided_spelling() {
+    // A lopsided quote is outside the listed syntax, so the word never
+    // cooks (`docs/tools.md`, "Shell", "Effects").
     assert_eq!(cook_quoted("\"ab\"", '"'), Some("ab".to_string()));
     assert_eq!(cook_quoted("ab\"", '"'), None);
     assert_eq!(cook_quoted("\"ab", '"'), None);
@@ -192,6 +198,8 @@ fn a_pipeline_builds_one_element_with_one_stage_per_command() {
 fn a_redirect_around_a_compound_body_opaques_the_pipeline() {
     // The redirect's body holds two elements (a list) or one element with
     // two stages (a pipeline), so the stage never stands alone.
+    // `docs/tools.md`, "Shell", "Effects": only the listed redirects
+    // keep a read-only call read-only.
     assert_opaque("a && b >f | cat");
     assert_opaque("a | b >f | cat");
 }
@@ -232,7 +240,8 @@ fn lists_build_one_element_per_command_in_source_order() {
 #[test]
 fn a_comment_inside_a_list_opaques_it() {
     // The comment is a fourth child of the `list` node, which only the
-    // three-child shape stands for.
+    // three-child shape stands for. `docs/tools.md`, "Shell", "Effects":
+    // any node outside the listed syntax makes the call `executes`.
     assert_opaque("a && # c\nb");
 }
 
@@ -324,6 +333,8 @@ fn attached_words_are_operands_not_descriptors() {
 fn a_spaced_digit_before_a_redirect_stays_an_operand() {
     // The digit is spaced from the redirect, so it is not spelled against
     // it and stays an operand: stealing it would bless descriptor `"3"`.
+    // `docs/tools.md`, "Shell", "Effects": a read-only call keeps
+    // only the listed redirects.
     let simple = only_simple("ls 3 >/dev/null");
     assert_eq!(word_cooked(&simple), ["ls", "3"]);
     assert_eq!(simple.tokens, ["ls", "3", ">/dev/null"]);
