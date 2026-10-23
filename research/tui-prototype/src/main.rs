@@ -8103,7 +8103,7 @@ mod tests {
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty, hub, prices, prices-empty, prices-free, prices-noprice, prices-tiered, install-missing, install-running, install-failed, install-done",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, at-path, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
-                "--reviewer-setup first, outside, rerun, struck, flipped, diff, notice",
+                "--reviewer-setup first, outside, rerun, struck, flipped, diff, notice, question, waiting, saved",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills, opened-edit, opened-read, opened-search, opened-shell, opened-mcp, cut-shell",
                 "--offer-case offer, confirm, select, multi_select, text_input",

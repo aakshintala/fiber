@@ -266,7 +266,8 @@ starts it. Each case draws one static frame from the fixtures in
 `src/reviewer_setup.rs` and waits for a key; Esc, q or Ctrl+C quits.
 Combine with `--static`; the fixture still loads but the setup ignores it.
 The `notice` case draws the notice the terminal shows when the reviewer
-blocks while both layers are empty, naming `/reviewer-setup`.
+blocks while both layers are empty, naming `/reviewer-setup`. `question`,
+`waiting` and `saved` draw the screens around the proposals.
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup first
@@ -276,32 +277,51 @@ cargo run --release -- fixtures/session.jsonl --static --reviewer-setup struck
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup flipped
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup diff
 cargo run --release -- fixtures/session.jsonl --static --reviewer-setup notice
+cargo run --release -- fixtures/session.jsonl --static --reviewer-setup question
+cargo run --release -- fixtures/session.jsonl --static --reviewer-setup waiting
+cargo run --release -- fixtures/session.jsonl --static --reviewer-setup saved
 ```
+
+Every lines frame (`first`, `outside`, `rerun`, `struck`, `flipped`) opens
+on a `Topic n of 5 · <heading name>` row.
 
 - `first`: first run in a project, topic 4 of 5 (routine actions): the
   topic's question, the session evidence (14 escalations answered allow for
   `gh pr merge … --squash`) and the `[per-project]` line barred. Legend:
   `Tab flip layer · Enter confirm · e edit · x strike · Esc back`.
-- `outside`: first run outside a project, topic 2 of 5 (internal hosts):
-  the topic's question, the person's answer as evidence and the `[global]`
-  line barred, with a
-  dim note that every line goes to the global notes. Same legend.
-- `rerun`: a rerun with earlier lines: two kept `✓` lines under `Earlier
-  lines`, then the new proposal barred under `New proposals`. Legend:
+- `outside`: first run from a launch directory outside git, topic 2 of 5
+  (internal hosts): the topic's question, the person's answer as evidence
+  and the `[global]` line barred, which is what an answer line gets in any
+  project. Every session has a project, so the frame says nothing about
+  one. Same legend.
+- `rerun`: a rerun with earlier lines, topic 1 of 5 (source control): two
+  kept `✓` lines under `Earlier lines`, then the evidence and the new
+  proposal barred under `New proposals`; the question is left out. Legend:
   `Enter keep · x strike · Esc back`.
 - `struck`: a struck line, dim with strikethrough on its bar, kept out of
-  the notes. Legend: `Enter keep · Esc back`.
+  the notes, under the topic line and the `struck — kept out of the notes`
+  label, with no question and no evidence. Legend: `Enter keep · Esc back`.
 - `flipped`: the first run's topic with its question and the line flipped to `[global]`, with a dim `was
   per-project` line. Same legend as `first`.
-- `diff`: the final diff, each layer's notes against the file as it is now
+- `diff`: the final diff, each layer's text against the file as it is now
   with the file named (`~/.fiber/config.json` and
-  `~/.fiber/projects/fiber/config.json`), each added line as a bullet under
-  its topic's heading with `+` in the added
-  colour, and a dim line saying approving then offers `r` reload now or
-  `n` from the next session. Legend: `Enter approve · Esc cancel`.
+  `~/.fiber/projects/fiber/config.json`): the topics' heading lines as
+  saved (`### Source control`), kept bullets as context, a struck bullet
+  with `-` in the removed colour, and added bullets and new headings with
+  `+` in the added colour, then a dim line saying approving then offers `r`
+  reload now or `n` from the next session. Legend: `Enter approve · Esc
+  cancel`.
 - `notice`: the notice naming `/reviewer-setup`, shown the first time in a
   session the reviewer blocks a call while both layers of the notes are
-  empty. Legend: `Esc closes`.
+  empty. Legend: `Any key closes`.
+- `question`: topic 1 of 5 (source control): the topic's question and a
+  one-line answer field with a block cursor. Legend: `Enter answer · Esc
+  back`.
+- `waiting`: the wait for the topic's lines: a dim `Proposing lines…` row.
+  Legend: `Esc back`.
+- `saved`: after the save, each file named with whether it was saved: the
+  global file saved with a dim sync error beside it, the per-project file
+  saved. Legend: `r reload now · n from the next session`.
 
 The keys match the two tools the person already uses, probed rather than
 guessed: Claude Code's binary names `h`, `c`, `o` and `q + Enter`
