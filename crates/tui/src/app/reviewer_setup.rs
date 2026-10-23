@@ -39,14 +39,18 @@ const LEFT: &str = "The reviewer setup closed: another session is on screen. Not
 /// What Enter on a diff with no changed layer says.
 const UNCHANGED: &str = "Nothing changed. No file was written.";
 
-/// The setup open now, if any, and the ids of requests whose answers no
-/// longer matter.
+/// The setup open now, if any, the ids of requests whose answers no longer
+/// matter, and the sessions the notice is finished with.
 #[derive(Default)]
 pub(super) struct State {
     open: Option<Open>,
     /// Request ids to settle silently when their answers arrive: dropped
     /// by Esc, a close, or a signal that the answer may never come.
     dropped: BTreeSet<String>,
+    /// Sessions whose notice showed or whose notes were found, by id: the
+    /// notes are fixed for the session, so neither is read again. Held in
+    /// memory only.
+    done: BTreeSet<String>,
 }
 
 /// A setup with the session and workspace it is bound to.
@@ -146,13 +150,49 @@ impl App {
         Some(self.reviewer_act(act))
     }
 
-    /// An edit at the setup: a paste goes into the field being edited, every
-    /// other edit is swallowed.
+    /// An edit at the setup: on the notice any edit closes it, otherwise a
+    /// paste goes into the field being edited and every other edit is
+    /// swallowed.
     pub(super) fn reviewer_setup_edit(&mut self, edit: &Edit) -> Effect {
-        if let (Edit::Paste(text), Some(open)) = (edit, self.reviewer_setup.open.as_mut()) {
+        let Some(open) = self.reviewer_setup.open.as_mut() else {
+            return Effect::None;
+        };
+        if open.setup.screen() == Screen::Notice {
+            self.reviewer_setup_close();
+        } else if let Edit::Paste(text) = edit {
             open.setup.paste(text);
         }
         Effect::None
+    }
+
+    /// The hook on `on_session`, after the approval panel took its lines:
+    /// the first live block of the attached session while both layers of
+    /// its notes are empty opens the notice. Nothing while an opening fold
+    /// replays history or a setup is open; a session with no row or no
+    /// project, no seam and a failed read are not counted, so a later block
+    /// tries again; a read that finds notes, or the notice, ends the reads
+    /// for the session.
+    pub(super) fn reviewer_block(&mut self, envelope: &Envelope) {
+        if !is_block(envelope)
+            || self.pass_open()
+            || self.reviewer_setup.open.is_some()
+            || self.reviewer_setup.done.contains(&envelope.session_id.0)
+        {
+            return;
+        }
+        let session = envelope.session_id.clone();
+        let (Some(seam), Ok(workspace)) = (self.configure_seam(), self.reviewer_binding(&session))
+        else {
+            return;
+        };
+        let Ok(notes) = seam.reviewer_notes(&workspace) else {
+            return;
+        };
+        self.reviewer_setup.done.insert(session.0.clone());
+        if !(notes.global.text.trim().is_empty() && notes.project.text.trim().is_empty()) {
+            return;
+        }
+        self.start_reviewer_setup(Setup::notice(notes), session, workspace);
     }
 
     /// Carries out what a key or an answer asked of the app.
@@ -320,11 +360,15 @@ impl App {
     /// Closes the setup because the screen left its session, with a notice
     /// that nothing was saved.
     fn reviewer_setup_leave(&mut self) {
-        if self.reviewer_setup.open.is_none() {
+        let Some(open) = self.reviewer_setup.open.as_ref() else {
             return;
-        }
+        };
+        // The notice saved nothing and asked for nothing: it just goes.
+        let said_nothing = open.setup.screen() == Screen::Notice;
         self.reviewer_setup_close();
-        self.push_notice("session_not_found", LEFT.to_owned());
+        if !said_nothing {
+            self.push_notice("session_not_found", LEFT.to_owned());
+        }
     }
 
     /// The hook on a stream ending or reopening for `session`: a waiting
@@ -339,6 +383,27 @@ impl App {
         }
         open.setup.lost();
         self.drop_pending_request();
+    }
+}
+
+/// Whether a session line is the reviewer blocking a call: its deny, or an
+/// escalation to the person whose cause is a block (`docs/events.md`,
+/// `permission_requested`).
+fn is_block(envelope: &Envelope) -> bool {
+    let payload = &envelope.payload;
+    let word = |key: &str| payload.get(key).and_then(Value::as_str);
+    match envelope.kind.as_str() {
+        "permission_resolved" => {
+            word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
+        }
+        "permission_requested" => matches!(
+            payload
+                .get("escalation")
+                .and_then(|escalation| escalation.get("cause"))
+                .and_then(Value::as_str),
+            Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
+        ),
+        _ => false,
     }
 }
 

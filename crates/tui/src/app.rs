@@ -1745,6 +1745,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
         self.session_views_line(envelope);

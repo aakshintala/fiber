@@ -84,7 +84,8 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(global: &str, project: &str, width: u16, height: u16) -> Self {
+    /// The session on screen with the seam installed and no setup open.
+    fn attached(global: &str, project: &str, width: u16, height: u16) -> Self {
         let mut app = App::new(PathBuf::from("/w"));
         app.set_home(Launch {
             location: crate::LaunchLocation::Local {
@@ -118,12 +119,18 @@ impl Fixture {
         let fake = Arc::new(Fake::new(Vec::new()));
         *fake.notes.lock().expect("notes lock") = Ok(notes(global, project));
         app.set_configure(Some(fake.clone() as Arc<dyn crate::Configure>));
-        for ch in "/reviewer-setup".chars() {
-            app.on_key(Key::Char(ch), now());
-        }
-        assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-        assert!(app.reviewer_setup_open(), "the setup did not open");
         Self { app, fake }
+    }
+
+    /// The setup open on topic 1 over `notes`.
+    fn new(global: &str, project: &str, width: u16, height: u16) -> Self {
+        let mut fx = Self::attached(global, project, width, height);
+        for ch in "/reviewer-setup".chars() {
+            fx.app.on_key(Key::Char(ch), now());
+        }
+        assert_eq!(fx.app.on_key(Key::Enter, now()), Effect::None);
+        assert!(fx.app.reviewer_setup_open(), "the setup did not open");
+        fx
     }
 
     fn empty() -> Self {
@@ -301,6 +308,17 @@ fn waiting() -> Fixture {
     fx
 }
 
+/// The notice a reviewer's deny opens over empty notes.
+fn notice() -> Fixture {
+    let mut fx = Fixture::attached("", "", 120, 40);
+    fx.app.on_line(envelope(
+        "permission_resolved",
+        json!({"request_id": "r_9", "decision": "deny", "decided_by": "reviewer"}),
+    ));
+    assert_eq!(fx.setup().screen(), Screen::Notice);
+    fx
+}
+
 fn saved() -> Fixture {
     let mut fx = Fixture::empty();
     *fx.fake.notes_saved.lock().expect("saved lock") = Ok(NotesSaved::Written(vec![
@@ -430,6 +448,11 @@ fn waiting_frame() {
 #[test]
 fn saved_frame() {
     insta::assert_snapshot!("saved", checked(saved(), "saved", 0));
+}
+
+#[test]
+fn notice_frame() {
+    insta::assert_snapshot!("notice", checked(notice(), "notice", 0));
 }
 
 #[test]

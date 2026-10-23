@@ -77,6 +77,10 @@ pub(crate) fn frame(setup: &Setup, inner: usize, height: u16) -> Overlay {
         Screen::Lines => lines(setup, inner, capacity),
         Screen::Diff => (diff_body(setup, inner, capacity), diff_legend()),
         Screen::Saved => saved(setup, inner),
+        Screen::Notice => (
+            paragraph(crate::reviewer_setup::NOTICE, inner, Style::new()),
+            overlay::legend(&[("Any key", "closes")]),
+        ),
     };
     Overlay {
         title: Some(("Reviewer setup".to_owned(), Some(Span::raw("✕")))),

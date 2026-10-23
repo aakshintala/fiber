@@ -1282,3 +1282,347 @@ fn a_press_outside_the_quit_question_closes_only_the_quit_question() {
     assert!(app.reviewer_setup_open());
     assert_eq!(answer(&app), "typed");
 }
+
+// ------------------------------------------------------------ the notice
+
+/// A reviewer's verdict on a call, as the session logs it.
+fn verdict(decided_by: &str, decision: &str) -> Line {
+    with_action(session_line(
+        "permission_resolved",
+        json!({"request_id": "r_9", "decision": decision, "decided_by": decided_by}),
+    ))
+}
+
+fn reviewer_deny() -> Line {
+    verdict("reviewer", "deny")
+}
+
+/// An escalation to the person, with `cause` when it has one.
+fn escalation(cause: Option<&str>) -> Line {
+    let mut payload = json!({"request_id": "r_8", "effects": ["executes"],
+        "reversible": true, "step": "review"});
+    if let (Some(cause), Some(map)) = (cause, payload.as_object_mut()) {
+        map.insert(
+            "escalation".to_owned(),
+            json!({"cause": cause, "reason": "it blocked three in a row"}),
+        );
+    }
+    with_action(session_line("permission_requested", payload))
+}
+
+/// Whether the notice is the screen the setup is on.
+fn noticed(app: &App) -> bool {
+    app.reviewer_setup()
+        .is_some_and(|setup| setup.screen() == Screen::Notice)
+}
+
+fn approval_resolved_for(id: &str) -> Line {
+    with_action(session_line(
+        "permission_resolved",
+        json!({"request_id": id, "decision": "allow", "decided_by": "person"}),
+    ))
+}
+
+#[test]
+fn a_reviewer_deny_with_both_layers_empty_opens_the_notice() {
+    let (mut app, _) = app();
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+    assert!(app.reviewer_setup_open());
+    assert_eq!(app.top_surface(), Surface::ReviewerSetup);
+}
+
+#[test]
+fn a_second_block_in_the_same_session_shows_no_notice() {
+    let (mut app, _) = app();
+    app.on_line(reviewer_deny());
+    press(&mut app, Key::Esc);
+    assert!(app.reviewer_setup().is_none());
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+}
+
+#[test]
+fn each_escalation_cause_that_is_a_block_opens_the_notice() {
+    for cause in ["consecutive_blocks", "session_blocks", "reviewer_failed"] {
+        let (mut app, _) = app();
+        app.on_line(escalation(Some(cause)));
+        assert!(noticed(&app), "{cause}");
+    }
+}
+
+#[test]
+fn an_escalation_with_another_cause_or_none_opens_nothing() {
+    for cause in [Some("escalate_rule"), Some("not_a_block"), None] {
+        let (mut app, _) = app();
+        app.on_line(escalation(cause));
+        assert!(app.reviewer_setup().is_none(), "{cause:?}");
+    }
+}
+
+#[test]
+fn only_a_reviewer_deny_opens_the_notice() {
+    for (by, decision) in [
+        ("person", "deny"),
+        ("reviewer", "allow"),
+        ("cancel", "deny"),
+        ("rule", "deny"),
+    ] {
+        let (mut app, _) = app();
+        app.on_line(verdict(by, decision));
+        assert!(app.reviewer_setup().is_none(), "{by} {decision}");
+    }
+}
+
+#[test]
+fn a_block_inside_an_opening_fold_shows_no_notice_and_marks_nothing() {
+    let (mut app, _) = app();
+    app.passes
+        .push((SessionId(SESSION.to_owned()), crate::app::Pass::Pending));
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+    app.passes.clear();
+    app.on_line(reviewer_deny());
+    assert!(
+        noticed(&app),
+        "the replayed block did not use the notice up"
+    );
+}
+
+#[test]
+fn notes_in_either_layer_show_no_notice_and_end_reads_for_the_session() {
+    for (global, project) in [
+        ("### Source control\n- g\n", ""),
+        ("", "### Source control\n- p\n"),
+    ] {
+        let (mut app, fake) = app();
+        set_notes(&fake, notes(global, project));
+        app.on_line(reviewer_deny());
+        assert!(app.reviewer_setup().is_none(), "{global:?} {project:?}");
+        // The notes are fixed for the session: a later read is not made.
+        set_notes(&fake, notes("", ""));
+        app.on_line(reviewer_deny());
+        assert!(app.reviewer_setup().is_none(), "read again");
+    }
+}
+
+#[test]
+fn a_failed_read_shows_no_notice_and_does_not_end_reads() {
+    let (mut app, fake) = app();
+    *fake.notes.lock().expect("notes lock") = Err(failure("config.json: unreadable"));
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+    assert!(notices(&app).is_empty(), "no notice row either");
+    set_notes(&fake, notes("", ""));
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+}
+
+#[test]
+fn whitespace_only_layers_count_as_empty() {
+    let (mut app, fake) = app();
+    set_notes(&fake, notes("  \n\t", " \n"));
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+}
+
+#[test]
+fn a_whitespace_only_layer_beside_a_layer_with_notes_shows_none() {
+    let (mut app, fake) = app();
+    set_notes(&fake, notes("  \n", "### Source control\n- p\n"));
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+}
+
+#[test]
+fn another_sessions_block_shows_no_notice_and_marks_nothing() {
+    let (mut app, _) = app();
+    app.on_line(with_session(OTHER, reviewer_deny()));
+    assert!(app.reviewer_setup().is_none());
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+}
+
+#[test]
+fn a_session_with_no_project_shows_no_notice_and_is_not_marked() {
+    let (mut app, _) = app();
+    app.on_line(status(SESSION, "/w", "", "idle"));
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+    app.on_line(status(SESSION, "/w", "-w", "idle"));
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+}
+
+#[test]
+fn a_session_with_no_row_shows_no_notice() {
+    let mut app = home_app();
+    app.set_configure(Some(
+        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
+    ));
+    app.attach(SessionId(OTHER.to_owned()));
+    app.on_line(with_session(OTHER, reviewer_deny()));
+    assert!(app.reviewer_setup().is_none());
+}
+
+#[test]
+fn with_no_seam_the_block_shows_no_notice() {
+    let mut app = session_app();
+    app.on_line(reviewer_deny());
+    assert!(app.reviewer_setup().is_none());
+}
+
+#[test]
+fn a_block_while_a_setup_is_open_shows_no_notice_and_marks_nothing() {
+    let (mut app, _) = app();
+    start(&mut app);
+    app.on_line(reviewer_deny());
+    assert_eq!(screen(&app), Screen::Question);
+    press(&mut app, Key::Esc);
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+}
+
+#[test]
+fn any_key_closes_the_notice_and_reaches_nothing_else() {
+    for key in [
+        Key::Char('x'),
+        Key::Enter,
+        Key::Esc,
+        Key::Tab,
+        Key::Backspace,
+        Key::Up,
+        Key::Char('/'),
+    ] {
+        let (mut app, _) = app();
+        type_text(&mut app, "draft");
+        app.on_line(reviewer_deny());
+        assert!(noticed(&app));
+        let effect = press(&mut app, key.clone());
+        assert_eq!(effect, Effect::None, "{key:?}");
+        assert!(app.reviewer_setup().is_none(), "{key:?}");
+        assert_eq!(app.input().expand(), "draft", "{key:?}");
+        assert!(app.completions().is_none(), "{key:?}");
+    }
+}
+
+#[test]
+fn ctrl_c_falls_through_the_notice_to_quit() {
+    let (mut app, _) = app();
+    app.on_line(status(SESSION, "/w", "-w", "idle"));
+    app.on_line(reviewer_deny());
+    assert_eq!(app.on_key(Key::CtrlC, now()), Effect::None);
+    assert!(noticed(&app), "one Ctrl+C leaves the notice");
+    assert_eq!(app.on_key(Key::CtrlC, now()), Effect::Quit);
+}
+
+/// An edit-class input closes the notice and leaves the draft as it was.
+#[track_caller]
+fn edit_closes(edit: Edit) {
+    let (mut app, _) = app();
+    type_text(&mut app, "draft");
+    app.on_line(reviewer_deny());
+    assert!(noticed(&app));
+    assert_eq!(app.on_edit(edit.clone()), Effect::None, "{edit:?}");
+    assert!(app.reviewer_setup().is_none(), "{edit:?}");
+    assert_eq!(app.input().expand(), "draft", "{edit:?}");
+}
+
+#[test]
+fn the_left_edit_closes_the_notice() {
+    edit_closes(Edit::Left);
+}
+
+#[test]
+fn the_right_edit_closes_the_notice() {
+    edit_closes(Edit::Right);
+}
+
+#[test]
+fn the_delete_edit_closes_the_notice() {
+    edit_closes(Edit::Delete);
+}
+
+#[test]
+fn ctrl_j_closes_the_notice() {
+    edit_closes(Edit::CtrlJ);
+}
+
+#[test]
+fn shift_enter_closes_the_notice() {
+    edit_closes(Edit::ShiftEnter);
+}
+
+#[test]
+fn ctrl_u_closes_the_notice() {
+    edit_closes(Edit::DeleteToLineStart);
+}
+
+#[test]
+fn a_word_move_left_closes_the_notice() {
+    edit_closes(Edit::WordLeft);
+}
+
+#[test]
+fn a_word_move_right_closes_the_notice() {
+    edit_closes(Edit::WordRight);
+}
+
+#[test]
+fn a_word_delete_closes_the_notice() {
+    edit_closes(Edit::DeleteWord);
+}
+
+#[test]
+fn a_line_move_closes_the_notice() {
+    edit_closes(Edit::LineStart);
+    edit_closes(Edit::LineEnd);
+}
+
+#[test]
+fn a_paste_closes_the_notice_and_pastes_nowhere() {
+    edit_closes(Edit::Paste("pasted".to_owned()));
+}
+
+#[test]
+fn a_press_outside_closes_the_notice_as_esc_does() {
+    let (mut app, _) = app();
+    app.on_line(reviewer_deny());
+    let (col, row, targets) = outside(&app);
+    let (mut twin, _) = self::app();
+    twin.on_line(reviewer_deny());
+    let esc = twin.on_key(Key::Esc, now());
+    assert_eq!(press_at(&mut app, &targets, col, row), esc);
+    assert!(app.reviewer_setup().is_none());
+}
+
+#[test]
+fn the_notice_closes_silently_when_another_session_is_attached() {
+    let (mut app, _) = app();
+    app.on_line(reviewer_deny());
+    app.attach(SessionId(OTHER.to_owned()));
+    assert!(app.reviewer_setup().is_none());
+    assert!(notices(&app).is_empty());
+}
+
+#[test]
+fn the_notice_closes_silently_on_going_home() {
+    let (mut app, _) = app();
+    app.on_line(reviewer_deny());
+    app.go_home();
+    assert!(app.reviewer_setup().is_none());
+    assert!(notices(&app).is_empty());
+}
+
+#[test]
+fn an_escalation_notice_waits_behind_the_approval_panel() {
+    let (mut app, _) = app();
+    app.on_line(escalation(Some("consecutive_blocks")));
+    assert!(noticed(&app));
+    assert!(!app.reviewer_setup_open(), "the approval panel is up");
+    assert!(!app.top_surfaces().contains(&Surface::ReviewerSetup));
+    app.on_line(approval_resolved_for("r_8"));
+    assert!(app.top_surfaces().contains(&Surface::ReviewerSetup));
+    press(&mut app, Key::Esc);
+    assert!(app.reviewer_setup().is_none());
+}

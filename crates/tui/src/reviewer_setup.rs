@@ -33,7 +33,13 @@ pub(crate) enum Screen {
     Diff,
     /// After the save: each file and whether it was saved.
     Saved,
+    /// The one-time notice that the reviewer blocked a call with no notes.
+    Notice,
 }
+
+/// What the notice says: the first time in a session the reviewer blocks a
+/// call while both layers of the notes are empty.
+pub(crate) const NOTICE: &str = "The reviewer blocked a call while both layers of the notes are empty. Run /reviewer-setup to set them up.";
 
 /// What the caller does after a key or an answer.
 #[derive(Debug, PartialEq, Eq)]
@@ -216,6 +222,15 @@ impl Setup {
         }
     }
 
+    /// The notice screen over `notes` as read: the same state, on the one
+    /// screen that takes any key to close it.
+    pub(crate) fn notice(notes: ReviewerNotes) -> Self {
+        Self {
+            screen: Screen::Notice,
+            ..Self::open(notes)
+        }
+    }
+
     // ----------------------------------------------------------- reading
 
     /// The screen on show.
@@ -375,6 +390,7 @@ impl Setup {
             Screen::Lines => self.lines_key(key),
             Screen::Diff => self.diff_key(key),
             Screen::Saved => self.saved_key(key),
+            Screen::Notice => Act::Close,
         }
     }
 
@@ -389,7 +405,7 @@ impl Setup {
                     field.push_str(&text);
                 }
             }
-            Screen::Waiting | Screen::Diff | Screen::Saved => {}
+            Screen::Waiting | Screen::Diff | Screen::Saved | Screen::Notice => {}
         }
     }
 
