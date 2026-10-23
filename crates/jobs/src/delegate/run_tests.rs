@@ -2621,18 +2621,47 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
         )
         .0;
     let _waited = waited;
-    // The fold signal fires after `on_line` returned for every line,
-    // so both forwards' inbox sends precede it on the watcher's own
-    // thread: whatever the scheduler did, the take below stashes both
-    // lines deterministically instead of racing the watcher's wakeups.
-    wait_folded(&rig, 1);
-    let (notice, usages) = reported_with_usage(&rig);
+    // The watcher's forwards and the runner's reap race (see #3005):
+    // the take holds the Job and both lines whichever lands first, so
+    // no schedule changes which values land. The bound is liveness
+    // only, the plan's MUST_SUCCEED_WITHIN.
+    let (notice, usages) = take_report_with_usages(&rig, 2);
     let generations: Vec<&str> = usages
         .iter()
         .map(|(_, generation)| generation.as_str())
         .collect();
     assert_eq!(generations, ["g_2", "g_3"]);
     assert_eq!(notice.completed.status, Outcome::Completed);
+}
+
+/// Takes the runner's Job notice and `want` streamed usages in either
+/// order (see #3005): stopping at the first Job would drop the lines
+/// when the reap beats the watcher, and stopping at the lines would
+/// drop the Job when the watcher wins. Both sends are program-ordered
+/// before the caller's assertions; the bound is liveness only.
+#[track_caller]
+fn take_report_with_usages(
+    rig: &Rig,
+    want: usize,
+) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    let mut usages = Vec::new();
+    let mut notice = None;
+    while notice.is_none() || usages.len() < want {
+        match deadline.recv(&rig.inbox) {
+            Ok(Delivery::Job(got)) => {
+                if notice.is_none() {
+                    notice = Some(got);
+                }
+            }
+            Ok(Delivery::DelegateUsage { session, line }) => {
+                usages.push((session, line.generation_id.0.clone()));
+            }
+            Ok(other) => panic!("expected the report or the streamed usage, got {other:?}"),
+            Err(_) => panic!("the report and the streamed usage never arrived"),
+        }
+    }
+    (notice.unwrap(), usages)
 }
 
 /// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
@@ -3093,14 +3122,12 @@ fn a_correction_applies_only_its_delta() {
         )
         .0;
     let _waited = waited;
-    // The fold signal fires after `on_line` returned for every line,
-    // so both forwards' inbox sends precede it on the watcher's own
-    // thread: whatever the scheduler did, the take below stashes both
-    // lines deterministically instead of racing the watcher's wakeups.
-    // The Job can precede the watcher's forwards (see #3005), so the
-    // tap is read only after the take holds both streamed lines.
-    wait_folded(&rig, 1);
-    let (notice, usages) = reported_with_usage(&rig);
+    // The watcher's forwards and the runner's reap race (see #3005):
+    // the take holds the Job and both lines whichever lands first, so
+    // no schedule changes which values land, and the tap is read only
+    // after the take holds both streamed lines. The bound is liveness
+    // only, the plan's MUST_SUCCEED_WITHIN.
+    let (notice, usages) = take_report_with_usages(&rig, 2);
     // Both arrivals of the corrected generation stream exactly once,
     // and neither trips the budget. The delta arithmetic itself is
     // production logic proved loop-side (the tripwire `pending_tests`),
