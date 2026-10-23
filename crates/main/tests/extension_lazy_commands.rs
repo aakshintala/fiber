@@ -180,7 +180,8 @@ fn the_first_run_is_accepted_only_after_the_start() {
     let holder = thread::spawn(move || {
         let writer = fs::OpenOptions::new().write(true).open(fifo).unwrap();
         held.send(()).unwrap();
-        let _ = released.recv();
+        // A dropped `release` (the test failed) frees the reader too.
+        released.recv().unwrap_or(());
         drop(writer);
     });
     send(
