@@ -172,8 +172,9 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     // `docs/mcp.md:82`: tools are sorted by name.
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
     // The infos run parallel to the sorted tools: `start` sorts the
-    // tools by name and unzips the infos from the same order
-    // (`docs/mcp.md:82`; `crates/mcp/src/start.rs:678-682`).
+    // tools by name and unzips the infos from the same sorted list
+    // (`crates/mcp/src/start.rs:678-682`). `docs/mcp.md` promises tool
+    // order only; the infos order follows from that construction.
     assert_eq!(
         started
             .infos
