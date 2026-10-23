@@ -153,6 +153,7 @@ fn late_preparer(calls: &Arc<AtomicUsize>, installed: &Arc<AtomicUsize>) -> r#lo
                 extension_sections: Vec::new(),
                 skills_disabled: Vec::new(),
                 cache_lifetime: CacheLifetime::FiveMinutes,
+                deferrals: Default::default(),
             },
             tools: vec![(
                 "repo".to_owned(),
@@ -543,6 +544,7 @@ fn a_reload_before_the_first_prompt_builds_twice_around_the_late_step() {
                     extension_sections: Vec::new(),
                     skills_disabled: Vec::new(),
                     cache_lifetime: CacheLifetime::FiveMinutes,
+                    deferrals: Default::default(),
                 },
                 tools: vec![("repo".to_owned(), Arc::clone(&reload_tool) as Arc<dyn Tool>)],
                 extensions: Vec::new(),

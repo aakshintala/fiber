@@ -323,11 +323,19 @@ pub struct Loop {
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
     ledger: usage::Ledger,
+    /// The spend the delegate-socket reader shares: per-generation billed
+    /// costs, the accumulated sum, the budget and the one-way trip. The
+    /// watcher applies each tapped line under its lock; the loop
+    /// publishes each ledgered line under the same lock.
+    pub(crate) spend_trip: std::sync::Arc<std::sync::Mutex<usage::Tripwire>>,
     /// Costs looked up after their calls ended, to write as they settle.
     late_cost: late_cost::LateCost,
     pub(crate) lifecycle: lifecycle::State,
     /// `budget.usd` for this session. `None` is no limit.
     budget: Option<f64>,
+    /// True for a delegate's loop (`Loop::delegate`): its tree stop must
+    /// preempt its failed-turn drain, so the session ends stopped.
+    is_delegate: bool,
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     retry: Retry,
@@ -460,6 +468,9 @@ struct Seed {
     replaced: Vec<ToolReplaced>,
     workspace: PathBuf,
     credentials: PathBuf,
+    /// True for a delegate's loop: its tree stop must preempt its
+    /// failed-turn drain, so the session ends stopped.
+    is_delegate: bool,
 }
 
 /// The failure step 7 escalates without a reviewer, with the default limits.
@@ -501,6 +512,7 @@ impl Loop {
         let workspace = PathBuf::from(&session.permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
         let credentials = permission::resolved(session.permissions.credentials.clone());
+        let is_delegate = parent.is_some();
         let started = session.log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: session.permissions.workspace.clone(),
@@ -540,6 +552,7 @@ impl Loop {
                 replaced,
                 workspace,
                 credentials,
+                is_delegate,
             },
         )
     }
@@ -580,6 +593,7 @@ impl Loop {
             replaced,
             workspace,
             credentials,
+            is_delegate,
         } = seed;
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
@@ -600,6 +614,9 @@ impl Loop {
             contract::SessionId(session_id.clone()),
             Arc::clone(log.clock()),
         );
+        let spend_trip = std::sync::Arc::new(std::sync::Mutex::new(usage::Tripwire::from_ledger(
+            &ledger, None,
+        )));
         Ok(Self {
             status_tap: None,
             log,
@@ -658,9 +675,11 @@ impl Loop {
             changes,
             cut_off: false,
             ledger,
+            spend_trip,
             late_cost: late_cost::LateCost::default(),
             lifecycle: lifecycle::State::new(reason, &contract::SessionId(session_id.clone())),
             budget: None,
+            is_delegate,
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
@@ -706,9 +725,15 @@ impl Loop {
     }
 
     /// Caps billed spend at `usd` US dollars. `None` is no limit
-    /// (`docs/loop.md`, "Spending budget").
+    /// (`docs/loop.md`, "Spending budget"). Publishes the budget to the
+    /// spend tripwire under its lock; the trip itself fires on spend
+    /// arrivals and at the request-time budget end, never here.
     pub fn budget(mut self, usd: Option<f64>) -> Self {
         self.budget = usd;
+        self.spend_trip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_budget(usd);
         self
     }
 

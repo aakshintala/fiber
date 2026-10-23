@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contract::provider::ModelRequest;
+use contract::provider::Provider;
 use serde_json::json;
 
 /// How long a test waits for the quota fetch.
@@ -113,4 +114,42 @@ fn connect_fetches_quota_for_its_label() {
         .map(|request| request.path.clone())
         .collect();
     assert_eq!(paths, ["/work/k"]);
+}
+
+/// `connect` over provider data naming `deferred_tools`.
+fn provider_for(protocol: &str, deferred_tools: bool) -> Arc<dyn Provider> {
+    let data: config::ProviderData = serde_json::from_value(json!({
+        "name": "qp",
+        "models": [{
+            "id": "m",
+            "protocol": protocol,
+            "base_url": "http://127.0.0.1:9/v1",
+            "deferred_tools": deferred_tools,
+        }],
+    }))
+    .unwrap();
+    let here = crate::connect::Here {
+        workspace: std::path::PathBuf::new(),
+        clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
+    };
+    let model = extensions::Model {
+        provider: &data,
+        model: &data.models[0],
+        thinking: None,
+    };
+    crate::connect::connect(model, None, None, None, &here).unwrap()
+}
+
+#[test]
+fn connect_passes_deferred_tools_to_responses_and_messages() {
+    assert!(provider_for("openai-responses", true).defers());
+    assert!(!provider_for("openai-responses", false).defers());
+    assert!(provider_for("anthropic-messages", true).defers());
+    assert!(!provider_for("anthropic-messages", false).defers());
+}
+
+#[test]
+fn connect_leaves_a_protocol_without_deferral_in_full() {
+    assert!(!provider_for("openai-completions", true).defers());
 }

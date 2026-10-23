@@ -22,7 +22,7 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
     CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
-    SessionState, SessionStatus,
+    SessionState, SessionStatus, ToolState,
 };
 use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
@@ -3228,6 +3228,180 @@ fn the_declarer_changes_the_tools_answer() {
         })
         .unwrap();
     close_within(opened.session, opened.log);
+}
+
+/// The `tools` answer's rows: name, state and bytes, in answer order.
+/// (`tokens` is recomputed from the byte rate on every answer, so a test
+/// pins stored tokens through the gate instead.)
+fn tools_rows(client: &Client, id: &str) -> Vec<(String, ToolState, u64)> {
+    send_bare(client, id, "tools");
+    let answer = answer_of(client, id);
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    answer["payload"]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| {
+            (
+                tool["name"].as_str().unwrap().to_owned(),
+                serde_json::from_value(tool["state"].clone()).unwrap(),
+                tool["bytes"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn sized_info(name: &str, bytes: u64, tokens: Option<u64>) -> contract::events::ToolInfo {
+    contract::events::ToolInfo {
+        name: name.into(),
+        source: contract::events::ToolSource::Builtin,
+        state: ToolState::Full,
+        bytes,
+        tokens,
+    }
+}
+
+#[test]
+fn the_state_setter_changes_only_the_named_rows_state() {
+    reset();
+    let opened = Opened::open(vec![
+        sized_info("edit", 1, Some(2)),
+        sized_info("write", 3, None),
+    ]);
+    let socket = opened.socket.clone();
+    let gate = Arc::clone(&opened.session.gate);
+    let state = opened.session.state_setter();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
+            let _ack = answer_of(&client, "c_sub");
+            state("edit", ToolState::Deferred);
+            assert_eq!(
+                tools_rows(&client, "c_1"),
+                [
+                    ("edit".to_owned(), ToolState::Deferred, 1),
+                    ("write".to_owned(), ToolState::Full, 3),
+                ],
+                "only the named row's state changes"
+            );
+            // Bytes, tokens and source are untouched in storage.
+            assert_eq!(
+                lock(&gate.tools)
+                    .iter()
+                    .map(|tool| (
+                        tool.name.clone(),
+                        tool.state,
+                        tool.bytes,
+                        tool.tokens,
+                        tool.source.clone()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    (
+                        "edit".to_owned(),
+                        ToolState::Deferred,
+                        1,
+                        Some(2),
+                        contract::events::ToolSource::Builtin
+                    ),
+                    (
+                        "write".to_owned(),
+                        ToolState::Full,
+                        3,
+                        None,
+                        contract::events::ToolSource::Builtin
+                    ),
+                ]
+            );
+            state("edit", ToolState::Loaded);
+            assert_eq!(tools_rows(&client, "c_2")[0].1, ToolState::Loaded,);
+            state("absent", ToolState::Deferred);
+            assert_eq!(
+                tools_rows(&client, "c_3"),
+                [
+                    ("edit".to_owned(), ToolState::Loaded, 1),
+                    ("write".to_owned(), ToolState::Full, 3),
+                ],
+                "an unknown name changes nothing and adds no row"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn the_state_setter_does_nothing_once_the_session_closes() {
+    reset();
+    let opened = Opened::open(vec![sized_info("edit", 1, Some(2))]);
+    let state = opened.session.state_setter();
+    let gate = Arc::clone(&opened.session.gate);
+    close_within(opened.session, opened.log);
+    state("edit", ToolState::Deferred);
+    state("absent", ToolState::Deferred);
+    assert_eq!(
+        lock(&gate.tools)
+            .iter()
+            .map(|tool| (tool.name.clone(), tool.state))
+            .collect::<Vec<_>>(),
+        [("edit".to_owned(), ToolState::Full)]
+    );
+    drop(gate);
+    // With the gate gone, a call still neither panics nor changes anything.
+    state("edit", ToolState::Deferred);
+}
+
+#[test]
+fn the_state_setter_does_nothing_once_close_begins() {
+    reset();
+    let opened = Opened::open(vec![sized_info("edit", 1, Some(2))]);
+    let state = opened.session.state_setter();
+    let gate = Arc::clone(&opened.session.gate);
+    // Held registered so `close` parks in its first shells wait: the shells
+    // are sealed (close began) while the connections are not yet stopped.
+    let held = Arc::new(crate::shell::ShellCancel::new());
+    gate.shells.track(Arc::clone(&held));
+    let (waiting_tx, waiting) = mpsc::channel();
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if matches!(point, Probe::ShellsWaiting) {
+            let _ignored = waiting_tx.send(());
+        }
+    }));
+    let session = opened.session;
+    let log = opened.log;
+    let (done_tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        session.close(log);
+        let _ignored = done_tx.send(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&waiting)
+        .expect("close parks waiting for the held shell");
+    assert!(
+        gate.sealed.load(Ordering::Relaxed),
+        "close began before the connections stop"
+    );
+    assert!(
+        !gate.conns.stopped(),
+        "the connections stop only after the shells wait"
+    );
+    state("edit", ToolState::Deferred);
+    state("absent", ToolState::Deferred);
+    let rows = || {
+        lock(&gate.tools)
+            .iter()
+            .map(|tool| (tool.name.clone(), tool.state))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(), [("edit".to_owned(), ToolState::Full)]);
+    gate.shells.untrack(&held);
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("close returned");
+    state("edit", ToolState::Deferred);
+    assert_eq!(rows(), [("edit".to_owned(), ToolState::Full)]);
 }
 
 #[test]

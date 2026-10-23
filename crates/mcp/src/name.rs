@@ -24,12 +24,7 @@ pub(crate) fn qualified(server: &str, tool: &str) -> String {
     if full.chars().count() <= MAX_NAME_LEN {
         return full;
     }
-    let digest = ring::digest::digest(&ring::digest::SHA256, full.as_bytes());
-    let hex: String = digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let hex = support::sha256_hex(full.as_bytes());
     let suffix = hex.get(..HASH_LEN).unwrap_or(&hex);
     let keep = MAX_NAME_LEN - 1 - HASH_LEN;
     let head: String = full.chars().take(keep).collect();

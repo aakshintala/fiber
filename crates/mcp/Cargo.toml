@@ -8,7 +8,8 @@ publish.workspace = true
 # Of Fiber's crates, `mcp` depends only on `contract`, `support` and
 # `net` (docs/architecture.md, "The call rules"). serde derives the server
 # JSON types, serde_json carries the wire format, thiserror the error
-# enums, base64 decodes binary content, ring the tool-name hash, rustix
+# enums, base64 decodes binary content, ring the OAuth PKCE challenge and
+# random, rustix
 # the process-group signals, `support` lists every server's process group,
 # and ureq carries streamable HTTP through `net`'s connector.
 [dependencies]

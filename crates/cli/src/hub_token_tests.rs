@@ -1,6 +1,6 @@
 //! Device listing and revocation over a fake hub socket.
 use super::*;
-use contract::HubLine;
+use contract::{ErrorCode, HubLine};
 use fakes::Deadline;
 use serde_json::{Map, json};
 use std::io::BufRead as _;
@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(10);
-fn run_wait(answer: Value, device: Option<&str>) -> (Result<(), Failure>, Vec<u8>, Value) {
+fn run_wait(answer: Value, device: Option<&str>) -> (Result<(), CliError>, Vec<u8>, Value) {
     let (client, server) = UnixStream::pair().unwrap();
     client.set_read_timeout(Some(WAIT)).unwrap();
     server.set_read_timeout(Some(WAIT)).unwrap();
@@ -97,8 +97,11 @@ fn a_rejected_revoke_prints_its_message() {
     let answer = json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":"c_revoke","code":"not_found","message":"No device named phone is paired."}});
     let (result, out, _) = run_wait(answer, Some("phone"));
     let failure = result.unwrap_err();
-    assert_eq!(failure.code, ErrorCode::NotFound);
-    assert_eq!(failure.message, "No device named phone is paired.");
+    assert!(
+        matches!(&failure, CliError::Rejected { message, .. } if message == "No device named phone is paired."),
+        "{failure}"
+    );
+    assert_eq!(failure.code(), ErrorCode::NotFound);
     assert!(out.is_empty());
 }
 #[test]
@@ -111,7 +114,9 @@ fn malformed_device_lists_are_refused_before_printing() {
         json!([{"name":"phone","last_connected_at":-1}]),
     ] {
         let (result, out, _) = run_wait(accepted(devices), None);
-        assert_eq!(result.unwrap_err().code, ErrorCode::IoFailed);
+        let error = result.unwrap_err();
+        assert!(matches!(error, CliError::DevicesMalformed), "{error}");
+        assert_eq!(error.code(), ErrorCode::IoFailed);
         assert!(out.is_empty());
     }
 }
