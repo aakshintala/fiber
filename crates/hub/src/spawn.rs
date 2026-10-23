@@ -356,8 +356,13 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
         loop {
             buf.clear();
             match read.read_line(&mut buf) {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break,
                 Ok(_) => std::mem::swap(&mut last, &mut buf),
+                // An unreadable final line leaves no last line to parse.
+                Err(_) => {
+                    last.clear();
+                    break;
+                }
             }
         }
         if let Some(failure) = fiber_exited_error(&last) {
