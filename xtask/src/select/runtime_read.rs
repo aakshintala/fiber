@@ -5,10 +5,11 @@ mod joins;
 mod paths;
 
 use crate::rules::RustFile;
-use crate::select::{Members, string_literal};
+use crate::select::Members;
 use joins::{
     format_probes, join_on_joined, join_on_root, joined_mention, rooted_format, second_mention,
 };
+pub(crate) use paths::string_literal;
 use paths::{
     all_literals, all_lits, escapes, escapes_members, holds_root, holds_value, inline_lits,
     is_joined_name, is_manifest_rooted, is_path_like, is_receiver_boundary, is_scripts_path,

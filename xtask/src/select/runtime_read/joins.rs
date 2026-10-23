@@ -1,10 +1,10 @@
 //! Join and format helpers for the run-time-read scanner.
 
+use super::paths::string_literal;
 use super::paths::{
     all_literals, holds_root, is_joined_name, is_manifest_rooted, is_path_like, joined_lit,
     resolve_in_root, yields_to_packages,
 };
-use crate::select::string_literal;
 use proc_macro2::{TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet};
 

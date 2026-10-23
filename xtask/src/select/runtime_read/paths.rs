@@ -1,8 +1,19 @@
 //! Path and token helpers for the run-time-read scanner.
 
-use crate::select::{Members, string_literal};
+use crate::select::Members;
 use proc_macro2::{TokenStream, TokenTree};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) fn string_literal(text: &str) -> Option<String> {
+    if let Some(inner) = text.strip_prefix('"') {
+        return inner.strip_suffix('"').map(str::to_owned);
+    }
+    let rest = text.strip_prefix('r')?;
+    let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+    let inner = rest.get(hashes..)?.strip_prefix('"')?;
+    let close = format!("\"{}", "#".repeat(hashes));
+    inner.strip_suffix(&close).map(str::to_owned)
+}
 
 /// Whether `text`, the inside of a string literal, can name a repository
 /// path on its own: it holds a `/` but no `:`, so bare event names and

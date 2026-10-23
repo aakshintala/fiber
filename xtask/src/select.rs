@@ -15,6 +15,7 @@ pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use runtime_read::runtime_read_mismatches;
+pub(crate) use runtime_read::string_literal;
 pub(crate) use test_filter::{is_test_file, test_filter};
 
 /// A workspace member: its directory relative to the workspace root, its
@@ -101,17 +102,6 @@ fn is_docs_file(path: &str) -> bool {
 /// and every path is a docs file, never a package file.
 pub(crate) fn docs_only(files: &[String]) -> bool {
     !files.is_empty() && files.iter().all(|f| is_docs_file(f) && !is_package_file(f))
-}
-
-fn string_literal(text: &str) -> Option<String> {
-    if let Some(inner) = text.strip_prefix('"') {
-        return inner.strip_suffix('"').map(str::to_owned);
-    }
-    let rest = text.strip_prefix('r')?;
-    let hashes = rest.bytes().take_while(|&b| b == b'#').count();
-    let inner = rest.get(hashes..)?.strip_prefix('"')?;
-    let close = format!("\"{}", "#".repeat(hashes));
-    inner.strip_suffix(&close).map(str::to_owned)
 }
 
 /// Whether `path` runs every job. `research/` is outside the rule: its
