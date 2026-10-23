@@ -382,8 +382,6 @@ fn a_request_goes_to_the_converse_path_in_bedrocks_shape() {
 
 #[test]
 fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() {
-    let session = fakes::TempDir::new("fiber-converse-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let image = json!({"image": {"format": "png", "source": {"bytes": "YWJjZA=="}}});
     let reasoning =
         json!({"reasoningContent": {"reasoningText": {"text": "think", "signature": "sig"}}});
@@ -421,7 +419,7 @@ fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() 
             user("go on"),
         ])
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("i.png", b"abcd")]),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);
@@ -488,9 +486,6 @@ fn an_id_whose_last_nine_are_not_letters_and_digits_is_replayed_as_its_action_id
 
 #[test]
 fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines() {
-    let session = fakes::TempDir::new("fiber-converse-request-pdf");
-    std::fs::write(session.path().join("p.pdf"), b"%PDF").unwrap();
-    std::fs::write(session.path().join("p-1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (vec![
             call(
@@ -512,7 +507,7 @@ fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines
             },
         ])
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("p.pdf", b"%PDF"), ("p-1.png", b"abcd")]),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);

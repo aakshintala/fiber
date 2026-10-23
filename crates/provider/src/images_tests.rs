@@ -2,10 +2,10 @@
 //! cannot be read does, and what a model that cannot take images gets.
 
 use contract::events::CacheLifetime;
-use contract::provider::{ImageRef, Input, InputSize, ModelRequest, PdfRef};
+use contract::provider::{ImageRef, Input, InputSize, Media, ModelRequest, PdfRef};
 use serde_json::json;
 
-use super::{PdfForm, anthropic_content, data_url, input_size, media_path, prepare};
+use super::{PdfForm, anthropic_content, data_url, input_size, prepare};
 
 fn image(path: &str) -> ImageRef {
     ImageRef {
@@ -16,16 +16,22 @@ fn image(path: &str) -> ImageRef {
     }
 }
 
+/// The loop's map for files holding these bytes: each path to the bytes as
+/// standard base64.
+fn media(files: &[(&str, &[u8])]) -> Media {
+    use base64::Engine as _;
+    files
+        .iter()
+        .map(|(path, bytes)| {
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            ((*path).to_owned(), std::sync::Arc::from(data))
+        })
+        .collect()
+}
+
 /// The `anthropic-messages` content for a model that takes images.
-fn content(text: &str, images: &[ImageRef], session_dir: &std::path::Path) -> serde_json::Value {
-    anthropic_content(prepare(
-        text,
-        images,
-        &[],
-        session_dir,
-        false,
-        PdfForm::Native,
-    ))
+fn content(text: &str, images: &[ImageRef], media: &Media) -> serde_json::Value {
+    anthropic_content(prepare(text, images, &[], media, false, PdfForm::Native))
 }
 
 #[test]
@@ -50,19 +56,9 @@ fn image_and_pdf_text_files_pin_every_byte() {
 
 #[test]
 fn no_image_leaves_the_content_a_plain_string() {
-    assert_eq!(
-        content("done\n", &[], std::path::Path::new("/nowhere")),
-        json!("done\n")
-    );
+    assert_eq!(content("done\n", &[], &Media::new()), json!("done\n"));
     // ... for either value of `text_only`.
-    let prepared = prepare(
-        "done\n",
-        &[],
-        &[],
-        std::path::Path::new("/nowhere"),
-        true,
-        PdfForm::Native,
-    );
+    let prepared = prepare("done\n", &[], &[], &Media::new(), true, PdfForm::Native);
     assert_eq!(prepared.text, "done\n");
     assert!(prepared.images.is_empty());
     assert_eq!(anthropic_content(prepared), json!("done\n"));
@@ -70,15 +66,13 @@ fn no_image_leaves_the_content_a_plain_string() {
 
 #[test]
 fn a_stored_image_follows_the_text_as_a_base64_block() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
     // "abcd" is `YWJjZA==`.
-    std::fs::write(dir.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let media = media(&[("artifacts/i_1.png", b"abcd")]);
     assert_eq!(
         content(
             "Image: 2x1 image/png.\n",
             &[image("artifacts/i_1.png")],
-            dir.path()
+            &media
         ),
         json!([
             {"type": "text", "text": "Image: 2x1 image/png.\n"},
@@ -90,9 +84,8 @@ fn a_stored_image_follows_the_text_as_a_base64_block() {
 
 #[test]
 fn a_readable_image_is_sent_beside_one_that_is_missing() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::write(dir.path().join("ok.png"), b"abcd").unwrap();
-    let value = content("t\n", &[image("gone.png"), image("ok.png")], dir.path());
+    let media = media(&[("ok.png", b"abcd")]);
+    let value = content("t\n", &[image("gone.png"), image("ok.png")], &media);
     assert_eq!(
         value[0],
         json!({"type": "text", "text": "t\n[Image gone.png could not be read.]"})
@@ -102,31 +95,13 @@ fn a_readable_image_is_sent_beside_one_that_is_missing() {
 }
 
 #[test]
-fn a_path_that_leaves_the_session_directory_is_not_read() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    let outside = dir.path().join("outside.png");
-    std::fs::write(&outside, b"abcd").unwrap();
-    let inner = dir.path().join("session");
-    std::fs::create_dir(&inner).unwrap();
-    let escaping = content("t\n", &[image("../outside.png")], &inner);
-    assert_eq!(
-        escaping,
-        json!("t\n[Image ../outside.png could not be read.]")
-    );
-    let absolute = content("t\n", &[image(outside.to_str().unwrap())], &inner);
-    assert!(absolute.is_string());
-}
-
-#[test]
 fn text_only_sends_no_image_and_says_the_image_was_left_out() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
-    std::fs::write(dir.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let media = media(&[("artifacts/i_1.png", b"abcd")]);
     let prepared = prepare(
         "Image: 2x1 image/png.\n",
         &[image("artifacts/i_1.png")],
         &[],
-        dir.path(),
+        &media,
         true,
         PdfForm::Native,
     );
@@ -140,34 +115,33 @@ fn text_only_sends_no_image_and_says_the_image_was_left_out() {
 }
 
 #[test]
-fn text_only_never_reads_the_filesystem() {
-    // The file is missing, yet the line says it was left out, not that it
-    // could not be read: the file was never opened.
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
+fn a_text_only_endpoint_ignores_the_map() {
+    // The map holds one image and lacks the other, yet both lines say the
+    // image was left out, not that it could not be read.
+    let media = media(&[("artifacts/here.png", b"abcd")]);
     let prepared = prepare(
         "no newline",
-        &[image("artifacts/gone.png")],
+        &[image("artifacts/here.png"), image("artifacts/gone.png")],
         &[],
-        dir.path(),
+        &media,
         true,
         PdfForm::Native,
     );
     assert!(prepared.images.is_empty());
     assert_eq!(
         prepared.text,
-        "no newline\n[Image artifacts/gone.png left out: this model does not take images.]"
+        "no newline\n[Image artifacts/here.png left out: this model does not take images.]\n[Image artifacts/gone.png left out: this model does not take images.]"
     );
 }
 
 #[test]
 fn text_only_leaves_out_each_image_in_order() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::write(dir.path().join("ok.png"), b"abcd").unwrap();
+    let media = media(&[("ok.png", b"abcd")]);
     let prepared = prepare(
         "t\n",
         &[image("gone.png"), image("ok.png")],
         &[],
-        dir.path(),
+        &media,
         true,
         PdfForm::Native,
     );
@@ -179,70 +153,40 @@ fn text_only_leaves_out_each_image_in_order() {
 }
 
 #[test]
-fn media_path_resolves_relative_paths_under_the_session_dir() {
-    let root = fakes::TempDir::new("fiber-media-path");
-    let sessions = root.path().join("sessions");
-    let parent = sessions.join("s_parent");
-    let child = sessions.join("s_child");
-    let resolved = media_path("artifacts/i.png", &child).unwrap();
-    assert_eq!(resolved, child.join("artifacts/i.png"));
-    assert_eq!(media_path("../x", &child), None);
-    assert_eq!(media_path("./x", &child), None);
-    let nested = parent.join("artifacts/sub/i.png").display().to_string();
+fn a_path_is_looked_up_by_its_string_whatever_its_form() {
+    // The map is the only authority: an absolute key is sent, and the same
+    // file under another spelling is not.
+    let media = media(&[("/h/sessions/s_parent/artifacts/i.png", b"abcd")]);
     assert_eq!(
-        media_path(&nested, &child),
-        Some(parent.join("artifacts/sub/i.png"))
-    );
-    let stored = parent.join("artifacts/i.png").display().to_string();
-    assert_eq!(
-        media_path(&stored, &child),
-        Some(parent.join("artifacts/i.png"))
-    );
-    let log = parent.join("events.jsonl").display().to_string();
-    assert_eq!(media_path(&log, &child), None);
-    let bare = parent.join("artifacts").display().to_string();
-    assert_eq!(media_path(&bare, &child), None);
-    let escaped = parent
-        .join("artifacts/../events.jsonl")
-        .display()
-        .to_string();
-    assert_eq!(media_path(&escaped, &child), None);
-    let outside = root.path().join("elsewhere/i.png").display().to_string();
-    assert_eq!(media_path(&outside, &child), None);
-    let no_session = sessions.join("artifacts/i.png").display().to_string();
-    assert_eq!(media_path(&no_session, &child), None);
-}
-
-#[test]
-fn prepare_sends_a_parent_image_named_by_its_absolute_path() {
-    let root = fakes::TempDir::new("fiber-media-path-parent");
-    let sessions = root.path().join("sessions");
-    let parent = sessions.join("s_parent");
-    let child = sessions.join("s_child");
-    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
-    std::fs::create_dir_all(&child).unwrap();
-    // "abcd" is `YWJjZA==`.
-    std::fs::write(parent.join("artifacts/i.png"), b"abcd").unwrap();
-    let absolute = parent.join("artifacts/i.png").display().to_string();
-    assert_eq!(
-        content("t\n", &[image(&absolute)], &child),
+        content(
+            "t\n",
+            &[image("/h/sessions/s_parent/artifacts/i.png")],
+            &media
+        ),
         json!([
             {"type": "text", "text": "t\n"},
             {"type": "image", "source": {
                 "type": "base64", "media_type": "image/png", "data": "YWJjZA=="}},
         ])
     );
+    assert_eq!(
+        content(
+            "t\n",
+            &[image("/h/sessions/s_parent/artifacts/./i.png")],
+            &media
+        ),
+        json!("t\n[Image /h/sessions/s_parent/artifacts/./i.png could not be read.]")
+    );
 }
 
 #[test]
 fn a_data_url_holds_the_mime_type_and_the_base64() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::write(dir.path().join("i.png"), b"abcd").unwrap();
+    let media = media(&[("i.png", b"abcd")]);
     let prepared = prepare(
         "t\n",
         &[image("i.png")],
         &[],
-        dir.path(),
+        &media,
         false,
         PdfForm::Native,
     );
@@ -265,15 +209,13 @@ fn pdf(path: &str, pages: Option<Vec<ImageRef>>) -> PdfRef {
 
 #[test]
 fn a_native_pdf_is_sent_as_a_document_with_its_bytes_unchanged() {
-    let dir = fakes::TempDir::new("fiber-pdf-document");
-    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
     // "abcd" is `YWJjZA==`.
-    std::fs::write(dir.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
+    let media = media(&[("artifacts/p_1.pdf", b"abcd")]);
     let prepared = prepare(
         "PDF: 2 pages.\n",
         &[],
         &[pdf("artifacts/p_1.pdf", None)],
-        dir.path(),
+        &media,
         false,
         PdfForm::Native,
     );
@@ -294,12 +236,11 @@ fn a_native_pdf_is_sent_as_a_document_with_its_bytes_unchanged() {
 
 #[test]
 fn a_native_pdf_whose_file_is_missing_is_named_in_the_text() {
-    let dir = fakes::TempDir::new("fiber-pdf-missing");
     let prepared = prepare(
         "PDF: 2 pages.\n",
         &[],
         &[pdf("artifacts/gone.pdf", None)],
-        dir.path(),
+        &media(&[("artifacts/other.pdf", b"abcd")]),
         false,
         PdfForm::Native,
     );
@@ -311,26 +252,26 @@ fn a_native_pdf_whose_file_is_missing_is_named_in_the_text() {
 }
 
 #[test]
-fn a_native_pdf_that_leaves_the_session_directory_is_not_read() {
-    let dir = fakes::TempDir::new("fiber-pdf-escape");
+fn a_native_pdf_named_by_an_absolute_path_is_sent_under_its_base_name() {
+    let path = "/h/sessions/s_parent/artifacts/p_1.pdf";
     let prepared = prepare(
         "t\n",
         &[],
-        &[pdf("../outside.pdf", None)],
-        &dir.path().join("session"),
+        &[pdf(path, None)],
+        &media(&[(path, b"abcd")]),
         false,
         PdfForm::Native,
     );
-    assert!(prepared.documents.is_empty());
-    assert_eq!(prepared.text, "t\n[PDF ../outside.pdf could not be read.]");
+    assert_eq!(prepared.documents[0].filename, "p_1.pdf");
+    assert_eq!(prepared.documents[0].data, "YWJjZA==");
 }
 
 #[test]
-fn pages_send_each_page_as_an_image_in_order() {
-    let dir = fakes::TempDir::new("fiber-pdf-pages");
-    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
-    std::fs::write(dir.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    std::fs::write(dir.path().join("artifacts/i_2.png"), b"efgh").unwrap();
+fn pages_send_each_page_as_an_image() {
+    let media = media(&[
+        ("artifacts/i_1.png", b"abcd"),
+        ("artifacts/i_2.png", b"efgh"),
+    ]);
     let prepared = prepare(
         "PDF: 2 pages.\n",
         &[],
@@ -338,27 +279,31 @@ fn pages_send_each_page_as_an_image_in_order() {
             "artifacts/p_1.pdf",
             Some(vec![image("artifacts/i_1.png"), image("artifacts/i_2.png")]),
         )],
-        dir.path(),
+        &media,
         false,
         PdfForm::Pages,
     );
     assert_eq!(prepared.text, "PDF: 2 pages.\n");
     assert!(prepared.documents.is_empty());
-    assert_eq!(prepared.images.len(), 2);
+    // No doc promises the pages' order, so they are compared as a set.
+    let urls: std::collections::BTreeSet<String> = prepared.images.iter().map(data_url).collect();
     assert_eq!(
-        data_url(&prepared.images[0]),
-        "data:image/png;base64,YWJjZA=="
+        urls,
+        [
+            "data:image/png;base64,YWJjZA==".to_owned(),
+            "data:image/png;base64,ZWZnaA==".to_owned(),
+        ]
+        .into()
     );
 }
 
 #[test]
 fn pages_without_rendered_pages_add_nothing() {
-    let dir = fakes::TempDir::new("fiber-pdf-no-pages");
     let prepared = prepare(
         "PDF: 2 pages.\n",
         &[],
         &[pdf("artifacts/p_1.pdf", None)],
-        dir.path(),
+        &Media::new(),
         false,
         PdfForm::Pages,
     );
@@ -369,8 +314,8 @@ fn pages_without_rendered_pages_add_nothing() {
 }
 
 #[test]
-fn text_only_leaves_out_each_pdf_without_reading_it() {
-    let dir = fakes::TempDir::new("fiber-pdf-text-only");
+fn text_only_leaves_out_each_pdf_whatever_the_map_holds() {
+    let media = media(&[("artifacts/gone.pdf", b"abcd")]);
     let prepared = prepare(
         "t\n",
         &[],
@@ -378,7 +323,7 @@ fn text_only_leaves_out_each_pdf_without_reading_it() {
             "artifacts/gone.pdf",
             Some(vec![image("artifacts/i_1.png")]),
         )],
-        dir.path(),
+        &media,
         true,
         PdfForm::Native,
     );
@@ -432,6 +377,19 @@ fn input_size_counts_tool_search_results_as_text_not_media() {
     );
 }
 
+#[test]
+fn input_size_counts_an_image_the_map_lacks() {
+    // `sized_request` carries an empty map: the image is unreadable, and
+    // still counts.
+    assert_eq!(
+        input_size(b"abc", &sized_request(vec![user_with_image()]), false),
+        InputSize {
+            bytes: 3,
+            media: true,
+        }
+    );
+}
+
 fn sized_request(conversation: Vec<Input>) -> ModelRequest {
     ModelRequest {
         system_prompt: String::new(),
@@ -444,7 +402,7 @@ fn sized_request(conversation: Vec<Input>) -> ModelRequest {
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

@@ -2030,9 +2030,6 @@ fn function_response(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_stored_image_is_sent_as_inline_data_parts_beside_the_response() {
-    let session = fakes::TempDir::new("fiber-gemini-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(
             false,
@@ -2040,7 +2037,7 @@ fn a_stored_image_is_sent_as_inline_data_parts_beside_the_response() {
             vec![png_ref("artifacts/i_1.png")],
         ))
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
@@ -2093,12 +2090,9 @@ fn pdf_ref(path: &str) -> contract::provider::PdfRef {
 
 #[test]
 fn a_stored_pdf_is_sent_as_inline_data_parts_beside_the_response() {
-    let session = fakes::TempDir::new("fiber-gemini-request-pdf");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (pdf_conversation(REFERENCE, pdf_ref("artifacts/p_1.pdf"))).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/p_1.pdf", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2115,11 +2109,9 @@ fn a_stored_pdf_is_sent_as_inline_data_parts_beside_the_response() {
 
 #[test]
 fn a_failed_result_with_an_image_keeps_the_error_key_and_still_has_parts() {
-    let session = fakes::TempDir::new("fiber-gemini-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(true, "boom", vec![png_ref("i.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("i.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2136,9 +2128,6 @@ fn a_failed_result_with_an_image_keeps_the_error_key_and_still_has_parts() {
 
 #[test]
 fn a_text_only_model_gets_no_parts_and_the_response_says_so() {
-    let session = fakes::TempDir::new("fiber-gemini-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(
             false,
@@ -2146,7 +2135,7 @@ fn a_text_only_model_gets_no_parts_and_the_response_says_so() {
             vec![png_ref("artifacts/i_1.png")],
         ))
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2296,12 +2285,9 @@ fn a_failed_foreign_result_renders_the_failed_text() {
 
 #[test]
 fn a_foreign_result_with_a_pdf_sends_text_then_inline_data() {
-    let session = fakes::TempDir::new("fiber-gemini-foreign-pdf");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (pdf_conversation("other/model", pdf_ref("artifacts/p_1.pdf"))).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/p_1.pdf", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2319,8 +2305,6 @@ fn a_foreign_result_with_a_pdf_sends_text_then_inline_data() {
 
 #[test]
 fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
-    let session = fakes::TempDir::new("fiber-gemini-foreign-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let conversation = vec![
         Input::ToolCall {
             action_id: ActionId("a_f1".into()),
@@ -2345,7 +2329,7 @@ fn a_foreign_result_with_an_image_sends_text_then_inline_data() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
         conversation: conversation.into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("i.png", b"abcd")]),
         ..request()
     };
     run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
@@ -2426,12 +2410,9 @@ fn user_contents(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_users_image_is_sent_as_inline_data_parts_after_the_text() {
-    let session = fakes::TempDir::new("fiber-gemini-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();

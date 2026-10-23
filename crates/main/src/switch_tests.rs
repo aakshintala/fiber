@@ -2379,7 +2379,7 @@ fn probe() -> ModelRequest {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: PathBuf::new(),
+        media: Default::default(),
     }
 }
 

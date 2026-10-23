@@ -166,7 +166,7 @@ fn idle_notes_send_only_evidence_and_write_usage_before_answering() {
     assert_eq!(request.previous_end, None);
     assert_eq!(request.sent_tools, None);
     assert_eq!(request.max_output_tokens, Some(4096));
-    assert_eq!(request.session_dir, log.dir());
+    assert!(request.media.is_empty());
     assert!(
         request
             .system_prompt
