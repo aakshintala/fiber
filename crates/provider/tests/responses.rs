@@ -702,13 +702,8 @@ static RECORDINGS: &[(&str, &[u8])] = &[
 ];
 
 /// The compiled-in bytes recorded under `name`.
-fn recording(name: &str) -> Vec<u8> {
-    RECORDINGS
-        .iter()
-        .find(|(entry, _)| *entry == name)
-        .unwrap_or_else(|| panic!("unknown recording {name}"))
-        .1
-        .to_vec()
+fn recording(name: &str) -> &'static [u8] {
+    probes::lookup(RECORDINGS, name)
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
@@ -980,7 +975,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 #[test]
 fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
     let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
-    let (reply, deltas) = decoded(&bytes);
+    let (reply, deltas) = decoded(bytes);
     let reply = reply.unwrap();
     assert_eq!(reply.text(), "I'll check the weather in Paris for you.");
     assert_eq!(
@@ -1022,7 +1017,7 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
     )));
 
     let bytes = recording("research/opencode-probe/raw/go_stream_tools_1.sse");
-    let reply = decoded(&bytes).0.unwrap();
+    let reply = decoded(bytes).0.unwrap();
     assert_eq!(reply.text(), "The weather in Paris is 18°C and clear.");
     assert_eq!(
         (
@@ -1038,10 +1033,10 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
 #[test]
 fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
-    let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
+    let server = ProviderServer::start([Response::stream(bytes)]).unwrap();
     let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
     let (reply, deltas) = run(provider.call(&request()));
-    let (want, want_deltas) = decoded(&bytes);
+    let (want, want_deltas) = decoded(bytes);
     let mut want = want.unwrap();
     want.input_size = InputSize {
         bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
@@ -1192,7 +1187,7 @@ fn store_and_extra_fields_come_from_model_data_only() {
 #[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
     let bytes = recording("research/opencode-probe/raw/go_stream_tools_0.sse");
-    let reply = decoded(&bytes).0.unwrap();
+    let reply = decoded(bytes).0.unwrap();
     let ReplyAction::Reasoning(ReasoningCompleted {
         provider_item: Some(item),
         ..

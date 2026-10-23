@@ -399,13 +399,13 @@ static RECORDINGS: &[(&str, &[u8])] = &[
 ];
 
 /// The compiled-in bytes recorded under `name`.
-fn recording(name: &str) -> Vec<u8> {
-    RECORDINGS
-        .iter()
-        .find(|(entry, _)| *entry == name)
-        .unwrap_or_else(|| panic!("unknown recording {name}"))
-        .1
-        .to_vec()
+fn recording(name: &str) -> &'static [u8] {
+    probes::lookup(RECORDINGS, name)
+}
+
+/// The exchanges the probe recording `name` holds.
+fn parsed(name: &str) -> Vec<probes::Exchange> {
+    probes::parse(name, recording(name)).unwrap()
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
@@ -646,11 +646,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 
 #[test]
 fn the_hard_question_stream_decodes_thinking_then_text() {
-    let exchanges = probes::parse(
-        "research/anthropic-messages-probe/raw/stream.json",
-        &recording("research/anthropic-messages-probe/raw/stream.json"),
-    )
-    .unwrap();
+    let exchanges = parsed("research/anthropic-messages-probe/raw/stream.json");
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("thinking forced"))
@@ -685,11 +681,7 @@ fn the_hard_question_stream_decodes_thinking_then_text() {
 
 #[test]
 fn the_tool_use_stream_decodes_the_call() {
-    let exchanges = probes::parse(
-        "research/anthropic-messages-probe/raw/stream.json",
-        &recording("research/anthropic-messages-probe/raw/stream.json"),
-    )
-    .unwrap();
+    let exchanges = parsed("research/anthropic-messages-probe/raw/stream.json");
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("stream tool use"))
@@ -910,11 +902,7 @@ fn thinking_delta_text_streams_as_reasoning_and_joins_in_order() {
 
 #[test]
 fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
-    let exchanges = probes::parse(
-        "research/anthropic-messages-probe/raw/stream.json",
-        &recording("research/anthropic-messages-probe/raw/stream.json"),
-    )
-    .unwrap();
+    let exchanges = parsed("research/anthropic-messages-probe/raw/stream.json");
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("plain text"))
@@ -1164,11 +1152,7 @@ fn the_previous_end_marker_lands_on_the_boundary_it_names() {
 
 #[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
-    let exchanges = probes::parse(
-        "research/anthropic-messages-probe/raw/stream.json",
-        &recording("research/anthropic-messages-probe/raw/stream.json"),
-    )
-    .unwrap();
+    let exchanges = parsed("research/anthropic-messages-probe/raw/stream.json");
     let exchange = exchanges
         .into_iter()
         .find(|e| e.label.contains("thinking forced"))

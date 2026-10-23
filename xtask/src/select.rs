@@ -172,6 +172,13 @@ fn is_joined_name(text: &str) -> bool {
     !text.is_empty() && text != "." && text != ".." && text != "/"
 }
 
+/// Whether `text` is a literal a `join` reports: a joined file name
+/// that is not the manifest literal and not an absolute path, which
+/// replaces the receiver.
+fn joined_lit(text: &str) -> bool {
+    is_joined_name(text) && text != "CARGO_MANIFEST_DIR" && !text.starts_with('/')
+}
+
 /// Whether `tokens` root a path at the manifest directory: they hold
 /// the literal `CARGO_MANIFEST_DIR`, such as through `env!` inside
 /// `Path::new`. A join onto any other base, such as a temporary
@@ -196,9 +203,7 @@ fn all_lits(tokens: &[TokenTree]) -> Vec<String> {
             match tree {
                 TokenTree::Literal(lit) => {
                     if let Some(text) = string_literal(&lit.to_string())
-                        && is_joined_name(&text)
-                        && text != "CARGO_MANIFEST_DIR"
-                        && !text.starts_with('/')
+                        && joined_lit(&text)
                     {
                         out.push(text);
                     }
@@ -232,6 +237,15 @@ fn is_scripts_path(resolved: &str) -> bool {
 /// not a file, so inline uses stay unreported.
 fn is_exact_root(resolved: &str) -> bool {
     resolved.is_empty()
+}
+/// Whether `resolved` is a run-time built path the gate reports:
+/// outside every member, not a `scripts/` fixture, not a first-party
+/// package, and not the repository root itself.
+fn escapes(resolved: &str, members: &Members, has_manifest: bool) -> bool {
+    escapes_members(resolved, members)
+        && !is_scripts_path(resolved)
+        && !yields_to_packages(resolved, has_manifest)
+        && !is_exact_root(resolved)
 }
 /// The first name in `tokens` bound to the manifest directory
 /// itself, searching inside groups: the base a bare join builds on.
@@ -403,9 +417,7 @@ fn bare_root_lits(
             for tree in group.stream() {
                 if let TokenTree::Literal(lit) = tree
                     && let Some(text) = string_literal(&lit.to_string())
-                    && is_joined_name(&text)
-                    && text != "CARGO_MANIFEST_DIR"
-                    && !text.starts_with('/')
+                    && joined_lit(&text)
                 {
                     lits.push(text);
                 }
@@ -596,7 +608,7 @@ pub(crate) fn runtime_read_mismatches(
                     for tree in group.stream() {
                         if let TokenTree::Literal(lit) = tree
                             && let Some(text) = string_literal(&lit.to_string())
-                            && is_joined_name(&text)
+                            && (is_joined_name(&text) || text == "..")
                         {
                             literals.push(text);
                         }
@@ -682,10 +694,7 @@ pub(crate) fn runtime_read_mismatches(
                     for tree in group.stream() {
                         if let TokenTree::Literal(lit) = tree
                             && let Some(text) = string_literal(&lit.to_string())
-                            && is_joined_name(&text)
-                            && text != "CARGO_MANIFEST_DIR"
-                            // An absolute suffix replaces the receiver.
-                            && !text.starts_with('/')
+                            && joined_lit(&text)
                         {
                             own.push(text);
                         }
@@ -1134,10 +1143,7 @@ pub(crate) fn runtime_read_mismatches(
                             for probe in probes {
                                 if let Some(resolved) =
                                     resolve_in_root(cx.manifest_dir, std::slice::from_ref(&probe))
-                                    && escapes_members(&resolved, cx.members)
-                                    && !is_scripts_path(&resolved)
-                                    && !yields_to_packages(&resolved, cx.has_manifest)
-                                    && !is_exact_root(&resolved)
+                                    && escapes(&resolved, cx.members, cx.has_manifest)
                                 {
                                     cx.escaping.insert(probe);
                                 }
@@ -1203,11 +1209,7 @@ pub(crate) fn runtime_read_mismatches(
                                 for tree in group.stream() {
                                     if let TokenTree::Literal(lit) = tree
                                         && let Some(text) = string_literal(&lit.to_string())
-                                        && is_joined_name(&text)
-                                        && text != "CARGO_MANIFEST_DIR"
-                                        // A join on an absolute path replaces
-                                        // the receiver.
-                                        && !text.starts_with('/')
+                                        && joined_lit(&text)
                                     {
                                         own.push(text);
                                     }
@@ -1236,11 +1238,7 @@ pub(crate) fn runtime_read_mismatches(
                             for tree in group.stream() {
                                 if let TokenTree::Literal(lit) = tree
                                     && let Some(text) = string_literal(&lit.to_string())
-                                    && is_joined_name(&text)
-                                    && text != "CARGO_MANIFEST_DIR"
-                                    // A join on an absolute path replaces
-                                    // the receiver.
-                                    && !text.starts_with('/')
+                                    && joined_lit(&text)
                                 {
                                     own.push(text);
                                 }
@@ -1281,10 +1279,7 @@ pub(crate) fn runtime_read_mismatches(
                                         && !own.is_empty()
                                         && let Some(resolved) =
                                             resolve_in_root(cx.manifest_dir, &full)
-                                        && escapes_members(&resolved, cx.members)
-                                        && !is_scripts_path(&resolved)
-                                        && !yields_to_packages(&resolved, cx.has_manifest)
-                                        && !is_exact_root(&resolved)
+                                        && escapes(&resolved, cx.members, cx.has_manifest)
                                     {
                                         cx.escaping.extend(own.clone());
                                     }

@@ -57,6 +57,20 @@ pub(crate) fn read(path: &Path) -> Result<Vec<Exchange>, String> {
     parse(&path.display().to_string(), &bytes)
 }
 
+/// The compiled-in bytes recorded under `name`: the row `table` holds
+/// for it, so the three probe suites share one lookup and no copy.
+#[allow(
+    clippy::panic,
+    reason = "test and jig lookup; a missing row is the test's failure (docs/testing.md, \"Jigs\")"
+)]
+pub(crate) fn lookup<'a>(table: &'a [(&str, &[u8])], name: &str) -> &'a [u8] {
+    table
+        .iter()
+        .find(|(entry, _)| *entry == name)
+        .unwrap_or_else(|| panic!("unknown recording {name}"))
+        .1
+}
+
 /// The exchanges `bytes` hold, named `name` in labels and failures:
 /// the same decoding as `read`, for bytes compiled into the test.
 pub(crate) fn parse(name: &str, bytes: &[u8]) -> Result<Vec<Exchange>, String> {

@@ -317,18 +317,13 @@ static PROVIDER_ERRORS: &[(&str, &[u8])] = &[
 ];
 
 /// The compiled-in bytes recorded under `name`.
-fn recording(name: &str) -> Vec<u8> {
-    RECORDINGS
-        .iter()
-        .find(|(entry, _)| *entry == name)
-        .unwrap_or_else(|| panic!("unknown recording {name}"))
-        .1
-        .to_vec()
+fn recording(name: &str) -> &'static [u8] {
+    probes::lookup(RECORDINGS, name)
 }
 
 /// The exchanges the probe recording `name` holds.
 fn parsed(name: &str) -> Vec<probes::Exchange> {
-    probes::parse(name, &recording(name)).unwrap()
+    probes::parse(name, recording(name)).unwrap()
 }
 
 fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {

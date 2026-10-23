@@ -5,7 +5,7 @@
 #![allow(
     clippy::unwrap_used,
     clippy::panic,
-    reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a failure is the test's"
+    reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a panic fails the drift test, which is the test's failure"
 )]
 
 use std::os::unix::process::CommandExt as _;
