@@ -436,19 +436,25 @@ fn spelled(tokens: &[TokenTree]) -> String {
     format!("{duration}::{from}({})", call.stream())
 }
 
-/// The value of an integer literal, `_` separators and an unsigned or
-/// signed type suffix allowed.
+/// The value of an integer literal, `_` separators, a `0x`, `0o` or `0b`
+/// radix prefix and an unsigned or signed type suffix allowed.
 fn single_integer(tree: &TokenTree) -> Option<u64> {
     let TokenTree::Literal(literal) = tree else {
         return None;
     };
     let text = literal.to_string().replace('_', "");
-    let digits: String = text.chars().take_while(char::is_ascii_digit).collect();
-    let rest = &text[digits.len()..];
+    let (radix, body) = match text.get(..2) {
+        Some("0x") => (16, &text[2..]),
+        Some("0o") => (8, &text[2..]),
+        Some("0b") => (2, &text[2..]),
+        _ => (10, text.as_str()),
+    };
+    let digits: String = body.chars().take_while(|c| c.is_digit(radix)).collect();
+    let rest = &body[digits.len()..];
     if !(rest.is_empty() || rest.starts_with('u') || rest.starts_with('i')) {
         return None;
     }
-    digits.parse().ok()
+    u64::from_str_radix(&digits, radix).ok()
 }
 
 fn show(ms: u128) -> String {

@@ -342,6 +342,15 @@ fn a_whole_file_allowance_that_matches_nothing_is_not_reported() {
     let allowances = [held("crates/x/src/a_tests.rs", "held by #1")];
     assert!(must_succeed(&[file("src/a_tests.rs", "fn a() {}")], &allowances).is_empty());
     assert!(must_succeed(&[], &allowances).is_empty());
+    let files = [file("src/a_tests.rs", SHORT), file("src/b_tests.rs", SHORT)];
+    let failures = must_succeed(&files, &allowances);
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(
+        failures
+            .iter()
+            .all(|f| f.starts_with("crates/x/src/b_tests.rs:")),
+        "{failures:?}"
+    );
 }
 
 #[test]
@@ -425,6 +434,32 @@ fn a_bound_with_an_integer_suffix_is_its_value_and_a_float_is_not() {
     ));
     assert!(!flagged(
         "fn a() { Deadline::after(Duration::from_secs(5.0)); }"
+    ));
+}
+
+#[test]
+fn a_radix_prefixed_bound_is_its_value() {
+    for short in ["0x5", "0x9u64", "0o5", "0b101", "0b1001_i32"] {
+        assert!(
+            flagged(&format!(
+                "fn a() {{ Deadline::after(Duration::from_secs({short})); }}"
+            )),
+            "{short}"
+        );
+    }
+    for floor in ["0xA", "0xa", "0o12", "0b1010", "0x1F"] {
+        assert!(
+            !flagged(&format!(
+                "fn a() {{ Deadline::after(Duration::from_secs({floor})); }}"
+            )),
+            "{floor}"
+        );
+    }
+    assert!(flagged(
+        "fn a() { Deadline::after(Duration::from_millis(0x3E8)); }"
+    ));
+    assert!(!flagged(
+        "fn a() { Deadline::after(Duration::from_millis(0x3E7)); }"
     ));
 }
 

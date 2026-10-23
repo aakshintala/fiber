@@ -249,8 +249,6 @@ pub(crate) fn pattern(text: &str) -> String {
 /// interval per holder, so this is the one short bound here, best-effort.
 const COMMAND_LINE_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long [`matching`] waits on the wall clock for `pgrep` to list and
-/// exit. A listing takes milliseconds; the bound only reports a hung one.
 /// The pids of the processes whose command line contains `text`.
 ///
 /// # Errors

@@ -1538,8 +1538,6 @@ fn a_transfer_registers_before_the_session_can_answer() {
 #[test]
 fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
     use std::sync::{Arc, mpsc};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
     const EPOCH: u64 = 7;
@@ -1588,7 +1586,7 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
         })
         .unwrap();
     order.done(SID, "c_1");
-    Deadline::after(DEADLINE)
+    Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the handover follows the re-routed answer");
     // One entry, not two: the second enqueue changed nothing.
@@ -1613,8 +1611,6 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
 fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgement() {
     use std::io::{BufRead, BufReader};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
 
     let held = fakes::TempDir::new("rn");
@@ -1623,7 +1619,7 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
     let order = crate::connection::lock(&relays).order.clone();
     order.enqueue(SID, "c_missing");
     let (writer, peer) = UnixStream::pair().unwrap();
-    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let writer = Arc::new(Mutex::new(writer));
     let (session, gone) = UnixStream::pair().unwrap();
     drop(gone);
@@ -1665,8 +1661,6 @@ fn refusing_a_missing_relay_writes_the_rejection_and_releases_its_acknowledgemen
 #[test]
 fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
     use std::sync::{Arc, mpsc};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_aaaaaaaaaaaaaaaa";
     const EPOCH: u64 = 7;
@@ -1695,10 +1689,12 @@ fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
                 returned_tx.send(()).unwrap_or(());
             })
             .unwrap();
-        let timely = Deadline::after(DEADLINE).recv(&returned_rx).is_ok();
+        let timely = Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&returned_rx)
+            .is_ok();
         order.done(held_session, held_id);
         if !timely {
-            Deadline::after(DEADLINE)
+            Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&returned_rx)
                 .expect("releasing the handover wakes the bounded waiter");
         }
@@ -1715,8 +1711,6 @@ fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
 fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
     use std::io::{BufRead, BufReader, Write};
     use std::sync::{Arc, Mutex, mpsc};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
     const NEWER: u64 = 8;
@@ -1735,7 +1729,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
         retiring: Some(crate::retire::Retire::Exited),
     });
     let (client, peer) = UnixStream::pair().unwrap();
-    peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
     let client = Arc::new(Mutex::new(client));
     let order = crate::connection::lock(&relays).order.clone();
     let kept: Kept = Arc::new(Mutex::new(vec![(
@@ -1766,7 +1760,9 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_later\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    let timely = Deadline::after(DEADLINE).recv(&noticed_rx).is_ok();
+    let timely = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&noticed_rx)
+        .is_ok();
     if !timely {
         order.done(SID, "c_earlier");
     }
@@ -1785,8 +1781,6 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
 fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     use std::io::Write;
     use std::sync::{Arc, Mutex, mpsc};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
 
@@ -1853,7 +1847,9 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             passed_tx.send(passed).unwrap_or(());
         }));
         let (client, client_peer) = UnixStream::pair().unwrap();
-        client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+        client_peer
+            .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+            .unwrap();
         let client = Arc::new(Mutex::new(client));
         let (session, mut session_peer) = UnixStream::pair().unwrap();
         let thread = start_relay_thread(
@@ -1872,7 +1868,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
         let mut client_peer = client_peer;
         let mut read = std::io::BufReader::new(&mut client_peer);
         if expect_pop {
-            let passed = Deadline::after(DEADLINE).recv(&passed_rx);
+            let passed = Deadline::after(MUST_SUCCEED_WITHIN).recv(&passed_rx);
             let mut text = String::new();
             read.read_line(&mut text).unwrap();
             // Close, never shut down: on macOS a shutdown can leave the blocked read
@@ -1917,8 +1913,6 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
 fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
     use std::io::{BufRead, Write};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
     let held = fakes::TempDir::new("rp");
@@ -1945,7 +1939,9 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
     let order = crate::connection::lock(&relays).order.clone();
     order.enqueue(SID, "c_ack");
     let (client, client_peer) = UnixStream::pair().unwrap();
-    client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    client_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
     let client = Arc::new(Mutex::new(client));
     let (session, mut session_peer) = UnixStream::pair().unwrap();
     let thread = start_relay_thread(
@@ -1985,8 +1981,6 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
 #[test]
 fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     use std::sync::{Arc, Mutex, mpsc};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rd");
     let hub = Arc::new(hub(&held));
@@ -2019,7 +2013,7 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     // Close, never shut down: on macOS a shutdown can leave the blocked read
     // waiting (#1877).
     drop(session_peer);
-    let passed = Deadline::after(DEADLINE)
+    let passed = Deadline::after(MUST_SUCCEED_WITHIN)
         .recv(&passed_rx)
         .expect("the relay end drains and clears its queue");
     join_within_deadline(thread);
@@ -2035,8 +2029,6 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
 fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     use std::io::{BufRead, Write};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    const DEADLINE: Duration = MUST_SUCCEED_WITHIN;
     const SID: &str = "s_0123456789abcdef";
     let held = fakes::TempDir::new("rk");
     let hub = Arc::new(hub(&held));
@@ -2062,7 +2054,9 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     let order = crate::connection::lock(&relays).order.clone();
     order.enqueue(SID, "c_known");
     let (client, client_peer) = UnixStream::pair().unwrap();
-    client_peer.set_read_timeout(Some(DEADLINE)).unwrap();
+    client_peer
+        .set_read_timeout(Some(MUST_SUCCEED_WITHIN))
+        .unwrap();
     let client = Arc::new(Mutex::new(client));
     let (session, mut session_peer) = UnixStream::pair().unwrap();
     let thread = start_relay_thread(
@@ -2093,7 +2087,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     let (ended_tx, ended) = std::sync::mpsc::channel();
     std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
     assert_eq!(
-        Deadline::after(DEADLINE).recv(&ended).ok(),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&ended).ok(),
         Some(true),
         "the relay thread ends once the session closes"
     );
