@@ -13,9 +13,8 @@ use contract::shapes::Process;
 use contract::{ErrorCode, JobId};
 
 use super::FakeJobs;
+use crate::MUST_SUCCEED_WITHIN;
 use crate::deadline::Deadline;
-
-const DEADLINE: Duration = Duration::from_secs(5);
 
 fn opening(description: &str, stop: Stop) -> Opening {
     Opening {
@@ -69,7 +68,7 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
     );
     assert_eq!(jobs.started(), vec![opened.started.clone()]);
     drop(opened.end);
-    let dropped = jobs.ended(Deadline::after(DEADLINE)).unwrap();
+    let dropped = jobs.ended(Deadline::after(MUST_SUCCEED_WITHIN)).unwrap();
     assert_eq!(dropped.job_id, opened.started.job_id);
     assert_eq!(dropped.status, Outcome::Failed);
     assert_eq!(
@@ -161,8 +160,8 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
     );
     assert!(jobs.stop(&id));
     assert!(
-        Deadline::after(DEADLINE).recv(&fired_rx).is_ok(),
-        "waited {DEADLINE:?} for the job's stop"
+        Deadline::after(MUST_SUCCEED_WITHIN).recv(&fired_rx).is_ok(),
+        "waited {MUST_SUCCEED_WITHIN:?} for the job's stop"
     );
     assert!(jobs.stop(&id), "a second stop of a running job is true");
     let racers: Vec<_> = (0..2)
@@ -184,7 +183,7 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
         job_id: JobId("j_other".into()),
         ..done.clone()
     });
-    let delivered = jobs.ended(Deadline::after(DEADLINE)).unwrap();
+    let delivered = jobs.ended(Deadline::after(MUST_SUCCEED_WITHIN)).unwrap();
     assert_eq!(delivered.job_id, id);
     assert_eq!(delivered.status, Outcome::Completed);
     assert_eq!(delivered.process, done.process);
@@ -336,7 +335,7 @@ fn a_jobs_deltas_are_recorded_in_order_and_other_events_ignored() {
         vec![(id.clone(), "a".to_owned()), (id, "b".to_owned())]
     );
     assert_eq!(deltas.text(), "ab");
-    assert!(deltas.wait_for_text("ab", Deadline::after(DEADLINE)));
+    assert!(deltas.wait_for_text("ab", Deadline::after(MUST_SUCCEED_WITHIN)));
     assert!(!deltas.wait_for_text("abc", Deadline::after(Duration::from_millis(1))));
 }
 
@@ -368,7 +367,7 @@ fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
                 },
             }));
         });
-        assert!(deltas.wait_for_text("hell", Deadline::after(DEADLINE)));
+        assert!(deltas.wait_for_text("hell", Deadline::after(MUST_SUCCEED_WITHIN)));
     });
 }
 

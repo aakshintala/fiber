@@ -12,11 +12,16 @@
 
 #[cfg(test)]
 use std::sync::Condvar;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, mpsc};
+#[cfg(test)]
+use std::sync::{Mutex, PoisonError};
 #[cfg(test)]
 use std::thread::ThreadId;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+/// A lock that outlives a panicked holder: plain data, and a panicked
+/// holder has already failed its test.
+use support::lock;
 
 use contract::clock::Clock;
 
@@ -303,12 +308,6 @@ pub(crate) fn join_within(accept: JoinHandle<()>, within: Duration) -> bool {
         }
     });
     Deadline::after(within).recv(&joined).is_ok()
-}
-
-/// A lock that outlives a panicked holder: plain data, and a panicked
-/// holder has already failed its test.
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

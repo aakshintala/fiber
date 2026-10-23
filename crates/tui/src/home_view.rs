@@ -6,7 +6,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{FOCUS_STYLE, completions, lift_hover};
+use super::{FOCUS_STYLE, completions, lift_hover, logo};
 use crate::app::App;
 use crate::app::Surface;
 use crate::completion_rows::Rows;
@@ -15,9 +15,6 @@ use crate::home::{HomeScreen, ListLine, Spot, TypedScreen};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 use crate::text::to_u16;
-
-#[path = "logo.rs"]
-mod logo;
 
 /// The home input box's tint.
 const BOX_TINT: Style = Style::new().bg(Role::Surface.color());

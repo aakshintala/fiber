@@ -272,10 +272,10 @@ fn park_waiter(
     let handle = std::thread::spawn(move || {
         waiter_clock.wait_until(Some(until), &mut |_| {
             let _ignored = parked_tx.send(());
-            let _ignored = Deadline::after(Duration::from_secs(5)).recv(&release_rx);
+            let _ignored = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&release_rx);
         });
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&parked_rx)
         .expect("the waiter parks before the test moves on");
     (release_tx, handle)
@@ -309,7 +309,7 @@ fn a_hang_advance_holds_until_its_entry_matches() {
         let _ignored = done_tx.send((ok, next, failures));
     });
     case.host_script()
-        .wait_hang_waiting(1, Duration::from_secs(5))
+        .wait_hang_waiting(1, fakes::MUST_SUCCEED_WITHIN)
         .expect("the applier reaches the hold for entry 1");
     assert!(
         matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
@@ -319,7 +319,7 @@ fn a_hang_advance_holds_until_its_entry_matches() {
     let (release, waiter) = park_waiter(&case, deadline);
     case.host_script()
         .hang_matched(1, &json!({"program": "hang-once"}), deadline);
-    let (ok, next, failures) = Deadline::after(Duration::from_secs(5))
+    let (ok, next, failures) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("the advance applies once entry 1 matches");
     assert!(ok && next == 1 && failures.is_empty(), "{failures:?}");
@@ -929,10 +929,10 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
         let until = waiter_clock.now() + Duration::from_millis(200);
         waiter_clock.wait_until(Some(until), &mut |_| {
             let _ignored = parked_tx.send(());
-            let _ignored = Deadline::after(Duration::from_secs(5)).recv(&release_rx);
+            let _ignored = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&release_rx);
         });
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&parked_rx)
         .expect("the waiter parks before the driver runs");
     // Ephemeral lines appended after the watcher registers still reach
@@ -1008,7 +1008,7 @@ fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
             let _ignored = release_rx.recv();
         });
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&parked_rx)
         .expect("the waiter parks before the driver runs");
     let driver = Arc::new(FakeDrive::new(Arc::clone(&log), false));
@@ -1062,11 +1062,11 @@ impl Clock for GateClock {
             let (released, cvar) = &*self.released;
             let guard = released.lock().unwrap_or_else(PoisonError::into_inner);
             let (_guard, wait) = cvar
-                .wait_timeout_while(guard, Duration::from_secs(5), |open| !*open)
+                .wait_timeout_while(guard, fakes::MUST_SUCCEED_WITHIN, |open| !*open)
                 .unwrap_or_else(PoisonError::into_inner);
             assert!(
                 !wait.timed_out(),
-                "the test did not release the gate clock within 5s"
+                "the test did not release the gate clock within the must-succeed bound"
             );
         }
         self.origin
@@ -1130,11 +1130,11 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
     let (flag, cvar) = &*entered;
     let guard = flag.lock().unwrap_or_else(PoisonError::into_inner);
     let (_guard, wait) = cvar
-        .wait_timeout_while(guard, Duration::from_secs(5), |seen| !*seen)
+        .wait_timeout_while(guard, fakes::MUST_SUCCEED_WITHIN, |seen| !*seen)
         .unwrap_or_else(PoisonError::into_inner);
     assert!(
         !wait.timed_out(),
-        "the case driver did not park in process_clock.now() within 5s"
+        "the case driver did not park in process_clock.now() within the must-succeed bound"
     );
 
     log.append(
@@ -1155,10 +1155,10 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         result
     });
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .is_ok(),
-        "the case driver did not finish within 5s"
+        "the case driver did not finish within the must-succeed bound"
     );
     joiner
         .join()

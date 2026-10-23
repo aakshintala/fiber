@@ -4,7 +4,8 @@
 //! ephemeral and durable alike, in arrival order.
 
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
+use support::lock;
 
 use crate::deadline::Deadline;
 
@@ -103,10 +104,6 @@ fn text_of(events: &[Event]) -> String {
         }
     }
     out
-}
-
-fn lock(inner: &Mutex<Vec<Event>>) -> MutexGuard<'_, Vec<Event>> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

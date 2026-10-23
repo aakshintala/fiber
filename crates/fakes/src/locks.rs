@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
+use support::lock;
 
 use contract::files::PathLock;
 
@@ -50,18 +51,12 @@ impl FakeLock {
 
     /// The keys `hold` was asked for, in order.
     pub fn calls(&self) -> Vec<PathBuf> {
-        self.calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        lock(&self.calls).clone()
     }
 
     /// How many callers are blocked in [`FakeLock::hold`].
     pub fn waiting(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .waiting
+        lock(&self.state).waiting
     }
 }
 
@@ -73,14 +68,8 @@ impl Default for FakeLock {
 
 impl PathLock for FakeLock {
     fn hold(&self, path: &Path, run: &mut dyn FnMut()) {
-        self.calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(path.to_path_buf());
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        lock(&self.calls).push(path.to_path_buf());
+        let mut state = lock(&self.state);
         while state.held.contains(path) {
             state.waiting += 1;
             state = self
@@ -92,10 +81,7 @@ impl PathLock for FakeLock {
         state.held.insert(path.to_path_buf());
         drop(state);
         run();
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = lock(&self.state);
         state.held.remove(path);
         self.changed.notify_all();
     }

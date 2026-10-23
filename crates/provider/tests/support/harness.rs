@@ -10,12 +10,12 @@
     reason = "each test file uses only part of it; sent_body indexes a scripted request"
 )]
 
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use contract::events::CacheLifetime;
-use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Reply};
+use contract::provider::{CallError, Delta, Input, Media, ModelCall, ModelRequest, Reply};
 use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
@@ -38,8 +38,23 @@ pub(crate) fn request() -> ModelRequest {
             images: Vec::new(),
         }])
         .into(),
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
+}
+
+/// The loop's map for files holding these bytes: each path to the bytes as
+/// standard base64. A path left out is a file the loop could not read.
+pub(crate) fn media(files: &[(&str, &[u8])]) -> Arc<Media> {
+    use base64::Engine as _;
+    Arc::new(
+        files
+            .iter()
+            .map(|(path, bytes)| {
+                let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                ((*path).to_owned(), Arc::from(data))
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn endpoint(provider: &str, server: &ProviderServer) -> Endpoint {

@@ -260,7 +260,7 @@ fn key_names_the_session_and_the_extension() {
     assert_eq!(sent[0].thinking, None);
     assert_eq!(sent[0].sent_tools, None);
     assert_eq!(sent[0].previous_end, None);
-    assert_eq!(sent[0].session_dir, PathBuf::new());
+    assert!(sent[0].media.is_empty());
     assert_eq!(sent[0].max_output_tokens, Some(16));
     assert_eq!(sent[0].system_prompt, "be brief");
     assert_eq!(
@@ -1406,4 +1406,45 @@ fn image_parts_ride_the_request_as_references() {
             }],
         }]
     );
+}
+
+/// An image part resolves through the loop's rule from the session's own
+/// directory: a stored file rides the request as its base64, and a file that
+/// is not there is left out of the map, never a failed call.
+#[test]
+fn image_parts_resolve_to_the_stored_files_base64() {
+    let root = TempDir::new("fiber-model-host");
+    let sessions = root.path().join("sessions");
+    let clock = test_clock();
+    let dir = seed(&sessions, "s_1", &clock, &[]);
+    std::fs::create_dir_all(dir.join("artifacts")).unwrap();
+    // "abcd" is `YWJjZA==`.
+    std::fs::write(dir.join("artifacts/shot.png"), b"abcd").unwrap();
+    let provider = Arc::new(ScriptedProvider::new([Scripted::text("hi")]));
+    let host = test_host(provider.clone(), dir, "s_1", None, immediate_retry());
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let image = |path: &str| ContentPart::Image {
+        path: path.to_owned(),
+        mime_type: "image/png".to_owned(),
+        width: 800,
+        height: 600,
+    };
+    let imaged = HostModelRequest {
+        model: "scripted/s.json".to_owned(),
+        system: None,
+        messages: vec![HostMessage {
+            role: HostRole::User,
+            content: vec![image("artifacts/shot.png"), image("artifacts/gone.png")],
+        }],
+        max_tokens: 16,
+    };
+    let reply = ok(host.call("tag", imaged, bound(clock, None, held)));
+    assert_eq!(reply.text, "hi");
+    let sent = provider.requests();
+    let media = &sent[0].media;
+    assert_eq!(
+        media.get("artifacts/shot.png").map(|data| &**data),
+        Some("YWJjZA==")
+    );
+    assert!(!media.contains_key("artifacts/gone.png"));
 }

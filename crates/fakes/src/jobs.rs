@@ -4,7 +4,8 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use support::lock;
 
 use contract::JobId;
 use contract::clock::Clock;
@@ -409,10 +410,6 @@ impl Jobs for FakeJobs {
     fn install_usage_tap(&self, tap: Option<UsageTap>) {
         lock(&self.inner).usage_tap = tap;
     }
-}
-
-fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

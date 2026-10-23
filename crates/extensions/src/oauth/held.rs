@@ -6,8 +6,9 @@
 
 use std::cell::RefCell;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
+use support::lock;
 
 use config::CredentialLock;
 use contract::clock::Clock;
@@ -107,12 +108,6 @@ fn usable(value: &Value) -> Option<i64> {
         return None;
     }
     value.get("expires_at").and_then(Value::as_i64)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    // A panic aborts the process (`docs/code-quality.md`, "Panics"), so no
-    // holder can leave the lock poisoned.
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl UserData for Held {

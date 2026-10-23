@@ -1,4 +1,4 @@
-//! Home's logo: a copy of real Fiber's pixel logo (`crates/tui/src/logo.rs`:
+//! Home's logo: a copy of real Fiber's pixel logo (`crates/tui/src/view/logo.rs`:
 //! `fiber` in pixel letters drawn with half blocks, four rows tall, with
 //! each letter's counter shaded) and the kitty-graphics image that replaces
 //! it where the terminal speaks the protocol. Its own job is the logo, so

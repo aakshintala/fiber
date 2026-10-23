@@ -9,7 +9,7 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::client;
@@ -28,6 +28,7 @@ use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
+use support::lock;
 
 mod accept;
 mod accepted;
@@ -1043,10 +1044,6 @@ fn prompt_message(prompt: String) -> Message {
             command_id: Some(CommandId(mint("c_"))),
         },
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Copies every event to `out`, one JSON line each, until `fiber_exited`

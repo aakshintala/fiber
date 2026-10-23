@@ -1933,7 +1933,7 @@ fn a_fixed_header_only_secret_is_redacted_from_the_recorded_path() {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     };
     let url = format!("{}/v1/{secret}/chat", server.url());
     let log = std::sync::Arc::new(RedactCapture {
@@ -2008,7 +2008,7 @@ fn a_fixed_bearer_token_is_redacted_from_the_recorded_path() {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     };
     let encoded_secret: String = secret.bytes().map(|byte| format!("%{byte:02X}")).collect();
     let url = format!("{}/v1/{secret}/files/{encoded_secret}", server.url());
@@ -2311,7 +2311,7 @@ fn test_request() -> contract::provider::ModelRequest {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

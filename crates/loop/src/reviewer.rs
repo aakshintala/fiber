@@ -640,7 +640,8 @@ impl Loop {
             previous_end,
             sent_tools: None,
             max_output_tokens,
-            session_dir: self.log.dir().to_path_buf(),
+            // No input the reviewer builds holds an image or a PDF.
+            media: Arc::default(),
         }
     }
 

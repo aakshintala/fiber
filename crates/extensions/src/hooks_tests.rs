@@ -81,7 +81,7 @@ impl Home {
         .unwrap();
     }
 
-    /// The session's extensions, loaded on a thread under [`WAIT`]: the
+    /// The session's extensions, loaded on a thread under [`fakes::MUST_SUCCEED_WITHIN`]: the
     /// fake clock never ends a wait the runtime does not end itself.
     /// Rewrites the installed `fiber.test/<short>`'s manifest with `change`,
     /// as an upgrade of Fiber or a hand edit would leave it.
@@ -154,10 +154,7 @@ fn hook(on_failure: &str, body: &str) -> String {
     )
 }
 
-/// How long a test waits for a load or a chain before failing.
-const WAIT: Duration = Duration::from_secs(5);
-
-/// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
+/// Runs `f` on its own thread and waits for it under [`fakes::MUST_SUCCEED_WITHIN`], so a runtime
 /// that never answers fails the test instead of hanging it.
 #[track_caller]
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -165,7 +162,7 @@ fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     thread::spawn(move || {
         let _sent = tx.send(f());
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for the extensions")
 }
@@ -1415,7 +1412,7 @@ end }})"#,
     thread::spawn(move || {
         let _sent = done.send(lua.command("run", ""));
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&arrival)
         .expect("the exec ended before its delivery");
     let waiter = Arc::clone(&session);
@@ -1426,11 +1423,15 @@ end }})"#,
         waiter.wait_for_runs();
         let _sent = done.send(());
     });
-    let waiter_id = Deadline::after(WAIT)
+    let waiter_id = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&started)
         .expect("the waiter started");
     assert!(
-        clock.await_thread_parked(waiter_id, None, fakes::Deadline::after(WAIT)),
+        clock.await_thread_parked(
+            waiter_id,
+            None,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the session barrier parks while its exec is held"
     );
     assert!(
@@ -1438,7 +1439,7 @@ end }})"#,
         "the session barrier waits for its Lua VM"
     );
     release.send(()).unwrap();
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&returned)
         .expect("the session barrier returned");
     let contract::inbox::Delivery::ExtensionExec(line) = rx
@@ -1450,7 +1451,9 @@ end }})"#,
     assert_eq!(line.program, "sh");
     assert_eq!(line.process.exit_code, Some(0));
     assert!(matches!(
-        Deadline::after(WAIT).recv(&completed).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&completed)
+            .unwrap(),
         Err(crate::Error::Stopped { .. })
     ));
     unpause_settle();
@@ -1517,7 +1520,7 @@ fn spawn_waiter(session: &Arc<SessionExtensions>) -> mpsc::Receiver<()> {
         waiter.wait_for_runs();
         let _sent = done.send(());
     });
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&started)
         .expect("the waiter started");
     assert!(
@@ -1594,18 +1597,18 @@ fn drive_provider_exec(init: Option<&str>, birth: ProviderBirth) {
     };
     let (arrival, release) = hold_provider_exec();
     let models = spawn_models(provider);
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&arrival)
         .expect("the provider exec ended before its delivery");
     let waiter = spawn_waiter(&session);
     release.send(()).unwrap();
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&waiter)
         .expect("the shutdown wait returned after the release");
     // The shutdown wait stops the VM first, so the suspended `models()`
     // answers `Stopped` while its exec's line is still queued.
     assert!(matches!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&models)
             .expect("models() returned"),
         Err(crate::Error::Stopped { .. })
@@ -1661,12 +1664,12 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
         let _sent = done_tx.send(lua.command("hold", ""));
     });
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the command to park on host.http"
     );
     contract::extension::ExtensionDoor::seal(&*session);
     server.release();
-    let result = Deadline::after(WAIT)
+    let result = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the parked command to return");
     assert_eq!(result.unwrap(), "ok");
@@ -1734,7 +1737,7 @@ fn drive_to_hands_the_driver_to_each_extension() {
     session.drive_to(Arc::clone(&drive) as Arc<dyn contract::extension::Drive>);
     let lua = Arc::clone(&session.lua[0]);
     assert_eq!(bounded(move || lua.command("go", "")).unwrap(), "drove");
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&called_rx)
         .expect("waited for the drive to reach the driver");
     assert_eq!(
@@ -1762,7 +1765,7 @@ fn crediting(provider: &str) -> String {
     )
 }
 
-/// `start_provider` on its own thread under [`WAIT`].
+/// `start_provider` on its own thread under [`fakes::MUST_SUCCEED_WITHIN`].
 #[track_caller]
 fn start(
     home: &Home,
@@ -2423,24 +2426,24 @@ fn a_watcher_receives_each_completion_in_session_order_with_the_hooks() {
     // The completion queues first, so the hook waits behind it: the single
     // worker runs them in stream order, and the hook's return proves it ran.
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the first completion"),
         "watch:1"
     );
-    let answer = Deadline::after(WAIT)
+    let answer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&hook_rx)
         .expect("waited for the hook to run");
     assert!(matches!(answer.outcome, AfterToolOutcome::Unchanged));
     session.deliver(&completed(2), Some(contract::Seq(1)));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the hook's line"),
         "hook:read"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the second completion"),
         "watch:2"
@@ -2465,7 +2468,7 @@ fn an_idle_watcher_receives_an_ephemeral_offer() {
     // An ephemeral offer carries no seq, as the log gives it none.
     session.deliver(&noticed("hello"), None);
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the idle watcher to run"),
         "idle:hello"
@@ -2493,7 +2496,7 @@ fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
     let statuses = status_channel(&session);
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the watcher to park on host.http"
     );
     // While it is parked the ephemeral offer is dropped and the durable one
@@ -2513,13 +2516,13 @@ fn a_parked_watcher_drops_the_ephemeral_offer_and_queues_the_durable_one() {
     }
     server.release();
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the parked watcher"),
         "ephemeral-ran"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the queued durable one"),
         "durable-ran"
@@ -2552,7 +2555,7 @@ fn an_unmatched_kind_fires_no_watcher() {
     session.deliver(&stepped(), Some(contract::Seq(3)));
     session.deliver(&noticed("after"), None);
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the later matching offer"),
         "picky:after"
@@ -2611,7 +2614,7 @@ fn a_late_watcher_receives_only_events_after_its_registration() {
     let first_statuses = status_channel(&first);
     first.deliver(&stepped(), Some(contract::Seq(4)));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&first_statuses)
             .expect("waited for the early watcher"),
         "early-ran"
@@ -2632,10 +2635,10 @@ fn a_late_watcher_receives_only_events_after_its_registration() {
     // Each extension runs on its own worker, so the two runs race: the set
     // is what the fan-out pins — the late watcher sees only B, never A.
     let mut ran = vec![
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&second_statuses)
             .expect("waited for the first watcher"),
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&second_statuses)
             .expect("waited for the second watcher"),
     ];
@@ -2673,13 +2676,13 @@ fn one_extensions_watchers_run_in_registration_order() {
     let statuses = status_channel(&session);
     session.deliver(&stepped(), Some(contract::Seq(2)));
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the first watcher"),
         "first"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the second watcher"),
         "second"
@@ -2735,7 +2738,7 @@ fn an_erroring_watcher_emits_one_notice_and_the_stream_continues() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let (statuses, notices) = observe(&session);
     session.deliver(&noticed("x"), None);
-    let notice = Deadline::after(WAIT)
+    let notice = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&notices)
         .expect("waited for the failure notice");
     assert!(
@@ -2745,7 +2748,7 @@ fn an_erroring_watcher_emits_one_notice_and_the_stream_continues() {
         "the notice names the extension, the watcher and the error, {notice:?}"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the next watcher"),
         "second-ran"
@@ -2786,7 +2789,7 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // The `sleeping` line proves the run reached the exec call; the park
     // follows under the same lock hold, and `mark_parked` waits for it.
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the watcher to start"),
         "sleeping"
@@ -2796,7 +2799,10 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // bounds the waits for the parked delivery to appear and the loop to
     // notice the move.
     let thread = clock
-        .mark_parked(before + Duration::from_millis(300), Deadline::after(WAIT))
+        .mark_parked(
+            before + Duration::from_millis(300),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        )
         .expect("waited for the sleeping watcher to park at its deadline")
         .threads()
         .pop()
@@ -2805,19 +2811,22 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
     // advancing: its poll park would otherwise arrive beside the
     // watcher's deadline park and fail the unnamed wait.
     let poll = clock
-        .mark_parked(before + Duration::from_millis(10), Deadline::after(WAIT))
+        .mark_parked(
+            before + Duration::from_millis(10),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        )
         .expect("waited for the exec runner to park");
     assert!(
-        clock.await_any_parked_since(&poll, Deadline::after(WAIT)),
+        clock.await_any_parked_since(&poll, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the exec runner to re-park"
     );
     clock.advance_when_parked(
         Some(before + Duration::from_millis(300)),
         Some(thread),
         Duration::from_millis(300),
-        &Deadline::after(WAIT),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let notice = Deadline::after(WAIT)
+    let notice = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&notices)
         .expect("waited for the timeout notice");
     assert!(
@@ -2827,7 +2836,7 @@ fn a_watcher_parked_past_its_timeout_notices_and_the_stream_continues() {
         "the notice names the extension, the watcher and the exact declared ms, {notice:?}"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the next watcher"),
         "after-timeout"
@@ -2855,7 +2864,7 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let statuses = status_channel(&session);
     session.deliver(&noticed("x"), None);
-    let refused = Deadline::after(WAIT)
+    let refused = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&statuses)
         .expect("waited for the tool refusal");
     assert!(
@@ -2864,7 +2873,7 @@ fn a_watcher_refuses_host_tool_but_runs_host_exec() {
         "the refusal names the call site, {refused:?}"
     );
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the exec result"),
         "exec:true"
@@ -2957,7 +2966,7 @@ fn a_watcher_queued_at_a_signal_never_starts() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     session.deliver(&noticed("park"), None);
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the first watcher to park on host.http"
     );
     // The one worker is parked on the first delivery, so the second stays
@@ -3093,15 +3102,15 @@ fn a_signal_during_the_drain_stops_it_at_once() {
     // The fake clock is held, never advanced: only the stop can wake the
     // parked delivery's wait.
     assert_eq!(
-        Deadline::after(WAIT)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&statuses)
             .expect("waited for the draining watcher to park"),
         "parked"
     );
     crate::lua::hub::stop_every_callback();
-    // Far under the 2000 ms fixture timeout: waiting the timeout out would
-    // miss this bound, so only `Stopped` wakes it in time.
-    let (errors, stopped) = Deadline::after(Duration::from_secs(1))
+    // The fake clock never advances, so only `Stopped` wakes the wait; a
+    // missing stop fails at this bound.
+    let (errors, stopped) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the drain to answer the stop");
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -3144,7 +3153,7 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
     // keeps it from returning before the queued delivery runs.
     session.deliver(&stepped(), Some(contract::Seq(0)));
     assert!(
-        server.await_requests(1, Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the live delivery to park on host.http"
     );
     let lua = session
@@ -3161,11 +3170,11 @@ fn drain_watchers_waits_for_a_queued_durable_delivery() {
     });
     // The wait engaged before any release: the parked delivery is still
     // queued, so only the wait holds the drain here.
-    Deadline::after(WAIT)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&wait_rx)
         .expect("waited for the drain to wait for the queued delivery");
     server.release();
-    let (errors, stopped) = Deadline::after(WAIT)
+    let (errors, stopped) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the drain after the release");
     assert!(errors.is_empty(), "{errors:?}");

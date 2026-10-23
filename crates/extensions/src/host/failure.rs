@@ -5,7 +5,8 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
+use support::lock;
 
 use contract::ErrorCode;
 use mlua::{FromLuaMulti, Function, Lua, MultiValue, Table, Value as LuaValue};
@@ -103,10 +104,6 @@ impl FailureState {
         });
         Ok(())
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The failure table constructor and per-VM callback-boundary state.

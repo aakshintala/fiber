@@ -3,8 +3,9 @@
 //! the cancel once the call signals it started to block.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
+use support::lock;
 
 use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
@@ -61,11 +62,7 @@ impl BlockingProvider {
     /// this, so the cancel lands mid-stream.
     #[track_caller]
     pub fn wait_started(&self, deadline: Deadline) {
-        let started = self
-            .inner
-            .started_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let started = lock(&self.inner.started_rx);
         let got = deadline.recv(&started);
         assert!(got.is_ok(), "timed out waiting for the model call to start");
     }
@@ -98,11 +95,7 @@ impl ModelCall for BlockingCall {
         // Buffered, so a cancel before `run` still ends the call at once
         // below.
         let _sent = self.inner.started_tx.send(()).is_ok();
-        let cancel = self
-            .inner
-            .cancel_rx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let cancel = lock(&self.inner.cancel_rx);
         let got = Deadline::after(LIMIT).recv(&cancel);
         // A call the cancel never reached is a missed signal, not a
         // cancellation: it must not report `Cancelled` after its timeout.

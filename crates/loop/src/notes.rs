@@ -68,7 +68,8 @@ impl Loop {
             previous_end: None,
             sent_tools: None,
             max_output_tokens: Some(4096),
-            session_dir: self.log.dir().to_path_buf(),
+            // The notes request is one text input: it names no image or PDF.
+            media: Default::default(),
         };
         let call = match self.observe.clone() {
             Some(observe) => observe(&request, std::num::NonZeroU32::MIN),

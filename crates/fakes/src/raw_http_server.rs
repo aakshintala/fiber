@@ -16,7 +16,10 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+/// A lock that outlives a panicked holder: the state is plain data, and a
+/// test thread that panicked has already failed its test.
+use support::lock;
 
 use crate::clock::SystemClock;
 use crate::deadline::Deadline;
@@ -141,12 +144,6 @@ impl RawHttpServer {
     pub fn drop_probe(&self) -> DropProbe {
         self.core.drop_probe()
     }
-}
-
-/// A lock that outlives a panicked holder: the state is plain data, and a
-/// test thread that panicked has already failed its test.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Serves one connection: records a complete request, then sends the

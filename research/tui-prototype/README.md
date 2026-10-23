@@ -69,7 +69,7 @@ key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still
 loads but home ignores it.
 
 The logo is real Fiber's: the pixel letters copied from
-`crates/tui/src/logo.rs`, and where the terminal speaks kitty graphics (kitty,
+`crates/tui/src/view/logo.rs`, and where the terminal speaks kitty graphics (kitty,
 Ghostty or WezTerm, never under tmux or screen) an image tints the checked-in
 `assets/logo-mask.bin` copy with the theme's accents and replaces the pixel
 letters in exactly the same cells. The pixel logo draws first and the image

@@ -3,7 +3,6 @@
 //! [`Provider`] and [`ModelCall`], and never names one.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +30,12 @@ pub fn loaded_text(names: &[String]) -> String {
         .trim_ascii_end()
         .replace("{names}", &names.join(", "))
 }
+
+/// The stored images and PDFs a request sends, as the loop resolved them:
+/// each path a conversation names, exactly as the conversation holds it,
+/// mapped to the stored file's bytes as standard base64. A path the loop
+/// could not read, or must not read, has no entry.
+pub type Media = BTreeMap<String, Arc<str>>;
 
 /// One model, reached through its protocol. A provider extension's model
 /// becomes one of these.
@@ -137,11 +142,11 @@ pub struct ModelRequest {
     /// (`docs/errors.md`, "Output tokens").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
-    /// The session directory, which an [`ImageRef`]'s path is relative to. A
-    /// protocol reads the stored image from here when it builds a request.
-    /// Empty when no input in the conversation holds an image.
-    #[serde(default)]
-    pub session_dir: PathBuf,
+    /// The stored images and PDFs the conversation names, encoded by the
+    /// loop: a protocol does no file I/O, so it sends these. Derived from the
+    /// conversation and the session directory, so it is never serialized.
+    #[serde(skip)]
+    pub media: Arc<Media>,
 }
 
 /// An image a tool result or a person's message carries: the log's `image` part
@@ -149,7 +154,8 @@ pub struct ModelRequest {
 /// sends (`docs/model-routing.md`, "Image limits").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageRef {
-    /// The file's path, relative to the session directory.
+    /// The file's path, relative to the session directory; the loop resolves
+    /// it into [`ModelRequest::media`].
     pub path: String,
     /// Its type, such as `image/png`.
     pub mime_type: String,
@@ -164,7 +170,8 @@ pub struct ImageRef {
 /// (`docs/model-routing.md`, "Image limits").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PdfRef {
-    /// The file's path, relative to the session directory.
+    /// The file's path, relative to the session directory; the loop resolves
+    /// it into [`ModelRequest::media`].
     pub path: String,
     /// The number of pages sent.
     pub page_count: u32,
@@ -275,6 +282,29 @@ pub enum Input {
         /// The tools the search loaded, by name, in the logged order.
         loaded: Vec<String>,
     },
+}
+
+impl Input {
+    /// The path of every image and PDF the input names: a message's
+    /// images; a tool result's images, then each PDF's path followed by its
+    /// page images' paths. Every other input names none.
+    pub fn media_paths(&self) -> Vec<&str> {
+        match self {
+            Self::User { images, .. } => images.iter().map(|image| image.path.as_str()).collect(),
+            Self::ToolResult { images, pdfs, .. } => images
+                .iter()
+                .map(|image| image.path.as_str())
+                .chain(pdfs.iter().flat_map(|pdf| {
+                    std::iter::once(pdf.path.as_str())
+                        .chain(pdf.pages.iter().flatten().map(|page| page.path.as_str()))
+                }))
+                .collect(),
+            Self::Assistant { .. }
+            | Self::Reasoning { .. }
+            | Self::ToolCall { .. }
+            | Self::ToolSearchResult { .. } => Vec::new(),
+        }
+    }
 }
 
 /// A fragment of a reply, emitted as an ephemeral event as it arrives.

@@ -13,8 +13,9 @@
 //! Dropping the extension stops it. Stopped is final.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
+use support::lock;
 
 use contract::RequestId;
 use contract::clock::{Clock, Wake};
@@ -92,7 +93,7 @@ static HUBS: Mutex<Vec<Weak<Hub>>> = Mutex::new(Vec::new());
 /// lock, so the order never inverts.
 pub fn stop_every_callback() {
     let live: Vec<Arc<Hub>> = {
-        let mut hubs = HUBS.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut hubs = lock(&HUBS);
         hubs.retain(|hub| hub.upgrade().is_some());
         hubs.iter().filter_map(Weak::upgrade).collect()
     };
@@ -117,9 +118,7 @@ impl Hub {
         let cloned = Arc::clone(&hub);
         let wake: Arc<dyn Wake> = cloned;
         clock.subscribe(Arc::downgrade(&wake));
-        HUBS.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(Arc::downgrade(&hub));
+        lock(&HUBS).push(Arc::downgrade(&hub));
         hub
     }
 
@@ -131,10 +130,7 @@ impl Hub {
     /// installation wins and a later one changes nothing. Runs no
     /// callback, so installing it before provider work is silent.
     pub(crate) fn set_diagnostics(&self, debug: Arc<dyn DebugLog>) {
-        let mut slot = self
-            .diagnostics
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut slot = lock(&self.diagnostics);
         if slot.is_none() {
             *slot = Some(debug);
         }
@@ -142,24 +138,15 @@ impl Hub {
 
     /// The installed sink, if any.
     pub(crate) fn diagnostics(&self) -> Option<Arc<dyn DebugLog>> {
-        self.diagnostics
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.diagnostics).clone()
     }
 
     pub(crate) fn set_host_script(&self, script: Arc<HostScript>) {
-        *self
-            .host_script
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(script);
+        *lock(&self.host_script) = Some(script);
     }
 
     pub(crate) fn host_script(&self) -> Option<Arc<HostScript>> {
-        self.host_script
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.host_script).clone()
     }
 
     pub(super) fn clock_handle(&self) -> Arc<dyn Clock> {
@@ -169,7 +156,7 @@ impl Hub {
     pub(crate) fn lock(&self) -> MutexGuard<'_, Shared> {
         // A panic aborts the process (`docs/code-quality.md`, "Panics"), so
         // no holder can leave the lock poisoned.
-        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.shared)
     }
 
     /// The hub lock when nothing holds it: a test's pause point learns
@@ -221,23 +208,19 @@ impl Hub {
         let (guard, _) = self
             .changed
             .wait_timeout_while(shared, timeout, |state| !done(state))
-            .unwrap_or_else(PoisonError::into_inner);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         done(&guard)
     }
 
     /// Runs `hook` at each delivery window from now on.
     #[cfg(test)]
     pub(super) fn pause_at_windows(&self, hook: WindowHook) {
-        *self.window.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook);
+        *lock(&self.window) = Some(hook);
     }
 
     #[cfg(test)]
     pub(super) fn at_window(&self, at: Window) {
-        let hook = self
-            .window
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let hook = lock(&self.window).clone();
         if let Some(hook) = hook {
             hook(self, at);
         }

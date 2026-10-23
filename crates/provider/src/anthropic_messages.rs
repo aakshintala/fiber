@@ -13,12 +13,13 @@
 //! same event stream (`docs/model-routing.md`, "Google Vertex wire facts").
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use contract::ActionId;
 use contract::diag::PrefixHashes;
 use contract::events::CacheLifetime;
-use contract::provider::{Input, ModelCall, ModelRequest, Provider, TOOL_SEARCH, ToolDefinition};
+use contract::provider::{
+    Input, Media, ModelCall, ModelRequest, Provider, TOOL_SEARCH, ToolDefinition,
+};
 use serde_json::{Map, Value, json};
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -486,7 +487,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             input,
             &reference,
             &call_ids,
-            &request.session_dir,
+            &request.media,
             endpoint.text_only,
         );
         if blocks.is_empty() {
@@ -551,7 +552,7 @@ fn block_of(
     input: &Input,
     reference: &str,
     call_ids: &BTreeMap<&ActionId, &str>,
-    session_dir: &Path,
+    media: &Media,
     text_only: bool,
 ) -> Vec<Value> {
     match input {
@@ -560,7 +561,7 @@ fn block_of(
                 text,
                 images,
                 &[],
-                session_dir,
+                media,
                 text_only,
                 crate::images::PdfForm::Native,
             );
@@ -635,7 +636,7 @@ fn block_of(
             let mut result = json!({
                 "type": "tool_result",
                 "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "content": crate::images::anthropic_content(crate::images::prepare(text, images, pdfs, session_dir, text_only, crate::images::PdfForm::Native)),
+                "content": crate::images::anthropic_content(crate::images::prepare(text, images, pdfs, media, text_only, crate::images::PdfForm::Native)),
             });
             if *is_error && let Some(map) = result.as_object_mut() {
                 map.insert("is_error".into(), json!(true));
