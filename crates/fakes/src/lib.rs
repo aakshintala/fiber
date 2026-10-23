@@ -37,6 +37,7 @@ mod temp_dir;
 mod tool_io;
 pub mod ustar;
 mod wait_output;
+mod wait_until;
 mod watchdog;
 pub mod wire;
 mod within;
@@ -77,6 +78,7 @@ pub use scripted_provider::{
 pub use temp_dir::TempDir;
 pub use tool_io::{text_of, tool_args};
 pub use wait_output::wait_output;
+pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, within};
 

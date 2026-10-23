@@ -11,21 +11,6 @@ use std::time::Duration;
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// Runs `work` on a thread and returns its result, failing after
-/// [`DEADLINE`] with `what`: one deadline however many reads it makes.
-#[track_caller]
-fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("sources-within".to_owned())
-        .spawn(move || done.send(work()).unwrap_or(()))
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(result) => result,
-        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
-    }
-}
-
 /// A reader on a pipe standing in for the tty: the reader, the pipe's
 /// write end and the loop's channel.
 fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
@@ -50,11 +35,15 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str, wait: &Deadline) -> Vec<u8
 /// Pauses `reader` on a thread with one deadline, handing it back.
 #[track_caller]
 fn paused(reader: super::Reader) -> super::Reader {
-    within("the pause to return", move || {
-        let mut reader = reader;
-        reader.pause();
-        reader
-    })
+    fakes::within(
+        "the pause to return",
+        Deadline::after(DEADLINE),
+        move || {
+            let mut reader = reader;
+            reader.pause();
+            reader
+        },
+    )
 }
 
 #[test]
