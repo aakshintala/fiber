@@ -25,7 +25,8 @@ const ROUNDS: u32 = 8;
 /// before the park.
 ///
 /// Returns the early answer when the run finished first (before or after
-/// the sighting), `None` when it advanced past a still-held grace park.
+/// the sighting), `None` when it advanced past a held park (the grace
+/// park, or the later drain park the run re-parked at).
 /// The caller reads the final answer either way, asserting the same
 /// deadline error. Panics when the run neither parks nor answers.
 #[track_caller]
