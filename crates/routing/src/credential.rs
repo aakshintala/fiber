@@ -13,13 +13,16 @@ use crate::failed;
 /// "Which credential a session uses"): `asked`, `--credential` on a resume,
 /// and `recorded`, the label the resumed or rewound log last recorded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Labels<'a> {
-    pub(crate) asked: Option<&'a str>,
-    pub(crate) recorded: Option<&'a str>,
+pub struct Labels<'a> {
+    /// `--model` on a resume, asking for a label the session was not on.
+    pub asked: Option<&'a str>,
+    /// The label the resumed or rewound log last recorded.
+    pub recorded: Option<&'a str>,
 }
 
 impl<'a> Labels<'a> {
-    pub(crate) fn new(asked: Option<&'a str>, recorded: Option<&'a str>) -> Self {
+    /// The asked and recorded labels to read the session's key under.
+    pub fn new(asked: Option<&'a str>, recorded: Option<&'a str>) -> Self {
         Self { asked, recorded }
     }
 
@@ -27,7 +30,7 @@ impl<'a> Labels<'a> {
     /// else the configured one. A scripted provider rejects `asked`
     /// (`scripted::label`) and ignores `recorded`; its returned label is never
     /// recorded (`scripted::credential`).
-    pub(crate) fn label(self, config: &Config, provider: &ProviderData) -> Result<String, Failure> {
+    pub fn label(self, config: &Config, provider: &ProviderData) -> Result<String, Failure> {
         crate::scripted::label(provider, self.asked)?;
         Ok(self
             .asked
@@ -49,7 +52,7 @@ impl<'a> From<Option<&'a str>> for Labels<'a> {
 
 /// `credential_missing` for `label` on `provider`, listing `labels`
 /// (`config::Credentials::listed`, "none" when empty).
-pub(crate) fn no_label(provider: &str, label: &str, labels: &[String]) -> Failure {
+pub fn no_label(provider: &str, label: &str, labels: &[String]) -> Failure {
     failed(
         contract::ErrorCode::CredentialMissing,
         format!(
@@ -63,7 +66,7 @@ pub(crate) fn no_label(provider: &str, label: &str, labels: &[String]) -> Failur
 /// `run`. `recorded` is the label the resumed session's log last recorded;
 /// it beats the configured one. A label that names no credential fails
 /// with `credential_missing`.
-pub(crate) fn session_credential(
+pub fn session_credential(
     config: &Config,
     provider: &ProviderData,
     recorded: Option<&str>,
@@ -86,7 +89,7 @@ pub(crate) fn session_credential(
 /// it read. A source that cannot be read fails with its own code, such as
 /// `credential_missing` (`docs/model-routing.md`, "When a credential is
 /// missing or fails").
-pub(crate) fn switch_credential(
+pub fn switch_credential(
     config: &Config,
     provider: &ProviderData,
     label: &str,

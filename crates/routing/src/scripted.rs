@@ -18,7 +18,7 @@ mod tests;
 /// Adds to `providers` each scripted model the session may name: the
 /// configured `model` (which `--model` sets), the resumed session's
 /// `recorded` model, `reviewer.model` and the `fiber:` references in `roles.*`.
-pub(crate) fn prepare(providers: &mut Providers, config: &Config, recorded: Option<&str>) {
+pub fn prepare(providers: &mut Providers, config: &Config, recorded: Option<&str>) {
     for key in ["model", "reviewer.model"] {
         if let Some((Value::String(typed), _)) = config.get(key, None) {
             providers.add_scripted(&typed);
@@ -40,7 +40,7 @@ pub(crate) fn prepare(providers: &mut Providers, config: &Config, recorded: Opti
 }
 
 /// Whether `provider` serves scripted models.
-pub(crate) fn is_scripted(provider: &ProviderData) -> bool {
+pub fn is_scripted(provider: &ProviderData) -> bool {
     provider
         .models
         .iter()
@@ -49,7 +49,7 @@ pub(crate) fn is_scripted(provider: &ProviderData) -> bool {
 
 /// `provider`'s access: none for a scripted provider, which reads no
 /// credential and runs no Lua, else what `read` returns.
-pub(crate) fn access(
+pub fn access(
     provider: &ProviderData,
     read: impl FnOnce() -> Result<Access, Failure>,
 ) -> Result<Access, Failure> {
@@ -64,7 +64,7 @@ pub(crate) fn access(
 }
 
 /// A scripted provider has no credential label: `asked` is `credential_missing`.
-pub(crate) fn label(provider: &ProviderData, asked: Option<&str>) -> Result<(), Failure> {
+pub fn label(provider: &ProviderData, asked: Option<&str>) -> Result<(), Failure> {
     if let Some(label) = asked
         && is_scripted(provider)
     {
@@ -75,12 +75,12 @@ pub(crate) fn label(provider: &ProviderData, asked: Option<&str>) -> Result<(), 
 
 /// The label `provider` records on `preamble_built` and `model_changed`:
 /// none for a scripted provider, else `label`.
-pub(crate) fn credential(provider: &ProviderData, label: String) -> Option<String> {
+pub fn credential(provider: &ProviderData, label: String) -> Option<String> {
     (!is_scripted(provider)).then_some(label)
 }
 
 /// The configured warming for `model`: none for a scripted model, which has
 /// no prompt cache to warm, and whose warm call would take a step.
-pub(crate) fn warm(model: &ModelData, warm: Option<u32>) -> Option<u32> {
+pub fn warm(model: &ModelData, warm: Option<u32>) -> Option<u32> {
     warm.filter(|_| model.protocol != Protocol::Scripted)
 }

@@ -296,13 +296,13 @@ pub(super) fn assembled(
         Arc::new(tools::PathLocks::new()),
         None,
     );
+    let lookup = crate::placeholders::lookup(home, &providers, &*fakes::clock::FakeClock::new());
     let (naming, _) = crate::lua_providers::add_lua(
         &extensions,
         &mut providers,
         &config,
         &fakes::children::grouped_output,
-        home,
-        &*fakes::clock::FakeClock::new(),
+        &lookup,
     )
     .unwrap();
     let owners = (extensions.lua_providers().iter())
@@ -1006,13 +1006,14 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         Arc::new(tools::PathLocks::new()),
         None,
     );
+    let lookup =
+        crate::placeholders::lookup(&fixture.home, &providers, &*fakes::clock::FakeClock::new());
     let (naming, _) = crate::lua_providers::add_lua(
         &extensions,
         &mut providers,
         &config,
         &fakes::children::grouped_output,
-        &fixture.home,
-        &*fakes::clock::FakeClock::new(),
+        &lookup,
     )
     .unwrap();
     assert!(

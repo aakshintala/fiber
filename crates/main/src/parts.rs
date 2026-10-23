@@ -19,8 +19,8 @@ use extensions::Providers;
 use r#loop::Model;
 
 use crate::{
-    failed, handoff, lua_providers, mcp_servers, prompt_files, scripted, session_extensions,
-    settings, switch,
+    failed, handoff, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
+    session_extensions, settings, switch,
 };
 
 /// What a session is built from, read before it exists.
@@ -273,14 +273,9 @@ pub(crate) fn parts_in(
     let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
         reads.credential(command, timeout, &*clock)
     };
-    let (naming, notices) = lua_providers::add_lua(
-        &extensions,
-        &mut providers,
-        &config,
-        &run,
-        &home,
-        clock.as_ref(),
-    )?;
+    let lookup = placeholders::lookup(&home, &providers, clock.as_ref());
+    let (naming, notices) =
+        lua_providers::add_lua(&extensions, &mut providers, &config, &run, &lookup)?;
     startup_notices.extend(notices);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())

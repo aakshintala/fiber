@@ -125,8 +125,8 @@ impl Starter for SpawnStarter {
 /// Marks a hub-spawned session's process: set beside the startup snapshot
 /// in [`apply`], so the session knows its process already holds its fixed
 /// environment (`docs/invocation.md`, "A session's environment"). The
-/// value is the names-only `"1"`, never a secret. `add_lua`
-/// (`crates/main/src/lua_providers.rs`) keys off its presence: present →
+/// value is the names-only `"1"`, never a secret. `placeholders::lookup`
+/// (`crates/main/src/placeholders.rs`) keys off its presence: present →
 /// the process environment is the snapshot, and no hub query runs;
 /// absent → an in-process `fiber ask`, which queries the hub so the
 /// session agrees with `fiber models` (issue #2909).

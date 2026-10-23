@@ -19,21 +19,25 @@ use crate::failed;
 /// The key a model's requests carry, or nothing when a Lua `credential()`
 /// supplies the token, which rides the signing seam instead; and what signs
 /// each request, `Some` when the provider registered `credential` or `sign`.
-pub(crate) type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
+pub type KeyAndSigner = (Option<Secret>, Option<Arc<dyn Signer>>);
 
 /// What a session reaches one provider with: the key or signer
 /// [`session_credential`] gave, and the Lua provider that signs its
 /// requests and looks up its costs, if one registered it.
 #[derive(Clone)]
-pub(crate) struct Access {
-    pub(crate) key: Option<Secret>,
-    pub(crate) signer: Option<Arc<dyn Signer>>,
-    pub(crate) lua: Option<Arc<LuaProvider>>,
+pub struct Access {
+    /// The read key, or nothing when a Lua `credential()` supplies the token.
+    pub key: Option<Secret>,
+    /// What signs each request.
+    pub signer: Option<Arc<dyn Signer>>,
+    /// The Lua provider that signs requests and looks up costs, if one
+    /// registered this provider.
+    pub lua: Option<Arc<LuaProvider>>,
 }
 
 impl Access {
     /// The access a read `credential` and the provider's `lua` give.
-    pub(crate) fn new(lua: Option<&Arc<LuaProvider>>, (key, signer): KeyAndSigner) -> Self {
+    pub fn new(lua: Option<&Arc<LuaProvider>>, (key, signer): KeyAndSigner) -> Self {
         Self {
             key,
             signer,
@@ -44,12 +48,7 @@ impl Access {
 
 /// What `add_lua` returns: every model as `(provider, id)` pairs, and
 /// the discovery and placeholder notices for the session's startup lines.
-pub(crate) type AddedLua = (Vec<(String, String)>, Vec<Notice>);
-
-/// One placeholder lookup `add_lua` shares across discovery, filling and
-/// the background refresh: owning its hub answer, so the two session
-/// kinds below can pick different sources behind one binding.
-type Lookup = Box<dyn Fn(&str) -> Option<String>>;
+pub type AddedLua = (Vec<(String, String)>, Vec<Notice>);
 
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
@@ -65,45 +64,21 @@ type Lookup = Box<dyn Fn(&str) -> Option<String>>;
 /// after `add_lua` and before placeholders are filled, so a model left out
 /// with `model_unconfigured` still counts toward ambiguity, alongside the
 /// discovery and placeholder notices for the session's startup lines.
-pub(crate) fn add_lua(
+/// The caller builds `lookup` once — `main`'s `placeholders::lookup`, which
+/// keeps the hub-spawned decision beside the startup snapshot — and shares
+/// it across discovery, filling and the background refresh.
+pub fn add_lua(
     extensions: &SessionExtensions,
     providers: &mut Providers,
     config: &Config,
     run: config::Runner<'_>,
-    home: &std::path::Path,
-    clock: &dyn contract::clock::Clock,
+    lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AddedLua, Failure> {
-    // A hub-spawned session carries the hub's marker
-    // (`hub::HUB_SESSION_MARKER`, set beside the startup snapshot): the
-    // process environment is that fixed snapshot, so placeholders resolve
-    // from it with no hub query at all — a `fiber hub refresh` between
-    // spawn and here must not move them under the session
-    // (`docs/invocation.md`, "A session's environment"). Anything else is
-    // an in-process `fiber ask`, which queries the hub so the session
-    // agrees with `fiber models` (issue #2909).
-    let lookup: Lookup = if std::env::var_os(hub::HUB_SESSION_MARKER).is_some() {
-        Box::new(|name: &str| std::env::var(name).ok())
-    } else {
-        Box::new(::cli::placeholder_lookup(home, providers, clock))
-    };
-    let mut notices = providers.add_session(extensions, config, run, &lookup);
-    let naming: Vec<(String, String)> = providers
-        .names()
-        .flat_map(|name| {
-            providers
-                .get(name)
-                .map(|data| {
-                    data.models
-                        .iter()
-                        .map(|model| (name.to_owned(), model.id.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
-        .collect();
+    let mut notices = providers.add_session(extensions, config, run, lookup);
+    let naming = providers.naming();
     notices.extend(
         providers
-            .fill_placeholders(config, &lookup)
+            .fill_placeholders(config, lookup)
             .map_err(|e| failed(e.code(), e))?,
     );
     // Detached: nothing joins them, and `fiber ask` does not wait on them
@@ -118,7 +93,7 @@ pub(crate) fn add_lua(
         config,
         Some(config::refresh_after(config)),
         run,
-        &lookup,
+        lookup,
     );
     let _detached = started;
     Ok((naming, notices))
@@ -130,7 +105,7 @@ pub(crate) fn add_lua(
 /// token is read once, so a failing `credential()` fails here with its
 /// code: before any session line for a session, and into the loop for a
 /// reviewer (`docs/permissions.md`, "How it runs").
-pub(crate) fn session_credential(
+pub fn session_credential(
     lua: Option<&Arc<LuaProvider>>,
     provider: &ProviderData,
     label: &str,
@@ -161,7 +136,7 @@ pub(crate) fn session_credential(
 /// whether its Lua registers `credential`: not when it does and its data
 /// declares no `login`, since `fiber login` then stores a key nothing reads
 /// (`docs/errors.md`, "The shape").
-pub(crate) fn login_advice(credential: bool, provider: &ProviderData) -> LoginAdvice {
+pub fn login_advice(credential: bool, provider: &ProviderData) -> LoginAdvice {
     if credential && provider.credential_from.login().is_none() {
         LoginAdvice::Omitted
     } else {
