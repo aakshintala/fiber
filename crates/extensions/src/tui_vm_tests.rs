@@ -599,3 +599,16 @@ fn a_renderer_failure_is_hook_failed_and_the_rest_are_extension_failed() {
         assert_eq!(error.code(), ErrorCode::HookFailed, "{error:?}");
     }
 }
+
+#[test]
+fn debug_names_the_extension_and_its_slots() {
+    let vm = TuiVm::load(
+        "acme-badge",
+        "fiber.slot('notice', { timeout = 100, render = function() end })",
+        FakeClock::new(),
+    )
+    .expect("the script loads");
+    let shown = format!("{vm:?}");
+    assert!(shown.contains("acme-badge"), "{shown}");
+    assert!(shown.contains("notice"), "{shown}");
+}
