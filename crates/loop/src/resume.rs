@@ -128,6 +128,16 @@ pub struct Resumed {
     pub(crate) exit: crate::Summary,
 }
 
+impl Resumed {
+    /// The requests and extension asks an earlier process left open: the
+    /// summary `fiber_exited` reports from when the resume fails before a
+    /// loop exists, so a signalled exit still names the approval and
+    /// declines the asks (`docs/invocation.md`, "Shutdown").
+    pub fn exit_seed(&self) -> crate::Summary {
+        self.exit.clone()
+    }
+}
+
 /// Folds the log in the session directory `dir` over its chain, root
 /// first (`docs/events.md`, "Rewind"): the session, the root, the
 /// workspace, the model, the credential label, the session-wide state,

@@ -67,6 +67,21 @@ impl Session {
         self.summary = Summary::default();
     }
 
+    /// A resumed process starts: its summary holds what the earlier one
+    /// left open, carried, and nothing of its calls, as the resume's
+    /// history pass seeds it.
+    fn resumed(&mut self) {
+        fiber_started(&self.log, "1.2.3", true).unwrap();
+        let earlier = std::mem::take(&mut self.summary);
+        self.summary = Summary {
+            open: earlier.open,
+            open_extension: earlier.open_extension,
+            offers: earlier.offers,
+            ..Summary::default()
+        };
+        self.summary.carry();
+    }
+
     /// Writes `fiber_exited` for a one-turn run (`fiber ask`) and returns
     /// its exit code and payload.
     fn exit(&self, ran: Result<(), Failure>) -> (i32, Value) {
@@ -203,6 +218,45 @@ fn a_resolved_extension_ask_is_left_alone() {
 }
 
 #[test]
+fn an_ask_an_earlier_process_left_open_is_declined() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&asked("r_old"), None);
+    // No `fiber_exited`: the earlier process crashed.
+    session.resumed();
+    let (code, _) = session.exit_served(Ok(()));
+    assert_eq!(code, 0);
+    let resolved = session.resolved();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["request_id"], "r_old");
+    assert_eq!(resolved[0].payload["by"], "fiber");
+}
+
+#[test]
+fn a_signal_still_declines_an_open_extension_ask() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&asked("r_1"), None);
+    let (code, _) = session.exit_on(Ok(()), Some(130));
+    assert_eq!(code, 130);
+    let resolved = session.resolved();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["by"], "fiber");
+    assert_eq!(resolved[0].payload["declined"], true);
+}
+
+#[test]
+fn a_signal_declines_an_ask_an_earlier_process_left_open() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&asked("r_old"), None);
+    session.resumed();
+    let (code, _) = session.exit_on(Ok(()), Some(143));
+    assert_eq!(code, 143);
+    assert_eq!(session.resolved().len(), 1);
+}
+
+#[test]
 fn a_resolved_ask_from_an_earlier_process_is_not_declined_again() {
     let mut session = Session::new();
     session.started(false);
@@ -313,6 +367,27 @@ fn an_approval_beside_an_offer_is_suspended_on() {
     session.append(&permission("r_a"), None);
     let (_, exited) = session.exit_served(Ok(()));
     assert_eq!(exited["suspended_on"], "r_a");
+}
+
+#[test]
+fn under_a_signal_an_earlier_approval_beats_this_process_offer() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&permission("r_a"), None);
+    session.resumed();
+    session.append(&offered("r_o"), None);
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+    assert_eq!(exited["suspended_on"], "r_a");
+}
+
+#[test]
+fn an_offer_an_earlier_process_left_is_not_suspended_on() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&offered("r_o"), None);
+    session.resumed();
+    let (_, exited) = session.exit_served(Ok(()));
+    assert!(exited.get("suspended_on").is_none());
 }
 
 fn rewound() -> Event {
@@ -924,4 +999,113 @@ fn a_signal_reports_only_this_process_usage() {
     let (_, exited) = session.exit_on(Ok(()), Some(143));
 
     assert_eq!(exited["usage"]["tokens"]["output"], 5);
+}
+
+#[test]
+fn fiber_exited_ignores_a_request_from_the_previous_process() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&permission("r_old"), Some("a_1"));
+    session.resumed();
+    let (_, exited) = session.exit_served(Ok(()));
+    assert_eq!(exited.get("suspended_on"), None);
+    assert_eq!(
+        session.kinds(),
+        [
+            "fiber_started",
+            "permission_requested",
+            "fiber_started",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn a_signal_names_a_request_from_the_previous_process() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&permission("r_old"), Some("a_1"));
+    session.resumed();
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+    assert_eq!(exited["suspended_on"], "r_old");
+}
+
+#[test]
+fn a_signal_does_not_name_an_earlier_request_resolved_since() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&permission("r_old"), Some("a_1"));
+    session.resumed();
+    session.append(&permission("r_old"), Some("a_1"));
+    session.append(&resolved("r_old"), Some("a_1"));
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+    assert_eq!(exited.get("suspended_on"), None);
+}
+
+#[test]
+fn a_re_raised_request_unresolved_is_named_without_a_signal() {
+    let mut session = Session::new();
+    session.started(false);
+    session.append(&permission("r_old"), Some("a_1"));
+    session.resumed();
+    session.append(&permission("r_old"), Some("a_1"));
+    let (_, exited) = session.exit_served(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_old");
+}
+
+/// A resume that fails before any loop exists exits over the seed alone.
+#[test]
+fn a_signalled_exit_over_the_seed_alone_names_the_approval_and_declines_the_ask() {
+    let mut earlier = Session::new();
+    earlier.started(false);
+    earlier.append(&permission("r_old"), None);
+    earlier.append(&asked("r_ask"), None);
+    let mut seed = Summary::default();
+    seed.seed_raw("permission_requested", &payload(&earlier, 1));
+    seed.seed_raw("interaction_requested", &payload(&earlier, 2));
+    seed.carry();
+    let session = Session::new();
+    let exited = fiber_exited(&session.log, &seed, Ok(()), false, Some(143)).unwrap();
+    assert_eq!(exited.code, 143);
+    let lines = log::read(&session.dir).unwrap();
+    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    assert_eq!(lines[0].payload["request_id"], "r_ask");
+    assert_eq!(lines[1].payload["suspended_on"], "r_old");
+}
+
+/// The payload of line `index` of `session`'s log.
+fn payload(session: &Session, index: usize) -> serde_json::Map<String, Value> {
+    log::read(&session.dir).unwrap()[index].payload.clone()
+}
+
+#[test]
+fn a_raw_line_without_a_string_request_id_seeds_nothing() {
+    let mut seed = Summary::default();
+    let none = serde_json::Map::new();
+    let mut number = serde_json::Map::new();
+    number.insert("request_id".into(), Value::from(7));
+    for payload in [&none, &number] {
+        seed.seed_raw("permission_requested", payload);
+        seed.seed_raw("interaction_requested", payload);
+    }
+    assert!(seed.open.is_empty() && seed.open_extension.is_empty());
+}
+
+#[test]
+fn a_raw_interaction_names_an_extension_ask_only_when_extension_is_a_string() {
+    let mut seed = Summary::default();
+    let mut ask = serde_json::Map::new();
+    ask.insert("request_id".into(), Value::from("r_1"));
+    ask.insert("extension".into(), Value::Null);
+    seed.seed_raw("interaction_requested", &ask);
+    assert_eq!(seed.open.len(), 1);
+    assert!(seed.open_extension.is_empty());
+    ask.insert("request_id".into(), Value::from("r_2"));
+    ask.insert("extension".into(), Value::from("ext"));
+    seed.seed_raw("interaction_requested", &ask);
+    assert_eq!(seed.open_extension, [RequestId("r_2".into())]);
+    seed.seed_raw("interaction_resolved", &ask);
+    assert!(seed.open_extension.is_empty());
+    assert_eq!(seed.open.len(), 1);
 }

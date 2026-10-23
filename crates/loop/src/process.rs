@@ -11,6 +11,7 @@ use contract::events::{
 };
 use contract::shapes::{Failure, Question, True};
 use log::Log;
+use serde_json::Value;
 
 use crate::Error;
 use crate::usage::Ledger;
@@ -122,26 +123,15 @@ impl Summary {
     /// line is on the log.
     pub(crate) fn observe(&mut self, event: &Event, action: Option<&ActionId>) {
         if let Event::PermissionRequested(requested) = event {
-            self.open.push((requested.request_id.clone(), false));
+            self.raised(requested.request_id.clone(), false);
         } else if let Event::InteractionRequested(requested) = event {
-            // an_open_extension_ask_is_declined_at_exit, not suspended: an
-            // extension question belongs to a callback in this process's
-            // VM, so resuming never raises it again.
-            if requested.extension.is_some() {
-                self.open_extension.push(requested.request_id.clone());
-            } else {
-                self.open.push((requested.request_id.clone(), false));
-            }
+            self.raised(requested.request_id.clone(), requested.extension.is_some());
         } else if let Event::PermissionResolved(resolved) = event {
             if let Some(id) = &resolved.request_id {
                 self.open.retain(|pending| &pending.0 != id);
             }
         } else if let Event::InteractionResolved(resolved) = event {
-            // a_resolved_extension_ask_is_left_alone: whoever answered it
-            // already wrote the one resolution.
-            self.open.retain(|pending| pending.0 != resolved.request_id);
-            self.open_extension
-                .retain(|pending| pending != &resolved.request_id);
+            self.answered(&resolved.request_id);
         } else if let Event::RepositoryCodeOffered(offered) = event {
             // An offer precedes every request its process raises, so it goes
             // first: `suspended_on` names an approval or question whenever
@@ -182,6 +172,53 @@ impl Summary {
         } else if let Event::UsageRecorded(recorded) = event {
             self.ledger.record(recorded);
         }
+    }
+
+    /// Marks every request open now as left by an earlier process: it is
+    /// named `suspended_on` only under a signal. Extension asks need no
+    /// mark: they are declined whichever process raised them.
+    pub(crate) fn carry(&mut self) {
+        for pending in &mut self.open {
+            pending.1 = true;
+        }
+    }
+
+    /// Folds a line of an earlier process by its raw `payload`, for the
+    /// kinds the resume history pass would otherwise never parse: a
+    /// `request_id` that is not a string skips the line, as a payload that
+    /// does not read contributes nothing to the exit.
+    pub(crate) fn seed_raw(&mut self, kind: &str, payload: &serde_json::Map<String, Value>) {
+        let Some(id) = payload.get("request_id").and_then(Value::as_str) else {
+            return;
+        };
+        let id = RequestId(id.to_owned());
+        match kind {
+            "permission_requested" => self.raised(id, false),
+            "interaction_requested" => {
+                self.raised(id, payload.get("extension").is_some_and(Value::is_string));
+            }
+            "interaction_resolved" => self.answered(&id),
+            _ => {}
+        }
+    }
+
+    /// A request raised. An extension question belongs to a callback in
+    /// this process's VM, so resuming never raises it again: it is
+    /// declined at exit, not suspended on
+    /// (`an_open_extension_ask_is_declined_at_exit`).
+    fn raised(&mut self, id: RequestId, extension: bool) {
+        if extension {
+            self.open_extension.push(id);
+        } else {
+            self.open.push((id, false));
+        }
+    }
+
+    /// An interaction resolved. Whoever answered an extension ask already
+    /// wrote the one resolution (`a_resolved_extension_ask_is_left_alone`).
+    fn answered(&mut self, id: &RequestId) {
+        self.open.retain(|pending| &pending.0 != id);
+        self.open_extension.retain(|pending| pending != id);
     }
 
     /// The latest approval or question this process left unresolved, or

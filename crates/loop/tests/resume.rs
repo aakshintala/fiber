@@ -3478,9 +3478,81 @@ fn exited_on_signal(history: &History, summary: &r#loop::Summary) -> Envelope {
     history.lines().pop().unwrap()
 }
 
-// `a_shutdown_before_the_finishing_turn_writes_nothing_and_keeps_the_request`
-// waits for the history seed: with no turn run, only a carried request
-// names `suspended_on`, which arrives with the seed. It returns with it.
+#[test]
+fn a_shutdown_before_the_finishing_turn_writes_nothing_and_keeps_the_request() {
+    let mut history = suspended_history(vec![Scripted::text("Done.")]);
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless(Vec::new())
+        .cancelled_by(Arc::clone(&cancel));
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    cancel.shutdown(143);
+    let (looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, None);
+    // No preamble, no re-raise: only this process's `fiber_started`.
+    assert_eq!(history.new_kinds(), ["fiber_started"]);
+    assert!(history.provider.requests().is_empty());
+    let exited = exited_on_signal(&history, looped.summary());
+    assert_eq!(exited.payload["suspended_on"], "r_9");
+}
+
+/// A session whose earlier process died with an extension's ask open and an
+/// approval pending.
+fn crashed_history() -> History {
+    let mut history = History::new(vec![Scripted::text("Done.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read", "Paris"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(
+        Event::InteractionRequested(InteractionRequested {
+            request_id: contract::RequestId("r_ext".into()),
+            interaction: Interaction::Confirm {
+                prompt: "Proceed?".into(),
+            },
+            action_ids: None,
+            extension: Some("fiber.test/notes".into()),
+            resumes: false,
+        }),
+        None,
+    );
+    history.freeze();
+    history
+}
+
+#[test]
+fn a_resumed_exit_declines_the_ask_an_earlier_process_left_open() {
+    let mut history = crashed_history();
+    let looped = history.resume_headless(Vec::new());
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    r#loop::fiber_exited(&history.log, looped.summary(), Ok(()), false, None).unwrap();
+
+    assert_eq!(
+        history.new_kinds(),
+        ["fiber_started", "interaction_resolved", "fiber_exited"]
+    );
+    let lines = history.new_lines();
+    assert_eq!(lines[1].payload["request_id"], "r_ext");
+    assert_eq!(lines[1].payload["by"], "fiber");
+    assert_eq!(lines[1].payload["declined"], true);
+    // The earlier approval is not this process's: only a signal names it.
+    assert!(lines[2].payload.get("suspended_on").is_none());
+}
+
+#[test]
+fn a_signalled_resumed_exit_names_the_approval_an_earlier_process_left() {
+    let mut history = crashed_history();
+    let looped = history.resume_headless(Vec::new());
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    let exited = exited_on_signal(&history, looped.summary());
+    assert_eq!(exited.payload["suspended_on"], "r_9");
+    assert_eq!(
+        history.new_kinds(),
+        ["fiber_started", "interaction_resolved", "fiber_exited"]
+    );
+}
 
 #[test]
 fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {

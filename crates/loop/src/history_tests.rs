@@ -316,6 +316,195 @@ fn the_ledger_and_the_block_count_hold_only_the_own_log() {
     assert_eq!(folded.session_blocks, 1);
 }
 
+fn requested_permission(id: &str) -> Event {
+    Event::PermissionRequested(contract::events::PermissionRequested {
+        always_reviewed: false,
+        request_id: contract::RequestId(id.to_owned()),
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Executes],
+            reversible: false,
+            paths: None,
+        },
+        step: contract::events::AskStep::StandingAsk {
+            standing_rule: contract::events::StandingRule {
+                scope: contract::events::RuleScope::Project,
+                prefix: "npm".to_owned(),
+            },
+        },
+    })
+}
+
+fn asked(id: &str, extension: Option<&str>) -> Event {
+    Event::InteractionRequested(contract::events::InteractionRequested {
+        request_id: contract::RequestId(id.to_owned()),
+        interaction: contract::events::Interaction::Confirm {
+            prompt: "go?".to_owned(),
+        },
+        action_ids: None,
+        extension: extension.map(str::to_owned),
+        resumes: false,
+    })
+}
+
+fn answered(id: &str) -> Event {
+    Event::InteractionResolved(contract::events::InteractionResolved {
+        request_id: contract::RequestId(id.to_owned()),
+        by: contract::events::ResolvedBy::Person,
+        answer: contract::events::Answer::Confirmed { confirmed: true },
+    })
+}
+
+fn offered(id: &str) -> Event {
+    Event::RepositoryCodeOffered(contract::events::RepositoryCodeOffered {
+        request_id: contract::RequestId(id.to_owned()),
+        items: Vec::new(),
+    })
+}
+
+fn process_started() -> Event {
+    Event::FiberStarted(contract::events::FiberStarted {
+        version: "1.2.3".to_owned(),
+        resumed: false,
+    })
+}
+
+/// The lines `fiber_exited` writes over the seed `folded` holds, under
+/// `signal`: the ask declines it appends, then the exit itself.
+fn exit_over(folded: &Resumed, signal: Option<i32>) -> Vec<Envelope> {
+    let home = fakes::TempDir::new("loop-history-exit");
+    let log = Log::create(
+        home.path(),
+        SessionId("s_exit".to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    crate::fiber_exited(&log, &folded.exit_seed(), Ok(()), false, signal).unwrap();
+    log::read(&home.path().join("s_exit")).unwrap()
+}
+
+/// Folds a one-segment log holding `events`, one per line from seq 1 after
+/// `session_started`, and returns what its exit reports.
+fn seeded(name: &str, events: &[Event], signal: Option<i32>) -> Vec<Envelope> {
+    let (_home, sessions) = sessions(name);
+    let mut lines = vec![envelope(A, 0, None, None, &started("/w", None))];
+    for (index, event) in events.iter().enumerate() {
+        lines.push(envelope(A, index as u64 + 1, None, None, event));
+    }
+    write_log(&sessions, A, &lines);
+    exit_over(&resumed(&sessions.join(A)).unwrap(), signal)
+}
+
+fn suspended_on(exit: &[Envelope]) -> Option<String> {
+    exit.last()
+        .unwrap()
+        .payload
+        .get("suspended_on")
+        .and_then(|id| id.as_str())
+        .map(str::to_owned)
+}
+
+#[test]
+fn the_seed_names_an_unresolved_approval_under_a_signal_only() {
+    let log = [
+        process_started(),
+        requested_permission("r_old"),
+        process_started(),
+    ];
+    assert_eq!(
+        suspended_on(&seeded("seed-signal", &log, Some(143))),
+        Some("r_old".to_owned())
+    );
+    assert_eq!(suspended_on(&seeded("seed-quiet", &log, None)), None);
+}
+
+#[test]
+fn a_resolved_approval_is_not_seeded() {
+    let resolved = Event::PermissionResolved(
+        serde_json::from_value(json!({
+            "request_id": "r_old", "decision": "allow", "decided_by": "person",
+        }))
+        .unwrap(),
+    );
+    let log = [requested_permission("r_old"), resolved, process_started()];
+    assert_eq!(
+        suspended_on(&seeded("seed-resolved", &log, Some(143))),
+        None
+    );
+}
+
+#[test]
+fn an_unresolved_extension_ask_is_seeded_and_a_resolved_one_is_not() {
+    let open = [asked("r_ext", Some("ext")), process_started()];
+    let exit = seeded("seed-ask", &open, None);
+    let kinds: Vec<&str> = exit.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    assert_eq!(exit[0].payload["request_id"], "r_ext");
+    let done = [
+        asked("r_ext", Some("ext")),
+        answered("r_ext"),
+        process_started(),
+    ];
+    assert_eq!(seeded("seed-ask-done", &done, None).len(), 1);
+}
+
+#[test]
+fn a_question_without_an_extension_is_a_request_and_no_ask() {
+    let log = [asked("r_q", None), process_started()];
+    let exit = seeded("seed-question", &log, Some(143));
+    assert_eq!(exit.len(), 1);
+    assert_eq!(suspended_on(&exit), Some("r_q".to_owned()));
+}
+
+#[test]
+fn an_offer_the_preamble_followed_is_not_seeded() {
+    let log = [offered("r_o"), built(None), process_started()];
+    assert_eq!(
+        suspended_on(&seeded("seed-offer-built", &log, Some(143))),
+        None
+    );
+    let log = [offered("r_o"), process_started()];
+    assert_eq!(
+        suspended_on(&seeded("seed-offer-open", &log, Some(143))),
+        Some("r_o".to_owned())
+    );
+}
+
+#[test]
+fn a_parent_segments_open_request_is_not_seeded() {
+    let (_home, sessions) = sessions("seed-parent");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &requested_permission("r_parent")),
+            envelope(A, 2, None, None, &asked("r_ext", Some("ext"))),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[envelope(B, 0, None, None, &started("/w", Some((A, 2))))],
+    );
+    let exit = exit_over(&resumed(&sessions.join(B)).unwrap(), Some(143));
+    assert_eq!(exit.len(), 1);
+    assert_eq!(suspended_on(&exit), None);
+}
+
+#[test]
+fn the_seed_reads_requests_without_parsing_their_payloads() {
+    let (_home, sessions) = sessions("seed-raw");
+    let mut garbled = envelope(A, 1, None, None, &requested_permission("r_old"));
+    garbled.payload.remove("declared");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None)), garbled],
+    );
+    let exit = exit_over(&resumed(&sessions.join(A)).unwrap(), Some(143));
+    assert_eq!(suspended_on(&exit), Some("r_old".to_owned()));
+}
+
 #[test]
 fn a_handoff_after_the_point_leaves_the_window_at_the_chains_start() {
     let (_home, sessions) = sessions("handoff-after");
