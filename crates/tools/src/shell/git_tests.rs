@@ -49,6 +49,15 @@ fn a_missing_workdir_reads() {
 }
 
 #[test]
+fn a_missing_workdir_beneath_a_bare_repository_reads() {
+    let (_dir, workspace) = workspace("fiber-shell-git-missing-bare");
+    make_bare(&workspace);
+    assert!(repository_ok(&workspace.join("missing")));
+    let effects = classify("git status", &workspace.join("missing"), &[]);
+    assert_eq!(effects.declared.effects, vec![Effect::Reads]);
+}
+
+#[test]
 fn a_bare_repository_executes() {
     let (_dir, workspace) = workspace("fiber-shell-git-bare");
     make_bare(&workspace);

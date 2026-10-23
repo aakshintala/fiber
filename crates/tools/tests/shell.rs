@@ -3008,8 +3008,8 @@ fn a_shell_guards_git_reads_by_repository() {
     std::fs::write(workspace.join("f"), "Top.\n").unwrap();
     let shell = Shell::new(workspace.clone(), FakeClock::new());
     // A normal repository reads, declaring operand paths, and the
-    // repository-independent `gh` forms read beside it.
-    for command in ["git status", "git log --oneline f", "gh pr view 123"] {
+    // repository-independent `gh` form declares the default host.
+    for command in ["git status", "git log --oneline f"] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -3017,6 +3017,15 @@ fn a_shell_guards_git_reads_by_repository() {
             "{command}"
         );
     }
+    let effects = effects_of(&shell, "gh pr view 123");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Network]
+    );
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()])
+    );
     assert_eq!(
         effects_of(&shell, "git log --oneline f").declared.paths,
         Some(vec![workspace.join("f").to_str().unwrap().to_owned()])

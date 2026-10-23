@@ -4,9 +4,8 @@
 //! file whose target Fiber cannot verify: the new directory can hold hooks
 //! or configuration the person never saw, and neither case is proven safe.
 
-use std::ffi::OsStr;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// The most bytes read from a `.git` file: a longer file is `executes`.
 pub(super) const MAX_GITFILE_BYTES: usize = 512;
@@ -17,6 +16,13 @@ pub(super) const MAX_GITFILE_BYTES: usize = 512;
 /// No repository found, or a missing path, counts as safe: the call still
 /// declares `reads`, and the run fails on its own when there is nothing.
 pub(super) fn repository_ok(dir: &Path) -> bool {
+    // A missing starting path is not bare: the bare-ancestor walk below
+    // must not fire when the workdir itself is missing.
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    }
     let mut current = dir.to_path_buf();
     loop {
         match std::fs::symlink_metadata(current.join(".git")) {
@@ -31,7 +37,7 @@ pub(super) fn repository_ok(dir: &Path) -> bool {
                     return true;
                 }
                 if meta.is_file() {
-                    return gitfile_ok(&current.join(".git"), &current);
+                    return gitfile_ok(&current);
                 }
                 return false;
             }
@@ -58,29 +64,26 @@ fn is_bare(dir: &Path) -> bool {
     head && objects && refs
 }
 
-/// Whether a `.git` file names a verifiable target: one line
+/// Whether `dir`'s `.git` file names a verifiable target: one line
 /// `gitdir: <path>` with at most one trailing newline, resolving relative
-/// to the file's directory to a directory under a `.git`, where worktrees
+/// to `dir` to a directory under a `.git`, where worktrees
 /// and submodules live. Anything else is `executes`.
-fn gitfile_ok(gitfile: &Path, dir: &Path) -> bool {
-    let file = match std::fs::File::open(gitfile) {
-        Ok(file) => file,
-        Err(_) => return false,
+fn gitfile_ok(dir: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(dir.join(".git")) else {
+        return false;
     };
     let mut bytes = Vec::new();
-    if file
+    let Ok(_) = file
         .take(MAX_GITFILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .is_err()
-    {
+    else {
         return false;
-    }
+    };
     if bytes.len() > MAX_GITFILE_BYTES {
         return false;
     }
-    let text = match std::str::from_utf8(&bytes) {
-        Ok(text) => text,
-        Err(_) => return false,
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return false;
     };
     let line = text.strip_suffix('\n').unwrap_or(text);
     if line.contains('\n') {
@@ -97,16 +100,15 @@ fn gitfile_ok(gitfile: &Path, dir: &Path) -> bool {
     } else {
         dir.join(target)
     };
-    let canonical = match joined.canonicalize() {
-        Ok(canonical) => canonical,
-        Err(_) => return false,
+    let Ok(canonical) = joined.canonicalize() else {
+        return false;
     };
     if !canonical.is_dir() {
         return false;
     }
     canonical
         .components()
-        .any(|component| matches!(component, Component::Normal(name) if name == OsStr::new(".git")))
+        .any(|component| component.as_os_str() == ".git")
 }
 
 #[cfg(test)]
