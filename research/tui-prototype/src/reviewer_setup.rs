@@ -117,7 +117,7 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "diff",
         help: "the final diff per layer with files named, approve or cancel",
-        check: "each layer's notes as a diff against the file as it is now with the file named, the topics' heading lines as saved (`### Source control`), kept bullets as context, struck bullets with `-` in the removed colour, added bullets and new headings with `+` in the added colour, `(no changes)` where the layer is untouched, and a dim reload line; the same panel with an approve-or-cancel legend.",
+        check: "each layer's notes as a diff against the file as it is now with the file named, the topics' heading lines as saved (`### Source control`), kept bullets as context, struck bullets with `-` in the removed colour, added bullets and new headings with `+` in the added colour, `(no changes)` where the layer is untouched, and a dim reload line with `r` and `n` bold as keys; the same panel with an approve-or-cancel legend.",
         build: || State { kind: Kind::Diff },
     },
     Case {
@@ -350,10 +350,13 @@ fn body(s: &State, inner: usize) -> Vec<super::Row> {
                 diff_row("+", "### Routine actions"),
                 diff_row("+", &format!("- {SQUASH}")),
                 row(vec![]),
-                row(vec![sp(
-                    "Approving then offers `r` reload now or `n` from the next session.",
-                    dim(),
-                )]),
+                row(vec![
+                    sp("Approving then offers ", dim()),
+                    sp("r", bold()),
+                    sp(" reload now or ", dim()),
+                    sp("n", bold()),
+                    sp(" from the next session.", dim()),
+                ]),
             ],
         ]
         .concat(),
@@ -769,9 +772,26 @@ mod tests {
             "the untouched layer says nothing"
         );
         assert!(
-            t.contains("Approving then offers `r` reload now or `n` from the next session."),
-            "missing the reload step"
+            t.contains("Approving then offers r reload now or n from the next session."),
+            "missing the reload step, or it draws backticks"
         );
+        // The keys read bold, as the saved frame's legend draws them.
+        let rows = view(&for_case("diff"), 120);
+        let offer = rows
+            .iter()
+            .find(|r| plain(r).contains("Approving then offers"))
+            .unwrap();
+        let bold_keys: Vec<&str> = offer
+            .spans
+            .iter()
+            .filter(|s| {
+                s.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+            })
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(bold_keys, ["r", "n"], "the offer's keys are not bold");
         assert!(
             t.contains("Enter approve · Esc cancel"),
             "missing the legend"

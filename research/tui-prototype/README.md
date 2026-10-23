@@ -308,8 +308,8 @@ on a `Topic n of 5 · <heading name>` row.
   `~/.fiber/projects/fiber/config.json`): the topics' heading lines as
   saved (`### Source control`), kept bullets as context, a struck bullet
   with `-` in the removed colour, and added bullets and new headings with
-  `+` in the added colour, then a dim line saying approving then offers `r`
-  reload now or `n` from the next session. Legend: `Enter approve · Esc
+  `+` in the added colour, then a dim line saying approving then offers r
+  reload now or n from the next session, with the two keys bold. Legend: `Enter approve · Esc
   cancel`.
 - `notice`: the notice naming `/reviewer-setup`, shown the first time in a
   session the reviewer blocks a call while both layers of the notes are
