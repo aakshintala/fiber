@@ -297,18 +297,20 @@ fn lines(setup: &Setup, inner: usize, capacity: usize) -> (Vec<Row>, Row) {
         capacity
     };
     let len = |block: &Block| block.rows.len();
-    let mut top = setup.top().get().min(focus);
-    while top < focus
-        && blocks
-            .iter()
-            .take(focus + 1)
-            .skip(top)
-            .map(len)
-            .sum::<usize>()
-            > room
-    {
-        top += 1;
-    }
+    // The first block, from where the window last began, whose run up to the
+    // focus fits; the focus alone when none does.
+    let top = (setup.top().get().min(focus)..focus)
+        .skip_while(|from| {
+            blocks
+                .iter()
+                .take(focus + 1)
+                .skip(*from)
+                .map(len)
+                .sum::<usize>()
+                > room
+        })
+        .next()
+        .unwrap_or(focus);
     setup.top().set(top);
 
     let mut body = if keep_header { header } else { Vec::new() };

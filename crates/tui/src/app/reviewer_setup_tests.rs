@@ -197,11 +197,15 @@ fn to_the_diff_with_a_line(app: &mut App) {
     ask(app, one_line());
     assert_eq!(screen(app), Screen::Lines);
     press(app, Key::Enter);
-    while screen(app) != Screen::Diff {
+    for _ in Topic::ALL {
+        if screen(app) == Screen::Diff {
+            break;
+        }
         assert_eq!(screen(app), Screen::Question);
         ask(app, nothing());
         press(app, Key::Enter);
     }
+    assert_eq!(screen(app), Screen::Diff);
 }
 
 fn saved_both() -> Result<NotesSaved, ConfigureError> {
@@ -708,10 +712,14 @@ fn esc_on_the_diff_sends_no_save_and_closes() {
 fn enter_on_a_diff_with_no_changed_layer_sends_no_save_and_says_nothing_changed() {
     let (mut app, fake) = app();
     start(&mut app);
-    while screen(&app) != Screen::Diff {
+    for _ in Topic::ALL {
+        if screen(&app) == Screen::Diff {
+            break;
+        }
         ask(&mut app, nothing());
         press(&mut app, Key::Enter);
     }
+    assert_eq!(screen(&app), Screen::Diff);
     assert_eq!(press(&mut app, Key::Enter), Effect::None);
     assert!(app.reviewer_setup().is_none());
     assert!(fake.notes_saves().is_empty());

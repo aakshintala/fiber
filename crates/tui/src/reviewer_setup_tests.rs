@@ -128,9 +128,13 @@ fn save_of(act: Act) -> (Option<NotesWrite>, Option<NotesWrite>) {
 
 /// Walks every remaining topic with no lines, to the diff.
 fn finish_to_diff(setup: &mut Setup) {
-    while setup.screen() != Screen::Diff {
+    for _ in Topic::ALL {
+        if setup.screen() == Screen::Diff {
+            break;
+        }
         skip(setup);
     }
+    assert_eq!(setup.screen(), Screen::Diff);
 }
 
 // ----------------------------------------------------------- the question
@@ -149,7 +153,8 @@ fn opening_shows_topic_one_with_both_layers_read() {
 fn the_topics_run_in_the_order_the_contract_gives_to_the_diff() {
     let mut setup = Setup::open(notes("", ""));
     let mut seen = Vec::new();
-    while setup.screen() == Screen::Question {
+    for _ in Topic::ALL {
+        assert_eq!(setup.screen(), Screen::Question);
         seen.push(setup.topic());
         assert_eq!(setup.number(), seen.len());
         skip(&mut setup);
@@ -220,6 +225,27 @@ fn the_request_carries_the_topics_bullets_from_both_layers_global_first() {
         panic!("no request");
     };
     assert_eq!(args.earlier, ["g1", "shared", "p1"]);
+}
+
+/// A layer holds a line when it lists that text under the topic, not when
+/// it lists the topic, or the text under another topic.
+#[test]
+fn a_line_struck_where_it_is_held_is_left_out_though_the_other_layer_has_the_topic() {
+    let global = "### Source control\n- mine\n";
+    let project = "### Source control\n- other\n### Internal hosts\n- mine\n";
+    let mut setup = Setup::open(notes(global, project));
+    ask(&mut setup, &[], &[]);
+    assert_eq!(focused(&setup).as_deref(), Some("mine"));
+    press(&mut setup, Key::Char('x'));
+    // The next topic's question, then back to this topic and its question.
+    press(&mut setup, Key::Esc);
+    press(&mut setup, Key::Esc);
+    assert_eq!(setup.screen(), Screen::Question);
+    assert_eq!(setup.topic(), Topic::SourceControl);
+    let Act::Propose(args) = press(&mut setup, Key::Enter) else {
+        panic!("no request");
+    };
+    assert_eq!(args.earlier, ["other"]);
 }
 
 #[test]

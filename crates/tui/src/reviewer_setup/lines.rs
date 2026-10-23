@@ -294,14 +294,16 @@ impl Run {
     }
 
     /// Moves to the next undecided proposal below the focus, wrapping to
-    /// above; with none left, to the next topic.
+    /// above; with none left, to the next topic. Every caller has just
+    /// decided the focused line, so it is never open and the search can
+    /// start at it.
     fn advance(&mut self) -> Flow {
         let open = |item: &Item| matches!(item, Item::Proposal(p) if p.state == LineState::Open);
         let after = self
             .items
             .iter()
             .enumerate()
-            .skip(self.focus + 1)
+            .skip(self.focus)
             .find(|(_, item)| open(item));
         let before = self
             .items

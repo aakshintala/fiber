@@ -13,13 +13,13 @@ use serde_json::{Value, json};
 use contract::clock::Clock;
 use contract::notes::Topic;
 
-use super::{clip, draw, frame, wrap_spans};
+use super::{HANG, clip, draw, frame, wrap_spans};
 use crate::app::{App, Effect, Surface};
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, NotesFile, NotesSaved, ReviewerNotes,
 };
 use crate::configure_fake::Fake;
-use crate::format::width as cells;
+use crate::format::{width as cells, wrap};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -172,9 +172,13 @@ impl Fixture {
 
     /// Skips topics until the question on show is `topic`'s.
     fn skip_to(&mut self, topic: Topic) {
-        while self.setup().topic() != topic {
+        for _ in Topic::ALL {
+            if self.setup().topic() == topic {
+                break;
+            }
             self.skip();
         }
+        assert_eq!(self.setup().topic(), topic);
     }
 
     /// The session starts working, so quitting asks first.
@@ -291,9 +295,13 @@ fn diff() -> Fixture {
 
 impl Fixture {
     fn skip_to_diff(&mut self) {
-        while self.setup().screen() != Screen::Diff {
+        for _ in Topic::ALL {
+            if self.setup().screen() == Screen::Diff {
+                break;
+            }
             self.skip();
         }
+        assert_eq!(self.setup().screen(), Screen::Diff);
     }
 }
 
@@ -545,6 +553,218 @@ fn a_thirty_line_screen_keeps_the_focused_row_in_view_with_one_barred_row() {
             "line {at} is out of view going up"
         );
     }
+}
+
+/// `docs/tui.md`, "Overlays": the window keeps the focused line in view
+/// however many rows each line takes and wherever it starts.
+fn uneven() -> Fixture {
+    let mut fx = Fixture::new("", "", 120, 40);
+    let proposed: Vec<Value> = [1, 3, 1, 2, 3, 1, 2]
+        .iter()
+        .enumerate()
+        .map(|(at, rows)| {
+            let text = rows_of(
+                *rows,
+                overlay::question_inner(120) - HANG,
+                &format!("p{at}"),
+            );
+            json!({"text": text, "cites": [0]})
+        })
+        .collect();
+    fx.ask(
+        json!([{"kind": "files", "text": "its git remotes: origin github.com/acme/fiber"}]),
+        Value::Array(proposed),
+    );
+    fx
+}
+
+/// A text of words that wraps to exactly `rows` rows at `width` columns.
+fn rows_of(rows: usize, width: usize, tag: &str) -> String {
+    (1..400)
+        .map(|words| format!("{tag} {}", "word ".repeat(words).trim_end()))
+        .find(|text| wrap(text, width).len() == rows)
+        .expect("a text of that many rows")
+}
+
+fn text_of(row: &overlay::Row) -> String {
+    row.spans.iter().map(|span| span.content.as_ref()).collect()
+}
+
+fn body_of(fx: &Fixture, height: u16) -> Vec<String> {
+    frame(fx.setup(), overlay::question_inner(120), height)
+        .body
+        .iter()
+        .map(text_of)
+        .collect()
+}
+
+/// The height whose body holds `rows` rows.
+fn height_for(rows: usize) -> u16 {
+    (1..400u16)
+        .find(|height| overlay::question_capacity(*height) == rows)
+        .expect("a height for that many rows")
+}
+
+#[test]
+fn a_window_that_exactly_fits_the_run_up_to_the_focus_shows_all_of_it() {
+    let mut fx = uneven();
+    for _ in 0..6 {
+        fx.press(Key::Down);
+    }
+    let whole = body_of(&fx, 400);
+    let exact = body_of(&fx, height_for(whole.len()));
+    assert_eq!(exact, whole, "nothing scrolls away or is cut");
+    assert!(!exact.iter().any(|row| row.ends_with('…')), "{exact:?}");
+    assert_eq!(fx.setup().top().get(), 0);
+}
+
+#[test]
+fn the_header_stays_when_it_and_the_focused_line_fit_exactly() {
+    let mut fx = Fixture::empty();
+    let inner = overlay::question_inner(120);
+    fx.ask(
+        json!([{"kind": "files", "text": rows_of(3, inner, "evidence")}]),
+        cite_first(&rows_of(3, inner - HANG, "proposal")),
+    );
+    let whole = body_of(&fx, 400);
+    let header = 1 + wrap(Topic::SourceControl.question(), inner).len();
+    let focused = whole.len() - header;
+    assert!(
+        (header - 1) * (focused - 1) > 1,
+        "the sum and the product of {header} and {focused} differ"
+    );
+    let exact = body_of(&fx, height_for(whole.len()));
+    assert!(exact[0].starts_with("Topic 1 of 5"), "{exact:?}");
+    assert_eq!(exact, whole);
+}
+
+#[test]
+fn the_header_gives_way_when_the_focused_line_and_it_do_not_fit() {
+    let mut fx = Fixture::empty();
+    let inner = overlay::question_inner(120);
+    fx.ask(
+        json!([{"kind": "files", "text": rows_of(3, inner, "evidence")}]),
+        cite_first(&rows_of(3, inner - HANG, "proposal")),
+    );
+    let whole = body_of(&fx, 400);
+    let header = 1 + wrap(Topic::SourceControl.question(), inner).len();
+    let short = body_of(&fx, height_for(whole.len() - 1));
+    assert!(!short[0].starts_with("Topic 1 of 5"), "{short:?}");
+    assert_eq!(short.len(), whole.len() - header, "only the focused line");
+}
+
+#[test]
+fn every_line_of_uneven_height_is_in_view_and_barred_once_at_every_height() {
+    let mut fx = uneven();
+    for at in 0..7 {
+        for height in 9..=28u16 {
+            let framed = frame(fx.setup(), overlay::question_inner(120), height);
+            let capacity = overlay::question_capacity(height);
+            let bars = framed.body.iter().filter(|row| row.barred).count();
+            assert_eq!(bars, 1, "line {at}, height {height}");
+            let place = framed
+                .body
+                .iter()
+                .position(|row| row.barred)
+                .expect("a bar");
+            // Lines after the focused one may run past the room; the draw
+            // trims them, so the bar has to sit inside it.
+            assert!(place < capacity, "line {at}, height {height}: row {place}");
+            assert!(
+                text_of(&framed.body[place]).contains(&format!("p{at} ")),
+                "line {at}, height {height}: {}",
+                text_of(&framed.body[place])
+            );
+        }
+        fx.press(Key::Down);
+    }
+}
+
+#[test]
+fn a_focused_line_taller_than_the_room_drops_only_the_labels_it_must() {
+    let inner = overlay::question_inner(120);
+    let evidence = rows_of(4, inner, "evidence");
+    let text = rows_of(6, inner - HANG, "proposal");
+    let mut fx = Fixture::empty();
+    fx.ask(
+        json!([{"kind": "files", "text": evidence}]),
+        cite_first(&text),
+    );
+    let labels = wrap(&evidence, inner);
+    let (own, tall) = (labels.len(), wrap(&text, inner - HANG).len());
+    // Two labels too many for the room: the first two give way, not all.
+    let room = own + tall - 2;
+    let body = body_of(&fx, height_for(room));
+    assert_eq!(body.len(), room, "{body:?}");
+    assert_eq!(body[0], labels[2]);
+    assert!(body[room - 1].ends_with('…'), "{body:?}");
+}
+
+#[test]
+fn the_window_stays_where_it_is_while_the_focus_moves_inside_it() {
+    let mut fx = thirty();
+    let in_view = |fx: &mut Fixture| -> Vec<usize> {
+        let screen = fx.screen();
+        (0..30)
+            .filter(|at| screen.contains(&format!("line number {at:02} of the thirty")))
+            .collect()
+    };
+    for _ in 0..25 {
+        in_view(&mut fx);
+        fx.press(Key::Down);
+    }
+    let before = in_view(&mut fx);
+    assert!(before.contains(&25) && !before.contains(&0), "{before:?}");
+    fx.press(Key::Up);
+    assert_eq!(in_view(&mut fx), before);
+}
+
+#[test]
+fn a_wrapped_line_hangs_under_its_text() {
+    let fx = long_proposal();
+    let framed = frame(fx.setup(), overlay::question_inner(120), 40);
+    let at = framed
+        .body
+        .iter()
+        .position(|row| row.barred)
+        .expect("a barred row");
+    let before_text: usize = framed.body[at].spans.iter().take(3).map(width_of).sum();
+    let hang = &framed.body[at + 1].spans[0];
+    assert_eq!(cells(&hang.content), before_text);
+    assert_eq!(cells(&hang.content), HANG);
+}
+
+fn width_of(span: &Span<'_>) -> usize {
+    cells(&span.content)
+}
+
+/// The modifiers of the first cell in the drawn screen where `needle` starts.
+fn modifiers_at(fx: &Fixture, needle: &str) -> Modifier {
+    let (width, height) = fx.app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&fx.app, area, &mut buf, None);
+    let symbols: Vec<char> = needle.chars().collect();
+    for y in 0..height {
+        for x in 0..width.saturating_sub(symbols.len() as u16) {
+            let found = symbols.iter().enumerate().all(|(at, symbol)| {
+                buf[(x + at as u16, y)].symbol().chars().next() == Some(*symbol)
+            });
+            if found {
+                return buf[(x, y)].modifier;
+            }
+        }
+    }
+    panic!("{needle:?} is not on the screen");
+}
+
+#[test]
+fn the_topic_line_is_dim_and_the_answer_marker_is_bold() {
+    let fx = question();
+    assert!(modifiers_at(&fx, "Topic 1 of 5").contains(Modifier::DIM));
+    assert!(modifiers_at(&fx, "›").contains(Modifier::BOLD));
+    assert!(!modifiers_at(&fx, "Topic 1 of 5").contains(Modifier::BOLD));
+    assert!(!modifiers_at(&fx, "›").contains(Modifier::DIM));
 }
 
 // ----------------------------------------------------- the height budget

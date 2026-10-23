@@ -132,23 +132,19 @@ struct Block {
 }
 
 fn blocks(lines: &[&str]) -> Vec<Block> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while let Some(line) = lines.get(at) {
-        let Some(topic) = heading_topic(line) else {
-            at += 1;
-            continue;
-        };
-        let mut end = at + 1;
-        while lines.get(end).is_some_and(|l| bullet_text(l).is_some()) {
-            end += 1;
+    let mut found: Vec<Block> = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        if let Some(topic) = heading_topic(line) {
+            found.push(Block {
+                topic,
+                heading: at,
+                end: at + 1,
+            });
+        } else if bullet_text(line).is_some()
+            && let Some(block) = found.last_mut().filter(|block| block.end == at)
+        {
+            block.end = at + 1;
         }
-        found.push(Block {
-            topic,
-            heading: at,
-            end,
-        });
-        at = end;
     }
     found
 }
@@ -167,8 +163,13 @@ pub(crate) fn owned(text: &str) -> Vec<(Topic, Vec<String>)> {
         }
         let mut bullets: Vec<String> = Vec::new();
         for block in own {
-            for line in lines.iter().take(block.end).skip(block.heading + 1) {
-                let text = bullet_text(line).unwrap_or_default();
+            // The heading line is no bullet, so it drops out here.
+            for text in lines
+                .iter()
+                .take(block.end)
+                .skip(block.heading)
+                .filter_map(|line| bullet_text(line))
+            {
                 if !text.is_empty() && !bullets.iter().any(|b| b == text) {
                     bullets.push(text.to_string());
                 }
