@@ -482,13 +482,13 @@ fn builtin_gets_the_original_input_and_the_width_the_render_passes() {
         seen.borrow_mut().push((input.clone(), width));
         Vec::new()
     };
-    let (_, mut vm) = notice("builtin({ changed = true }, width - 6)");
+    let (_, mut vm) = notice("return builtin({ changed = true }, width - 6)");
     let input = json!({ "name": "shell" });
     vm.call("notice", "s1", &input, 80, &builtin).unwrap();
     // The table the render passed is ignored, and so is the injected
     // `session_id`; the width it passed is used.
     assert_eq!(*seen.borrow(), vec![(input.clone(), 74)]);
-    let (_, mut plain) = notice("builtin()");
+    let (_, mut plain) = notice("return builtin()");
     plain.call("notice", "s1", &input, 80, &builtin).unwrap();
     assert_eq!(seen.borrow().last(), Some(&(input, 80)));
 }
