@@ -70,6 +70,11 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     kept("crates/extensions/tests/login_discovery.rs", "GRACE", GRACE),
     kept("crates/extensions/tests/lua.rs", "GRACE", GRACE),
     kept("crates/extensions/tests/lua_tools.rs", "GRACE", GRACE),
+    kept(
+        "crates/extensions/tests/lazy_commands.rs",
+        "ABANDON_AT",
+        GRACE,
+    ),
     kept("crates/extensions/tests/oauth.rs", "GRACE", GRACE),
     kept("crates/main/src/read_signals_tests.rs", "HELD_FOR", STEP),
     kept("crates/doors/tests/support/mod.rs", "SLICE", SLICE),
