@@ -181,10 +181,13 @@ impl Loop {
     /// The request the preamble, the key and the previous request's end make
     /// around `conversation`. `None` before the preamble is built. Each
     /// logged search renders against the preamble's deferred set
-    /// (`docs/tools.md`, "Tool search").
+    /// (`docs/tools.md`, "Tool search"). The request's media is every image
+    /// and PDF `conversation` names, read through `log` and encoded once per
+    /// session: the provider does no file I/O.
     pub(crate) fn request_for(&self, conversation: Vec<Input>) -> Option<ModelRequest> {
         let built = self.preamble.as_ref()?;
         let conversation = crate::render_loaded::render(conversation, built.deferred.as_ref());
+        let media = self.media.resolve(self.log.dir(), &conversation);
         Some(ModelRequest {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
@@ -198,7 +201,7 @@ impl Loop {
             conversation: conversation.into(),
             previous_end: self.sent,
             max_output_tokens: None,
-            session_dir: self.log.dir().to_path_buf(),
+            media,
         })
     }
 

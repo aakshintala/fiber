@@ -3,7 +3,6 @@
 //! [`Provider`] and [`ModelCall`], and never names one.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -143,11 +142,11 @@ pub struct ModelRequest {
     /// (`docs/errors.md`, "Output tokens").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
-    /// The session directory, which an [`ImageRef`]'s path is relative to. A
-    /// protocol reads the stored image from here when it builds a request.
-    /// Empty when no input in the conversation holds an image.
-    #[serde(default)]
-    pub session_dir: PathBuf,
+    /// The stored images and PDFs the conversation names, encoded by the
+    /// loop: a protocol does no file I/O, so it sends these. Derived from the
+    /// conversation and the session directory, so it is never serialized.
+    #[serde(skip)]
+    pub media: Arc<Media>,
 }
 
 /// An image a tool result or a person's message carries: the log's `image` part
@@ -155,7 +154,8 @@ pub struct ModelRequest {
 /// sends (`docs/model-routing.md`, "Image limits").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageRef {
-    /// The file's path, relative to the session directory.
+    /// The file's path, relative to the session directory; the loop resolves
+    /// it into [`ModelRequest::media`].
     pub path: String,
     /// Its type, such as `image/png`.
     pub mime_type: String,
@@ -170,7 +170,8 @@ pub struct ImageRef {
 /// (`docs/model-routing.md`, "Image limits").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PdfRef {
-    /// The file's path, relative to the session directory.
+    /// The file's path, relative to the session directory; the loop resolves
+    /// it into [`ModelRequest::media`].
     pub path: String,
     /// The number of pages sent.
     pub page_count: u32,

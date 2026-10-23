@@ -231,13 +231,32 @@ fn a_pdf_ref_round_trips_in_a_tool_result() {
 }
 
 #[test]
-fn a_request_without_a_session_dir_reads_an_empty_one() {
-    let request = json!({
-        "system_prompt": "s", "tools": [], "tool_choice": "auto",
-        "cache_lifetime": "5m", "cache_key": "k", "conversation": [],
-    });
-    let read: ModelRequest = serde_json::from_value(request).unwrap();
-    assert_eq!(read.session_dir, PathBuf::new());
+fn a_request_s_media_is_never_serialized_and_an_old_session_dir_key_is_ignored() {
+    let mut request = ModelRequest {
+        system_prompt: "s".into(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: "k".into(),
+        conversation: Arc::from([]),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+    request.media = Arc::new(Media::from([(
+        "artifacts/i.png".to_owned(),
+        Arc::from("YWJjZA=="),
+    )]));
+
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert!(value.get("media").is_none(), "{value}");
+    assert!(value.get("session_dir").is_none(), "{value}");
+
+    value["session_dir"] = json!("/old/session");
+    let read: ModelRequest = serde_json::from_value(value).unwrap();
+    assert!(read.media.is_empty());
 }
 
 #[test]
@@ -256,7 +275,7 @@ fn a_request_s_conversation_wires_as_a_plain_array_and_reads_back() {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: PathBuf::new(),
+        media: Default::default(),
     };
     let value = serde_json::to_value(&request).unwrap();
     assert_eq!(
@@ -392,7 +411,7 @@ fn default_warms_is_true() {
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: PathBuf::new(),
+        media: Default::default(),
     };
     assert!(Fake.warms(&request));
 }

@@ -900,7 +900,7 @@ fn fanout_returns_every_reply_in_request_order() {
             previous_end: None,
             sent_tools: None,
             max_output_tokens: Some(4096),
-            session_dir: std::path::PathBuf::from("/tmp/s_test"),
+            media: Default::default(),
         })
         .collect::<Vec<_>>();
     let (done_tx, done_rx) = mpsc::channel();

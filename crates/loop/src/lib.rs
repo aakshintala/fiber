@@ -169,6 +169,9 @@ pub struct Loop {
     status_tap: Option<status::Tap>,
     diag: diag::SessionDiag,
     provider: Arc<dyn Provider>,
+    /// The session's encoded images and PDFs, so each artifact is read and
+    /// encoded once (`docs/model-routing.md`, "Image limits").
+    media: media::Cache,
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
     /// Builds the session's observed model calls, one per attempt: `None`
@@ -633,6 +636,7 @@ impl Loop {
             log,
             diag,
             provider,
+            media: media::Cache::default(),
             model,
             observe: None,
             reviewer_observe: None,

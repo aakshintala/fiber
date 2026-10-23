@@ -1708,12 +1708,9 @@ fn bodies_of(request: &ModelRequest, times: usize) -> Vec<Vec<u8>> {
 
 #[test]
 fn a_stored_image_is_sent_inside_the_tool_result_after_its_text() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1737,11 +1734,9 @@ fn a_stored_image_is_sent_inside_the_tool_result_after_its_text() {
 
 #[test]
 fn a_failed_result_with_an_image_still_sets_is_error() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(true, vec![png_ref("i.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("i.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1755,10 +1750,9 @@ fn a_failed_result_with_an_image_still_sets_is_error() {
 
 #[test]
 fn an_image_that_cannot_be_read_is_named_in_the_text_and_not_sent() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-image");
     let request = ModelRequest {
         conversation: (image_conversation(false, vec![png_ref("artifacts/gone.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: Default::default(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1773,44 +1767,13 @@ fn an_image_that_cannot_be_read_is_named_in_the_text_and_not_sent() {
 
 #[test]
 fn a_resume_sends_the_same_bytes() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-image");
-    std::fs::write(
-        session.path().join("i.png"),
-        b"\x89PNG bytes that are not a png",
-    )
-    .unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(false, vec![png_ref("i.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("i.png", b"\x89PNG bytes that are not a png")]),
         ..request()
     };
     let bodies = bodies_of(&request, 2);
     assert_eq!(bodies[0], bodies[1]);
-}
-
-#[test]
-fn a_rewound_child_sends_its_parent_image_as_the_same_bytes() {
-    let root = fakes::TempDir::new("fiber-anthropic-rewound-image");
-    let sessions = root.path().join("sessions");
-    let parent = sessions.join("s_parent");
-    let child = sessions.join("s_child");
-    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
-    let absolute = parent.join("artifacts/i_1.png").display().to_string();
-    let parent_request = ModelRequest {
-        conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: parent,
-        ..request()
-    };
-    let child_request = ModelRequest {
-        conversation: (image_conversation(false, vec![png_ref(&absolute)])).into(),
-        session_dir: child,
-        ..request()
-    };
-    let parent_body = bodies_of(&parent_request, 1).pop().unwrap();
-    let child_body = bodies_of(&child_request, 1).pop().unwrap();
-    assert_eq!(parent_body, child_body);
 }
 
 /// A conversation whose one tool result carries a PDF with two pages.
@@ -1851,12 +1814,9 @@ fn pdf_ref(
 
 #[test]
 fn a_stored_pdf_is_sent_inside_the_tool_result_as_a_document() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-pdf");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (pdf_conversation(pdf_ref("artifacts/p_1.pdf", None))).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/p_1.pdf", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1879,47 +1839,6 @@ fn a_stored_pdf_is_sent_inside_the_tool_result_as_a_document() {
 }
 
 #[test]
-fn a_rewound_child_sends_its_parent_pdf_as_the_same_bytes() {
-    let root = fakes::TempDir::new("fiber-anthropic-rewound-pdf");
-    let sessions = root.path().join("sessions");
-    let parent = sessions.join("s_parent");
-    let child = sessions.join("s_child");
-    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::write(parent.join("artifacts/p_1.pdf"), b"abcd").unwrap();
-    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
-    std::fs::write(parent.join("artifacts/i_2.png"), b"abcd").unwrap();
-    let absolute = |name: &str| parent.join(name).display().to_string();
-    let parent_request = ModelRequest {
-        conversation: (pdf_conversation(pdf_ref(
-            "artifacts/p_1.pdf",
-            Some(vec![
-                png_ref("artifacts/i_1.png"),
-                png_ref("artifacts/i_2.png"),
-            ]),
-        )))
-        .into(),
-        session_dir: parent.clone(),
-        ..request()
-    };
-    let child_request = ModelRequest {
-        conversation: (pdf_conversation(pdf_ref(
-            &absolute("artifacts/p_1.pdf"),
-            Some(vec![
-                png_ref(&absolute("artifacts/i_1.png")),
-                png_ref(&absolute("artifacts/i_2.png")),
-            ]),
-        )))
-        .into(),
-        session_dir: child,
-        ..request()
-    };
-    let parent_body = bodies_of(&parent_request, 1).pop().unwrap();
-    let child_body = bodies_of(&child_request, 1).pop().unwrap();
-    assert_eq!(parent_body, child_body);
-}
-
-#[test]
 fn a_result_without_an_image_keeps_a_string_content() {
     let request = ModelRequest {
         conversation: (image_conversation(false, Vec::new())).into(),
@@ -1937,12 +1856,9 @@ fn a_result_without_an_image_keeps_a_string_content() {
 
 #[test]
 fn a_text_only_model_gets_no_image_part_and_the_result_says_so() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(false, vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2717,12 +2633,9 @@ fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> V
 
 #[test]
 fn a_users_image_is_sent_as_image_blocks_after_the_text() {
-    let session = fakes::TempDir::new("fiber-anthropic-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -2742,9 +2655,6 @@ fn a_users_image_is_sent_as_image_blocks_after_the_text() {
 
 #[test]
 fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
-    let session = fakes::TempDir::new("fiber-anthropic-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (vec![
             Input::User {
@@ -2759,7 +2669,7 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
         .into(),
         previous_end: Some(1),
         sent_tools: None,
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();

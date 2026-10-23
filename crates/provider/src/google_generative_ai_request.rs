@@ -238,7 +238,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             text,
             images,
             pdfs,
-            &request.session_dir,
+            &request.media,
             endpoint.text_only,
             crate::images::PdfForm::Native,
         );
@@ -315,7 +315,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     text,
                     images,
                     &[],
-                    &request.session_dir,
+                    &request.media,
                     endpoint.text_only,
                     crate::images::PdfForm::Native,
                 );
@@ -491,7 +491,7 @@ mod body_segments_tests {
             sent_tools: None,
             previous_end: None,
             max_output_tokens: None,
-            session_dir: std::path::PathBuf::new(),
+            media: Default::default(),
         };
         let (system, tools, contents) = body_segments(&endpoint, &request);
         assert_eq!(system, Some(json!({"parts": [{"text": "You are terse."}]})));

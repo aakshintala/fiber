@@ -2,7 +2,6 @@ use super::*;
 use contract::events::CacheLifetime;
 use contract::provider::ModelRequest;
 use fakes::clock::FakeClock;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// One origin; every instant below is built from it, so no clock is read.
@@ -22,7 +21,7 @@ fn request() -> ModelRequest {
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: PathBuf::new(),
+        media: Default::default(),
     }
 }
 

@@ -1722,12 +1722,9 @@ fn pdf_output(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_stored_pdf_is_sent_as_an_input_file_part_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-request-pdf");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (pdf_conversation(pdf_ref("artifacts/p_1.pdf"))).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/p_1.pdf", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1762,16 +1759,13 @@ fn image_output(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_stored_image_is_sent_as_input_image_parts_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
         ))
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1795,12 +1789,10 @@ fn a_stored_image_is_sent_as_input_image_parts_after_the_text() {
 
 #[test]
 fn empty_text_sends_no_input_text_part_and_an_unreadable_image_sends_no_part() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let imaged = |text: &str, path: &str| {
         let request = ModelRequest {
             conversation: (image_conversation(text, vec![png_ref(path)])).into(),
-            session_dir: session.path().to_path_buf(),
+            media: harness::media(&[("i.png", b"abcd")]),
             ..request()
         };
         let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1826,16 +1818,13 @@ fn empty_text_sends_no_input_text_part_and_an_unreadable_image_sends_no_part() {
 
 #[test]
 fn a_text_only_model_gets_a_string_output_saying_the_image_was_left_out() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (image_conversation(
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
         ))
         .into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
@@ -1924,12 +1913,9 @@ fn user_item(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_users_image_is_sent_as_input_image_parts_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
         conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
-        session_dir: session.path().to_path_buf(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
