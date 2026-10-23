@@ -243,6 +243,36 @@ pub(crate) fn info(tool: &dyn Tool, source: ToolSource) -> Result<ToolInfo, Fail
     })
 }
 
+/// Builds the session's `tool_search` from the deferred definitions as
+/// sent and their sources (`docs/tools.md`, "Tool search"): the search
+/// tool by role, holding no session state.
+pub(crate) fn tool_search_factory() -> r#loop::ToolSearchFactory {
+    Arc::new(
+        |catalogue: &[contract::provider::ToolDefinition], sources: &[String]| {
+            Arc::new(tools::ToolSearch::new(catalogue.to_vec(), sources.to_vec())) as Arc<dyn Tool>
+        },
+    )
+}
+
+/// Publishes the loop's `/tools` rows through the session's declarer and
+/// state setter (`docs/tools.md`, "Seeing the tools"): `declare` reaches
+/// the declarer only for the search tool the loop adds and removes, so
+/// every other tool keeps the source its own registration gave it; `state`
+/// reaches the setter for every name, correcting each row at each build.
+pub(crate) fn tool_rows(
+    declare: doors::Declare,
+    state: Arc<dyn Fn(&str, ToolState) + Send + Sync>,
+) -> r#loop::ToolRows {
+    r#loop::ToolRows {
+        declare: Arc::new(move |name: &str, info: Option<ToolInfo>| {
+            if name == contract::provider::TOOL_SEARCH {
+                declare(name, info);
+            }
+        }),
+        state,
+    }
+}
+
 #[cfg(test)]
 #[path = "builtin_tests.rs"]
 mod tests;

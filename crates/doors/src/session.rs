@@ -20,7 +20,7 @@ use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::events::{
     Clients, CommandInfo, CommandResult, CredentialLabels, Event, McpServerRow, QuotaInfo,
-    SkillInfo, ToolInfo,
+    SkillInfo, ToolInfo, ToolState,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
@@ -512,6 +512,30 @@ impl Session {
                     tools.insert(at, info);
                 }
                 (Err(_), None) => {}
+            }
+        })
+    }
+
+    /// What sets one entry of the `tools` answer's state when a preamble
+    /// build defers or loads a tool (`docs/tools.md`, "Seeing the tools"):
+    /// only the named row's `state` changes; `bytes`, `tokens`, `source`
+    /// and order are unchanged. An unknown name changes nothing and adds
+    /// no row. It holds the gate weakly and does nothing once
+    /// [`Session::close`] has begun.
+    pub fn state_setter(&self) -> Arc<dyn Fn(&str, ToolState) + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move |name: &str, state: ToolState| {
+            let Some(gate) = gate.upgrade() else {
+                return;
+            };
+            if gate.conns.stopped() {
+                return;
+            }
+            let mut tools = lock(&gate.tools);
+            if let Ok(at) = tools.binary_search_by(|tool| tool.name.as_str().cmp(name)) {
+                if let Some(entry) = tools.get_mut(at) {
+                    entry.state = state;
+                }
             }
         })
     }
