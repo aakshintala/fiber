@@ -7,9 +7,11 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::{Origin, is_path, run_git, split};
+use super::{Origin, is_path, split};
 use crate::Error;
 use fakes::Deadline;
+
+use super::run_git;
 
 use std::fs;
 use std::path::PathBuf;
