@@ -127,7 +127,7 @@ struct WriterEnd {
 impl Drop for WriterEnd {
     fn drop(&mut self) {
         self.gate.accepted.untrack(self.reader);
-        self.gate.conns.note_writer_done(self.conn);
+        self.gate.conns.note_cut_flushed(self.conn);
         self.gate.conns.end_writer();
     }
 }
@@ -149,8 +149,10 @@ pub(crate) enum Ended {
 /// gets every line up to `fiber_exited`. Past the end only kept lines
 /// arrive: the answers of commands still running, `STOP`, `LEVEL` and `CUT`.
 /// The writer ends once it has met `STOP` and nothing its reader read is
-/// unanswered, or when the grace cuts it. With no `flight` there is no
-/// tracking and no cut: `STOP` ends the writer.
+/// unanswered, or at the log's end past a cut. A cut flushes what it
+/// decided and the writer carries on, so `fiber_exited` still reaches the
+/// client. With no `flight` there is no tracking and no cut: `STOP` ends
+/// the writer.
 pub(crate) fn write_loop(
     watcher: log::Watcher,
     mut stream: Box<dyn Write + Send>,
@@ -188,14 +190,15 @@ pub(crate) fn write_loop(
         };
         // A cut pushed while the writer still reads the log: the writer
         // sees it by the flag when it reaches the end, unless it still
-        // owes an answer. Then the grace already decided, so it answers
-        // now: `Session::quiesce` cuts while the log is open, and waiting
-        // for the end would leave the answer unwritten at `fiber_exited`.
+        // owes an answer. Then the grace already decided, so it flushes
+        // what the cut decided now and carries on: `Session::quiesce`
+        // cuts while the log is open, and ending here would strand
+        // `fiber_exited`, which is written after the quiesce wait.
         if line.kind == CUT {
             if let Some(flight) = flight
                 && flight.gate.accepted.unanswered(flight.reader) > 0
             {
-                return write_cut(&mut writing, stream.as_mut(), flight);
+                write_cut(&mut writing, stream.as_mut(), flight);
             }
             continue;
         }
@@ -275,7 +278,9 @@ fn past_end(
 /// The grace passed: writes what is already queued, without waiting, then
 /// one `indeterminate` for each command still unanswered, in read order.
 /// A command's own answer queued ahead of the cut is written, and that
-/// command gets no `indeterminate`.
+/// command gets no `indeterminate`. Marks the cut flushed, so the quiesce
+/// wait knows the answers are on the connection; the caller carries on
+/// streaming, so `fiber_exited` still reaches the client.
 fn write_cut(writing: &mut Writing, stream: &mut dyn Write, flight: &Flight) -> Ended {
     while let Ok(Some(line)) = writing.watcher.try_recv() {
         if matches!(line.kind.as_str(), STOP | CUT | LEVEL) {
@@ -299,6 +304,7 @@ fn write_cut(writing: &mut Writing, stream: &mut dyn Write, flight: &Flight) -> 
             break;
         }
     }
+    flight.gate.conns.note_cut_flushed(flight.conn);
     Ended::Done
 }
 

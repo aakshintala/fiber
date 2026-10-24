@@ -5033,6 +5033,78 @@ fn a_command_held_past_the_quiesce_grace_is_answered_indeterminate_once() {
     close_within(session, opened.log);
 }
 
+/// `docs/invocation.md`, "Lifecycle": after a clean exit (the log ends in
+/// `fiber_exited`) the session never read the command — and the exit line
+/// itself still reaches a connection the quiesce cut: the cut flushes the
+/// answers owed, then the writer carries on streaming instead of ending.
+#[test]
+fn a_connection_cut_at_the_quiesce_grace_streams_fiber_exited_before_end_of_file() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let clock = Arc::clone(&opened.clock);
+    let (hold, entered) = Dispatch::new();
+    wire_quota(&opened.session, &hold);
+    let client = subscribed_client(&opened);
+    client
+        .send(r#"{"id":"c_q","command":"quota","args":{"fetch":true}}"#)
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&entered)
+        .expect("the reader is inside quota");
+    let start = clock.now();
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let quiescer = thread::spawn(move || {
+        session.quiesce();
+        if let Ok(()) = done_tx.send(()) {}
+        session
+    });
+    clock.advance_when_parked(
+        Some(start + super::GRACE),
+        Some(quiescer.thread().id()),
+        super::GRACE,
+        &Deadline::after(DEADLINE),
+    );
+    // The grace passes with the command still running: one indeterminate
+    // answer on the connection, before quiesce returns.
+    let mut lines = Vec::new();
+    loop {
+        let line = recv(&client);
+        let is_answer = matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        );
+        lines.push(line);
+        if is_answer {
+            break;
+        }
+    }
+    let answer = lines.last().unwrap().clone();
+    assert_eq!(answer["kind"], "command_rejected", "{answer:?}");
+    assert_eq!(answer["payload"]["command_id"], "c_q", "{answer:?}");
+    assert_eq!(answer["payload"]["code"], "indeterminate", "{answer:?}");
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("quiesce returns once the cut is flushed");
+    // The exit line is written after quiesce returns, the way `run_turn`
+    // writes `fiber_exited` after it: the cut connection still streams it.
+    opened.log.append(&exited(), None, None).unwrap();
+    hold.release();
+    let session = quiescer.join().expect("the quiesce thread returns");
+    close_within(session, opened.log);
+    lines.extend(read_to_eof(&client));
+    let acks = acks_for(&lines, "c_q");
+    assert_eq!(acks.len(), 1, "one answer for the cut command: {lines:?}");
+    assert_eq!(acks[0]["kind"], "command_rejected", "{lines:?}");
+    let cut_at = lines.iter().position(|line| line == acks[0]).unwrap();
+    assert!(
+        lines[cut_at..]
+            .iter()
+            .any(|line| line["kind"] == "fiber_exited"),
+        "fiber_exited reaches the cut connection after its answers: {lines:?}"
+    );
+}
+
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_reader_mid_dispatch_at_close_is_answered_before_end_of_file() {

@@ -50,10 +50,12 @@ struct Live {
     /// writes, if it has a writer: [`Conns::cut_owed`] cuts the
     /// connections that still owe answers.
     owed_by: Option<ThreadId>,
-    /// The writer ended, after flushing what the cut decided: set under
-    /// the lock before the wake, so [`Conns::wait_cut`] never misses it
-    /// between the wake and the thread's exit.
-    writer_done: bool,
+    /// The cut's answers are flushed: `write_cut` wrote what the cut
+    /// decided, or the writer ended. Set under the lock before the wake,
+    /// so [`Conns::wait_cut`] never misses it between the wake and the
+    /// thread's exit. The writer stays up past the cut to stream what is
+    /// written next.
+    cut_flushed: bool,
     writer: Option<JoinHandle<()>>,
     /// Stops the reader and shuts the socket. [`Conns::quiet_readers`]
     /// drops it to stop the reader and leave the socket open.
@@ -167,7 +169,7 @@ impl Conns {
             Live {
                 reader_thread: handle.thread().id(),
                 owed_by: None,
-                writer_done: false,
+                cut_flushed: false,
                 reader: Some(handle),
                 writer: None,
                 ender: Some(ender),
@@ -270,14 +272,17 @@ impl Conns {
         }
     }
 
-    /// Marks connection `conn`'s writer ended, after it flushed what the
-    /// cut decided. Runs on the writer thread before its end wake, so
-    /// [`Conns::wait_cut`] sees it under the same lock that parks it.
-    pub(crate) fn note_writer_done(&self, conn: u64) {
+    /// Marks connection `conn`'s cut answers flushed: `write_cut` wrote
+    /// what the cut decided, or the writer ended. Runs on the writer
+    /// thread before its end wake, so [`Conns::wait_cut`] sees it under
+    /// the same lock that parks it.
+    pub(crate) fn note_cut_flushed(&self, conn: u64) {
         let mut state = lock(&self.state);
         if let Some((_, live)) = state.live.iter_mut().find(|(slot, _)| *slot == conn) {
-            live.writer_done = true;
+            live.cut_flushed = true;
         }
+        drop(state);
+        self.writers.notify_all();
     }
 
     /// Registers `wake`, the injector of the queue connection `conn`'s writer
@@ -298,8 +303,8 @@ impl Conns {
 
     /// The quiesce grace passed: marks every live connection whose reader
     /// still owes an answer cut and wakes its writer, which answers what
-    /// it holds `indeterminate` and ends. Connections with nothing owed
-    /// stay up, to stream `fiber_exited`.
+    /// it holds `indeterminate` and stays up, to stream `fiber_exited`.
+    /// Connections with nothing owed stay up too.
     pub(super) fn cut_owed(&self, session: &SessionId, owed: impl Fn(ThreadId) -> bool) {
         let mut state = lock(&self.state);
         for (_, live) in &mut state.live {
@@ -313,17 +318,19 @@ impl Conns {
         }
     }
 
-    /// Waits, up to `until`, for every cut writer to end: each writes what
-    /// it holds, then its `indeterminate` lines, before it ends. Uncut
-    /// writers stay up and are not waited for, and a cut connection with
-    /// no writer holds nothing to flush.
+    /// Waits, up to `until`, for every cut writer to flush: each writes
+    /// what it holds, then its `indeterminate` lines. The writer stays up
+    /// past the cut to stream what is written next — `fiber_exited` in
+    /// [`Session::quiesce`](super::Session::quiesce) — and ends at the
+    /// log's end. Uncut writers stay up and are not waited for, and a cut
+    /// connection with no writer holds nothing to flush.
     pub(super) fn wait_cut(&self, clock: &dyn Clock, until: Instant) {
         let mut state = lock(&self.state);
         while clock.now() < until
             && state
                 .live
                 .iter()
-                .any(|(_, live)| live.cut && live.writer.is_some() && !live.writer_done)
+                .any(|(_, live)| live.cut && live.writer.is_some() && !live.cut_flushed)
         {
             // The guard is held into the condvar wait; `None` relocks.
             state = support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)

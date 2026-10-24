@@ -653,9 +653,9 @@ impl Session {
     /// it is dispatching, and a line already in its buffer is still
     /// dispatched), then waits up to [`conns::GRACE`] for the answers owed
     /// and cuts what is still unanswered, answering each `indeterminate`.
-    /// At the cut each writer that still owes answers is cut, and
-    /// [`conns::CUT_FLUSH`] more lets it write its lines; a connection
-    /// with nothing owed stays up, to stream `fiber_exited`. Every line a
+    /// A cut writer flushes what the cut decided and stays up, and
+    /// [`conns::CUT_FLUSH`] more lets the flush land before `fiber_exited`
+    /// is written, so every connection streams it. Every line a
     /// reader read gets exactly one answer on its connection: its own, or
     /// `indeterminate` when the grace passes first. Runs before
     /// `fiber_exited` is written.
@@ -679,11 +679,12 @@ impl Session {
     /// Ends the door side, in this order. It cancels every driver shell and
     /// waits for each, since shutting its socket does not stop the tool; the
     /// shell's thread is not joined, and its answer is queued before it
-    /// ends. Unless [`Session::quiesce`] already waited before `fiber_exited`
-    /// was written, it waits for the writers, cuts what still waits at the
-    /// grace, and waits the flush margin, then unlinks the socket. It ends
-    /// every watcher's stream with `log.end_watchers()`, which keeps the
-    /// lock, then drops `log`. The readers are joined only up to the
+    /// ends. It waits for the writers — [`Session::quiesce`] already
+    /// answered everything owed before `fiber_exited` was written, and
+    /// this wait lets every writer stream it — cuts what still waits at
+    /// the grace, and waits the flush margin, then unlinks the socket. It
+    /// ends every watcher's stream with `log.end_watchers()`, which keeps
+    /// the lock, then drops `log`. The readers are joined only up to the
     /// grace: a reader still inside a command then is detached, since its
     /// line was answered, and process exit ends it. One `timeout` line in
     /// the session's diagnostic log (`docs/state.md`, "What each part
@@ -730,14 +731,13 @@ impl Session {
         drop(log);
         let clock = self.gate.clock.as_ref();
         let until = clock.now() + GRACE;
-        // Skipped when `quiesce` already waited before `fiber_exited` was
-        // written: the answers are owed no more, and the writers stream the
-        // exit instead of ending here.
-        if !self.gate.answered.swap(true, Ordering::Relaxed) {
-            self.gate.conns.wait_writers(clock, until);
-            self.gate.conns.cut_all(&self.gate.session_id);
-            self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
-        }
+        // After `quiesce` nothing is owed, but the writers still need this
+        // window to stream `fiber_exited` before the sockets shut: without
+        // it a slow writer loses the exit line. Then the belt: cut what
+        // still waits, and let it flush before the sockets shut.
+        self.gate.conns.wait_writers(clock, until);
+        self.gate.conns.cut_all(&self.gate.session_id);
+        self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
         let detached = self.gate.conns.join_clients(clock, until);
         for _ in 0..detached {
             self.stopped_waiting();
