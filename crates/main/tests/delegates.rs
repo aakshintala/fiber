@@ -997,6 +997,7 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     let _guard = arm(&setup);
     let full = "the scan found three caches";
     let child = ProviderServer::start([text_reply(full)]).unwrap();
+    child.hold();
     // The wait names the job the receipt minted, which no script can know:
     // the server builds the wait call from the receipt it sees.
     let parent = ProviderServer::start_responding(answering(
@@ -1017,7 +1018,19 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     standing_allow(&setup);
     slow_idle(&setup);
 
-    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the child call is held"
+    );
+    let requested = running.wait_line("the jobs wait is requested", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    let action = requested.last().unwrap()["action_id"].clone();
+    running.wait_line("the matching jobs wait starts", |line| {
+        line["kind"] == "tool_call_started" && line["action_id"] == action
+    });
+    child.release();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
