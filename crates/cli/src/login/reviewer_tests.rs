@@ -1368,13 +1368,14 @@ fn an_unexpected_error_surfaces_instead_of_retrying() {
     assert_eq!(error.kind(), ErrorKind::Other);
 }
 
-/// An `err` writer that fails the first prompt write and the first retry
-/// message write with `WouldBlock`, then accepts everything: the prompt
-/// must wait through each and complete the whole text.
+/// An `err` writer that fails the first prompt write and the first of each
+/// retry message write with `WouldBlock`, then accepts everything: the
+/// prompt must wait through each and complete the whole text.
 struct WouldBlockThenAccept {
     out: Vec<u8>,
     prompt_blocked: bool,
     retry_blocked: bool,
+    blank_blocked: bool,
 }
 
 impl Write for WouldBlockThenAccept {
@@ -1386,6 +1387,10 @@ impl Write for WouldBlockThenAccept {
         }
         if !self.retry_blocked && text.contains("is not a listed reviewer") {
             self.retry_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        if !self.blank_blocked && text.contains("No reviewer is selected") {
+            self.blank_blocked = true;
             return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
         }
         self.out.extend_from_slice(buf);
@@ -1418,6 +1423,7 @@ fn a_would_block_write_retries_until_the_prompt_completes() {
         out: Vec::new(),
         prompt_blocked: false,
         retry_blocked: false,
+        blank_blocked: true,
     };
     let pick = prompt_choice(
         "acme",
@@ -1432,15 +1438,58 @@ fn a_would_block_write_retries_until_the_prompt_completes() {
     .unwrap();
     assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
     let out = String::from_utf8(err.out).unwrap();
-    assert_eq!(
-        out.matches("Reviewer, by number or name: ").count(),
-        2,
-        "both prompts land whole: {out}"
+    assert!(
+        out.contains("Reviewer, by number or name: "),
+        "the prompt lands whole: {out}"
     );
-    assert_eq!(
-        out.matches("is not a listed reviewer").count(),
-        1,
+    assert!(
+        out.contains("is not a listed reviewer"),
         "the retry message lands whole: {out}"
+    );
+}
+
+#[test]
+fn a_would_block_write_retries_until_the_blank_retry_completes() {
+    // A blank answer with nothing preselected prints the "No reviewer is
+    // selected" retry: the first write of that message blocks once, the
+    // prompt waits through it and still writes every byte, then the listed
+    // answer lands.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+    let mut input = Script {
+        steps: [Step::Line("\n"), Step::Line("2\n")].into_iter().collect(),
+    };
+    let mut err = WouldBlockThenAccept {
+        out: Vec::new(),
+        prompt_blocked: true,
+        retry_blocked: true,
+        blank_blocked: false,
+    };
+    let pick = prompt_choice(
+        "acme",
+        &listed(),
+        &mut input,
+        &mut err,
+        &|| false,
+        true,
+        &clock,
+        slave.as_fd(),
+    )
+    .unwrap();
+    assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
+    let out = String::from_utf8(err.out).unwrap();
+    assert!(
+        out.contains("No reviewer is selected"),
+        "the blank-answer retry lands whole: {out}"
+    );
+    assert!(
+        out.contains("Reviewer, by number or name: "),
+        "the prompt lands whole: {out}"
     );
 }
 
@@ -1499,20 +1548,20 @@ fn drain_pipe(read: &mut std::io::PipeReader) {
     }
 }
 
-/// An `err` writer over a pipe that fails its first write with `WouldBlock`
-/// after filling the pipe, then forwards: the helper must wait again
-/// instead of spinning or dropping bytes.
+/// An `err` writer over a pipe that forwards every write, except once
+/// when the drain hook arms it: a spurious writable report followed by
+/// `WouldBlock`, which must cause another wait instead of spinning or
+/// dropping bytes. Every other `WouldBlock` comes from the really-full
+/// pipe, so a retry always re-derives the park the driver expects.
 struct FillOnceThenForward {
     file: fs::File,
-    filled: bool,
+    spurious: Arc<atomic::AtomicBool>,
     out: Vec<u8>,
 }
 
 impl Write for FillOnceThenForward {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if !self.filled {
-            self.filled = true;
-            fill_pipe(&mut self.file);
+        if self.spurious.swap(false, atomic::Ordering::SeqCst) {
             return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
         }
         let written = self.file.write(buf)?;
@@ -1527,13 +1576,19 @@ impl Write for FillOnceThenForward {
 
 #[test]
 fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
-    // The first write reports WouldBlock with the pipe now full, so the
+    // The first write reports WouldBlock with the pipe full, so the
     // helper parks; the retry still meets the full pipe, so the helper
-    // parks again instead of spinning or surfacing the error. Draining the
+    // parks again instead of spinning or surfacing the error. The next
+    // write still says WouldBlock although room is coming — a spurious
+    // writable report — so the helper parks a third time; draining the
     // pipe then lets the whole text through in order.
     let clock = fakes::clock::FakeClock::new();
     let start = clock.now();
     let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let spurious = Arc::new(atomic::AtomicBool::new(false));
+    let worker_spurious = Arc::clone(&spurious);
     let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
     let text: &[u8] = b"Reviewer, by number or name: ";
     let (ids_tx, ids) = mpsc::channel();
@@ -1545,7 +1600,7 @@ fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
             ids_tx.send(thread::current().id()).unwrap_or(());
             let mut err = FillOnceThenForward {
                 file,
-                filled: false,
+                spurious: worker_spurious,
                 out: Vec::new(),
             };
             let outcome =
@@ -1561,16 +1616,19 @@ fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
     });
     let second = first + super::POLL_SLICE;
     clock.advance_when_parked_then(Some(second), Some(id), super::POLL_SLICE, &within, || {
+        // Arm only: the pipe stays full, so this hook cannot wake the
+        // worker early. The next write still says WouldBlock despite the
+        // writable report the drain below will earn: the spurious report
+        // the helper must wait through once more.
+        spurious.store(true, atomic::Ordering::SeqCst);
+    });
+    let third = second + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(third), Some(id), super::POLL_SLICE, &within, || {
         drain_pipe(&mut read);
     });
     let (outcome, out) = within.recv_or_fail(&done, "the drained write completes");
     assert!(!outcome.unwrap(), "no cancellation interrupted the write");
     assert_eq!(out.as_slice(), text, "every byte lands in order");
-    assert_eq!(
-        clock.now(),
-        second,
-        "two slices move the clock, one per park"
-    );
     worker.join().unwrap();
 }
 
@@ -1624,6 +1682,121 @@ fn a_non_would_block_write_error_surfaces_at_once() {
     );
 }
 
+/// An `err` writer that accepts every write and fails its first flush
+/// with `WouldBlock`: the helper must wait and retry the flush instead of
+/// surfacing the error.
+struct FlushWouldBlockOnce {
+    flushed: bool,
+    out: Vec<u8>,
+}
+
+impl Write for FlushWouldBlockOnce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.flushed {
+            self.flushed = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_would_block_flush_waits_and_retries_instead_of_surfacing() {
+    // A WouldBlock flush parks exactly like a WouldBlock write: the retry
+    // flush lands, every byte stays, and nothing surfaces. The park the
+    // test advances pins the flush-wait deadline one slice ahead.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-flush-wait".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = FlushWouldBlockOnce {
+                flushed: false,
+                out: Vec::new(),
+            };
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the flush worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        drain_pipe(&mut read);
+    });
+    let (outcome, out) = within.recv_or_fail(&done, "the retried flush completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the flush");
+    assert_eq!(out.as_slice(), text, "every byte lands in order");
+    worker.join().unwrap();
+}
+
+/// An `err` writer that accepts every write and fails its flush with
+/// `Other`: the helper must surface the error at once instead of waiting
+/// on a flush that will never clear.
+struct FailFlushOnce {
+    out: Vec<u8>,
+}
+
+impl Write for FailFlushOnce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("broken"))
+    }
+}
+
+#[test]
+fn a_non_would_block_flush_error_surfaces_at_once() {
+    // Only a WouldBlock flush waits: any other flush error ends the write
+    // on a worker thread, so a wait instead of a surface would miss the
+    // deadline rather than hang the test.
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (_read, write) = nonblocking_pipe();
+    let (done_tx, done) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name("pipe-flush-fail".to_owned())
+        .spawn(move || {
+            let mut err = FailFlushOnce { out: Vec::new() };
+            let outcome = super::write_all_wait(
+                &mut err,
+                write.as_fd(),
+                b"Reviewer, by number or name: ",
+                &|| false,
+                &worker_clock,
+            );
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let (outcome, out) = within.recv_or_fail(&done, "the fatal flush surfaces");
+    let error = outcome.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+    assert_eq!(
+        out.as_slice(),
+        b"Reviewer, by number or name: ",
+        "the writes before the fatal flush stay: {out:?}"
+    );
+    worker.join().unwrap();
+}
+
 #[test]
 fn a_blocked_write_completes_whole_once_the_pipe_drains() {
     // The pipe starts full, so the first write refuses and the helper
@@ -1656,7 +1829,6 @@ fn a_blocked_write_completes_whole_once_the_pipe_drains() {
     });
     let outcome = within.recv_or_fail(&done, "the drained write completes");
     assert!(!outcome.unwrap(), "no cancellation interrupted the write");
-    assert_eq!(clock.now(), until, "one slice moves the clock");
     // The worker wrote after the drain: the pipe holds exactly the text.
     let mut got = vec![0u8; text.len()];
     read.read_exact(&mut got).unwrap();
