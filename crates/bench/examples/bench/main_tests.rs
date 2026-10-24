@@ -10,7 +10,7 @@ use super::brand_string;
 #[cfg(target_os = "linux")]
 use super::host_cpu;
 use super::{
-    Args, Base, Only, Pass, Side, attach, bench, busy, document, idle, listing, measure_all,
+    Args, Base, Only, Pass, Side, attach, bench, busy, debug, document, idle, listing, measure_all,
     model_name, paging, parse, resume, selected, session_list, sides, timing_names, wheel,
 };
 
@@ -494,9 +494,9 @@ fn a_stall_shifts_one_sample_not_a_side() {
 }
 
 #[test]
-fn skip_rows_filters_the_base_list_only() {
-    // A mutant applying `--skip-rows` to the head list with a base, or
-    // dropping it from the base list, fails the logs below.
+fn skip_rows_filters_the_head_and_the_base_lists() {
+    // A mutant applying `--skip-rows` to only one list, or to neither,
+    // fails the asserts below.
     let (head_args, base_args) = sides(
         &argv(&[
             "--fiber",
@@ -516,7 +516,7 @@ fn skip_rows_filters_the_base_list_only() {
         ])
         .unwrap(),
     );
-    assert!(head_args.skip_rows.is_empty());
+    assert_eq!(head_args.skip_rows, ["session start".to_owned()]);
     let base_args = base_args.unwrap();
     assert_eq!(base_args.skip_rows, ["session start".to_owned()]);
     let mut head = Pass::new(Side::Head, head_args);
@@ -531,14 +531,7 @@ fn skip_rows_filters_the_base_list_only() {
         .filter(|(_, name, _)| *name == "session start")
         .cloned()
         .collect();
-    assert_eq!(
-        starts,
-        [
-            (Side::Head, "session start", 1),
-            (Side::Head, "session start", 2),
-            (Side::Head, "session start", 3),
-        ]
-    );
+    assert!(starts.is_empty(), "{starts:?}");
     let firsts: Vec<(Side, &str, u32)> = log
         .iter()
         .filter(|(_, name, _)| *name == "terminal first frame")
@@ -555,8 +548,8 @@ fn skip_rows_filters_the_base_list_only() {
             (Side::Base, "terminal first frame", 3),
         ]
     );
-    // The head's file skips nothing; the base's reports the skipped row,
-    // so the judge reports it instead of failing its missing metric.
+    // Both files record the skipped row, so the judge reports it instead
+    // of failing its missing metrics.
     let skipped = |pass: &Pass| {
         document(
             &pass.args,
@@ -568,8 +561,107 @@ fn skip_rows_filters_the_base_list_only() {
         )["skipped"]
             .clone()
     };
-    assert_eq!(skipped(&head), json!([]));
+    assert_eq!(skipped(&head), json!(["session start"]));
     assert_eq!(skipped(&base), json!(["session start"]));
+    // Memory and exact rows keep running: with every one of the six
+    // selectable rows left out, the head still runs its untimed rows, and
+    // the never-skipped `session_list` row runs on both sides.
+    let (head_args, base_args) = sides(
+        &argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "5",
+            "--timing-runs",
+            "3",
+            "--paging",
+            "j",
+            "--base-fiber",
+            "b",
+            "--base-out",
+            "ob",
+            "--base-paging",
+            "j",
+            "--skip-rows",
+            "session start,sessions list,terminal first frame,terminal attach,terminal wheel,paging",
+        ])
+        .unwrap(),
+    );
+    let mut head = Pass::new(Side::Head, head_args);
+    let mut base = Pass::new(Side::Base, base_args.unwrap());
+    let mut log = Vec::new();
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        log.push((side, workload.name, run));
+        Ok(Vec::new())
+    });
+    for name in [
+        "busy turn",
+        "fsyncs",
+        "session idle",
+        "terminal idle",
+        "session_list",
+    ] {
+        let calls: Vec<(Side, &str, u32)> = log
+            .iter()
+            .filter(|(_, row, _)| *row == name)
+            .cloned()
+            .collect();
+        assert!(!calls.is_empty(), "{name}");
+    }
+    // A mutant skipping by `timing == true` instead of by name drops
+    // `session_list`, which is timing but never skipped.
+    let listed: Vec<(Side, &str, u32)> = log
+        .iter()
+        .filter(|(_, row, _)| *row == "session_list")
+        .cloned()
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (Side::Head, "session_list", 1),
+            (Side::Base, "session_list", 1),
+            (Side::Head, "session_list", 2),
+            (Side::Base, "session_list", 2),
+            (Side::Head, "session_list", 3),
+            (Side::Base, "session_list", 3),
+        ]
+    );
+    let fsyncs = log.iter().filter(|(_, row, _)| *row == "fsyncs").count();
+    assert_eq!(fsyncs, 1);
+    let busy = log.iter().filter(|(_, row, _)| *row == "busy turn").count();
+    assert_eq!(busy, 5);
+    for name in [
+        "session start",
+        "sessions list",
+        "terminal first frame",
+        "terminal attach",
+        "terminal wheel",
+        "paging",
+    ] {
+        assert!(
+            !log.iter().any(|(_, row, _)| *row == name),
+            "{name} ran: {log:?}"
+        );
+    }
+    // Debug runs keep the selection: no skipped row gets a debug run, and
+    // the busy workload still does.
+    let debug = debug::debug_workloads(&head.args);
+    assert!(
+        !debug.iter().any(|workload| workload.name == "paging"),
+        "{:?}",
+        debug
+            .iter()
+            .map(|workload| workload.name)
+            .collect::<Vec<_>>()
+    );
+    assert!(debug.iter().any(|workload| workload.name == "busy turn"));
+    // Without a base the single run keeps the skip list.
+    let (head_args, base_args) =
+        sides(&argv(&["--fiber", "f", "--out", "o", "--skip-rows", "session start"]).unwrap());
+    assert!(base_args.is_none());
+    assert_eq!(head_args.skip_rows, ["session start".to_owned()]);
 }
 
 /// Runs the lone `session start` row on both sides, failing the named

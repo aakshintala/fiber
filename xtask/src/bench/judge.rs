@@ -528,6 +528,40 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
     ),
 ];
 
+/// Each selectable timing row with the result-file metric ids its budgets
+/// read, in `BASE_ROWS` order (`xtask/src/select/plan.rs`): a head file
+/// that skips one of these rows leaves those budgets unmeasured. Memory
+/// rows that ride on a timing row (`terminal attach`, `paging`) are
+/// skipped with it; every other memory and exact budget keeps running.
+pub(super) const ROW_METRICS: &[(&str, &[&str])] = &[
+    ("session start", &["session_start_ms"]),
+    ("sessions list", &["sessions_list_ms"]),
+    ("terminal first frame", &["terminal_first_frame_ms"]),
+    (
+        "terminal attach",
+        &[
+            "terminal_attach_ms",
+            "terminal_attach_rss_kib",
+            "terminal_attach_retained_kib",
+        ],
+    ),
+    ("terminal wheel", &["wheel_paging_ms", "wheel_read_ms"]),
+    (
+        "paging",
+        &[
+            "paging_rss_kib",
+            "paging_open_ms",
+            "paging_load_ms",
+            "paging_jump_ms",
+            "paging_width_ms",
+            "paging_append_ms",
+            "paging_search_ms",
+            "paging_scale16_width_ms",
+            "paging_scale16_search_ms",
+        ],
+    ),
+];
+
 /// The ten-turn pass's Budget cell, here and in `docs/performance.md`.
 pub(super) const TEN_TURNS_BUDGET: &str =
     "Session, memory kept after 10 busy turns, each followed by its handoff";
@@ -606,6 +640,105 @@ pub(super) fn ten_turns_skipped(head: Option<&Results>) -> bool {
             .iter()
             .any(|name| name == TEN_TURNS_WORKLOAD)
     })
+}
+
+/// What the head column shows for a budget the selection left
+/// unmeasured: the skipped row's name follows (`docs/ci.md`,
+/// "Selection").
+const HEAD_SKIP_NOTE: &str = "skipped: the selection did not run ";
+
+/// The head file's skipped timing rows, in file order: the names in
+/// `head.skipped` that name a `ROW_METRICS` row. `10 busy turns` and
+/// unknown names are not returned; `None` returns empty. `pub` for the
+/// summary, which names the skip (`docs/ci.md`, "Selection").
+pub(super) fn head_skipped_rows(head: Option<&Results>) -> Vec<&'static str> {
+    match head {
+        None => Vec::new(),
+        Some(results) => results
+            .skipped
+            .iter()
+            .filter_map(|name| {
+                ROW_METRICS
+                    .iter()
+                    .find(|(row, _)| name == row)
+                    .map(|(row, _)| *row)
+            })
+            .collect(),
+    }
+}
+
+/// The first head-skipped timing row one of whose metric ids `check`
+/// reads, or `None`. A row matches when its name is in the head file's
+/// `skipped` list and one of the check's ids is in the row's
+/// `ROW_METRICS` entry: memory checks read their ids, timing and
+/// per-MiB checks their one id, ratios either side, and exact checks
+/// read none, so an exact budget never skips. `10 busy turns` and names
+/// outside `ROW_METRICS` never match: the selector never emits them.
+fn head_skipped_row(check: Check, head: Option<&Results>) -> Option<&'static str> {
+    let head = head?;
+    for (row, ids) in ROW_METRICS {
+        if !head.skipped.iter().any(|name| name == row) {
+            continue;
+        }
+        let reads = match check {
+            Check::Memory(check_ids) => check_ids.iter().any(|id| ids.contains(id)),
+            Check::Within { id, .. } | Check::Timing(id) | Check::PerMib { id, .. } => {
+                ids.contains(&id)
+            }
+            Check::Ratio { small, large, .. } => ids.contains(&small) || ids.contains(&large),
+            Check::Exact { .. } => false,
+        };
+        if reads {
+            return Some(row);
+        }
+    }
+    None
+}
+
+/// The table-only checks for a budget the selection left unmeasured on
+/// the head: the ceiling cell must still read what the measured arms
+/// require, since a table edit is checked even when nothing is measured
+/// (`docs/ci.md`, "Selection"). Each message reuses its measured arm's
+/// wording, so a failure reads the same measured or skipped.
+fn table_failures(budget: &str, cell: &str, check: Check, rows: &[Vec<String>]) -> Vec<String> {
+    let mut failures = Vec::new();
+    match check {
+        Check::Memory(_) => match ceiling(cell) {
+            Ok(Quantity::Kib(_)) => {}
+            Ok(Quantity::Ms(_)) => failures.push(format!("{cell:?} is not a memory ceiling")),
+            Err(e) => failures.push(e),
+        },
+        Check::Within { .. } => {}
+        Check::PerMib { pin, .. } => {
+            if cell != pin {
+                failures.push(format!(
+                    "the ceiling reads {cell:?}; its formula is code, so change xtask/src/bench.rs with it"
+                ));
+            }
+            if let Err(e) = class_gates(budget, rows) {
+                failures.push(e);
+            }
+        }
+        Check::Timing(_) => {
+            match ceiling(cell) {
+                Ok(Quantity::Ms(_)) => {}
+                Ok(Quantity::Kib(_)) => failures.push(format!("{cell:?} is not a timing ceiling")),
+                Err(e) => failures.push(e),
+            }
+            if let Err(e) = class_gates(budget, rows) {
+                failures.push(e);
+            }
+        }
+        Check::Exact { .. } => {}
+        Check::Ratio { pin, .. } => {
+            if cell != pin {
+                failures.push(format!(
+                    "the ceiling reads {cell:?}; it must read {pin:?} for budget {budget:?}: change xtask/src/bench/judge.rs with it"
+                ));
+            }
+        }
+    }
+    failures
 }
 
 /// The rule's failures, and what the head column shows.
@@ -896,6 +1029,25 @@ pub(super) fn judge(
         base: String::new(),
         result: "pass",
     };
+    // A pull request leaves an unselected timing row unmeasured on the
+    // head as well as the base (`docs/ci.md`, "Selection"): its budgets
+    // read skipped, table-checked but never measured, and the stored
+    // results' over-at-base path is never reached for them. A push
+    // judges the head alone and ignores `skipped` entirely, so a stray
+    // `--skip-rows` on a push cannot silently skip a gating row in the
+    // backstop.
+    if !matches!(base, Base::None)
+        && let Some(skipped) = head_skipped_row(check, head)
+    {
+        line.head = format!("{HEAD_SKIP_NOTE}{skipped}");
+        line.result = "skipped";
+        let table = table_failures(budget, cell, check, rows);
+        // The closing rule below: a table failure fails the row.
+        if !table.is_empty() {
+            line.result = "fail";
+        }
+        return (table, line);
+    }
     match check {
         Check::Memory(ids) => {
             line.head = memory(cell, ids, head, &mut measured);
