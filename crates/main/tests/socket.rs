@@ -950,9 +950,11 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     // Each pair below is promised in order by the area doc named with it:
     // `session_started`, then `fiber_started` (`docs/invocation.md`,
     // "Lifecycle"); `extensions_loaded`, `preamble_built` and
-    // `opening_message`, each written at process or session start before
-    // the first model request (`docs/events.md`, "`extensions_loaded`",
-    // "`preamble_built`", "`opening_message`"); `turn_started`, since
+    // `opening_message` arrive as a set: each is written at process or
+    // session start before the first model request, with no promised
+    // relative order (`docs/events.md`, "`extensions_loaded`",
+    // "`preamble_built`", "`opening_message`"; `docs/testing.md`,
+    // "Event streams"); `turn_started`, since
     // `prompt` starts a turn (`docs/invocation.md`, "Driver commands");
     // `step_started`, then the reply's items in the order the model
     // produced them, closed by `assistant_message_completed`
@@ -970,13 +972,20 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     // with no tool call ends the turn (`docs/loop.md`, "One step",
     // "Ending a turn").
     assert_eq!(
-        kinds,
+        &kinds[..2],
+        ["session_started", "fiber_started"],
+        "the log opens in order: {lines:?}"
+    );
+    let mut startup = kinds[2..5].to_vec();
+    startup.sort_unstable();
+    assert_eq!(
+        startup,
+        ["extensions_loaded", "opening_message", "preamble_built"],
+        "the startup set precedes the first model request, in no promised order: {lines:?}"
+    );
+    assert_eq!(
+        &kinds[5..],
         [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
