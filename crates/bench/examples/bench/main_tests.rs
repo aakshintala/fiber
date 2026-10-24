@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 #[cfg(target_os = "macos")]
@@ -397,6 +399,97 @@ fn sampled_rows_alternate_head_and_base_by_sample() {
         }
     }
     assert_eq!(order(head, Some(base)), expected);
+}
+
+/// The acceptance for alternate-by-sample scheduling: with a scripted
+/// clock, one stalled call delays only the samples after it, so each
+/// index's head and base samples stay within one sample cost of each
+/// other. The closure records what `order` records, plus each call's
+/// scripted time; no real clock sleeps. A mutant running a side's block
+/// in one go shifts the whole base block past the stalled head block,
+/// failing the skew bound below.
+#[test]
+fn a_stall_shifts_one_sample_not_a_side() {
+    const STEP: Duration = Duration::from_millis(1);
+    const STALL: Duration = Duration::from_millis(50);
+    let lone_list = || {
+        argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "3",
+            "--timing-runs",
+            "3",
+            "--only",
+            "timing",
+            "--skip-rows",
+            "session start,terminal first frame,session_list,paging,terminal attach,terminal wheel",
+        ])
+        .unwrap()
+    };
+    let mut head = Pass::new(Side::Head, lone_list());
+    let mut base = Pass::new(Side::Base, lone_list());
+    let clock = fakes::clock::FakeClock::new();
+    let mut log: Vec<(Side, &'static str, u32, Instant)> = Vec::new();
+    let mut calls = 0u32;
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        calls += 1;
+        log.push((side, workload.name, run, clock.now()));
+        // One sample costs STEP; the second call stalls the runner.
+        clock.advance(if calls == 2 { STALL } else { STEP });
+        Ok(vec![("stall_ms", json!(1.0))])
+    });
+    assert_eq!(
+        log.iter()
+            .map(|(side, name, run, _)| (*side, *name, *run))
+            .collect::<Vec<_>>(),
+        [
+            (Side::Head, "sessions list", 1),
+            (Side::Base, "sessions list", 1),
+            (Side::Head, "sessions list", 2),
+            (Side::Base, "sessions list", 2),
+            (Side::Head, "sessions list", 3),
+            (Side::Base, "sessions list", 3),
+        ]
+    );
+    let at = |side: Side, run: u32| {
+        log.iter()
+            .find(|(logged, _, logged_run, _)| *logged == side && *logged_run == run)
+            .map(|(_, _, _, at)| *at)
+    };
+    // The stall delays every later sample equally: each index's samples
+    // stay within one sample cost. A block schedule holds the whole
+    // base block until the stalled head block ends, skewing every index
+    // by the stall.
+    for run in 1..=3 {
+        let head_at = at(Side::Head, run).unwrap_or_else(|| panic!("no head sample {run}"));
+        let base_at = at(Side::Base, run).unwrap_or_else(|| panic!("no base sample {run}"));
+        let skew = if head_at > base_at {
+            head_at - base_at
+        } else {
+            base_at - head_at
+        };
+        assert!(
+            skew <= STEP,
+            "sample {run} skews by {skew:?}, over one sample cost {STEP:?}"
+        );
+    }
+    // The stall happened: one consecutive same-side gap reaches it, so
+    // the bound above does not pass on an unstalled run alone.
+    let mut slowest = Duration::ZERO;
+    for side in [Side::Head, Side::Base] {
+        for run in 1..3 {
+            let gap = at(side, run + 1).unwrap_or_else(|| panic!("no {side:?} sample"))
+                - at(side, run).unwrap_or_else(|| panic!("no {side:?} sample"));
+            slowest = slowest.max(gap);
+        }
+    }
+    assert!(
+        slowest >= STALL,
+        "no same-side gap reaches the {STALL:?} stall: {slowest:?}"
+    );
 }
 
 #[test]
