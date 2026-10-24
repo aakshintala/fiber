@@ -3,10 +3,19 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS, PROBE_A, PROBE_B,
-    Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows, open_command,
-    open_error_samples, parse_open_line, plan_turns, replay_finished, size_note, stage_rows,
+    ATTACH_TAIL, FIXTURE_COUNT, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS,
+    PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows,
+    open_command, open_error_samples, parse_open_line, plan_turns, replay_finished, size_note,
+    stage_rows,
 };
+
+#[test]
+fn the_fixture_count_is_the_plan_length() {
+    // The scheduler alternates the attach row by sample
+    // (`docs/performance.md`, "Measuring") over this many fixtures: a
+    // plan that gains or loses one fails here.
+    assert_eq!(usize::try_from(FIXTURE_COUNT), Ok(PLANS.len()));
+}
 
 fn status(id: &str, state: &str) -> serde_json::Value {
     json!({
