@@ -5304,6 +5304,50 @@ fn finish_leaves_the_entry_while_the_gate_is_stopped() {
 }
 
 #[test]
+fn join_clients_waits_for_a_reader_that_finishes_inside_the_grace() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    // The reader stays inside its command until released, so the join must
+    // wait: returning at once would reap it still unfinished and detach it.
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (id_tx, id_rx) = mpsc::channel::<u64>();
+    let finishing = Arc::clone(&gate);
+    let reader = thread::spawn(move || {
+        release_rx.recv().unwrap();
+        finishing.conns.finish(id_rx.recv().unwrap());
+    });
+    let id = gate
+        .conns
+        .push_reader(reader, Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    id_tx.send(id).unwrap();
+    gate.conns.mark_stopped();
+    let until = opened.clock.now() + super::GRACE;
+    let (parked_tx, parked_rx) = mpsc::channel::<bool>();
+    let parked_clock = Arc::clone(&opened.clock);
+    thread::spawn(move || {
+        // The release always goes out, so a join that never parks fails
+        // this test instead of hanging it.
+        parked_tx
+            .send(parked_clock.await_parked(until, Deadline::after(DEADLINE)))
+            .unwrap();
+        release_tx.send(()).unwrap();
+    });
+    let detached = gate.conns.join_clients(opened.clock.as_ref(), until);
+    assert!(
+        parked_rx.recv().unwrap(),
+        "the join parks in its wait before the release"
+    );
+    assert_eq!(
+        detached, 0,
+        "a reader that finishes inside the grace is joined, not detached"
+    );
+    assert!(!gate.conns.published(id));
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn quiet_readers_stops_a_reader_and_leaves_its_socket_open() {
     reset();
     let opened = Opened::open(Vec::new());

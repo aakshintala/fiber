@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use fakes::Deadline;
 
+const DEADLINE: Duration = Duration::from_secs(10);
+
 fn write(dir: &std::path::Path, bytes: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("events.jsonl"), bytes).unwrap();
@@ -463,7 +465,14 @@ fn ended_watcher() -> (fakes::TempDir, Watcher) {
     .unwrap();
     let mut watcher = log.watch();
     drop(log);
-    assert!(watcher.recv().unwrap().is_none(), "the log's end");
+    assert!(
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("dropping the log ends its watchers")
+            .unwrap()
+            .is_none(),
+        "the log's end"
+    );
     (sessions, watcher)
 }
 

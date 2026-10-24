@@ -1252,12 +1252,29 @@ fn end_watchers_ends_a_watcher_after_its_queued_lines_and_keeps_the_lock() {
         ),
         "the session lock stays held"
     );
-    let queued = watcher.recv().unwrap().expect("the queued line first");
+    let queued = watcher
+        .recv_timeout(DEADLINE)
+        .expect("the queued line arrives")
+        .unwrap()
+        .expect("the queued line first");
     assert_eq!(queued.kind, "session_status");
-    assert!(watcher.recv().unwrap().is_none(), "then the end");
+    assert!(
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("the end arrives")
+            .unwrap()
+            .is_none(),
+        "then the end"
+    );
     // Idempotent.
     log.end_watchers();
-    assert!(watcher.recv().unwrap().is_none());
+    assert!(
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("the end still arrives")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -1267,13 +1284,35 @@ fn a_watcher_registered_after_end_watchers_starts_ended() {
     log.append(&status("idle"), None, None).unwrap();
     log.end_watchers();
     let mut plain = log.watch();
-    assert!(plain.recv().unwrap().is_none());
+    assert!(
+        plain
+            .recv_timeout(DEADLINE)
+            .expect("the late watcher starts ended")
+            .unwrap()
+            .is_none()
+    );
     let mut all = log.watch_all();
-    assert_eq!(all.recv().unwrap().expect("seq 0").kind, "fiber_started");
-    assert!(all.recv().unwrap().is_none());
+    assert_eq!(
+        all.recv_timeout(DEADLINE)
+            .expect("the first durable line arrives")
+            .unwrap()
+            .expect("seq 0")
+            .kind,
+        "fiber_started"
+    );
+    assert!(
+        all.recv_timeout(DEADLINE)
+            .expect("the end arrives after the durable lines")
+            .unwrap()
+            .is_none()
+    );
     let mut seeded = log.watch_all_seeded();
     let mut kinds = Vec::new();
-    while let Some(line) = seeded.recv().unwrap() {
+    while let Some(line) = seeded
+        .recv_timeout(DEADLINE)
+        .expect("the seeded lines arrive before the end")
+        .unwrap()
+    {
         kinds.push(line.kind);
     }
     assert_eq!(kinds, ["fiber_started", "session_status"]);
@@ -1284,7 +1323,13 @@ fn dropping_the_log_still_ends_the_watchers() {
     let (_sessions, log) = ended_log("log-unit-drop-ends");
     let mut watcher = log.watch();
     drop(log);
-    assert!(watcher.recv().unwrap().is_none());
+    assert!(
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("dropping the log ends its watchers")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -1319,7 +1364,11 @@ fn an_append_after_the_end_writes_nothing_and_returns_ended() {
         "session_status"
     );
     assert!(
-        watcher.recv().unwrap().is_none(),
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("the end arrives")
+            .unwrap()
+            .is_none(),
         "no new line before the end"
     );
 }
