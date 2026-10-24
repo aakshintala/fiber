@@ -10,7 +10,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::{Envelope, Seq, SessionId};
-use support::lock;
 
 use crate::offsets::{After, Offsets, Page};
 use crate::{EVENTS, Error, io_at, open_log};
@@ -783,7 +782,6 @@ mod tests;
 pub(crate) mod parked_after_end {
     use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
     use std::time::Duration;
-    use support::lock;
 
     /// How long [`wait`] waits for the park before failing the test.
     const BOUND: Duration = Duration::from_secs(10);

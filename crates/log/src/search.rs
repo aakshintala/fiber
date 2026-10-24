@@ -21,7 +21,6 @@ use contract::SessionId;
 use contract::diag::{Op, Timing};
 use contract::session_search::{Found, Hit, Label, Query, Scan};
 use contract::tool::Cancel;
-use support::lock;
 
 use crate::scan::SessionStarted;
 use crate::{EVENTS, project_key};

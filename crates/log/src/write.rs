@@ -17,7 +17,6 @@ use contract::emit::Emit;
 use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
-use support::lock;
 
 use crate::diag::{Diag, Timer, timed};
 use crate::offsets::Offsets;

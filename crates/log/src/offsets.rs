@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use contract::Envelope;
-use support::lock;
 
 use crate::read::{CAPACITY, PAGE_BYTES, complete_len};
 use crate::{Error, io_at};

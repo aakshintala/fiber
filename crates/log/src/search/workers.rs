@@ -10,7 +10,6 @@ use std::sync::{Mutex, PoisonError};
 use std::thread;
 
 use contract::tool::Cancel;
-use support::lock;
 
 use super::Collect;
 
@@ -69,7 +68,7 @@ pub(super) fn run(
             problems.push((index, session.take_problems()));
             hits.merge(session);
         }
-        lock(&found).push((hits, problems));
+        support::lock(&found).push((hits, problems));
     };
     thread::scope(|scope| {
         for _ in 1..workers {
