@@ -15,6 +15,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use super::marks;
+use crate::app::{App, NotedSurface, SpanRow, SurfaceId};
 use crate::format::{cut, width as cells, wrap_joined};
 use crate::mouse::{Target, TargetId};
 use crate::rows::Join;
@@ -583,6 +585,52 @@ pub(crate) fn body_text(row: &Row, room: usize) -> String {
         text.extend(right.iter().map(|span| span.content.clone()));
     }
     text
+}
+
+/// Notes an overlay's kept body rows with their copy text and paints
+/// the selection over them: each row's drawn cells with the choice
+/// gutter left out, titles, key-hint footers and blank gaps never
+/// copied (`docs/tui.md`, "Selection and copy"). `joins` runs parallel
+/// to the frame's body, saying how each row's text follows the row
+/// before it.
+pub(crate) fn note_overlay(
+    app: &App,
+    buf: &mut Buffer,
+    slab: Rect,
+    framed: &Overlay,
+    area: Rect,
+    place: Place,
+    joins: &[Join],
+) {
+    if slab.is_empty() {
+        return;
+    }
+    let (text_x, inner) = inner_width(slab);
+    let (_, placed) = body_rows(framed, area, place);
+    let mut noted = Vec::with_capacity(placed.len());
+    for (y, at) in placed {
+        let (Some(row), Some(join)) = (framed.body.get(at), joins.get(at)) else {
+            continue;
+        };
+        if row.spans.is_empty() {
+            continue;
+        }
+        let text = body_text(row, usize::from(inner));
+        noted.push(SpanRow {
+            y,
+            x: text_x,
+            end: slab.x.saturating_add(slab.width),
+            text,
+            join: *join,
+        });
+    }
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Overlay,
+        rows: noted,
+    });
+    for rect in app.selection_cells(SurfaceId::Overlay, slab) {
+        buf.set_style(rect.intersection(slab), marks::selection_style());
+    }
 }
 
 /// The slab an overlay takes and its drawn body rows' screen rows with

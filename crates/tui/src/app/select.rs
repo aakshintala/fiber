@@ -106,8 +106,10 @@ fn cells_range(text: &str, x: u16, from: u16, to: u16) -> Option<(u16, u16)> {
         }
         col = col.saturating_add(wide);
     }
+    // Both ends set always spans at least the setting cell: the end
+    // moves only forward from the start, so no guard is needed.
     match (start, end) {
-        (Some(start), Some(end)) if end > start => Some((start, end.min(x.saturating_add(col)))),
+        (Some(start), Some(end)) => Some((start, end.min(x.saturating_add(col)))),
         _ => None,
     }
 }

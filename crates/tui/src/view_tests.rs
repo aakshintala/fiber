@@ -4114,7 +4114,8 @@ fn a_drag_holds_a_fading_notice_until_after_the_release_copy() {
     let _ = report(&mut app, MouseKind::Press(Button::Left), at.0, at.1, t0);
     let _ = report(&mut app, MouseKind::Drag(Button::Left), at.0 + 4, at.1, t0);
     // Past the fade, mid-drag, the row still shows: the fade waits
-    // for the release.
+    // for the release (`docs/tui.md`, "Selection and copy": on
+    // release the copy happens first, then the waiting fade).
     app.sweep_notices(t0 + std::time::Duration::from_secs(30));
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
@@ -4218,4 +4219,148 @@ fn a_drag_across_a_wrapped_conversation_row_joins_with_no_newline() {
         ),
     );
     assert_eq!(effect, Effect::Copy(text));
+}
+
+/// A drag over the model picker copies the row's text: the picker
+/// reads as its own surface over the conversation
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_model_picker_copies_its_row() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    let at = cell_at(&mut app, 80, 24, "Reading");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 6, at.1));
+    assert_eq!(effect, Effect::Copy("Reading".to_owned()));
+}
+
+/// A drag over the `/keys` screen copies the frame's rows: the title
+/// and footer never copy (`docs/tui.md`, "Selection and copy").
+/// (The F1 key-map overlay draws through `key_map::draw`, not the
+/// swapped frame path, so it notes no selection rows; only the
+/// `/keys` screen exercises `select_frame`.)
+#[test]
+fn a_drag_over_the_keys_screen_copies_its_rows() {
+    use crate::app::Effect;
+    let mut app = empty();
+    app.open_keys();
+    let at = cell_at(&mut app, 80, 24, "Send a prompt");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 3, at.1));
+    assert_eq!(effect, Effect::Copy("Send".to_owned()));
+}
+
+/// A connected app attached to a session, holding a repository offer
+/// of `items`.
+fn offered(items: serde_json::Value, width: u16, height: u16) -> App {
+    use crate::link::Line;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(contract::SessionId(S_A.to_owned()));
+    app.set_size(width, height);
+    app.on_line(session_line(
+        S_A,
+        "repository_code_offered",
+        serde_json::json!({"request_id": "r_1", "items": items}),
+        None,
+    ));
+    assert!(app.offer_open());
+    app
+}
+
+/// A drag over the repository offer copies the row's text: the
+/// offer's body rows, the title never copying (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_drag_over_the_offer_copies_its_body_text() {
+    use crate::app::Effect;
+    let items = serde_json::json!([{
+        "kind": "mcp_server", "name": "db", "hash": "h", "required": true,
+        "summary": "MCP server: db\ndeclared in: .fiber/config.json\nruns: /bin/echo",
+    }]);
+    let mut app = offered(items, 80, 24);
+    let at = cell_at(&mut app, 80, 24, "declared in");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 7, at.1));
+    assert_eq!(effect, Effect::Copy("declared".to_owned()));
+}
+
+/// A drag over the login overlay copies its row's text: the login
+/// overlay reads as its own surface (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn a_drag_over_the_login_overlay_copies_its_row() {
+    use crate::app::Effect;
+    let mut app = empty();
+    let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_configure(Some(seam));
+    app.open_config_view(crate::app::ConfigView::Login);
+    let at = cell_at(&mut app, 80, 24, "No provider");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 10, at.1));
+    assert_eq!(effect, Effect::Copy("No provider".to_owned()));
+}
+
+/// A drag over the input box paints the selection tint over the
+/// covered cells and only those: the draft's range reads through its
+/// visible spans (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_input_box_paints_the_covered_cells() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for ch in "hello".chars() {
+        app.on_key(Key::Char(ch), fakes::clock::FakeClock::new().now());
+    }
+    let at = cell_at(&mut app, 80, 24, "hello");
+    // The column counts cells, not bytes: the input box's `› ` mark is
+    // multibyte.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut probe = Buffer::empty(area);
+    render(&app, area, &mut probe, None);
+    let row_text: String = (0..80)
+        .map(|col| {
+            probe
+                .cell((col, at.1))
+                .map(|cell| cell.symbol().to_owned())
+                .unwrap_or_default()
+        })
+        .collect();
+    let prefix = row_text.split("hello").next().unwrap_or_default();
+    let x = crate::text::to_u16(crate::text::width(prefix));
+    let at = (x, at.1);
+    let mut pointer = Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut press = |app: &mut App, kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = press(&mut app, MouseKind::Press(Button::Left), at.0 + 1, at.1);
+    let _ = press(&mut app, MouseKind::Drag(Button::Left), at.0 + 3, at.1);
+    let tint = crate::theme::Role::Selection.color();
+    let buf = buffer(&app, 80, 24);
+    // The covered cells carry the tint: the press and drag pieces, the
+    // release piece's cell not yet, as the copy reads the same pieces.
+    for col in [at.0 + 1, at.0 + 2] {
+        assert_eq!(
+            buf.cell((col, at.1)).map(|cell| cell.bg),
+            Some(tint),
+            "col {col} paints the selection"
+        );
+    }
+    assert_ne!(
+        buf.cell((at.0, at.1)).map(|cell| cell.bg),
+        Some(tint),
+        "before the drag stays plain"
+    );
+    assert_ne!(
+        buf.cell((at.0 + 3, at.1)).map(|cell| cell.bg),
+        Some(tint),
+        "past the drag stays plain"
+    );
 }

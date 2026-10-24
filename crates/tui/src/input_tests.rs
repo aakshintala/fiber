@@ -955,3 +955,34 @@ fn selected_text_reads_chars_paste_labels_and_image_labels() {
     );
     assert!(!draft.selected_text().unwrap().contains("l1\nl2"));
 }
+
+/// The selection's highlight rects at `width`: one `(row, start, end)`
+/// per covered row in reading order (`docs/tui.md`, "Selection and
+/// copy": the selection paints over every surface's own rects).
+#[test]
+fn selected_rects_cover_each_selected_row() {
+    let mut draft = typed("abcdefgh");
+    draft.select_at(2);
+    draft.select_to(7);
+    // Width 5 wraps after three text columns: the first row from the
+    // selection's start to its end, the middle row whole, the last
+    // row from its start to the selection's end.
+    assert_eq!(
+        draft.selected_rects(5),
+        vec![(0, 4, 5), (1, 0, 5), (2, 0, 3)]
+    );
+    // With no selection nothing highlights.
+    draft.clear_selection();
+    assert!(draft.selected_rects(5).is_empty());
+}
+
+/// A selection over pieces sharing one cell highlights nothing: the
+/// row's start and end meet, so the row drops out (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn selected_rects_skip_a_row_the_selection_does_not_cover() {
+    let mut draft = typed("a\u{200b}b");
+    draft.select_at(1);
+    draft.select_to(2);
+    assert!(draft.selected_rects(5).is_empty());
+}

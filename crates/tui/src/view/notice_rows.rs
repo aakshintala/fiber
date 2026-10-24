@@ -161,34 +161,7 @@ pub(super) fn overlay(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec
     let slab = overlay::draw(buf, area, &framed, Place::Centre, targets);
     // The overlay's text rows read through the same kept rows the draw
     // kept: titles, the key-hint legend and blank gaps never copy.
-    if !slab.is_empty() {
-        let (text_x, inner) = overlay::inner_width(slab);
-        let (_, placed) = overlay::body_rows(&framed, area, Place::Centre);
-        let mut noted = Vec::with_capacity(placed.len());
-        for (y, at) in placed {
-            let (Some(row), Some(join)) = (framed.body.get(at), joins.get(at)) else {
-                continue;
-            };
-            if row.spans.is_empty() {
-                continue;
-            }
-            let text = overlay::body_text(row, usize::from(inner));
-            noted.push(crate::app::SpanRow {
-                y,
-                x: text_x,
-                end: slab.x.saturating_add(slab.width),
-                text,
-                join: *join,
-            });
-        }
-        app.note_surface(crate::app::NotedSurface {
-            surface: crate::app::SurfaceId::Overlay,
-            rows: noted,
-        });
-        for rect in app.selection_cells(crate::app::SurfaceId::Overlay, slab) {
-            buf.set_style(rect.intersection(slab), super::marks::selection_style());
-        }
-    }
+    overlay::note_overlay(app, buf, slab, &framed, area, Place::Centre, &joins);
     slab
 }
 

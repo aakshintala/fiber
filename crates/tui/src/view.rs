@@ -355,7 +355,20 @@ pub(crate) fn render(
         None => {
             // The repository offer swaps in for the conversation.
             match app.offer_rows(conversation.width) {
-                Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
+                Some((rows, top)) => {
+                    offer::render(&rows, top, conversation, buf, &mut targets);
+                    // The offer reads as its own surface over the
+                    // conversation's rows: the body's drawn rows, the
+                    // title never copying
+                    // (`docs/tui.md`, "Selection and copy").
+                    app.note_surface(crate::app::NotedSurface {
+                        surface: crate::app::SurfaceId::Swapped,
+                        rows: offer::selection_rows(&rows, top, conversation),
+                    });
+                    for rect in app.selection_cells(crate::app::SurfaceId::Swapped, conversation) {
+                        buf.set_style(rect.intersection(conversation), marks::selection_style());
+                    }
+                }
                 // The search results swap in for the conversation while
                 // open (`docs/tui.md`, "Search", "Swapped views").
                 None => match app.find_results() {

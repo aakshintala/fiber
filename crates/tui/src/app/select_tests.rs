@@ -681,9 +681,11 @@ fn no_selection_on_home_or_under_a_cover() {
     assert!(app.notice_overlay().is_some());
     assert_eq!(tried(&mut app, at), None, "the notice overlay");
 
-    // The repository offer's swapped view.
+    // The repository offer's swapped view: the body's drawn rows read
+    // as the surface's text, so a drag over them selects (`docs/tui.md`,
+    // "Selection and copy"). The offer wiring notes the body's rows; the
+    // title row never copies.
     let mut app = replied(40, 10, "hello there");
-    let at = find(&app, "hello");
     app.on_line(line(
         "repository_code_offered",
         json!({"request_id": "r_1", "items": [{"kind": "mcp_server", "name": "a",
@@ -692,7 +694,12 @@ fn no_selection_on_home_or_under_a_cover() {
         None,
     ));
     assert!(app.offer_open());
-    assert_eq!(tried(&mut app, at), None, "the repository offer");
+    let at = find(&app, "MCP");
+    assert_eq!(
+        select(&mut app, at, right(at, 2)),
+        Effect::Copy("MCP".to_owned()),
+        "the repository offer"
+    );
 }
 
 #[test]
@@ -1443,4 +1450,70 @@ fn unclaimed_surfaces_highlight_nothing() {
         !app.selection_cells(SurfaceId::Conversation, area)
             .is_empty()
     );
+}
+
+/// `cells_range` pins the screen cells of `text`'s chars in `from..to`
+/// past `x`: `None` when no char shows there (`docs/tui.md`,
+/// "Selection and copy": the selection is screen cells).
+#[test]
+fn cells_range_pins_the_cells_covered() {
+    use super::cells_range;
+    // The whole text in range reads its cells past `x`.
+    assert_eq!(cells_range("ab", 10, 0, 2), Some((10, 12)));
+    // A middle slice reads only its own cells.
+    assert_eq!(cells_range("ab", 10, 1, 2), Some((11, 12)));
+    // An empty range covers nothing.
+    assert_eq!(cells_range("ab", 10, 1, 1), None);
+    // A range past the text covers nothing.
+    assert_eq!(cells_range("ab", 10, 5, 7), None);
+    // A range ending where the text starts covers nothing.
+    assert_eq!(cells_range("ab", 10, 0, 0), None);
+    // No text shows no cells.
+    assert_eq!(cells_range("", 10, 0, 2), None);
+    // A wide char reads both its cells while its first cell is in.
+    assert_eq!(cells_range("あ", 10, 0, 1), Some((10, 12)));
+    // Past the wide char nothing shows.
+    assert_eq!(cells_range("あ", 10, 2, 3), None);
+}
+
+/// A drag leaving a noted surface's box clamps to its edge cell: the
+/// nearest noted row to the clamped row, the last row on or above it
+/// (`docs/tui.md`, "Selection and copy": the drag selects within its
+/// surface and does not spill into a neighbour).
+#[test]
+fn a_drag_leaving_the_noted_box_clamps_to_the_nearest_row() {
+    use super::{NotedSurface, Selection};
+    use crate::app::SurfaceId;
+    use crate::rows::Join;
+    let noted = Selection::default();
+    noted.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            super::SpanRow {
+                y: 5,
+                x: 10,
+                end: 20,
+                text: "upper row".to_owned(),
+                join: Join::Break,
+            },
+            super::SpanRow {
+                y: 7,
+                x: 10,
+                end: 20,
+                text: "lower row".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    // Between the rows the drag reads as the upper row's end: the
+    // last noted row on or above the clamped row.
+    let clamped = noted
+        .clamp_noted(SurfaceId::Swapped, 30, 6)
+        .expect("inside the noted box");
+    assert_eq!(clamped, super::Point { row: 0, col: 9 });
+    // Below the box the drag reads as the lower row's end.
+    let clamped = noted
+        .clamp_noted(SurfaceId::Swapped, 30, 40)
+        .expect("inside the noted box");
+    assert_eq!(clamped, super::Point { row: 1, col: 9 });
 }

@@ -338,7 +338,9 @@ pub(crate) fn draw(
         select_frame(app, &frame, area, buf);
         None
     } else if let Some(login) = app.login_view() {
-        Some(login.draw(area, buf, targets))
+        // The login overlay reads as its own surface over the
+        // conversation's rows (`docs/tui.md`, "Selection and copy").
+        Some(login.draw_noted(app, area, buf, targets))
     } else if let Some(logout) = app.logout_view() {
         Some(logout.draw(area, buf, targets))
     } else if let Some(frame) = app.config_view_screen() {
