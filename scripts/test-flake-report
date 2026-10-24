@@ -2,20 +2,23 @@
 # The self-test for the flake report's write step (.github/workflows/ci.yml,
 # job flake_report; docs/testing/running.md, "Flaky tests"). It runs that
 # step's own script, cut from the workflow file, against a stub `gh` that
-# records each write and answers each read from the case's fixture, plus a
+# records each write and answers each read from the case's fixture, a
+# minimal `jq` fake answering only the step's fixed queries, plus a
 # decision artifact the case writes. Every write path is proven: a new
 # issue carrying the test-only label, a comment on an open issue, a pull
 # request comment for a failing file the pull request owns, and a validated
 # reopen with its sighting comment and needs-triage. Every no-write path
-# is proven: stale and unknown actions, the four reopen predicate
-# mismatches, a fetch that fails, a recheck that fails or finds an open
-# issue before reopen or create, a failed open lookup, an invalid or
-# missing decision, and the fail-closed guards on the decision result, the
-# decision artifact and the flake lists. A duplicate title writes once.
-# Each body names the tested commit: `tested <sha> = main <base> + head
-# <head>` on a pull request run with two parents, and `tested <sha>` on a
-# push run or a pull request run with one parent. Nothing reaches the
-# GitHub API.
+# is proven: stale and source-aware unknown actions, the four reopen
+# predicate mismatches, a fetch that fails, a recheck that fails or finds
+# an open issue before reopen or create, a failed open lookup, an invalid
+# or missing decision, and the fail-closed guards on the decision result,
+# the decision artifact and the flake lists. A duplicate title writes
+# once. It also exercises scripts/flaky-tests on malformed XML, proving
+# collection fails with no list (the incomplete marker path) instead of a
+# complete empty list. Each body names the tested commit:
+# `tested <sha> = main <base> + head <head>` on a pull request run with
+# two parents, and `tested <sha>` on a push run or a pull request run with
+# one parent. Nothing reaches the GitHub API.
 #
 # Usage: scripts/test-flake-report
 set -euo pipefail
@@ -120,6 +123,123 @@ gh() {
 EOF
 cat "$tmp/stub.sh" "$tmp/step.sh" >"$tmp/run.sh"
 
+# `jq` is absent on the Linux runners (docs/testing/running.md, "Running
+# tests"), so the writer's fixed queries run against this minimal fake. It
+# answers only the exact filters the step uses and fails any other filter,
+# so a new query is added here deliberately. The full JSON contract lives
+# in the Rust tests.
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/jq" <<'EOF'
+#!/usr/bin/env python3
+"""Minimal jq for the flake report writer's fixed queries only."""
+import json
+import sys
+
+
+def fail(message):
+    sys.stderr.write(f"stub jq: {message}\n")
+    sys.exit(2)
+
+
+argv = sys.argv[1:]
+args = {}
+positionals = []
+i = 0
+while i < len(argv):
+    if argv[i] in ("-r", "-s", "-e", "-c"):
+        pass
+    elif argv[i] == "--arg":
+        args[argv[i + 1]] = argv[i + 2]
+        i += 2
+    elif argv[i].startswith("-") and argv[i] != "-":
+        fail(f"unsupported flag {argv[i]}")
+    else:
+        positionals.append(argv[i])
+    i += 1
+if not positionals:
+    fail("want a filter")
+fil = positionals[0]
+
+
+def read_docs():
+    if positionals[1:]:
+        text = ""
+        for path in positionals[1:]:
+            with open(path, encoding="utf-8") as handle:
+                text += handle.read() + "\n"
+    else:
+        text = sys.stdin.read()
+    docs = []
+    decoder = json.JSONDecoder()
+    rest = text.strip()
+    while rest:
+        try:
+            doc, end = decoder.raw_decode(rest)
+        except json.JSONDecodeError as err:
+            fail(f"invalid JSON: {err}")
+        docs.append(doc)
+        rest = rest[end:].strip()
+    return docs
+
+
+title = args.get("t", "")
+
+if ".[0].number // empty" in fil:
+    # The open lookup: slurped paginated pages, the first exact-title
+    # issue that is not a pull request.
+    for doc in read_docs():
+        items = doc if isinstance(doc, list) else [doc]
+        found = None
+        for item in items:
+            if (
+                isinstance(item, dict)
+                and item.get("title") == title
+                and item.get("pull_request") is None
+            ):
+                found = item.get("number")
+                break
+        if isinstance(found, int):
+            print(found)
+            break
+elif fil == "select(.title == $t)":
+    # The decision for this title: one compact line per match.
+    for doc in read_docs():
+        if isinstance(doc, dict) and doc.get("title") == title:
+            print(json.dumps(doc, sort_keys=True))
+elif fil in (".action // empty", ".issue // empty", ".source // empty"):
+    # One field of the selected decision line.
+    key = fil.split()[0][1:]
+    for doc in read_docs():
+        value = doc.get(key) if isinstance(doc, dict) else None
+        if isinstance(value, str):
+            print(value)
+        elif isinstance(value, int):
+            print(value)
+elif ".pull_request == null and" in fil and ".state" in fil:
+    # The reopen validation of the single fetched issue.
+    docs = read_docs()
+    fetched = docs[0] if docs else None
+    labels = []
+    if isinstance(fetched, dict):
+        labels = [
+            label.get("name")
+            for label in fetched.get("labels", [])
+            if isinstance(label, dict)
+        ]
+    ok = (
+        isinstance(fetched, dict)
+        and fetched.get("pull_request") is None
+        and fetched.get("state") == "closed"
+        and fetched.get("title") == title
+        and "test-only" in labels
+    )
+    sys.exit(0 if ok else 1)
+else:
+    fail(f"unsupported filter: {fil}")
+EOF
+chmod +x "$tmp/bin/jq"
+export PATH="$tmp/bin:$PATH"
+
 sha=1111111111111111111111111111111111111111
 base=2222222222222222222222222222222222222222
 head=3333333333333333333333333333333333333333
@@ -140,11 +260,13 @@ body() {
   printf '%s\n%s\n%s\n%s\n%s' "$1" "$2" "$fence" "$detail" "$fence"
 }
 
-# setup_case DIR: the sandbox for one case.
+# setup_case DIR: the sandbox for one case. The writer reads the
+# combined artifact layout: the decisions plus the runner lists in one
+# directory.
 setup_case() {
   dir=$tmp/$1
-  mkdir -p "$dir/temp/flaky" "$dir/calls"
-  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+  mkdir -p "$dir/temp/report-data" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/report-data/flaky-tests-linux.txt"
 }
 
 # run_step DIR EVENT PR PARENTS COMPARE PR_FILES OPEN ISSUE DECISIONS
@@ -231,7 +353,8 @@ issue9='{"number": 9, "title": "'"$title"'", "state": "closed", "labels": [{"nam
 decide_new='{"action": "file-new", "title": "'"$title"'"}'
 decide_reopen='{"action": "reopen", "issue": 9, "title": "'"$title"'"}'
 decide_stale='{"action": "stale", "issue": 9, "title": "'"$title"'"}'
-decide_unknown='{"action": "unknown", "title": "'"$title"'"}'
+decide_unknown='{"action": "unknown", "source": "closed", "title": "'"$title"'"}'
+decide_unknown_bare='{"action": "unknown", "title": "'"$title"'"}'
 
 sighting=$(printf 'comment 9\n%s' "$(body "$plain" "$push_tested")")
 
@@ -292,17 +415,18 @@ expect_writes "$tmp/pr-one-parent" 1
 expect_write "$tmp/pr-one-parent" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$see_pr" "$push_tested")")"
 
 # No open issue and a validated reopen decision: reopen, comment the
-# sighting, and put needs-triage back on, in no promised order.
+# sighting, and put needs-triage back on. Each effect is asserted by
+# content, wherever it lands; no total counts a transport order.
 setup_case decide-reopen
 printf '%s\n' "$decide_reopen" >"$tmp/decide-reopen/decisions.jsonl"
 code=$(run_step "$tmp/decide-reopen" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl)
 expect_exit decide-reopen "$code" 0
-expect_writes "$tmp/decide-reopen" 3
 expect_present "$tmp/decide-reopen" "reopen 9"
 expect_present "$tmp/decide-reopen" "$sighting"
 expect_present "$tmp/decide-reopen" "label 9 needs-triage"
 
-# Stale and unknown actions file nothing and say so in the summary.
+# Stale and source-aware unknown actions file nothing and say so in the
+# summary, naming the failed lookup.
 setup_case decide-stale
 printf '%s\n' "$decide_stale" >"$tmp/decide-stale/decisions.jsonl"
 code=$(run_step "$tmp/decide-stale" push "" "" "" "" "$empty_open" "" decisions.jsonl)
@@ -315,7 +439,14 @@ printf '%s\n' "$decide_unknown" >"$tmp/decide-unknown/decisions.jsonl"
 code=$(run_step "$tmp/decide-unknown" push "" "" "" "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-unknown "$code" 0
 expect_writes "$tmp/decide-unknown" 0
-expect_summary "$tmp/decide-unknown" "unknown fix: $title stays closed: a lookup failed, so nothing is filed"
+expect_summary "$tmp/decide-unknown" "unknown closed: $title stays closed: the closed lookup failed, so nothing is filed"
+
+setup_case decide-unknown-no-source
+printf '%s\n' "$decide_unknown_bare" >"$tmp/decide-unknown-no-source/decisions.jsonl"
+code=$(run_step "$tmp/decide-unknown-no-source" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit decide-unknown-no-source "$code" 0
+expect_writes "$tmp/decide-unknown-no-source" 0
+expect_summary "$tmp/decide-unknown-no-source" "unknown fix: $title stays closed: a lookup failed, so nothing is filed"
 
 # Each reopen predicate mismatch files nothing: a pull request, an open
 # issue, another title, and a missing flake label.
@@ -431,11 +562,11 @@ setup_case guard-no-artifact
 code=$(run_step "$tmp/guard-no-artifact" push "" "" "" "" "$empty_open" "" missing.jsonl)
 expect_exit guard-no-artifact "$code" 1
 expect_writes "$tmp/guard-no-artifact" 0
-expect_summary "$tmp/guard-no-artifact" "the flake-decisions artifact is missing: no write"
+expect_summary "$tmp/guard-no-artifact" "the flake-report-data artifact is missing: no write"
 
 setup_case guard-no-lists
 printf '%s\n' "$decide_new" >"$tmp/guard-no-lists/decisions.jsonl"
-rm -rf "$tmp/guard-no-lists/temp/flaky"
+rm -f "$tmp/guard-no-lists/temp/report-data"/flaky-tests-*.txt
 code=$(run_step "$tmp/guard-no-lists" push "" "" "" "" "$empty_open" "" decisions.jsonl)
 expect_exit guard-no-lists "$code" 1
 expect_writes "$tmp/guard-no-lists" 0
@@ -443,13 +574,43 @@ expect_summary "$tmp/guard-no-lists" "flake_decide found flakes but their lists 
 
 # A duplicate title across runner lists writes once.
 setup_case duplicate-title
-printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-linux.txt"
-printf '%s\t%s\n' "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-arm.txt"
+printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name" "$detail" >"$tmp/duplicate-title/temp/report-data/flaky-tests-linux.txt"
+printf '%s\t%s\n' "$name" "$detail" >"$tmp/duplicate-title/temp/report-data/flaky-tests-arm.txt"
 printf '%s\n' "$decide_new" >"$tmp/duplicate-title/decisions.jsonl"
 code=$(run_step "$tmp/duplicate-title" push "" "" "" "" "$empty_open" "" decisions.jsonl)
 expect_exit duplicate-title "$code" 0
 expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
+
+# A malformed JUnit file fails collection with no list, so the producer
+# marks the collection incomplete instead of a complete empty list. An
+# empty file is the complete empty list. The marker is the file the
+# workflow uploads beside the list: true only when the parser exits 0.
+printf '<testsuite><broken' >"$tmp/malformed.xml"
+if out=$(scripts/flaky-tests "$tmp/malformed.xml" 2>"$tmp/malformed.err"); then
+  fail "malformed XML must fail collection"
+fi
+[ -z "$out" ] || fail "malformed XML must print no list"
+[ -s "$tmp/malformed.err" ] || fail "malformed XML must explain itself"
+if scripts/flaky-tests "$tmp/malformed.xml" >"$tmp/malformed-list.txt" 2>/dev/null; then
+  complete=true
+else
+  complete=false
+fi
+[ "$complete" = false ] || fail "malformed XML must mark the collection incomplete"
+[ -s "$tmp/malformed-list.txt" ] && fail "malformed XML must leave no list"
+echo false >"$tmp/malformed-marker.txt"
+[ "$(cat "$tmp/malformed-marker.txt")" = false ] || fail "the incomplete marker must read false"
+: >"$tmp/empty.xml"
+if scripts/flaky-tests "$tmp/empty.xml" >"$tmp/empty-list.txt" 2>/dev/null; then
+  complete=true
+else
+  complete=false
+fi
+[ "$complete" = true ] || fail "empty XML must mark the collection complete"
+[ ! -s "$tmp/empty-list.txt" ] || fail "empty XML must print no list"
+echo true >"$tmp/empty-marker.txt"
+[ "$(cat "$tmp/empty-marker.txt")" = true ] || fail "the complete marker must read true"
 
 echo "scripts/test-flake-report: ok"

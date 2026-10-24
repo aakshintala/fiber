@@ -31,14 +31,24 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
-//! - `flake-report`: reads one JSON object on stdin carrying the flake
-//!   titles, the complete open and closed exact-title issue lookups with
-//!   their completeness, the selected issues' event lists and the
-//!   `merge-base --is-ancestor` results, and prints one JSON object per
-//!   line: `{"action": ..., "issue": ..., "title": ...}` for every unique
-//!   title with no open match (`reopen`, `file-new`, `stale`, `unknown`);
-//!   a complete open match prints nothing
+//! - `flake-report-events`: reads one JSON object on stdin carrying the
+//!   flake titles and the complete open and closed exact-title issue
+//!   lookups with their completeness, and prints the unique closed issue
+//!   numbers whose event lists the workflow must fetch, one per line;
+//!   titles decided without events request nothing
 //!   (`docs/testing/running.md`, "Flaky tests")
+//! - `flake-report [--tested-commit SHA]`: reads one JSON object on stdin
+//!   carrying the flake titles, the complete open and closed exact-title
+//!   issue lookups with their completeness and the requested issues'
+//!   event lists, and prints one JSON object per line:
+//!   `{"action": ..., "issue": ..., "source": ..., "title": ...}` for
+//!   every unique title with no open match (`reopen`, `file-new`,
+//!   `stale`, `unknown`, with the failed lookup `source` on unknown);
+//!   a complete open match prints nothing
+//!   (`docs/testing/running.md`, "Flaky tests"). With `--tested-commit`
+//!   it probes ancestry itself with `git merge-base --is-ancestor`, but
+//!   only for each title's latest closed event's non-null commit; without
+//!   it every fix probes unknown
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
@@ -350,6 +360,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             &ci_needs::check(&read(ci_needs::WORKFLOW)?, &read(ci_needs::CI_DOC)?)?,
             "every job but ci and the report jobs is in the ci job's needs",
         ),
+        "flake-report-events" => {
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let input: Value =
+                serde_json::from_str(&body).map_err(|e| format!("flake-report-events: {e}"))?;
+            for number in flake_report::event_requests(&input)? {
+                println!("{}", number.0);
+            }
+            Ok(true)
+        }
         "flake-report" => {
             let mut body = String::new();
             std::io::stdin()
@@ -357,7 +379,12 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .map_err(|e| format!("stdin: {e}"))?;
             let input: Value =
                 serde_json::from_str(&body).map_err(|e| format!("flake-report: {e}"))?;
-            for decision in flake_report::decide(&input)? {
+            let tested = optional(rest, "--tested-commit");
+            for decision in flake_report::decide_with(&input, &|fix| {
+                tested
+                    .as_deref()
+                    .and_then(|commit| ancestor_of(fix, commit))
+            })? {
                 println!("{}", decision.line());
             }
             Ok(true)
@@ -459,6 +486,26 @@ fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
 
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Whether `fix` is an ancestor of `tested`: `None` when the object is
+/// missing or Git errors, which the decision reports as unknown.
+fn ancestor_of(fix: &str, tested: &str) -> Option<bool> {
+    let exists = Command::new("git")
+        .args(["cat-file", "-e", fix])
+        .status()
+        .ok()?
+        .success();
+    if !exists {
+        return None;
+    }
+    Some(
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", fix, tested])
+            .status()
+            .ok()?
+            .success(),
+    )
 }
 
 fn output(program: &str, args: &[&str]) -> Result<String, String> {

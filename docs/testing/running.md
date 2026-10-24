@@ -112,7 +112,9 @@ a test has several closed issues, the most recently closed is the one: the
 greatest close time wins, and on a tie the higher issue number. Where the
 issue has several `closed` events, the latest wins the same way: the
 greatest `created_at`, and on a tie the greater event `id`. Only a test with
-no flake issue at all gets a new one.
+no flake issue at all gets a new one. The decision emits exactly one action
+per unique title, whatever the runner lists repeat; the unit tests assert
+that contract.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.

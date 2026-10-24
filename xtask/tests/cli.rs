@@ -875,6 +875,17 @@ fn flake_report_prints_one_json_line_per_unmatched_title() {
 }
 
 #[test]
+fn flake_report_events_prints_only_numbers_needing_event_fetches() {
+    let dir = TempDir::new("xtask-flake-report-events");
+    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}}";
+    assert_eq!(
+        xtask(&dir, &["flake-report-events"], &[], INPUT),
+        (0, "9\n".to_owned())
+    );
+    assert_eq!(xtask(&dir, &["flake-report-events"], &[], "{}").0, 2);
+}
+
+#[test]
 fn an_unknown_or_missing_command_is_an_error() {
     let dir = TempDir::new("xtask-unknown");
     assert_eq!(
