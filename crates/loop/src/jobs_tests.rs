@@ -976,7 +976,7 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
 
 #[test]
 fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
-    // `docs/tools.md`, "Background jobs": delegate and job ends are delivered in order.
+    // `docs/delegates.md`, "Events": `delegate_finished` precedes `job_completed`.
     let mut world = finish_suspended_turn(true, true);
     let lines = log::read(&world.dir).unwrap();
     // The finishing turn recorded the waiting start with no turn and no action.
