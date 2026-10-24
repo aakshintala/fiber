@@ -5,7 +5,7 @@ use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use std::io::{self, Cursor};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 /// Builds a TLS config using the same OS trust-store policy as HTTPS calls.
 pub fn client_config() -> Arc<ClientConfig> {
@@ -153,7 +153,7 @@ impl Socket {
         let Some(state) = &self.shared.state else {
             return Ok(plaintext.unwrap_or_default().to_vec());
         };
-        let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = support::lock(state);
         if let Some(bytes) = plaintext {
             state.writer().write_all(bytes)?;
         }
@@ -164,11 +164,7 @@ impl Socket {
         Ok(records)
     }
     fn send(&self, plaintext: Option<&[u8]>) -> io::Result<()> {
-        let _send = self
-            .shared
-            .send
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _send = support::lock(&self.shared.send);
         let records = self.outgoing(plaintext)?;
         #[cfg(test)]
         if std::thread::current().name() == Some("net-ws-out")
@@ -189,11 +185,7 @@ impl Read for Socket {
             return if n == 0 { self.tcp.read(bytes) } else { Ok(n) };
         };
         loop {
-            let read = state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .reader()
-                .read(bytes);
+            let read = support::lock(state).reader().read(bytes);
             match read {
                 Ok(n) => return Ok(n),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
@@ -209,7 +201,7 @@ impl Read for Socket {
                 self.prefix = Cursor::new(encrypted.get(..n).unwrap_or_default().to_vec());
             }
             let pending = {
-                let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut state = support::lock(state);
                 // Feed TCP EOF too: rustls distinguishes close_notify from truncation.
                 state.read_tls(&mut self.prefix)?;
                 state.process_new_packets().map_err(io::Error::other)?;

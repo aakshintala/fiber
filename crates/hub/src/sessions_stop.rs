@@ -17,7 +17,7 @@ use std::io::{BufReader, ErrorKind};
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -34,6 +34,7 @@ use crate::connection::Hub;
 pub(crate) mod transport;
 use crate::relay::valid_session_id;
 use crate::tick::Wait;
+use support::lock;
 
 /// How long a sessions stop waits for every session to confirm closed,
 /// from the first zero-wait to the answer: inside the CLI's stop exchange
@@ -427,10 +428,6 @@ fn finish(
         confirmed,
         unconfirmed,
     }
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

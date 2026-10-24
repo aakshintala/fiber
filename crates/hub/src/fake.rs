@@ -9,13 +9,14 @@ use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
 use serde_json::Value;
+use support::lock;
 
 use crate::{Started, Starter};
 
@@ -722,10 +723,6 @@ fn write_ack(writer: &mut UnixStream, prompt: &str, reply: &Handshake) {
 
 fn refused(path: &Path, error: &std::io::Error) -> std::io::Error {
     std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// A `session_status` payload: `state` is `"idle"`, or `"waiting"` with a
