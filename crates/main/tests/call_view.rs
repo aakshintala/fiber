@@ -346,7 +346,7 @@ fn any_marked(grid: &Grid) -> bool {
 /// once the rescan lands.
 fn scoped_search(run: &mut Run) {
     run.write(b"\x06TAIL");
-    run.wait_screen("the scoped tail hit", |grid| tail_row_marked(grid));
+    run.wait_screen("the scoped tail hit", tail_row_marked);
     run.write(b"\x7f\x7f\x7f\x7fDoing");
     run.wait_screen("the scoped miss", |grid| !any_marked(grid));
     // Esc closes the find bar; the view stays open on its footer, and
@@ -372,10 +372,10 @@ fn base64_decode(text: &str) -> Vec<u8> {
             _ => panic!("bad base64 byte: {byte}"),
         }
     }
-    assert!(text.len() % 4 == 0, "padded base64 comes in quads");
+    assert!(text.len().is_multiple_of(4), "padded base64 comes in quads");
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for quad in bytes.chunks_exact(4) {
+    for quad in bytes.chunks(4) {
         let pad = quad.iter().rev().take_while(|byte| **byte == b'=').count();
         assert!(pad <= 2, "at most two pad bytes: {text:?}");
         let word = (six(quad[0]) << 18) | (six(quad[1]) << 12) | (six(quad[2]) << 6) | six(quad[3]);
@@ -542,7 +542,7 @@ fn a_head_only_fetch_cut_pages_with_one_marker() {
     assert_view_chrome(&grid, "Other", &url, false);
     assert_snapshot!(
         "call_view_one_end_open",
-        snapshot_text(&setup, &grid, &[url.clone()])
+        snapshot_text(&setup, &grid, std::slice::from_ref(&url))
     );
     // Search stays scoped to the view: the tail hit counts once, and the
     // ledger's thought behind the view counts never.
