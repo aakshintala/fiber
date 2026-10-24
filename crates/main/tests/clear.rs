@@ -126,7 +126,10 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     let command = format!("sh {}", script.display());
     scripted(
         &setup,
-        json!([{"tool_calls": [{"name": "shell", "arguments": {"command": command}}]}]),
+        json!([
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"text": ["done."]},
+        ]),
     );
     // A shell call is reviewed; a global standing rule allows this one, so
     // the turn runs instead of waiting on an approval.
