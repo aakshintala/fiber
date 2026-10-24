@@ -17,10 +17,6 @@ const COPY_FAILED: &str = "Could not copy: history could not be loaded.";
 
 /// Which text surface a selection lives on: the press claims one, and
 /// the drag stays inside it (`docs/tui.md`, "Selection and copy").
-#[allow(
-    dead_code,
-    reason = "Task 4 claims every other surface; only two press arms exist yet"
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfaceId {
     /// The conversation's rows.
@@ -43,6 +39,48 @@ pub(crate) enum SurfaceId {
     Home,
 }
 
+/// One drawn text row a surface noted while the last frame drew it:
+/// the visible text cells with everything decorative left out by the
+/// renderer that recorded it (`docs/tui.md`, "Selection and copy").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpanRow {
+    /// The row's screen row.
+    pub(crate) y: u16,
+    /// The screen column of its first text cell.
+    pub(crate) x: u16,
+    /// The screen column past its last text cell.
+    pub(crate) end: u16,
+    /// Its visible text, in reading order.
+    pub(crate) text: String,
+    /// How its text follows the row before it: a new line, a word
+    /// broken at the edge, or a dropped wrap space
+    /// (`docs/tui.md`, "Selection and copy").
+    pub(crate) join: crate::rows::Join,
+}
+
+/// A surface's noted text rows, in reading order, from the frame that
+/// drew them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NotedSurface {
+    pub(crate) surface: SurfaceId,
+    pub(crate) rows: Vec<SpanRow>,
+}
+
+/// The hit-test order over noted surfaces: a framed overlay covers
+/// everything under it, then the swapped view, the request panel, the
+/// panel and the rail beside the conversation and the notices above the
+/// working line. The input box and the conversation are claimed
+/// geometrically, not from notes.
+const NOTE_ORDER: [SurfaceId; 7] = [
+    SurfaceId::Overlay,
+    SurfaceId::Swapped,
+    SurfaceId::Request,
+    SurfaceId::Panel,
+    SurfaceId::Rail,
+    SurfaceId::Notices,
+    SurfaceId::Home,
+];
+
 /// A cell of a surface: its surface-local row and its column in the
 /// surface's area. Ordered by row, then column, as text reads. On the
 /// input box the row is a draft piece index and the column is unused.
@@ -50,6 +88,47 @@ pub(crate) enum SurfaceId {
 pub(crate) struct Point {
     pub(crate) row: usize,
     pub(crate) col: u16,
+}
+
+/// The screen columns of `text`'s chars in cells `from..to` past `x`:
+/// `None` when no char shows there.
+fn cells_range(text: &str, x: u16, from: u16, to: u16) -> Option<(u16, u16)> {
+    let mut col = 0u16;
+    let mut start = None;
+    let mut end = None;
+    for ch in text.chars() {
+        let wide = u16::try_from(crate::format::width(&ch.to_string())).unwrap_or(u16::MAX);
+        if col < to && col.saturating_add(wide) > from {
+            if start.is_none() {
+                start = Some(x.saturating_add(col));
+            }
+            end = Some(x.saturating_add(col).saturating_add(wide));
+        }
+        col = col.saturating_add(wide);
+    }
+    match (start, end) {
+        (Some(start), Some(end)) if end > start => Some((start, end.min(x.saturating_add(col)))),
+        _ => None,
+    }
+}
+
+/// The chars of `text` drawn in cells `from..to`: whole graphemes
+/// only, a wide char kept when its first cell is in. Cell offsets count
+/// display columns, as the noted rows do.
+fn slice_cells(text: &str, from: u16, to: u16) -> String {
+    let mut out = String::new();
+    let mut col = 0u16;
+    for ch in text.chars() {
+        let wide = u16::try_from(crate::format::width(&ch.to_string())).unwrap_or(u16::MAX);
+        if col >= to {
+            break;
+        }
+        if col.saturating_add(wide) > from {
+            out.push(ch);
+        }
+        col = col.saturating_add(wide);
+    }
+    out
 }
 
 /// A selection's copy waiting on dropped pages: its ends and the pages it
@@ -79,6 +158,10 @@ pub(in crate::app) struct Selection {
     /// while the last frame drew it: the press and drag map their cells
     /// through it. `None` while the box draws nothing.
     input_note: std::cell::RefCell<Option<(Rect, usize)>>,
+    /// Every other text surface's noted rows, topmost first, from the
+    /// frame that drew them. The press claims the topmost surface whose
+    /// rows hold its cell.
+    notes: std::cell::RefCell<Vec<NotedSurface>>,
 }
 
 impl Selection {
@@ -149,6 +232,153 @@ impl Selection {
         *self.input_note.borrow()
     }
 
+    /// Notes `surface`'s drawn text rows. Empty rows note nothing, so a
+    /// surface squeezed to nothing takes the old path. A surface may
+    /// note twice in one frame for two disjoint regions, such as home's
+    /// notice overlay under its question.
+    pub(crate) fn note_surface(&self, noted: NotedSurface) {
+        if noted.rows.is_empty() {
+            return;
+        }
+        self.notes.borrow_mut().push(noted);
+    }
+
+    /// Drops every surface's note, before the next frame notes its own.
+    pub(crate) fn clear_notes(&self) {
+        self.notes.borrow_mut().clear();
+    }
+
+    /// The noted rows of `surface`, in reading order, every region the
+    /// frame noted.
+    fn noted_rows(&self, surface: SurfaceId) -> Vec<SpanRow> {
+        self.notes
+            .borrow()
+            .iter()
+            .filter(|slot| slot.surface == surface)
+            .flat_map(|slot| slot.rows.clone())
+            .collect()
+    }
+
+    /// The noted cell of `surface` under `col`, `row`: the row holding
+    /// it, else the nearest row when the press lands inside the
+    /// surface's box but on no text (a blank gap or an empty row), so a
+    /// press on the surface's chrome cannot fall through to the surface
+    /// beneath it. `None` outside the box.
+    fn noted_press(&self, surface: SurfaceId, col: u16, row: u16) -> Option<Point> {
+        if let Some(point) = self.noted_at(surface, col, row) {
+            return Some(point);
+        }
+        let area = self.noted_box(surface)?;
+        if area.is_empty()
+            || col < area.x
+            || col >= area.right()
+            || row < area.y
+            || row >= area.bottom()
+        {
+            return None;
+        }
+        self.clamp_noted(surface, col, row)
+    }
+
+    /// The noted row holding cell `col`, `row` of `surface`: its index
+    /// with the cell's offset past its first text cell. `None` on no
+    /// noted row.
+    fn noted_at(&self, surface: SurfaceId, col: u16, row: u16) -> Option<Point> {
+        let rows = self.noted_rows(surface);
+        let (at, span) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, span)| row == span.y && col >= span.x && col < span.end.max(span.x))?;
+        // Past the text, the press reads as the text's end: chrome
+        // holds no text to start from.
+        let wide = u16::try_from(crate::format::width(&span.text)).unwrap_or(u16::MAX);
+        Some(Point {
+            row: at,
+            col: col.saturating_sub(span.x).min(wide),
+        })
+    }
+
+    /// The noted rows' bounding box on screen: where a drag clamps.
+    /// `None` while the surface noted nothing.
+    fn noted_box(&self, surface: SurfaceId) -> Option<Rect> {
+        let rows = self.noted_rows(surface);
+        let top = rows.iter().map(|span| span.y).min()?;
+        let bottom = rows.iter().map(|span| span.y).max()?.saturating_add(1);
+        let left = rows.iter().map(|span| span.x).min().unwrap_or(0);
+        let right = rows.iter().map(|span| span.end).max().unwrap_or(0);
+        Some(Rect::new(
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
+        ))
+    }
+
+    /// The nearest cell of a noted `surface` to `col`, `row`: a drag
+    /// outside the surface clamps to its edge cell.
+    fn clamp_noted(&self, surface: SurfaceId, col: u16, row: u16) -> Option<Point> {
+        let area = self.noted_box(surface)?;
+        if area.is_empty() {
+            return None;
+        }
+        let clamped_col = col.clamp(area.x, area.right().saturating_sub(1).max(area.x));
+        let rows = self.noted_rows(surface);
+        let clamped_row = row.clamp(area.y, area.bottom().saturating_sub(1));
+        // The nearest noted row to the clamped row: rows read top to
+        // bottom, so the last row on or above it, else the first.
+        let (at, span) = rows
+            .iter()
+            .enumerate()
+            .rfind(|(_, span)| span.y <= clamped_row)
+            .or_else(|| rows.iter().enumerate().next())?;
+        // Past the text, the drag reads as the text's end, as the
+        // conversation's clamp does.
+        let wide = u16::try_from(crate::format::width(&span.text)).unwrap_or(u16::MAX);
+        Some(Point {
+            row: at,
+            col: clamped_col.saturating_sub(span.x).min(wide),
+        })
+    }
+
+    /// The text of the noted rows from `from` to `to`: each row's cells
+    /// in the range, trailing spaces dropped; rows a wrap joins onto the
+    /// next with no newline, other rows ending the line.
+    fn noted_text(&self, surface: SurfaceId, from: Point, to: Point) -> String {
+        let rows = self.noted_rows(surface);
+        let (start, end) = (from.min(to), from.max(to));
+        let mut parts: Vec<String> = Vec::new();
+        let mut line = String::new();
+        let mut first = true;
+        for (at, span) in rows.iter().enumerate() {
+            if at < start.row || at > end.row {
+                continue;
+            }
+            if !first {
+                match span.join {
+                    crate::rows::Join::Break => parts.push(std::mem::take(&mut line)),
+                    crate::rows::Join::Wrap => {}
+                    crate::rows::Join::WrapSpace => line.push(' '),
+                }
+            }
+            first = false;
+            let from_col = if at == start.row { start.col } else { 0 };
+            let to_col = if at == end.row {
+                end.col.saturating_add(1)
+            } else {
+                u16::MAX
+            };
+            let mut fragment = slice_cells(&span.text, from_col, to_col);
+            // Trailing spaces on each row are dropped: a wrap's joint
+            // reads as no gap at all.
+            while fragment.ends_with(' ') {
+                fragment.pop();
+            }
+            line.push_str(&fragment);
+        }
+        parts.push(line);
+        parts.join("\n")
+    }
+
     /// The selection's ends in reading order, while one shows.
     pub(in crate::app) fn span(&self) -> Option<(Point, Point)> {
         let (anchor, head) = (self.anchor?, self.head?);
@@ -210,6 +440,9 @@ impl App {
                 self.notices.release();
                 match (self.select.surface(), self.select.release()) {
                     (Some(SurfaceId::Input), Some(_)) => self.copy_input(),
+                    (Some(surface), Some((from, to))) if surface != SurfaceId::Conversation => {
+                        self.copy_noted(surface, from, to)
+                    }
                     (_, Some((from, to))) => self.copy_selection(from, to),
                     (_, None) => Effect::None,
                 }
@@ -223,14 +456,20 @@ impl App {
     }
 
     /// The surface a left press at `col`, `row` claims, with its local
-    /// cell: the input box first, else the conversation's text. `None`
-    /// where no selectable surface shows.
+    /// cell: the topmost noted surface holding the cell, else the input
+    /// box, else the conversation's text. `None` where no selectable
+    /// surface shows.
     fn press_at(
         &self,
         col: u16,
         row: u16,
         targets: &[mouse::Target],
     ) -> Option<(SurfaceId, Point)> {
+        for surface in NOTE_ORDER {
+            if let Some(point) = self.select.noted_press(surface, col, row) {
+                return Some((surface, point));
+            }
+        }
         if let Some(point) = self.input_at(col, row) {
             return Some((SurfaceId::Input, point));
         }
@@ -289,8 +528,18 @@ impl App {
             | SurfaceId::Request
             | SurfaceId::Swapped
             | SurfaceId::Overlay
-            | SurfaceId::Home => None,
+            | SurfaceId::Home => self.select.clamp_noted(surface, col, row),
         }
+    }
+
+    /// A noted surface's copy: the text of its rows in the range.
+    fn copy_noted(&mut self, surface: SurfaceId, from: Point, to: Point) -> Effect {
+        let text = self.select.noted_text(surface, from, to);
+        if text.is_empty() {
+            return Effect::None;
+        }
+        self.copied = true;
+        Effect::Copy(text)
     }
 
     /// The input box selection's copy: the visible text of the draft's
@@ -411,7 +660,32 @@ impl App {
                 .collect();
         }
         if surface != SurfaceId::Conversation {
-            return Vec::new();
+            // A noted surface highlights its rows' cells in the span's
+            // range: whole rows between, clipped to the range's columns
+            // on its first and last row.
+            let Some((from, to)) = self.select.span() else {
+                return Vec::new();
+            };
+            let (start, end) = (from.min(to), from.max(to));
+            return self
+                .select
+                .noted_rows(surface)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(at, span)| {
+                    if at < start.row || at > end.row {
+                        return None;
+                    }
+                    let from_col = if at == start.row { start.col } else { 0 };
+                    let to_col = if at == end.row {
+                        end.col.saturating_add(1)
+                    } else {
+                        u16::MAX
+                    };
+                    let (x, end) = cells_range(&span.text, span.x, from_col, to_col)?;
+                    Some(Rect::new(x, span.y, end.saturating_sub(x), 1))
+                })
+                .collect();
         }
         let Some((from, to)) = self.select.span() else {
             return Vec::new();

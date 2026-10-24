@@ -4038,3 +4038,184 @@ fn a_drag_from_a_link_selects_and_clicks_nothing() {
         "{effect:?}"
     );
 }
+
+#[test]
+fn an_input_drag_then_a_typed_char_replaces_the_selection() {
+    use crate::app::Effect;
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    // The release copies the dragged text and keeps the editor's
+    // selection: typing replaces the selected pieces.
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 2, at.1));
+    assert_eq!(effect, Effect::Copy("zz".to_owned()));
+    assert_eq!(app.input().selected(), Some((0, 2)));
+    type_draft(&mut app, "q");
+    assert_eq!(app.input().expand(), "qqx");
+}
+
+#[test]
+fn a_drag_on_a_notice_copies_its_text() {
+    use crate::app::Effect;
+    let mut app = running(100, 24);
+    raise_four(&mut app);
+    let at = cell_at(&mut app, 100, 24, "Notice 1.");
+    let effect = drag_at(&mut app, 100, 24, at, (at.0 + 9, at.1));
+    // The copy holds the notice's text exactly: no closing pad and no
+    // dismiss cross.
+    assert_eq!(effect, Effect::Copy("Notice 1.".to_owned()));
+}
+
+#[test]
+fn a_drag_on_the_notice_overlay_copies_its_text() {
+    use crate::app::Effect;
+    // A tall screen: a short frame drops its body rows, keeping the
+    // title and footer, so the text needs room to show.
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(80, 24);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "x", "message": "Saved."}),
+        None,
+    ));
+    app.open_notice(0);
+    let at = cell_at(&mut app, 80, 24, "Saved.");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 4, at.1));
+    assert_eq!(effect, Effect::Copy("Saved".to_owned()));
+}
+
+#[test]
+fn a_drag_holds_a_fading_notice_until_after_the_release_copy() {
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let t0 = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(80, 24);
+    app.on_line(session_line(
+        S_A,
+        "notice",
+        serde_json::json!({"code": "io_failed", "message": "Saved."}),
+        None,
+    ));
+    app.sweep_notices(t0);
+    let area = Rect::new(0, 0, 80, 24);
+    let at = cell_at(&mut app, 80, 24, "Saved.");
+    let mut pointer = Pointer::default();
+    let mut report =
+        |app: &mut App, kind: MouseKind, col: u16, row: u16, now: std::time::Instant| {
+            let mut buf = Buffer::empty(area);
+            let targets = render(app, area, &mut buf, None);
+            app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+        };
+    let _ = report(&mut app, MouseKind::Press(Button::Left), at.0, at.1, t0);
+    let _ = report(&mut app, MouseKind::Drag(Button::Left), at.0 + 4, at.1, t0);
+    // Past the fade, mid-drag, the row still shows: the fade waits
+    // for the release.
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    assert!(text(&buf).contains("Saved."));
+    // The release copies first; the waiting fade runs on the next
+    // sweep, after the copy.
+    let effect = report(
+        &mut app,
+        MouseKind::Release,
+        at.0 + 4,
+        at.1,
+        t0 + std::time::Duration::from_secs(30),
+    );
+    assert_eq!(effect, Effect::Copy("Saved".to_owned()));
+    app.sweep_notices(t0 + std::time::Duration::from_secs(30));
+    assert!(app.notices().is_empty());
+}
+
+#[test]
+fn a_drag_on_the_approval_panel_copies_its_text() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review"}),
+        Some("a_1"),
+    ));
+    assert!(app.panel().is_some());
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "runs a command");
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 14, at.1));
+    assert_eq!(effect, Effect::Copy("runs a command".to_owned()));
+}
+
+#[test]
+fn a_drag_across_an_approval_wrap_reads_the_space_back() {
+    use crate::app::Effect;
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.set_size(60, 24);
+    // Short words only, so every wrap lands on a space: joining with
+    // nothing would drop them all, while the copy reads each back.
+    let paths: Vec<String> = (0..12).map(|n| format!("p{n}")).collect();
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_1", "effects": ["executes"],
+            "reversible": true, "step": "review", "paths": paths}),
+        Some("a_1"),
+    ));
+    let facts = format!(
+        "runs a command · {} · no rule allows this call",
+        (0..12)
+            .map(|n| format!("p{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(app.panel().is_some());
+    assert!(
+        app.panel()
+            .expect("a panel")
+            .lines
+            .iter()
+            .any(|line| line == &facts),
+        "facts line shows"
+    );
+    // The whole facts line, first cell to last: the wrap's dropped
+    // space reads back, and no newline splits the copy.
+    let start = cell_at(&mut app, 60, 24, "runs a command");
+    let end = cell_at(&mut app, 60, 24, "no rule allows this call");
+    let effect = drag_at(
+        &mut app,
+        60,
+        24,
+        start,
+        (
+            end.0 + u16::try_from("no rule allows this call".len()).expect("a width"),
+            end.1,
+        ),
+    );
+    assert_eq!(effect, Effect::Copy(facts));
+}
+
+#[test]
+fn a_drag_across_a_wrapped_conversation_row_joins_with_no_newline() {
+    use crate::app::Effect;
+    let text = format!("quixotic {}yodel", "zebras ".repeat(12));
+    let mut app = replying(WIDTH, HEIGHT, &text);
+    let start = cell_at(&mut app, WIDTH, HEIGHT, "quixotic");
+    let end = cell_at(&mut app, WIDTH, HEIGHT, "yodel");
+    let effect = drag_at(
+        &mut app,
+        WIDTH,
+        HEIGHT,
+        start,
+        (
+            end.0 + u16::try_from("yodel".len()).expect("a width"),
+            end.1,
+        ),
+    );
+    assert_eq!(effect, Effect::Copy(text));
+}

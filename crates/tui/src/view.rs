@@ -266,7 +266,7 @@ pub(crate) fn render(
     let mut box_top = bottom;
     status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
-        bottom = request::draw(&panel, area, bottom, buf, &mut targets);
+        bottom = request::draw_noted(app, &panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
         box_top = input_box::draw(app, area, &mut bottom, buf, &mut targets);
@@ -355,6 +355,45 @@ pub(crate) fn render(
                 None => match app.find_results() {
                     Some(view) => {
                         results::render(&view, conversation, buf, &mut targets);
+                        // The results read as their own surface over the
+                        // conversation's rows: the path and match rows
+                        // each entry draws
+                        // (`docs/tui.md`, "Selection and copy").
+                        let mut noted = Vec::new();
+                        for (row, (path, text)) in
+                            results::selection_rows(&view, conversation.width)
+                                .into_iter()
+                                .enumerate()
+                        {
+                            let y = conversation
+                                .y
+                                .saturating_add(3)
+                                .saturating_add(to_u16(row.saturating_mul(3)));
+                            if y.saturating_add(1) >= conversation.bottom() {
+                                break;
+                            }
+                            for (dy, line) in [(0, path), (1, text)] {
+                                noted.push(crate::app::SpanRow {
+                                    y: y.saturating_add(dy),
+                                    x: conversation.x,
+                                    end: conversation.right(),
+                                    text: line,
+                                    join: crate::rows::Join::Break,
+                                });
+                            }
+                        }
+                        app.note_surface(crate::app::NotedSurface {
+                            surface: crate::app::SurfaceId::Swapped,
+                            rows: noted,
+                        });
+                        for rect in
+                            app.selection_cells(crate::app::SurfaceId::Swapped, conversation)
+                        {
+                            buf.set_style(
+                                rect.intersection(conversation),
+                                marks::selection_style(),
+                            );
+                        }
                         marks::draw(app, conversation, buf, &mut targets, None);
                     }
                     None => {

@@ -525,7 +525,7 @@ fn laid_out(width: u16, height: u16) -> App {
 }
 
 #[test]
-fn presses_outside_the_area_select_nothing() {
+fn presses_outside_the_area_click_while_drags_select() {
     // The input box, and the blank rows above a short conversation.
     let mut app = replied(40, 10, "hello there");
     let area = app.conversation_area();
@@ -549,7 +549,15 @@ fn presses_outside_the_area_select_nothing() {
     ));
     assert!(app.panel().is_some());
     let area = app.conversation_area();
-    assert_eq!(tried(&mut app, (2, area.bottom())), None, "the panel");
+    // A press alone is a click: no selection shows, so the panel keeps
+    // its targets. The drag a press starts turns into a selection
+    // instead (rule R2).
+    press(&mut app, (2, area.bottom()));
+    assert_eq!(app.select.span(), None, "the panel");
+    assert!(
+        tried(&mut app, (2, area.bottom())).is_some(),
+        "a drag from the panel"
+    );
 
     // The rail, the panel and the column's header at 160x48.
     let mut app = laid_out(160, 48);
@@ -559,8 +567,20 @@ fn presses_outside_the_area_select_nothing() {
     let layout = app.chrome().layout().expect("the layout applies");
     let rail = layout.rail.expect("a rail at 160 columns");
     let panel = layout.panel.expect("a panel at 160 columns");
-    assert_eq!(tried(&mut app, (rail.x, 30)), None, "the rail");
-    assert_eq!(tried(&mut app, (panel.x + 1, 30)), None, "the panel");
+    press(&mut app, (rail.x, 30));
+    assert_eq!(app.select.span(), None, "the rail");
+    // Below the last card row no note covers the cell, so even a drag
+    // selects nothing here.
+    assert_eq!(tried(&mut app, (rail.x, 30)), None, "a drag from the rail");
+    press(&mut app, (panel.x + 1, 30));
+    assert_eq!(app.select.span(), None, "the panel");
+    // Below the last card row no note covers the cell, so even a drag
+    // selects nothing here.
+    assert_eq!(
+        tried(&mut app, (panel.x + 1, 30)),
+        None,
+        "a drag from the panel"
+    );
     assert_eq!(
         tried(&mut app, (layout.column.x + 1, layout.column.y)),
         None,
@@ -572,7 +592,7 @@ fn presses_outside_the_area_select_nothing() {
 }
 
 #[test]
-fn a_press_on_a_notice_or_new_below_selects_nothing() {
+fn a_press_on_a_notice_clicks_while_a_drag_selects() {
     let mut app = attached(40, 10);
     prompt(&mut app, " ");
     let text: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
@@ -583,10 +603,14 @@ fn a_press_on_a_notice_or_new_below_selects_nothing() {
         .iter()
         .find(|target| matches!(target.id, TargetId::Notice(_)))
         .expect("the notice is drawn");
-    assert_eq!(
-        tried(&mut app, (notice.rect.x + 1, notice.rect.y)),
-        None,
-        "a notice"
+    // A press alone is a click: the notice keeps its dismiss target
+    // and no selection shows. The drag a press starts turns into a
+    // selection instead (rule R2).
+    press(&mut app, (notice.rect.x + 1, notice.rect.y));
+    assert_eq!(app.select.span(), None, "a notice");
+    assert!(
+        tried(&mut app, (notice.rect.x + 1, notice.rect.y)).is_some(),
+        "a drag from a notice"
     );
     // Scrolled up, new output shows "↓ New messages below".
     app.on_key(Key::PageUp, now());

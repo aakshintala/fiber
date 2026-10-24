@@ -48,7 +48,7 @@ const CURRENT_NO_COLOR: Style = Style::new()
 
 /// The selection's highlight style, shared by every surface that paints
 /// one (`docs/tui.md`, "Selection and copy").
-pub(super) fn selection_style() -> Style {
+pub(crate) fn selection_style() -> Style {
     if crate::surface::boxed() {
         SELECTION_NO_COLOR
     } else {
