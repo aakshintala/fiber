@@ -397,7 +397,8 @@ The panel is a column of cards. `tui.panel.cards` lists which cards show and
 in what order. An extension widget (`host.widget`, `docs/extensions.md`) is
 listed as `"<extension>/<widget>"`, which places it. A widget the list does not
 name shows after the listed cards, in the order widgets arrived. The panel
-scrolls when its cards outgrow the screen.
+scrolls when its cards outgrow the screen. A mouse-wheel step moves it by three
+rows; scrolling clamps at the top and bottom of the content.
 
 The default cards, in order:
 
