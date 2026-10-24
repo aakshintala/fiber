@@ -248,6 +248,76 @@ impl FakeJobs {
     }
 }
 
+/// A controllable ordered running-job list for tests that never open a job.
+///
+/// Unlike [`FakeJobs`], which opens files and tracks started jobs, this stub
+/// only answers [`Jobs::running`]: the list holds job ids in start order
+/// behind one mutex, and every snapshot waits for an in-progress
+/// [`StubJobs::update_running`] callback before it reads. The remaining
+/// [`Jobs`] methods are inert: no job is opened, stopped, or delivered.
+#[derive(Default)]
+pub struct StubJobs {
+    running: Mutex<Vec<JobId>>,
+}
+
+impl StubJobs {
+    /// The stub lists `running`'s ids, in iterator order.
+    pub fn new(running: impl IntoIterator<Item = JobId>) -> Self {
+        Self {
+            running: Mutex::new(running.into_iter().collect()),
+        }
+    }
+
+    /// Atomically replaces the running list, preserving iterator order.
+    pub fn set_running(&self, running: impl IntoIterator<Item = JobId>) {
+        *lock(&self.running) = running.into_iter().collect();
+    }
+
+    /// Runs `update` on the running list while holding the list mutex, so a
+    /// concurrent [`Jobs::running`] snapshot waits for the callback and then
+    /// observes its complete result. Keep the callback short: it must not
+    /// wait, and must not re-enter this instance.
+    pub fn update_running(&self, update: impl FnOnce(&mut Vec<JobId>)) {
+        update(&mut lock(&self.running));
+    }
+}
+
+impl Jobs for StubJobs {
+    fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
+        let _ = opening;
+        Err(OpenError {
+            path: PathBuf::from("unused"),
+            source: std::io::Error::other("a stub job is not opened"),
+        })
+    }
+
+    fn stop(&self, job_id: &JobId) -> bool {
+        let _ = job_id;
+        false
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, call: Foreground) {
+        let _ = call;
+    }
+
+    /// A snapshot of the current ordered list.
+    fn running(&self) -> Vec<JobId> {
+        lock(&self.running).clone()
+    }
+
+    fn stop_delegates(&self) -> usize {
+        0
+    }
+
+    fn deliver_to(&self, inbox: Sender<Delivery>) {
+        let _ = inbox;
+    }
+}
+
 impl Jobs for FakeJobs {
     fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
         if self.fail {
