@@ -38,7 +38,7 @@ use log::{Log, Watcher};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, assert_kinds, calls_reply, completed, delivery, model, of_kind, read_until, text_all,
+    assert_kinds, calls_reply, completed, delivery, model, of_kind, read_until, text_all,
 };
 
 /// A provider that defers, delegating every call to the scripted provider
@@ -583,7 +583,7 @@ impl Harness {
         self.looped = Some(looped);
     }
 
-    /// Sends `prompt` and runs one turn, failing at [`DEADLINE`].
+    /// Sends `prompt` and runs one turn, failing at [`fakes::MUST_SUCCEED_WITHIN`].
     fn turn(&mut self, prompt: &str) -> Option<TurnOutcome> {
         self.inbox.send(delivery(prompt)).unwrap();
         let mut looped = self.looped.take().unwrap();
@@ -592,7 +592,7 @@ impl Harness {
             let outcome = looped.turn().unwrap();
             done.send((looped, outcome)).unwrap();
         });
-        let (looped, outcome) = Deadline::after(DEADLINE)
+        let (looped, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&finished)
             .expect("the turn ended in time");
         self.looped = Some(looped);
@@ -1618,7 +1618,7 @@ fn a_rewound_session_matches_the_parent_request_bytes() {
         let outcome = b.turn().unwrap();
         done.send((b, outcome)).unwrap();
     });
-    let (_b, outcome) = Deadline::after(DEADLINE)
+    let (_b, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1815,7 +1815,7 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
         let outcome = b.turn().unwrap();
         done.send((b, outcome)).unwrap();
     });
-    let (_b, outcome) = Deadline::after(DEADLINE)
+    let (_b, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -2079,7 +2079,7 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
         let outcome = b.turn().unwrap();
         done.send((b, outcome)).unwrap();
     });
-    let (_b, outcome) = Deadline::after(DEADLINE)
+    let (_b, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -2313,7 +2313,7 @@ fn a_cancelled_search_loads_nothing_and_renders_the_cancel_line() {
     });
     tap.wait_for("tool_call_started");
     assert!(cancel.cancel());
-    let (looped, outcome) = Deadline::after(DEADLINE)
+    let (looped, outcome) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&finished)
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
