@@ -875,6 +875,63 @@ fn flake_report_prints_one_json_line_per_unmatched_title() {
 }
 
 #[test]
+fn flake_report_tested_commit_reopens_when_the_latest_fix_is_an_ancestor() {
+    // The real `git merge-base --is-ancestor` probe: the fix commit is an
+    // ancestor of the tested commit, so the decision reopens. Without the
+    // existence check the probe answers unknown instead.
+    let dir = TempDir::new("xtask-flake-report-ancestry");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    dir.write("fix.txt", "the fix\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "fix"]);
+    let fix = common::git(&dir, &["rev-parse", "HEAD"]);
+    let input = format!(
+        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{fix}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["flake-report", "--tested-commit", &fix],
+            &[],
+            &input
+        ),
+        (
+            0,
+            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky test: a\"}\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn flake_report_tested_commit_is_unknown_when_the_fix_object_is_missing() {
+    // `git cat-file` fails for an object the checkout lacks, so the probe
+    // answers unknown. A probe stuck at a boolean decides instead.
+    let dir = TempDir::new("xtask-flake-report-missing-fix");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    dir.write("fix.txt", "the fix\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "fix"]);
+    let tested = common::git(&dir, &["rev-parse", "HEAD"]);
+    let missing = "0123456789012345678901234567890123456789";
+    let input = format!(
+        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{missing}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["flake-report", "--tested-commit", &tested],
+            &[],
+            &input
+        ),
+        (
+            0,
+            "{\"action\":\"unknown\",\"issue\":9,\"source\":\"ancestry\",\"title\":\"Flaky test: a\"}\n"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
 fn flake_report_events_prints_only_numbers_needing_event_fetches() {
     let dir = TempDir::new("xtask-flake-report-events");
     const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}}";
