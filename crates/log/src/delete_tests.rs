@@ -164,6 +164,7 @@ fn delete_session_without_a_log_is_io_naming_the_log_and_removes_nothing() {
         crate::Error::NotFound(_)
         | crate::Error::Held { .. }
         | crate::Error::Poisoned { .. }
+        | crate::Error::Ended { .. }
         | crate::Error::Ambiguous { .. }
         | crate::Error::Exists(_)
         | crate::Error::Pointer { .. }

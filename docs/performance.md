@@ -207,9 +207,8 @@ exact.
 Linux x86_64 gates every pull request, and the backstop on `main` measures
 the same benchmarks. On a pull request the base binary runs the timing
 benchmarks only, and only the rows the diff selects (`docs/ci.md`, "Selection"); head and base
-timings alternate in one harness process, by sample for the repeated rows and the `paging`
-jig and by row block for listing, attach and wheel, and rows the base skips run on the head
-alone. Memory and exact rows compare against the backstop's
+timings alternate in one harness process, by sample for every timing row, and rows
+the base skips run on the head alone. Memory and exact rows compare against the backstop's
 stored results for the base commit (`docs/ci.md`, "On every pull request
 that changes code"). Linux arm64 and macOS arm64 are
 measured at each release and reported, never gated: timings differ by about

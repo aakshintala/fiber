@@ -10,9 +10,17 @@ use serde_json::json;
 use std::time::Duration;
 
 use super::{
-    POINTER, RAIL, ROWS, conversation, distinct, latencies, position, send_stamped,
-    session_samples, sgr_wheel, typed,
+    POINTER, RAIL, ROWS, SESSION_COUNT, SESSIONS, conversation, distinct, latencies, position,
+    send_stamped, session_samples, sgr_wheel, typed,
 };
+
+#[test]
+fn the_session_count_is_the_session_plan_length() {
+    // The scheduler alternates the wheel row by sample
+    // (`docs/performance.md`, "Measuring") over this many sessions: a
+    // plan that gains or loses one fails here.
+    assert_eq!(usize::try_from(SESSION_COUNT), Ok(SESSIONS.len()));
+}
 use crate::pty::Frame;
 use crate::run::System;
 

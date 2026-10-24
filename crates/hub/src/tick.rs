@@ -8,10 +8,11 @@
 
 #[cfg(test)]
 use std::sync::mpsc::Sender;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
 use contract::clock::{Clock, Wake};
+use support::lock;
 
 /// Woken on every clock move, every change to what a waiter checks,
 /// every signal, and every stop-store.
@@ -117,8 +118,4 @@ impl Tick {
     ) -> Option<MutexGuard<'a, ()>> {
         support::clock::park(clock, until, None, &self.moved, guard, |_| false)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

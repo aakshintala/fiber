@@ -26,7 +26,7 @@ use crate::busy::{self, READY};
 use crate::home::Home;
 use crate::idle::{self, Ctx, Samples, Workload};
 use crate::pty::{Frame, Terminal};
-use crate::run::{self, Session};
+use crate::run::{self, Proc, Session};
 
 pub(crate) const SAMPLED: [Workload; 1] = [Workload {
     name: "terminal wheel",
@@ -728,52 +728,151 @@ fn open_read_call(
     Ok(())
 }
 
-/// One full measurement of one session: attach, open the call for the read
-/// session, calibrate, burst, and back to the bottom.
-fn sample_once(
+/// How many sessions the wheel row times: the paging session, then the
+/// read one, each in its own pseudo-terminal.
+pub(crate) const SESSION_COUNT: u32 = 2;
+
+/// The wheel row's sessions, in run order: the paging session draws the
+/// jig's log at scale 1, and the read session opens its 300-line output
+/// before the bursts.
+const SESSIONS: [(&str, bool); 2] = [("paging", false), ("read", true)];
+
+/// One wheel session, live in its own pseudo-terminal: the held terminal
+/// stays attached across the session's samples, so every burst starts
+/// from the calibrated bottom.
+pub(crate) struct WheelSession {
+    session: Session,
+    terminal: Terminal,
+    id: String,
+    name: &'static str,
+}
+
+/// The wheel row's prepared sessions, in [`SESSIONS`] order, under one
+/// hub: both sessions are live in their own pseudo-terminals before the
+/// first timed burst.
+pub(crate) struct WheelPrepared {
+    home: Home,
+    hub: Proc,
+    sessions: Vec<WheelSession>,
+}
+
+/// Starts one session, attaches its terminal, and settles it at the
+/// bottom: the bursts then calibrate and time from a live screen.
+fn prepare_session(
     ctx: &Ctx<'_>,
     home: &Home,
     id: &str,
-    session: &str,
+    name: &'static str,
     open_call: bool,
-    notes: &mut Vec<String>,
+) -> Result<WheelSession, String> {
+    let mut session = Session::spawn(&mut busy::session(ctx, home, id, &["--resume"]), ctx.clock)?;
+    let prepared = (|| {
+        session.line(ctx.clock, ctx.clock.now() + READY, "the first stdout line")?;
+        wait_listed(ctx, home, id, &mut session.proc)?;
+        let mut terminal = Terminal::spawn_sized(
+            home,
+            &["resume", id],
+            ctx.path.as_deref(),
+            ctx.clock,
+            COLS,
+            ROWS,
+        )?;
+        terminal.record(true);
+        let spawned = terminal.proc.spawned;
+        wait_frames(
+            ctx.clock,
+            &terminal,
+            spawned + READY,
+            "the first frame",
+            |frames| !frames.is_empty(),
+        )?;
+        // The attach replays the log after its first frame: a bottom
+        // taken before the finished turn draws is a blank screen.
+        terminal.wait_for(ctx.clock, spawned + READY, "completed")?;
+        if open_call {
+            open_read_call(ctx.clock, &mut terminal, spawned)?;
+        }
+        let bottom = to_bottom(ctx.clock, &mut terminal)?;
+        if open_call && !bottom.lines().any(|line| line.contains(OUTPUT_MARK)) {
+            return Err("the bottom settled without the read's output".to_owned());
+        }
+        Ok(terminal)
+    })();
+    match prepared {
+        Ok(terminal) => Ok(WheelSession {
+            session,
+            terminal,
+            id: id.to_owned(),
+            name,
+        }),
+        Err(err) => {
+            let _stopped = session.proc.stop(ctx.clock);
+            Err(err)
+        }
+    }
+}
+
+/// Prepares the wheel row: both sessions' logs written straight to the
+/// log, one hub, and both sessions live in their own pseudo-terminals,
+/// settled at the bottom. A failed prepare removes its home, so no
+/// session outlives the call.
+pub(crate) fn prepare_wheel(ctx: &Ctx<'_>) -> Result<WheelPrepared, String> {
+    let home = ctx.home.child([])?;
+    let prepared = (|| {
+        let paging = doors::mint("s_");
+        let read = doors::mint("s_");
+        write_paging_log(&home, &paging)?;
+        write_read_log(&home, &read)?;
+        let hub = busy::start_hub(ctx, &home)?;
+        let ids = [paging, read];
+        let sessions = (|| {
+            let mut sessions = Vec::new();
+            for ((name, open_call), id) in SESSIONS.iter().zip(ids.iter()) {
+                sessions.push(prepare_session(ctx, &home, id, name, *open_call)?);
+            }
+            Ok(sessions)
+        })();
+        match sessions {
+            Ok(sessions) => Ok((hub, sessions)),
+            Err(err) => {
+                let _stopped = hub.stop(ctx.clock);
+                Err(err)
+            }
+        }
+    })();
+    match prepared {
+        Ok((hub, sessions)) => Ok(WheelPrepared {
+            home,
+            hub,
+            sessions,
+        }),
+        Err(err) => {
+            let _finished = home.finish();
+            Err(err)
+        }
+    }
+}
+
+/// One timed burst against one prepared session: calibrate from the
+/// settled bottom, burst, and back to the bottom, keeping the slowest
+/// report. The terminal stays open for the session's next sample.
+pub(crate) fn sample_wheel(
+    prepared: &mut WheelPrepared,
+    index: usize,
+    clock: &dyn Clock,
 ) -> Result<Samples, String> {
-    let mut terminal = Terminal::spawn_sized(
-        home,
-        &["resume", id],
-        ctx.path.as_deref(),
-        ctx.clock,
-        COLS,
-        ROWS,
-    )?;
-    terminal.record(true);
-    let spawned = terminal.proc.spawned;
-    wait_frames(
-        ctx.clock,
-        &terminal,
-        spawned + READY,
-        "the first frame",
-        |frames| !frames.is_empty(),
-    )?;
-    // The attach replays the log after its first frame: a bottom taken
-    // before the finished turn draws is a blank screen.
-    terminal.wait_for(ctx.clock, spawned + READY, "completed")?;
-    if open_call {
-        open_read_call(ctx.clock, &mut terminal, spawned)?;
-    }
-    let bottom = to_bottom(ctx.clock, &mut terminal)?;
-    if open_call && !bottom.lines().any(|line| line.contains(OUTPUT_MARK)) {
-        return Err("the bottom settled without the read's output".to_owned());
-    }
-    let calibration = calibrate(ctx.clock, &mut terminal, &bottom)?;
+    let Some(session) = prepared.sessions.get_mut(index) else {
+        return Err(format!("no wheel session at index {index}"));
+    };
+    let bottom = to_bottom(clock, &mut session.terminal)?;
+    let calibration = calibrate(clock, &mut session.terminal, &bottom)?;
     // Back to the bottom before the timed burst, so every burst frame
     // shows a calibrated step.
-    back_to_bottom(ctx.clock, &mut terminal, &calibration.bottom)?;
-    let (slowest_ms, covered, full) = burst(ctx.clock, &mut terminal, &calibration)?;
-    back_to_bottom(ctx.clock, &mut terminal, &calibration.bottom)?;
-    idle::quit(ctx, terminal, notes, idle::HubExit::Keep)?;
+    back_to_bottom(clock, &mut session.terminal, &calibration.bottom)?;
+    let (slowest_ms, covered, full) = burst(clock, &mut session.terminal, &calibration)?;
+    back_to_bottom(clock, &mut session.terminal, &calibration.bottom)?;
     Ok(session_samples(
-        session,
+        session.name,
         slowest_ms,
         &covered,
         &full,
@@ -781,49 +880,84 @@ fn sample_once(
     ))
 }
 
-/// Measures one session `ctx.runs` times: a live, idle session process,
-/// held while each run attaches its own terminal.
-fn measure(
-    ctx: &Ctx<'_>,
-    home: &Home,
-    id: &str,
-    name: &str,
-    open_call: bool,
+/// Quits every session's terminal, stops the sessions and the hub, and
+/// removes the home: the first error fails the row, as the single-call
+/// run's first error did, while the remaining sessions still go away.
+/// The tail check runs only when every sample ran, as the single-call
+/// run never reached it after a failed sample.
+pub(crate) fn finish_wheel(
+    prepared: WheelPrepared,
+    clock: &dyn Clock,
     notes: &mut Vec<String>,
-) -> Result<Samples, String> {
-    let mut session = Session::spawn(&mut busy::session(ctx, home, id, &["--resume"]), ctx.clock)?;
-    session.line(ctx.clock, ctx.clock.now() + READY, "the first stdout line")?;
-    wait_listed(ctx, home, id, &mut session.proc)?;
+    tail: bool,
+) -> Result<(), String> {
+    let WheelPrepared {
+        home,
+        hub,
+        sessions,
+    } = prepared;
+    let mut result = Ok(());
+    for wheel_session in sessions {
+        let WheelSession {
+            mut session,
+            terminal,
+            id,
+            ..
+        } = wheel_session;
+        // The quit borrows the row's home, which moves into the finish
+        // below.
+        let row = (|| {
+            let ctx = Ctx {
+                home: &home,
+                clock,
+                idle: Duration::ZERO,
+                path: None,
+                runs: 1,
+                paging: None,
+            };
+            idle::quit(&ctx, terminal, notes, idle::HubExit::Keep)?;
+            if tail && !session.proc.running()? {
+                notes.push(format!("{id} exited while it was sampled"));
+            }
+            session.proc.stop(clock)?;
+            Ok(())
+        })();
+        if result.is_ok() {
+            result = row;
+        }
+    }
+    let stopped = hub.stop(clock);
+    let finished = home.finish();
+    result.and(stopped).and(finished)
+}
+
+/// Times one prepared session `runs` times: the single-call run keeps
+/// its old shape, session by session, on top of the shared prepare and
+/// finish.
+fn measure(prepared: &mut WheelPrepared, clock: &dyn Clock, runs: u32) -> Result<Samples, String> {
     let mut samples = Samples::new();
-    for _ in 0..ctx.runs {
-        samples.extend(sample_once(ctx, home, id, name, open_call, notes)?);
+    for index in 0..prepared.sessions.len() {
+        for _ in 0..runs {
+            samples.extend(sample_wheel(prepared, index, clock)?);
+        }
     }
-    if !session.proc.running()? {
-        notes.push(format!("{id} exited while it was sampled"));
-    }
-    session.proc.stop(ctx.clock)?;
     Ok(samples)
 }
 
 /// Samples the wheel workload: both sessions' logs written straight to the
 /// log, then a live, idle session each under one hub.
 fn terminal_wheel(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let home = ctx.home.child([])?;
-    let paging = doors::mint("s_");
-    let read = doors::mint("s_");
-    write_paging_log(&home, &paging)?;
-    write_read_log(&home, &read)?;
-    let hub = busy::start_hub(ctx, &home)?;
-    let measured: Result<Samples, String> = (|| {
-        let mut samples = Samples::new();
-        samples.extend(measure(ctx, &home, &paging, "paging", false, notes)?);
-        samples.extend(measure(ctx, &home, &read, "read", true, notes)?);
-        Ok(samples)
-    })();
-    let stopped = hub.stop(ctx.clock);
-    let samples = measured?;
-    stopped?;
-    Ok(samples)
+    let mut prepared = prepare_wheel(ctx)?;
+    let measured = measure(&mut prepared, ctx.clock, ctx.runs);
+    // The row's sessions and hub go away even when a sample errs, as the
+    // old single-call run removed them before; a failed sample skips
+    // the tail check it never reached.
+    let tail = measured.is_ok();
+    let finished = finish_wheel(prepared, ctx.clock, notes, tail);
+    match measured {
+        Ok(samples) => finished.map(|()| samples),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ExitStatus, Stdio};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use crate::support::{Deadline, KillGroup, Setup};
@@ -103,11 +103,11 @@ impl Setup {
             end_tx.send(end).unwrap_or(());
         });
         let (err_tx, stderr_rx) = mpsc::channel();
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
         thread::spawn(move || {
-            let mut text = String::new();
-            match std::io::Read::read_to_string(&mut BufReader::new(stderr_pipe), &mut text) {
-                Ok(_) | Err(_) => {}
-            }
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = crate::support::drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             match err_tx.send(text) {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
@@ -121,6 +121,7 @@ impl Setup {
                 lines,
                 stdout_end,
                 stderr: stderr_rx,
+                stderr_snapshot,
                 first: Vec::new(),
                 deadline: self.deadline,
             },
@@ -148,6 +149,9 @@ pub(crate) struct Running {
     pub(crate) lines: mpsc::Receiver<String>,
     stdout_end: mpsc::Receiver<StdoutEnd>,
     pub(crate) stderr: mpsc::Receiver<String>,
+    /// The stderr text so far, appended by the drain thread: the timeout
+    /// dump reads it while the session still runs.
+    pub(crate) stderr_snapshot: Arc<Mutex<String>>,
     pub(crate) first: Vec<String>,
     pub(crate) deadline: Deadline,
 }
@@ -283,6 +287,9 @@ impl Running {
 pub(crate) struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    /// Context for the timeout dump, set once after connect at the sites
+    /// that hold a session's stderr snapshot and log directory.
+    diag: Option<crate::support::Diag>,
     deadline: Deadline,
 }
 
@@ -300,8 +307,23 @@ impl Socket {
         Ok(Self {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
+            diag: None,
             deadline,
         })
+    }
+
+    /// Registers the timeout dump's context: the stderr snapshot the drain
+    /// thread keeps and the session's log directory. Without it the timeout
+    /// branch keeps the old message, so other `Socket` users are unaffected.
+    pub(crate) fn set_diag(&mut self, diag: crate::support::Diag) {
+        self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     #[track_caller]
@@ -318,16 +340,17 @@ impl Socket {
         }
     }
 
-    fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+    pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
         match crate::support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
             Ok(None) => None,
             Ok(Some(buf)) => {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error) if error.kind() == ErrorKind::TimedOut => {
-                panic!("waited until the deadline for {what}; got {got:?}")
-            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
+                Some(diag) => panic!("{}", diag.report(what, got)),
+                None => panic!("waited until the deadline for {what}; got {got:?}"),
+            },
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")
             }

@@ -4,6 +4,7 @@ use std::io;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, mpsc};
 
+use super::conns::shutter;
 use super::{Gate, join, spawn};
 use crate::client;
 
@@ -16,7 +17,9 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                let Ok(shutdown_stream) = stream.try_clone() else {
+                let (Ok(shutdown_stream), Ok(shut_stream)) =
+                    (stream.try_clone(), stream.try_clone())
+                else {
                     if gate.conns.stopped() {
                         return;
                     }
@@ -41,10 +44,11 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     // admitted after the stop is rejected instead of leaked:
                     // its stream is already shut, dropping `tx` ends its
                     // thread, and joining reaps it.
-                    match gate
-                        .conns
-                        .push_reader(handle, client::ender(shutdown_stream, stop))
-                    {
+                    match gate.conns.push_reader(
+                        handle,
+                        client::ender(shutdown_stream, stop),
+                        shutter(shut_stream),
+                    ) {
                         Ok(id) => {
                             if tx.send(id).is_err() {
                                 gate.conns.finish(id);

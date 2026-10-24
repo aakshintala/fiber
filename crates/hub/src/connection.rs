@@ -17,8 +17,8 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake, wall_ms};
@@ -1535,9 +1535,7 @@ pub(crate) fn spawn(
         .map(|_| ())
 }
 
-pub(crate) fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
+pub(crate) use support::lock;
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]

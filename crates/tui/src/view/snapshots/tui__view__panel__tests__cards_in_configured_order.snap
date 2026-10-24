@@ -5,6 +5,7 @@ expression: "super::super::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    /Users/you/work/fiber     auto
+
    test/model                high
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│         500
    handoff at 800   50% of window

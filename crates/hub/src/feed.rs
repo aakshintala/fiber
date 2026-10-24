@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ use contract::clock::{Clock, Wake, wall_ms};
 use contract::events::{SessionState, SessionStatus};
 use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
+use support::lock;
 
 use crate::attention::{Attention, Seen};
 use crate::connection::{Hub, Refused, accept_result, reject, send as send_line};
@@ -812,10 +813,6 @@ fn join(handle: JoinHandle<()>) {
     match handle.join() {
         Ok(()) | Err(_) => {}
     }
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -399,7 +399,8 @@ The panel is a column of cards. `tui.panel.cards` lists which cards show and
 in what order. An extension widget (`host.widget`, `docs/extensions.md`) is
 listed as `"<extension>/<widget>"`, which places it. A widget the list does not
 name shows after the listed cards, in the order widgets arrived. The panel
-scrolls when its cards outgrow the screen.
+scrolls when its cards outgrow the screen. A mouse-wheel step moves it by three
+rows; scrolling clamps at the top and bottom of the content.
 
 The default cards, in order:
 
@@ -409,7 +410,14 @@ The default cards, in order:
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down. Every number has a plain label that says what it
   measures, such as "tokens in / out", "cache hits" or "output speed, last
-  reply", never a bare abbreviation. The handoff marker carries one line saying
+  reply", never a bare abbreviation. The branch slot, every figure row, the
+  context bar and the two lines under it are drawn from the session's first
+  frame. The branch slot stays blank until status supplies a branch name, and
+  remains blank outside a repository. A figure not known yet, such as the
+  speed before the first timed reply, shows a dim "—", so no row moves when
+  its data arrives. The bar is drawn empty with 17 cells
+  in rule and a dim "—" for context size until its figures are known. Zero is
+  shown as zero. The handoff marker carries one line saying
   what a handoff is: when the context fills, Fiber writes a summary and the
   work continues in a fresh context (`docs/handoff.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
@@ -438,6 +446,7 @@ cut with "…". The cards draw:
   tokens in / out     412k / 18.2k
   cache hits                   91%
   cost                       $4.12
+  cost on subscription       $0.00
   speed, last reply   64 tokens/s
   turns                         12
   tools 31          ✗ github down
@@ -2405,7 +2414,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   ends that session's pass. Waiting work then runs against what is held,
   or fails as usual with no connection.
   If `stream_reopened` arrives during a `history` wait, the wait ends at
-  once. Stashed lines fold in order before the new fold, whose lines are
+  once. A `history` wait with no answer after 10 seconds ends as a lost
+  connection, and the terminal reconnects as it does after a disconnect.
+  Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.
 - **A rewound session pages across its `forked_from` chain as one history,**

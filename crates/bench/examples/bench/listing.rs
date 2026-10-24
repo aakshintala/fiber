@@ -11,13 +11,14 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
-use crate::busy::{self, expect, in_home};
+use crate::busy::{self, expect};
 use crate::home::Home;
 use crate::idle::{Ctx, Samples, Workload};
 use crate::resume::{self, Fixture};
-use crate::run;
+use crate::run::{self, Proc};
 
 pub(crate) const SAMPLED: [Workload; 1] = [Workload {
     name: "sessions list",
@@ -181,14 +182,28 @@ fn list_once(ctx: &Ctx<'_>, home: &Home) -> Result<(run::Finished, Duration), St
     run::timed_to_end(&mut command, ctx.clock, LIST, "fiber sessions")
 }
 
-/// Generates one real session, clones it to 1,000, then lists the project
-/// once untimed and `runs` times timed, through the installed hub.
-fn sessions_list(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
+/// The listing fixture, ready to time: its home, its hub and the ids
+/// the checks compare each listing against. The warm listing ran during
+/// preparation, so no timed sample shares the hub or the cache with
+/// setup.
+pub(crate) struct ListingPrepared {
+    pub(crate) home: Home,
+    pub(crate) hub: Proc,
+    pub(crate) ids: Vec<String>,
+}
+
+/// Prepares the listing fixture: one real session generated, cloned to
+/// 1,000, the hub up, and one listing already run untimed. A failed
+/// prepare still removes its home and kills its processes.
+pub(crate) fn prepare_listing(
+    ctx: &Ctx<'_>,
+    notes: &mut Vec<String>,
+) -> Result<ListingPrepared, String> {
     let home = ctx.home.child(SEED.script())?;
-    in_home(home, |home| {
-        init_git(ctx, home)?;
+    let prepared = (|| {
+        init_git(ctx, &home)?;
         let seed = doors::mint("s_");
-        resume::generate(ctx, home, &SEED, &seed, notes)?;
+        resume::generate(ctx, &home, &SEED, &seed, notes)?;
         expect(
             notes,
             "seed model requests",
@@ -196,29 +211,67 @@ fn sessions_list(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
             SEED.script().len() - 1,
         );
         let ids = clone_sessions(&home.home(), &home.workspace(), &seed, 999)?;
-        let hub = busy::start_hub(ctx, home)?;
-        let measured = (|| {
-            let (warm, _) = list_once(ctx, home)?;
-            if !warm.status.success() {
-                return Err(format!("fiber sessions exited with {}", warm.status));
-            }
-            notes.extend(check_listing(&warm.stdout, &ids));
-            let mut samples = Vec::new();
-            for _ in 0..ctx.runs {
-                let (finished, took) = list_once(ctx, home)?;
-                if !finished.status.success() {
-                    return Err(format!("fiber sessions exited with {}", finished.status));
-                }
-                notes.extend(check_listing(&finished.stdout, &ids));
-                samples.push(("sessions_list_ms", json!(took.as_secs_f64() * 1000.0)));
-            }
-            Ok(samples)
-        })();
-        let stopped = hub.stop(ctx.clock);
-        let samples = measured?;
-        stopped?;
+        let hub = busy::start_hub(ctx, &home)?;
+        let (warm, _) = list_once(ctx, &home)?;
+        if !warm.status.success() {
+            return Err(format!("fiber sessions exited with {}", warm.status));
+        }
+        notes.extend(check_listing(&warm.stdout, &ids));
+        Ok::<_, String>((hub, ids))
+    })();
+    match prepared {
+        Ok((hub, ids)) => Ok(ListingPrepared { home, hub, ids }),
+        Err(err) => {
+            let _finished = home.finish();
+            Err(err)
+        }
+    }
+}
+
+/// One timed listing against the prepared fixture: `ctx.home` is the
+/// fixture's home.
+pub(crate) fn sample_listing(
+    prepared: &ListingPrepared,
+    ctx: &Ctx<'_>,
+    notes: &mut Vec<String>,
+) -> Result<Samples, String> {
+    let (finished, took) = list_once(ctx, &prepared.home)?;
+    if !finished.status.success() {
+        return Err(format!("fiber sessions exited with {}", finished.status));
+    }
+    notes.extend(check_listing(&finished.stdout, &prepared.ids));
+    Ok(vec![(
+        "sessions_list_ms",
+        json!(took.as_secs_f64() * 1000.0),
+    )])
+}
+
+/// Stops the fixture's hub and removes its home: the hub's error first,
+/// as the single-call run reported it before the home's.
+pub(crate) fn finish_listing(prepared: ListingPrepared, clock: &dyn Clock) -> Result<(), String> {
+    let ListingPrepared { home, hub, .. } = prepared;
+    let stopped = hub.stop(clock);
+    let finished = home.finish();
+    stopped.and(finished)
+}
+
+/// Generates one real session, clones it to 1,000, then lists the project
+/// once untimed and `runs` times timed, through the installed hub.
+fn sessions_list(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
+    let prepared = prepare_listing(ctx, notes)?;
+    let measured = (|| {
+        let mut samples = Samples::new();
+        for _ in 0..ctx.runs {
+            samples.extend(sample_listing(&prepared, ctx, notes)?);
+        }
         Ok(samples)
-    })
+    })();
+    // The row's hub and home go away even when a sample errs.
+    let finished = finish_listing(prepared, ctx.clock);
+    match measured {
+        Ok(samples) => finished.map(|()| samples),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]

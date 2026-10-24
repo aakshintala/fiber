@@ -74,6 +74,14 @@ pub(crate) fn exited(home: &Path, session: &SessionId) -> bool {
         .is_some_and(|(_, dir)| exited_in(dir))
 }
 
+/// The kind of the last line of `session`'s log, from one log lookup:
+/// `fiber_exited` is a clean exit, `rewound` a rewind, anything else a
+/// session that did not exit.
+pub(crate) fn last_kind(home: &Path, session: &SessionId) -> Option<String> {
+    let (_, dir) = crate::recent::lookup_logged(home, session)?;
+    log::last_kind(&dir)
+}
+
 /// Whether the log in `dir` ends in `fiber_exited`.
 fn exited_in(dir: &Path) -> bool {
     log::last_kind(dir).as_deref() == Some("fiber_exited")

@@ -12,8 +12,7 @@
 //! 2 on a usage error or a host other than Linux, and 1 when the file
 //! cannot be written. With `--base-fiber` the harness measures the head
 //! and base binaries in one process, alternating head and base samples
-//! (by sample for the repeated rows and the `paging` jig, by row block
-//! for listing, attach and wheel), and writes the base file too; a base
+//! by sample for every timing row, and writes the base file too; a base
 //! file that cannot be written leaves the exit status alone.
 
 #![allow(
@@ -37,10 +36,12 @@ mod session_list;
 mod wheel;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] \
@@ -67,7 +68,7 @@ struct Base {
 }
 
 /// Which side of a paired run a timed call measures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Side {
     Head,
     Base,
@@ -365,16 +366,70 @@ fn sides(args: &Args) -> (Args, Option<Args>) {
     }
 }
 
+/// Which sampled family a workload belongs to, when it belongs to one:
+/// the single place that classifies a workload name, so the scheduler,
+/// the call count and the prepare step cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SampledKind {
+    Listing,
+    Attach,
+    Wheel,
+}
+
+fn sampled_kind(workload: &idle::Workload) -> Option<SampledKind> {
+    if listing::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Listing)
+    } else if attach::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Attach)
+    } else if wheel::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Wheel)
+    } else {
+        None
+    }
+}
+
+/// Whether the row takes every sample in its own timed call: listing,
+/// attach and wheel prepare their fixtures once per side, then time one
+/// sample per call, so the scheduler alternates the sides per sample.
+/// Every other row times one run per call.
+fn is_sampled(workload: &idle::Workload) -> bool {
+    sampled_kind(workload).is_some()
+}
+
+/// How many timed calls one side makes of a sampled row with `runs`
+/// samples per fixture or session: listing times one sample per run,
+/// while attach times each of its fixtures and wheel each of its
+/// sessions `runs` times.
+fn sample_total(workload: &idle::Workload, runs: u32) -> u32 {
+    // The scheduler calls this only for sampled rows; any other row
+    // keeps its run count.
+    match sampled_kind(workload) {
+        Some(SampledKind::Attach) => runs.saturating_mul(attach::FIXTURE_COUNT),
+        Some(SampledKind::Wheel) => runs.saturating_mul(wheel::SESSION_COUNT),
+        _ => runs,
+    }
+}
+
 /// Runs each selected workload with its repeats and run count, head and
 /// base calls in alternation: head call n, then the base call n when the
 /// base runs the row, for n in 1..=`repeats`, so runner drift lands on
-/// both sides. A repeated row therefore alternates by sample, and a row
-/// that takes every sample in one call is its head block then its base
-/// block, with no other row's call between. A row runs on the base only
-/// when the base's selection holds it; any other row runs on the head
-/// alone, at its place in head order. A side whose call errs ends that
-/// side's row, its samples for the row discarded, while the other side
-/// still runs its remaining calls of the row, without the failed side.
+/// both sides. A repeated row therefore alternates by sample, and a
+/// sampled row alternates by sample too: head sample s, then the base
+/// sample s, for s in 1..=the row's samples, with no other row's call
+/// between. A row runs on the base only when the base's selection holds
+/// it; any other row runs on the head alone, at its place in head order.
+/// A side whose call errs ends that side's row, its samples for the row
+/// discarded, while the other side still runs its remaining calls of
+/// the row, without the failed side.
 fn measure_all(
     head: &mut Pass,
     mut base: Option<&mut Pass>,
@@ -425,14 +480,22 @@ fn measure_all(
         let mut base_samples: Metrics = BTreeMap::new();
         let mut head_alive = true;
         let mut base_alive = paired;
-        for n in 1..=repeats {
+        // A sampled row times one sample per call, alternating the sides
+        // per sample; every other row times one run per call. The row's
+        // nominal run count still labels its metrics below.
+        let (calls, each) = if is_sampled(workload) {
+            (sample_total(workload, runs), 1)
+        } else {
+            (repeats, runs)
+        };
+        for n in 1..=calls {
             // debt: the head and base side-measurement branches duplicate progress
             // reporting, measurement, note collection, sample accumulation and failure
             // handling; extract one per-side measurement operation called in head/base
             // order on the next change to the side-measurement branches.
             if head_alive {
                 eprintln!(
-                    "bench: running {} (run {n} of {repeats}, samples {runs}) [{}]",
+                    "bench: running {} (run {n} of {calls}, samples {each}) [{}]",
                     workload.name,
                     head.side.tag()
                 );
@@ -442,7 +505,7 @@ fn measure_all(
                 )]
                 let _ = std::io::Write::flush(&mut std::io::stderr());
                 let mut notes = Vec::new();
-                let result = measure(head.side, workload, runs, n, &mut notes);
+                let result = measure(head.side, workload, each, n, &mut notes);
                 head.failures.extend(
                     notes
                         .into_iter()
@@ -464,7 +527,7 @@ fn measure_all(
             }
             if base_alive && let Some(base) = base.as_mut() {
                 eprintln!(
-                    "bench: running {} (run {n} of {repeats}, samples {runs}) [{}]",
+                    "bench: running {} (run {n} of {calls}, samples {each}) [{}]",
                     workload.name,
                     base.side.tag()
                 );
@@ -474,7 +537,7 @@ fn measure_all(
                 )]
                 let _ = std::io::Write::flush(&mut std::io::stderr());
                 let mut notes = Vec::new();
-                let result = measure(base.side, workload, runs, n, &mut notes);
+                let result = measure(base.side, workload, each, n, &mut notes);
                 base.failures.extend(
                     notes
                         .into_iter()
@@ -641,6 +704,176 @@ fn run_once(
     (workload.run)(ctx, notes)
 }
 
+/// One side's prepared sampled row: both sides' fixtures are ready
+/// before the first timed sample, and the row's setup notes join its
+/// first call.
+struct SampledRow {
+    state: Result<SampledState, String>,
+    setup_notes: Vec<String>,
+    total: u32,
+    per_group: u32,
+}
+
+/// A sampled row's prepared fixtures, by workload.
+enum SampledState {
+    Listing(Box<listing::ListingPrepared>),
+    Attach(attach::AttachPrepared),
+    Wheel(Box<wheel::WheelPrepared>),
+}
+
+/// Prepares the side's sampled rows before any timed sample, in
+/// selection order. A failed prepare is stored, so the row's calls
+/// report it exactly where the single-call run did.
+fn prepare_sampled(
+    side: Side,
+    home: &home::Home,
+    args: &Args,
+    clock: &dyn Clock,
+    path: &Option<OsString>,
+    sampled: &mut BTreeMap<(Side, &'static str), SampledRow>,
+) {
+    for (workload, _, runs) in selected(args) {
+        if !is_sampled(workload) {
+            continue;
+        }
+        let ctx = idle::Ctx {
+            home,
+            clock,
+            idle: Duration::from_secs(args.idle_secs),
+            path: path.clone(),
+            runs,
+            paging: args.paging.as_deref(),
+        };
+        let mut setup_notes = Vec::new();
+        let state = match sampled_kind(workload) {
+            Some(SampledKind::Listing) => listing::prepare_listing(&ctx, &mut setup_notes)
+                .map(Box::new)
+                .map(SampledState::Listing),
+            Some(SampledKind::Attach) => {
+                attach::prepare_attach(&ctx, &mut setup_notes).map(SampledState::Attach)
+            }
+            _ => wheel::prepare_wheel(&ctx)
+                .map(Box::new)
+                .map(SampledState::Wheel),
+        };
+        sampled.insert(
+            (side, workload.name),
+            SampledRow {
+                state,
+                setup_notes,
+                total: sample_total(workload, runs),
+                per_group: runs,
+            },
+        );
+    }
+}
+
+/// What one timed sample borrows: the harness clock, PATH, and the
+/// side's idle window and paging jig.
+struct SampleParts<'a> {
+    clock: &'a dyn Clock,
+    path: &'a Option<OsString>,
+    idle_secs: u64,
+    paging: Option<&'a Path>,
+}
+
+/// One timed sample of a prepared row: fixture or session group `s`
+/// within its group, alternating head and base. The row's first call
+/// reports its setup notes. The last call finalizes the row, so a
+/// failed stop discards its buffered samples as the single-call run
+/// did; any other failed call tears the row down without its tail
+/// checks and reports the sample's error.
+fn sample_prepared(
+    sampled: &mut BTreeMap<(Side, &'static str), SampledRow>,
+    parts: &SampleParts<'_>,
+    side: Side,
+    workload: &'static idle::Workload,
+    s: u32,
+    notes: &mut Vec<String>,
+) -> Result<idle::Samples, String> {
+    let key = (side, workload.name);
+    let Some(row) = sampled.get_mut(&key) else {
+        return Err(format!("bench: no prepared fixture for {}", workload.name));
+    };
+    if s == 1 {
+        notes.extend(std::mem::take(&mut row.setup_notes));
+    }
+    let total = row.total;
+    let group = usize::try_from(s.saturating_sub(1) / row.per_group)
+        .map_err(|err| format!("counting sample groups: {err}"))?;
+    let result = match &mut row.state {
+        Err(err) => Err(err.clone()),
+        Ok(SampledState::Listing(prepared)) => {
+            let ctx = idle::Ctx {
+                home: &prepared.home,
+                clock: parts.clock,
+                idle: Duration::from_secs(parts.idle_secs),
+                path: parts.path.clone(),
+                runs: 1,
+                paging: parts.paging,
+            };
+            listing::sample_listing(prepared, &ctx, notes)
+        }
+        Ok(SampledState::Attach(prepared)) => {
+            let Some(home) = prepared.home(group) else {
+                return Err(format!("bench: no attach fixture at index {group}"));
+            };
+            let ctx = idle::Ctx {
+                home,
+                clock: parts.clock,
+                idle: Duration::from_secs(parts.idle_secs),
+                path: parts.path.clone(),
+                runs: 1,
+                paging: parts.paging,
+            };
+            attach::sample_attach(prepared, group, &ctx, notes)
+        }
+        Ok(SampledState::Wheel(prepared)) => wheel::sample_wheel(prepared, group, parts.clock),
+    };
+    match result {
+        // The row stays up for its remaining samples.
+        Ok(one) if s != total => Ok(one),
+        Ok(one) => {
+            let finished = match sampled.remove(&key) {
+                Some(SampledRow {
+                    state: Ok(SampledState::Listing(prepared)),
+                    ..
+                }) => listing::finish_listing(*prepared, parts.clock),
+                Some(SampledRow {
+                    state: Ok(SampledState::Attach(prepared)),
+                    ..
+                }) => attach::finish_attach(prepared, parts.clock, notes, true),
+                Some(SampledRow {
+                    state: Ok(SampledState::Wheel(prepared)),
+                    ..
+                }) => wheel::finish_wheel(*prepared, parts.clock, notes, true),
+                _ => Ok(()),
+            };
+            finished.map(|()| one)
+        }
+        Err(err) => {
+            if let Some(row) = sampled.remove(&key) {
+                let mut dropped = Vec::new();
+                match row.state {
+                    Ok(SampledState::Listing(prepared)) => {
+                        let _finished = listing::finish_listing(*prepared, parts.clock);
+                    }
+                    Ok(SampledState::Attach(prepared)) => {
+                        let _finished =
+                            attach::finish_attach(prepared, parts.clock, &mut dropped, false);
+                    }
+                    Ok(SampledState::Wheel(prepared)) => {
+                        let _finished =
+                            wheel::finish_wheel(*prepared, parts.clock, &mut dropped, false);
+                    }
+                    Err(_) => {}
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
 /// Measures the head side and, with `--base-fiber`, the base side in
 /// alternation, and hands back each side's result file: `None` without a
 /// base. A side whose home failed setup runs zero timed calls while the
@@ -655,12 +888,22 @@ fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
         Some(pass) => setup(pass),
         None => (None, None),
     };
-    // The per-call closure builds its own context per call, so each side
-    // sets up and tears down its fixture exactly as the single-side run
-    // did: the calls per side per row are the same, only reordered.
+    // Both sides' sampled fixtures are ready before the first timed
+    // sample, so no setup lands between one side's sample and the
+    // other's. The per-call closure builds its own context per call for
+    // every other row, exactly as the single-side run did.
     let path = std::env::var_os("PATH");
+    let mut sampled: BTreeMap<(Side, &'static str), SampledRow> = BTreeMap::new();
     match (head_home, base_home) {
         (Some(head_home), base_home) => {
+            prepare_sampled(
+                Side::Head,
+                &head_home,
+                &head.args,
+                &clock,
+                &path,
+                &mut sampled,
+            );
             let head_idle = head.args.idle_secs;
             let head_paging = head.args.paging.clone();
             // The base side's home and context pieces, when its setup
@@ -668,6 +911,7 @@ fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
             // the closure finds them here.
             let base_ctx = match (&base_home, &base) {
                 (Some(home), Some(pass)) => {
+                    prepare_sampled(Side::Base, home, &pass.args, &clock, &path, &mut sampled);
                     Some((home, pass.args.idle_secs, pass.args.paging.clone()))
                 }
                 _ => None,
@@ -675,7 +919,25 @@ fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
             measure_all(
                 &mut head,
                 base.as_mut().filter(|_| base_ctx.is_some()),
-                |side, workload, runs, _, notes| {
+                |side, workload, runs, s, notes| {
+                    if is_sampled(workload) {
+                        let (idle_secs, paging) = match side {
+                            Side::Head => (head_idle, head_paging.as_deref()),
+                            Side::Base => match &base_ctx {
+                                Some((_, idle_secs, paging)) => (*idle_secs, paging.as_deref()),
+                                None => {
+                                    return Err("bench: the base home is missing".to_owned());
+                                }
+                            },
+                        };
+                        let parts = SampleParts {
+                            clock: &clock,
+                            path: &path,
+                            idle_secs,
+                            paging,
+                        };
+                        return sample_prepared(&mut sampled, &parts, side, workload, s, notes);
+                    }
                     let (home, idle_secs, paging) = match side {
                         Side::Head => (&head_home, head_idle, head_paging.as_deref()),
                         Side::Base => match &base_ctx {
@@ -720,9 +982,26 @@ fn bench(args: &Args, cpu: &str) -> (Value, Option<Value>) {
         (None, Some(base_home)) => {
             // The head's setup failed, so the base runs the whole list alone.
             if let Some(pass) = base.as_mut() {
+                prepare_sampled(
+                    Side::Base,
+                    &base_home,
+                    &pass.args,
+                    &clock,
+                    &path,
+                    &mut sampled,
+                );
                 let idle_secs = pass.args.idle_secs;
                 let paging = pass.args.paging.clone();
-                measure_all(pass, None, |_, workload, runs, _, notes| {
+                measure_all(pass, None, |side, workload, runs, s, notes| {
+                    if is_sampled(workload) {
+                        let parts = SampleParts {
+                            clock: &clock,
+                            path: &path,
+                            idle_secs,
+                            paging: paging.as_deref(),
+                        };
+                        return sample_prepared(&mut sampled, &parts, side, workload, s, notes);
+                    }
                     let ctx = idle::Ctx {
                         home: &base_home,
                         clock: &clock,

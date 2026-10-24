@@ -9,7 +9,7 @@
 
 use std::process::{Child, ExitStatus};
 #[cfg(test)]
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use rustix::process::Signal;
 use support::group::Listing;
@@ -23,9 +23,7 @@ static SENT: Mutex<Vec<(u32, Signal)>> = Mutex::new(Vec::new());
 /// of 1 or less before any syscall: a group already gone reads as done.
 fn send(pgid: u32, signal: Signal) {
     #[cfg(test)]
-    SENT.lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push((pgid, signal));
+    support::lock(&SENT).push((pgid, signal));
     match support::group::signal(pgid, signal) {
         Ok(()) | Err(_) => {}
     }
@@ -95,7 +93,7 @@ pub(crate) fn retire_if_empty(listing: &mut Option<Listing>) -> bool {
 /// what was sent to a group that is already gone.
 #[cfg(test)]
 pub(crate) fn sent_signals() -> Vec<(u32, Signal)> {
-    SENT.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    support::lock(&SENT).clone()
 }
 
 #[cfg(test)]

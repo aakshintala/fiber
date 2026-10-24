@@ -4,6 +4,21 @@ expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                             auto
+
+
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
+   handoff at —                 —
+   then a summary, fresh context
+   tokens in / out              —
+   cache hits                   —
+   cost                         —
+   cost on subscription         —
+   speed, last reply            —
+   turns                        0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Changed files                2
    …ath/to/the/parser.rs +120 −15
    src/a.rs                 +3 −3

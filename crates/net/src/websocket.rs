@@ -183,12 +183,7 @@ impl Pause {
         match self.held.send(()) {
             Ok(()) | Err(_) => {}
         }
-        match self
-            .release
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .recv()
-        {
+        match support::lock(&self.release).recv() {
             Ok(()) | Err(_) => {}
         }
     }

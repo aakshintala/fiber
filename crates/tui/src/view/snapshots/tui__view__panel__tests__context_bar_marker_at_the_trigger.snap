@@ -5,10 +5,15 @@ expression: "super::super::text(&buf)"
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    /Users/you/work/fiber     auto
+
    test/model                high
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│         500
    handoff at 800   50% of window
    then a summary, fresh context
    tokens in / out        500 / 0
    cache hits                  0%
+   cost                     $0.00
+   cost on subscription     $0.00
+   speed, last reply            —
+   turns                        0
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -18,8 +18,9 @@ use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -142,11 +143,11 @@ impl Setup {
             }
         });
         let (err_tx, stderr_rx) = mpsc::channel();
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
         thread::spawn(move || {
-            let mut text = String::new();
-            match std::io::Read::read_to_string(&mut BufReader::new(stderr_pipe), &mut text) {
-                Ok(_) | Err(_) => {}
-            }
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = support::drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             match err_tx.send(text) {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
@@ -159,8 +160,10 @@ impl Setup {
                 guard,
                 lines,
                 stderr: stderr_rx,
+                stderr_snapshot,
                 first: Vec::new(),
                 deadline: self.deadline,
+                diag: None,
             },
             stdin,
         )
@@ -264,10 +267,16 @@ struct Running {
     guard: KillGroup,
     lines: mpsc::Receiver<String>,
     stderr: mpsc::Receiver<String>,
+    /// The stderr text so far, appended by the drain thread: the timeout
+    /// dump reads it while the session still runs.
+    stderr_snapshot: Arc<Mutex<String>>,
     /// Stdout lines taken as the readiness signal, as written, prepended
     /// to what [`Running::wait`] returns.
     first: Vec<String>,
     deadline: Deadline,
+    /// The timeout dump's log directory, carried onto the socket at
+    /// [`Running::connect`].
+    diag: Option<PathBuf>,
 }
 
 impl Running {
@@ -275,6 +284,13 @@ impl Running {
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
+    /// Registers the session log directory for the timeout dump: the next
+    /// [`Running::connect`] carries it and the stderr snapshot onto the
+    /// socket. Without it the socket keeps the old timeout message.
+    fn set_diag(&mut self, log_dir: PathBuf) {
+        self.diag = Some(log_dir);
+    }
+
     #[track_caller]
     fn connect(&mut self, socket: &Path) -> Socket {
         let line = match self.deadline.recv(&self.lines) {
@@ -287,8 +303,15 @@ impl Running {
             }
         };
         self.first.push(line);
-        Socket::connect(self.deadline, socket)
-            .expect("the session's socket accepted before the deadline")
+        let mut client = Socket::connect(self.deadline, socket)
+            .expect("the session's socket accepted before the deadline");
+        if let Some(log_dir) = self.diag.clone() {
+            client.set_diag(support::Diag::new(
+                Arc::clone(&self.stderr_snapshot),
+                log_dir,
+            ));
+        }
+        client
     }
 
     /// Reads stdout lines until one of `kind` arrives, each taking what
@@ -383,6 +406,8 @@ impl Running {
 struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    /// Context for the timeout dump, carried from [`Running::connect`].
+    diag: Option<support::Diag>,
     deadline: Deadline,
 }
 
@@ -400,8 +425,20 @@ impl Socket {
         Ok(Self {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
+            diag: None,
             deadline,
         })
+    }
+
+    fn set_diag(&mut self, diag: support::Diag) {
+        self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     #[track_caller]
@@ -427,9 +464,10 @@ impl Socket {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error) if error.kind() == ErrorKind::TimedOut => {
-                panic!("waited until the deadline for {what}; got {got:?}")
-            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
+                Some(diag) => panic!("{}", diag.report(what, got)),
+                None => panic!("waited until the deadline for {what}; got {got:?}"),
+            },
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")
             }
@@ -459,22 +497,14 @@ fn until_session_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
-/// The ordered event kinds, omitting `clients`, which can race with loop writes.
-fn kinds_except_clients(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
-}
 /// The socket's event kinds for one prompt and `close`: the subscribe, the
 /// prompt's turn, and the close. The prompt-over-the-socket, skill and
 /// same-id tests run exactly this shape, so they share it.
-const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 19] = [
+const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 18] = [
     "command_accepted",
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -493,11 +523,10 @@ const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 19] = [
 
 /// The same run's stdout kinds: the loop's own lines, without the
 /// socket's `command_accepted` echoes.
-const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
+const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 15] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -711,6 +740,19 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     let mut stream = vec![sub];
     stream.extend(attached);
     stream.extend(tail);
+    // One `clients` line for this full connection attaching
+    // (`docs/events.md`, `clients`); the count is fixed, so it is pinned
+    // against the raw lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "the client attached once: {stream:?}"
+    );
+    // The ordered turn: subscribe, then the held prompt's turn, then the
+    // close (`docs/loop.md`, "Starting a turn", "Ending a turn").
     assert_eq!(
         kinds(&stream),
         [
@@ -723,7 +765,6 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -744,7 +785,6 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -859,7 +899,6 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -891,7 +930,6 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -1161,7 +1199,6 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1195,7 +1232,6 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1628,7 +1664,6 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "command_accepted",
             "fiber_exited",
@@ -1640,7 +1675,6 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "fiber_exited",
         ],
     );
@@ -1715,16 +1749,16 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
     assert!(status.success(), "stderr: {stderr}");
     for stream in [&events, &out] {
         assert_eq!(
-            kinds(stream)
+            stream
                 .iter()
-                .filter(|kind| **kind == "clients")
+                .filter(|line| line["kind"] == "clients")
                 .count(),
             1,
             "the resumed client was counted once"
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -1750,7 +1784,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -2053,15 +2087,13 @@ fn unreadable_pasted_images_are_rejected_without_a_turn() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
-/// The stdout kinds every `close` test's session opens with: startup, the
-/// client's attach, and the prompt's turn starting. `clients` lands after
-/// `extensions_loaded` because each test connects after
-/// `running.wait_for("extensions_loaded")`, as the existing tests do.
-const CLOSE_START: [&str; 7] = [
+/// The ordered stdout kinds every `close` test's session opens with:
+/// startup and the prompt's turn starting. Independently triggered lines
+/// are set aside (`docs/testing.md`, "Event streams").
+const CLOSE_START: [&str; 6] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -2152,6 +2184,7 @@ fn job_session(
     setup.provider(server);
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
     send(
@@ -2173,13 +2206,104 @@ fn job_session(
     (running, client, job_group, id)
 }
 
+#[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
+    let mut client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the socket never closes: the close wait then
+    // expires on a zero bound instead of spending what remains of the
+    // test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = until_session(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_prompt"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..1000 {
+            match client.next("the session to close the socket", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the session closed the socket while waiting for the timeout; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered while waiting for the timeout; got {got:?}");
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    support::assert_timeout_dump(&message);
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    drop(client);
+    let group = running.group;
+    let cleanup = running.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let mut child = running.child;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    match cleanup.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    running.watchdog.stand_down(cleanup);
+    std::mem::forget(running.guard);
+}
+
+#[test]
+fn stdout_projection_also_sets_aside_job_deltas() {
+    let lines = support::expected(&[
+        "clients",
+        "fiber_started",
+        "session_status",
+        "job_delta",
+        "attention",
+        "date_changed",
+        "fiber_exited",
+    ]);
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
+    assert_eq!(
+        kinds(&lines),
+        ["fiber_started", "job_delta", "fiber_exited"]
+    );
+    assert_eq!(stdout_kinds(&lines), ["fiber_started", "fiber_exited"]);
+}
+
 /// The session's stdout kinds without `job_delta`: it is ephemeral, and
 /// where it lands depends on when the job writes. Like [`kinds`], without
 /// `session_status`.
 fn stdout_kinds(out: &[Value]) -> Vec<&str> {
-    out.iter()
-        .filter(|line| line["kind"] != "job_delta" && line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
+    kinds(out)
+        .into_iter()
+        .filter(|kind| *kind != "job_delta")
         .collect()
 }
 
@@ -3194,7 +3318,6 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "command_accepted",
             "fiber_exited",
@@ -3206,7 +3329,6 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "fiber_exited",
         ],
     );
@@ -3276,16 +3398,16 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
     assert!(status.success(), "stderr: {stderr}");
     for stream in [&events, &out] {
         assert_eq!(
-            kinds(stream)
+            stream
                 .iter()
-                .filter(|kind| **kind == "clients")
+                .filter(|line| line["kind"] == "clients")
                 .count(),
             1,
             "the resumed client was counted once"
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -3311,7 +3433,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -3370,7 +3492,6 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -3510,7 +3631,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "session_started",
             "fiber_started",
