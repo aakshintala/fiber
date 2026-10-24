@@ -137,7 +137,7 @@ fn configure_ignores_a_project_files_port() {
     let root = fakes::TempDir::new("hport");
     let (home, workspace) = home_and_workspace(&root);
     let (sessions, _) =
-        ::cli::project_of(&home, &workspace).unwrap_or_else(|e| panic!("project: {}", e.message));
+        ::cli::project_of(&home, &workspace).unwrap_or_else(|e| panic!("project: {e}"));
     let dir = sessions.parent().unwrap();
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("config.json"), r#"{"hub": {"port": 5050}}"#).unwrap();

@@ -126,7 +126,7 @@ fn a_slash_prompt_runs_a_servers_prompt() {
     let expanded = session
         .requests()
         .iter()
-        .flat_map(|request| request.conversation.clone())
+        .flat_map(|request| request.conversation.to_vec())
         .rev()
         .find_map(|input| match input {
             Input::User { text, .. } => Some(text),
@@ -510,7 +510,7 @@ fn a_rejected_prompt_does_not_move_the_idle_deadline() {
     let deadline = clock.now() + Duration::from_secs(60);
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run()).unwrap());
+    thread::spawn(move || done.send(looped.run().result).unwrap());
     clock.advance_when_parked(
         Some(deadline),
         None,

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use contract::shapes::Effect;
@@ -243,6 +244,33 @@ fn assert_reads(command: &str) {
     assert!(effects.declared.reversible, "{command}");
 }
 
+/// The paths a `cd` call declares, as a membership: the doc promises
+/// which directories each element runs in, not their order.
+fn assert_declares(command: &str, paths: &[&str]) {
+    assert_reads(command);
+    let declared = classified(command).declared.paths.unwrap_or_default();
+    let actual: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    assert_eq!(
+        actual,
+        BTreeSet::from_iter(paths.iter().copied()),
+        "{command}"
+    );
+}
+
+/// The network a `gh` read declares: the default GitHub API endpoint,
+/// in the shape `web_fetch` declares it.
+fn assert_network(command: &str, entries: &[(String, Vec<String>)], paths: &[&str]) {
+    let effects = classified_with(command, entries);
+    assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "{command}"
+    );
+    let paths = paths.iter().map(|path| (*path).to_owned()).collect();
+    assert_eq!(effects.declared.paths, Some(paths), "{command}");
+}
+
 fn assert_closed(command: &str) {
     let effects = classified(command);
     assert_eq!(
@@ -342,24 +370,28 @@ fn the_longest_built_in_path_wins() {
 
 #[test]
 fn an_assignment_after_the_name_is_an_operand() {
-    // `ls FOO=1` reads the `FOO=1` operand; a leading assignment
-    // executes, whatever its name (#1497 task 1.3).
+    // `ls FOO=1` reads the `FOO=1` operand; a leading assignment reads
+    // only for a name on the fixed list (#1497).
     assert_eq!(
         classified("ls FOO=1").declared.paths,
         Some(vec!["/work/FOO=1".to_owned()])
     );
     assert_closed("FOO=1 ls");
-    assert_closed("LC_ALL=C git status");
+    let status = classified("LC_ALL=C git status");
+    assert_eq!(status.declared.effects, vec![Effect::Reads]);
+    assert!(status.declared.reversible);
+    assert!(status.declared.paths.is_none());
 }
 
 #[test]
-fn assignment_prefixes_execute_despite_takes_value_flags() {
-    // No built-in entry blesses an assignment name (#1497 task 1.3): not
-    // `LC_ALL`, and not a bare letter matching a takes-value flag such
-    // as `head -n`. `docs/tools.md`, "Shell", "Effects" promises the
-    // call declares `executes` with no paths.
+fn only_listed_assignment_names_read() {
+    // A leading assignment reads only for a name on the fixed list
+    // (#1497): `LC_ALL` reads, while `FOO`, a bare letter matching a
+    // takes-value flag such as `head -n`, and any other name execute.
+    // `docs/tools.md`, "Shell", "Effects" promises the refused call
+    // declares `executes` with no paths.
+    assert_reads("LC_ALL=C git status");
     assert_closed("FOO=1 git status");
-    assert_closed("LC_ALL=C git status");
     assert_closed("n=1 head -5");
 }
 
@@ -368,6 +400,7 @@ fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
         "git -c diff.external=x diff",
+        "git --config-env=a=b log",
         "git --exec-path=/x log",
         "git --exec-path log",
         "git -p log",
@@ -408,6 +441,74 @@ fn hostile_git_forms_execute() {
     ] {
         assert_closed(command);
     }
+}
+
+#[test]
+fn gh_read_only_forms_read() {
+    // The table tests below prove every flag alone and every row reads;
+    // one combined row pins the declared network, host and paths.
+    assert_network(
+        "gh pr view 123 --json number,title --comments --repo owner/name -R owner/name",
+        &[],
+        &["/work/123"],
+    );
+    assert_network("LC_ALL=C gh pr view 123", &[], &["/work/123"]);
+}
+
+#[test]
+fn gh_host_overrides_execute() {
+    // Any host override leaves the default endpoint, so the call is
+    // reviewed: an assignment prefix naming a host variable, and the
+    // `--hostname` flag, whose value the classifier never sees.
+    for command in [
+        "GH_HOST=example.com gh pr view 123",
+        "GH_ENTERPRISE_TOKEN=token gh pr view 123",
+        "env GH_HOST=example.com gh pr view 123",
+        "gh pr view 123 --hostname example.com",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn other_gh_forms_execute() {
+    for command in [
+        "gh",
+        "gh api repos/owner/name",
+        "gh pr merge 123",
+        "gh pr create --title x",
+        "gh pr view 123 --web",
+        "gh pr view -- x",
+        "gh -R owner/name pr view 123",
+        "gh pr view 123 --repo github.corp/owner/repo",
+        "gh pr view 123 --repo=github.corp/owner/repo",
+        "gh pr view 123 -R github.corp/owner/repo",
+        "gh issue close 123",
+        "gh repo clone owner/name",
+        "gh auth status",
+        "gh run watch 123",
+        "curl https://example.com",
+    ] {
+        assert_closed(command);
+    }
+    // A configured `gh pr view` adds nothing: the built-in path owns the
+    // name. A configured `gh pr status` is honoured: no built-in owns it.
+    let view = [configured("gh pr view", &["--web"])];
+    assert_configured_closed("gh pr view 123 --web", &view);
+    // Only echo stages print statically-known words: a gh stage's output
+    // leaves a later `xargs` reader unproven, so the call is reviewed.
+    assert_closed("gh pr view 123 | xargs wc -l");
+    let status = [configured("gh pr status", &["--json="])];
+    // A configured `gh` entry hits the network too, so it declares
+    // `Network` with the default host instead of `Reads`.
+    assert_network("gh pr status 123", &status, &["/work/123"]);
+    assert_network("gh pr status 123 --json number", &status, &["/work/123"]);
+    assert_eq!(
+        classified_with("gh pr status 123 --web", &status)
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
 }
 
 #[test]
@@ -579,6 +680,13 @@ fn denied_flags_are_absent_from_every_allowed_list() {
 #[test]
 fn every_listed_command_with_a_plain_operand_reads() {
     for command in COMMANDS {
+        // A `gh` command hits the network, so it declares `Network`
+        // with the default host instead of `Reads`.
+        if command.name.starts_with("gh ") {
+            let line = format!("{} x", command.name);
+            assert_network(&line, &[], &["/work/x"]);
+            continue;
+        }
         let line = format!("{} x", command.name);
         assert_reads(&line);
         let paths = classified(&line).declared.paths;
@@ -595,6 +703,19 @@ fn every_listed_command_with_a_plain_operand_reads() {
 #[test]
 fn each_allowed_flag_keeps_the_command_read_only() {
     for command in COMMANDS {
+        // A `gh` command hits the network, so it declares `Network`
+        // with the default host instead of `Reads`.
+        if command.name.starts_with("gh ") {
+            for flag in command.flags {
+                let line = if flag.takes_value {
+                    format!("{} {} v", command.name, flag.spelling)
+                } else {
+                    format!("{} {}", command.name, flag.spelling)
+                };
+                assert_network(&line, &[], &["/work"]);
+            }
+            continue;
+        }
         for flag in command.flags {
             let line = if flag.takes_value {
                 format!("{} {} v", command.name, flag.spelling)
@@ -778,6 +899,15 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git rev-parse", true),
         ("git ls-files", true),
         ("git blame", true),
+        ("gh pr view", false),
+        ("gh pr list", false),
+        ("gh pr diff", false),
+        ("gh pr checks", false),
+        ("gh issue view", false),
+        ("gh issue list", false),
+        ("gh repo view", false),
+        ("gh run list", false),
+        ("gh run view", false),
     ];
     assert_eq!(COMMANDS.len(), stated.len());
     for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {
@@ -1196,4 +1326,192 @@ fn a_quoted_path_with_a_space_still_ends_at_its_basename() {
     assert_configured_closed("/opt/my tools/jq . f", &spaced);
     assert_configured_closed("'/opt/my tools/jqx' . f", &spaced);
     assert_configured_closed("'/opt/my tools/jq' -x . f", &spaced);
+}
+
+#[test]
+fn cd_forms_outside_the_allow_list_execute() {
+    for command in [
+        "cd",
+        "cd -",
+        "cd \"\"",
+        "cd -P",
+        "cd -L",
+        "cd -x",
+        "cd -P x",
+        "cd -L x",
+        "cd a b",
+        "cd ~",
+        "cd \"~\"",
+        "cd \"~/x\"",
+        "cd a*b",
+        "cd \"a*b\"",
+        "cd \"a?b\"",
+        "cd \"a[b]\"",
+        "cd \"a{b}\"",
+        "cd $(x)",
+        "cd `x`",
+        "cd $HOME",
+        "cd --",
+        "cd -- -",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn cd_dash_dash_names_one_directory() {
+    assert_declares("cd -- x", &["/work/x"]);
+    // A flag-like operand reads only after `--`.
+    assert_declares("cd -- -P", &["/work/-P"]);
+}
+
+#[test]
+fn cd_declares_its_directory() {
+    assert_declares("cd sub", &["/work/sub"]);
+    // A lexical join still resolves against the workdir.
+    assert_declares("cd sub/../proc", &["/work/proc"]);
+    // Under /proc the call is reviewed.
+    for command in ["cd /proc", "cd /proc/self", "cd /proc/1/fd"] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn operand_less_commands_declare_each_running_directory() {
+    // Each element declares the directories it runs in: the `cd` its own
+    // join, then the operand-less `ls` each running directory.
+    assert_declares("cd sub && ls", &["/work/sub"]);
+    for command in ["cd sub ; ls", "cd sub || ls"] {
+        assert_declares(command, &["/work", "/work/sub"]);
+    }
+}
+
+#[test]
+fn git_after_any_cd_executes() {
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd sub || git status",
+        "cd sub && git stash list",
+        "cd sub && git log",
+    ] {
+        assert_closed(command);
+    }
+    // Git before the cd still reads, declaring the joined directory.
+    assert_declares("git status && cd sub", &["/work/sub"]);
+}
+
+#[test]
+fn cd_before_an_input_redirect_checks_each_running_directory() {
+    assert_declares("cd sub && cat <f", &["/work/sub", "/work/sub/f"]);
+    for command in ["cd sub ; cat <f", "cd sub || cat <f"] {
+        assert_declares(command, &["/work", "/work/sub", "/work/f", "/work/sub/f"]);
+    }
+}
+
+#[test]
+fn cd_in_a_pipeline_moves_nothing() {
+    assert_declares("cd sub | cat f", &["/work/sub", "/work/f"]);
+}
+
+#[test]
+fn losing_the_path_executes_every_later_element() {
+    assert_reads(&cd_chain(30));
+    assert_reads(&cd_chain(31));
+    assert_closed(&cd_chain(32));
+}
+
+fn cd_chain(count: usize) -> String {
+    let mut command = String::new();
+    for n in 1..=count {
+        if n > 1 {
+            command.push_str(" ; ");
+        }
+        command.push_str(&format!("cd /d{n}"));
+    }
+    command.push_str(" ; ls");
+    command
+}
+
+fn noted(command: &str) -> Option<String> {
+    super::not_shown_read_only(command, Path::new("/work"), &[])
+}
+
+#[test]
+fn the_note_names_only_the_stages_that_were_not_shown_read_only() {
+    assert_eq!(
+        noted("ls && npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+    assert_eq!(noted("npm test"), None);
+    assert_eq!(noted("ls && pwd"), None);
+    assert_eq!(noted("ls &&"), None);
+    assert_eq!(
+        noted("echo $(x) && ls"),
+        Some("Not shown read-only: `echo $(x)`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_joins_several_unshown_parts_with_comma() {
+    assert_eq!(
+        noted("ls && npm test && npm run"),
+        Some("Not shown read-only: `npm test`, `npm run`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_git_stage_failed_by_an_earlier_cd() {
+    assert_eq!(
+        noted("cd sub && git status"),
+        Some("Not shown read-only: `git status`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_an_opaque_subshell_stage() {
+    assert_eq!(
+        noted("(ls) && pwd"),
+        Some("Not shown read-only: `(ls)`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_keeps_verbatim_spacing() {
+    assert_eq!(
+        noted("ls  &&  npm   test"),
+        Some("Not shown read-only: `npm   test`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_pipeline_stage() {
+    assert_eq!(
+        noted("ls | npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_stage_reading_under_proc() {
+    assert_eq!(
+        noted("cat /proc/version && ls"),
+        Some("Not shown read-only: `cat /proc/version`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_the_command_after_a_lost_path() {
+    assert_eq!(
+        noted(&cd_chain(32)),
+        Some("Not shown read-only: `ls`".to_owned())
+    );
+}
+
+#[test]
+fn an_oversize_call_has_no_note() {
+    let over = format!("echo {}", "a".repeat(9_996));
+    assert!(over.len() > super::super::syntax::MAX_COMMAND_BYTES);
+    assert_eq!(noted(&over), None);
 }

@@ -56,6 +56,7 @@ impl Jig {
     }
     fn spawn_inner(home: &Path, args: &[&str], capture_stderr: bool) -> Self {
         let executable = example_executable();
+        fakes::warm_up(&executable, &["--bogus"], 2);
         let mut child = Command::new(executable)
             .args(args)
             .env_clear()

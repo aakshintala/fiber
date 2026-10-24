@@ -190,16 +190,14 @@ fn settle(clock: &FakeClock, due: Instant) {
 
 /// Closes the inbox and runs the loop until it returns.
 #[track_caller]
-fn run_to_end(session: &mut Session) {
+fn run_to_end(session: &mut Session) -> r#loop::Ran {
     drop(std::mem::replace(&mut session.inbox, mpsc::channel().0));
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
-    assert!(
-        Deadline::after(DEADLINE)
-            .recv(&finished)
-            .expect("run ended in time")
-    );
+    thread::spawn(move || done.send(looped.run()).unwrap());
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run ended in time")
 }
 
 fn usage_lines(lines: &[Envelope]) -> Vec<&Envelope> {
@@ -312,8 +310,9 @@ fn a_failed_call_s_cost_settles_30_seconds_later_and_is_counted_once() {
     let lines = next_turn(&mut session);
     assert_late_record_first(&lines, &first, 0.5);
 
-    run_to_end(&mut session);
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, None).unwrap();
+    let ran = run_to_end(&mut session);
+    assert!(ran.result.is_ok());
+    r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), false, None).unwrap();
     let all = log::read(&session.dir).unwrap();
     assert_eq!(
         kinds(&all),
@@ -747,7 +746,7 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
     session.inbox.send(delivery("hi")).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
-    let loop_thread = thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
+    let loop_thread = thread::spawn(move || done.send(looped.run().result.is_ok()).unwrap());
     let loop_thread = loop_thread.thread().id();
 
     let refresh = start + Duration::from_secs(270);

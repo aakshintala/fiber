@@ -35,7 +35,7 @@ use fakes::{MUST_SUCCEED_WITHIN, ProviderServer, Response, Watchdog};
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Output, Setup, group_alive, spawn_watched};
+use support::{Deadline, KillGroup, Output, Setup, spawn_watched};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -157,10 +157,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         assert!(terminal.echoes(), "echo was not restored");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
@@ -186,10 +183,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)
@@ -440,7 +434,7 @@ impl OnTerminal {
             Err(_) => support::expired(self.deadline, self.group, &finished, "`fiber` to exit"),
         };
         assert!(
-            !group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "`fiber` left a process behind"
         );
         std::mem::forget(self.guard.take());
@@ -731,7 +725,7 @@ fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
     run.screen.wait_for("Key for acme: ");
     run.terminal.wait_for_echo_off(setup.deadline);
     // The guarded helper: it refuses a group of 1 or less.
-    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
+    assert!(fakes::kill_group(run.group, "INT").unwrap());
     let status = run.finish();
     assert_eq!(status.signal(), Some(2), "{status:?}");
     assert!(run.terminal.echoes(), "echo was not restored");
@@ -1026,10 +1020,7 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
             }
         }
     }
-    assert!(
-        !group_alive(setup.deadline, group),
-        "`fiber` left a process behind"
-    );
+    assert!(!fakes::group_alive(group), "`fiber` left a process behind");
     std::mem::forget(guard);
     watchdog.stand_down(setup.deadline.cleanup_phase());
     Output {
@@ -1526,7 +1517,7 @@ fn an_interrupt_at_the_reviewer_prompt_keeps_the_credential_and_sets_nothing() {
     );
     // The prompt blocks on terminal input: the interrupt must end the
     // read with no reviewer set, not hang inside it.
-    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
+    assert!(fakes::kill_group(run.group, "INT").unwrap());
     run.screen.wait_for("no reviewer was set");
     let status = run.finish();
     let shown = &run.screen.seen;
@@ -1639,7 +1630,7 @@ fn an_interrupt_during_reviewer_discovery_keeps_the_credential_and_sets_nothing(
         "no prompt before discovery ends: {:?}",
         run.screen.seen
     );
-    assert!(support::kill_group(setup.deadline, run.group, "INT").unwrap());
+    assert!(fakes::kill_group(run.group, "INT").unwrap());
     held.release();
     run.screen.wait_for("no reviewer was set");
     let status = run.finish();

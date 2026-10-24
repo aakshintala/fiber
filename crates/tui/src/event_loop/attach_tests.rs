@@ -275,6 +275,7 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
             | Input::Feedback(_)
             | Input::Viewed { .. }
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. } => "other".to_owned(),
         })
         .collect()

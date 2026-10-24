@@ -47,7 +47,8 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
     let ep = endpoint(&server);
     let model = ep.reference();
     let mut req = request();
-    req.conversation.push(Input::ToolCall {
+    let mut conversation = req.conversation.to_vec();
+    conversation.push(Input::ToolCall {
         action_id: ActionId("a_1".into()),
         model: model.clone(),
         call: ToolCallRequested {
@@ -59,20 +60,23 @@ fn tool_search_results_send_the_same_bytes_as_successful_text_results() {
             provider_item: None,
         },
     });
-    req.conversation.push(Input::ToolSearchResult {
+    conversation.push(Input::ToolSearchResult {
         action_id: ActionId("a_1".into()),
         loaded: vec!["a".into(), "b".into()],
     });
+    req.conversation = conversation.into();
 
     let protocol = Completions::new(ep.clone());
     run(protocol.call(&req)).0.unwrap();
-    req.conversation[2] = Input::ToolResult {
+    let mut conversation = req.conversation.to_vec();
+    conversation[2] = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "Loaded: a, b.".into(),
         is_error: false,
         images: vec![],
         pdfs: vec![],
     };
+    req.conversation = conversation.into();
     run(protocol.call(&req)).0.unwrap();
     let requests = server.requests();
     let pair = &requests[requests.len() - 2..];
@@ -374,10 +378,11 @@ fn request() -> ModelRequest {
         tools: vec![weather_tool(), loose_tool()],
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "s_root".into(),
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..harness::request()
     }
 }
@@ -792,7 +797,7 @@ fn markers() -> Endpoint {
 fn declared_cache_markers_go_on_the_system_prompt_the_previous_end_and_the_new_end() {
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
     let request = ModelRequest {
-        conversation: four_turn_conversation(),
+        conversation: (four_turn_conversation()).into(),
         previous_end: Some(3),
         sent_tools: None,
         cache_lifetime: CacheLifetime::OneHour,
@@ -855,7 +860,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         }
     );
 
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Reasoning {
             model: "openai/gpt-6-luna".into(),
@@ -901,7 +906,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     send(
         endpoint(&server),
         &ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             ..request()
         },
     );
@@ -1102,13 +1107,13 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
         text: "hm".into(),
         provider_item: Some(json!({"reasoning_content": "hm"})),
     };
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([call("a"), call("b"), result("a"), result("b"), reasoning]);
     let server = ProviderServer::start([completed_reply()]).unwrap();
     send(
         endpoint(&server),
         &ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             ..request()
         },
     );
@@ -1469,7 +1474,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
         send(
             endpoint(&server),
             &ModelRequest {
-                conversation: conversation(is_error),
+                conversation: (conversation(is_error)).into(),
                 ..request()
             },
         );
@@ -1526,13 +1531,12 @@ fn png_ref(path: &str) -> contract::provider::ImageRef {
     }
 }
 
-fn image_session() -> fakes::TempDir {
-    let session = fakes::TempDir::new("fiber-completions-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+fn image_media() -> std::sync::Arc<contract::provider::Media> {
     // "abcd" is `YWJjZA==`, "wxyz" is `d3h5eg==`.
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    std::fs::write(session.path().join("artifacts/i_2.png"), b"wxyz").unwrap();
-    session
+    harness::media(&[
+        ("artifacts/i_1.png", b"abcd"),
+        ("artifacts/i_2.png", b"wxyz"),
+    ])
 }
 
 fn image_url(data: &str) -> Value {
@@ -1541,7 +1545,7 @@ fn image_url(data: &str) -> Value {
 
 #[test]
 fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
-    let session = image_session();
+    let media = image_media();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
         images: Vec::new(),
@@ -1553,8 +1557,8 @@ fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
         vec![png_ref("artifacts/i_1.png")],
     ));
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
@@ -1614,7 +1618,7 @@ fn pdf_ref(
 
 #[test]
 fn a_tool_results_pdf_pages_go_in_a_user_message_after_the_tool_message() {
-    let session = image_session();
+    let media = image_media();
     let conversation = pdf_turn(
         "a_1",
         "call_1",
@@ -1627,8 +1631,8 @@ fn a_tool_results_pdf_pages_go_in_a_user_message_after_the_tool_message() {
         ),
     );
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
@@ -1651,11 +1655,11 @@ fn a_tool_results_pdf_pages_go_in_a_user_message_after_the_tool_message() {
 
 #[test]
 fn a_pdf_without_pages_adds_no_user_message() {
-    let session = image_session();
+    let media = image_media();
     let conversation = pdf_turn("a_1", "call_1", pdf_ref("artifacts/p_1.pdf", None));
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1673,7 +1677,7 @@ fn a_pdf_without_pages_adds_no_user_message() {
 
 #[test]
 fn pdf_pages_from_parallel_results_share_one_user_message_in_order() {
-    let session = image_session();
+    let media = image_media();
     // Two parallel calls, then their results: one run of tool messages,
     // the first carrying a PDF with two pages.
     let (first, second) = (
@@ -1702,8 +1706,8 @@ fn pdf_pages_from_parallel_results_share_one_user_message_in_order() {
         second[1].clone(),
     ];
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1727,61 +1731,8 @@ fn pdf_pages_from_parallel_results_share_one_user_message_in_order() {
 }
 
 #[test]
-fn a_rewound_child_sends_its_parent_pdf_pages_as_the_same_bytes() {
-    let root = fakes::TempDir::new("fiber-completions-rewound-pdf");
-    let sessions = root.path().join("sessions");
-    let parent = sessions.join("s_parent");
-    let child = sessions.join("s_child");
-    std::fs::create_dir_all(parent.join("artifacts")).unwrap();
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::write(parent.join("artifacts/i_1.png"), b"abcd").unwrap();
-    std::fs::write(parent.join("artifacts/i_2.png"), b"wxyz").unwrap();
-    let absolute = |name: &str| parent.join(name).display().to_string();
-    let conversation = |relative: bool| {
-        let path = |name: &str| {
-            if relative {
-                name.to_owned()
-            } else {
-                absolute(name)
-            }
-        };
-        pdf_turn(
-            "a_1",
-            "call_1",
-            pdf_ref(
-                &path("artifacts/p_1.pdf"),
-                Some(vec![
-                    png_ref(&path("artifacts/i_1.png")),
-                    png_ref(&path("artifacts/i_2.png")),
-                ]),
-            ),
-        )
-    };
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let endpoint = endpoint(&server);
-    send(
-        endpoint.clone(),
-        &ModelRequest {
-            conversation: conversation(true),
-            session_dir: parent.clone(),
-            ..request()
-        },
-    );
-    send(
-        endpoint,
-        &ModelRequest {
-            conversation: conversation(false),
-            session_dir: child,
-            ..request()
-        },
-    );
-    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
-    assert_eq!(bodies[0], bodies[1]);
-}
-
-#[test]
 fn images_from_parallel_results_share_one_user_message_in_order() {
-    let session = image_session();
+    let media = image_media();
     // Two parallel calls, then their results: one run of tool messages.
     let (first, second) = (
         image_turn(
@@ -1804,8 +1755,8 @@ fn images_from_parallel_results_share_one_user_message_in_order() {
         second[1].clone(),
     ];
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1828,7 +1779,7 @@ fn images_from_parallel_results_share_one_user_message_in_order() {
 
 #[test]
 fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
-    let session = image_session();
+    let media = image_media();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
         images: Vec::new(),
@@ -1844,8 +1795,8 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
         images: Vec::new(),
     });
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1868,7 +1819,7 @@ fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
 
 #[test]
 fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
-    let session = image_session();
+    let media = image_media();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
         images: Vec::new(),
@@ -1880,8 +1831,8 @@ fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
         vec![png_ref("artifacts/i_1.png")],
     ));
     let request = ModelRequest {
-        conversation,
-        session_dir: session.path().to_path_buf(),
+        conversation: conversation.into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1905,7 +1856,7 @@ fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
 
 #[test]
 fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
-    let session = image_session();
+    let media = image_media();
     let mut conversation = vec![Input::User {
         text: "What is the weather in Paris?".into(),
         images: Vec::new(),
@@ -1929,8 +1880,8 @@ fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
                 ..markers()
             },
             &ModelRequest {
-                conversation: conversation.clone(),
-                session_dir: session.path().to_path_buf(),
+                conversation: (conversation.clone()).into(),
+                media: media.clone(),
                 previous_end,
                 cache_lifetime: CacheLifetime::OneHour,
                 ..request()
@@ -1962,7 +1913,7 @@ fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
     // `ends` entry still points at the tool message when the image message
     // is flushed. The previous-end marker must land on the image message
     // the run ends with, not the tool message.
-    let session = image_session();
+    let media = image_media();
     let mut conversation = image_turn(
         "a_1",
         "call_1",
@@ -1981,8 +1932,8 @@ fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
             ..markers()
         },
         &ModelRequest {
-            conversation,
-            session_dir: session.path().to_path_buf(),
+            conversation: conversation.into(),
+            media: media.clone(),
             previous_end: Some(3),
             sent_tools: None,
             ..request()
@@ -2143,10 +2094,10 @@ fn user_message(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
-    let session = image_session();
+    let media = image_media();
     let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
+        conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
+        media: media.clone(),
         ..request()
     };
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
@@ -2444,12 +2395,13 @@ fn live_openrouter_web_search_completes_a_turn() {
     };
     let request = ModelRequest {
         tools: vec![hosted_search_tool()],
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "Search the web: what is the latest stable version of the Rust \
                      compiler? Answer in one sentence and cite the source."
                 .into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..request()
     };
     let (done, finished) = std::sync::mpsc::channel();

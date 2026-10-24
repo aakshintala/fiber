@@ -607,7 +607,8 @@ a click on it returns too. The views are:
   necessarily next to each other and ignoring case, the model's provider,
   id or display name. The filter keeps the list's order and only drops
   rows. Backspace removes a letter; Esc clears the query first and closes
-  the picker on the next press. Enter with no match leaves the picker open.
+  the picker on the next press. Enter with nothing focused does nothing and
+  leaves the picker open; it installs only a row ↓ or a click has focused.
   Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
@@ -643,9 +644,49 @@ a click on it returns too. The views are:
   model's chips. A model chosen for this session only gets a third row,
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
-  matches nothing shows one line, "No models match" dim, and no provider
-  sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+  matches no model and no not-installed row shows one line, "No models
+  match" dim, and no provider sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
   Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
+
+  Below the last provider section, after a blank row, the choosing picker
+  lists each first-party provider no installed extension declares, one row
+  each (`docs/extensions.md`, "A fresh install"): the gutter, the name in
+  `accent`, " · not installed" dim. The scripted provider is never listed
+  (`docs/model-routing.md`, "The scripted provider"), and `/thinking` and
+  `/scoped-models` list none. Typing filters these rows by provider name as it
+  filters models, and a query that matches no model and no row still shows the
+  one "No models match" line. "Show all" leaves the rows as they are. ↑ and ↓
+  walk the models and then these rows; no row is focused until ↓ or a click
+  puts it there, so Enter with no row focused does what it does with none
+  listed (a query that hides every model focuses nothing). The focused row
+  reads as a focused model does, with "› " in its gutter, bold, on the bar.
+  Enter, or a click on the name, installs the provider as `fiber extension
+  install <name>` does, asking nothing more: choosing the row is the approval.
+  While it installs the row reads " ⟳ installing" and the spinner in
+  `attention`; choosing another row does nothing until it ends, and closing the
+  picker does not stop it. A failed install keeps the row, still marked not
+  installed, and adds a row under it, indented four columns, "✗ " and the
+  error in `error`, its first line cut at 80 columns; choosing the row again
+  tries again. A successful install drops the row, asks one model refresh so
+  the provider's models list, and draws under the list, until the picker closes
+  and indented four columns: "✓ " in `success` and "installed <name>", the
+  lines of the install summary dim ("What an install shows",
+  `docs/extensions.md`), and, for a provider whose key is missing, "<name>
+  needs a credential: run `fiber login <name>`" dim, or, for a key that could
+  not be read, "✗ <name>'s credential could not be read: <error>" in `error`.
+  An install that ends while the picker is closed asks the refresh and, if it
+  failed, shows the notice "Installing <name> failed: <error>"; if it
+  succeeded, each credential line above is a notice instead
+  (`credential_missing`, `credential_failed`). On a remote terminal the install
+  runs on the hub (`docs/invocation.md`, `configure`, `install_provider`) and
+  the list is the hub's; with the hub not connected the row fails with "The hub
+  is not connected."; and the install holds the terminal's one hub connection
+  until it ends, up to 1,800 s for each install step (`docs/extensions.md`,
+  "Installing"), so other hub commands wait behind it; while it runs on a
+  remote terminal, `/settings` and the other config views are refused with "a
+  provider is installing; try again when it finishes" (a local terminal gets
+  no such refusal), and on either terminal Esc closes the picker with the
+  install still running.
 - The credential picker, `/credential`: the header reads "Credentials" bold,
   "  /credential" dim and "Esc returns" dim, right-aligned. The provider's
   labels follow the header in the answer's order,
@@ -1212,6 +1253,7 @@ and an expiry wakes the loop even with no input.
 | `model_unconfigured` | event | Fades 10 s after it shows. |
 | `models_loading` | condition | The model list arrives. |
 | `no_model` | event | Fades 10 s after it shows. |
+| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
@@ -1533,8 +1575,10 @@ what it started keeps running.
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search, and choosing
-  in the model picker or the credential picker for this session only. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, choosing
+  in the model picker or the credential picker for this session only, and
+  keeping, editing, striking and flipping a line's layer in the reviewer
+  setup. A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1542,6 +1586,15 @@ what it started keeps running.
   workspace is chosen ("Home"). On home, Esc on a focused row goes back to the session the person came from ("Home"). It returns focus to the input box from
   the conversation, and interrupts the turn only when nothing is open and the
   input box has focus. In a question form, Esc means "Chat about this".
+- **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
+  ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
+  panel's legend says. The ✕ and a press outside the panel, which is Esc,
+  are its mouse targets, and the mouse wheel does nothing while it is open.
+  Enter on a diff that would change neither layer closes the setup with one
+  notice, `notes_unchanged`, and writes no file.
+  The notice that names the command, shown the first time in a session the
+  reviewer blocks a call while both layers of the notes are empty, closes on
+  any key, and that key goes nowhere else.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -1712,7 +1765,7 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the home screen's delete question or workspace picker, the
+  close-all and stop questions, the import report, the reviewer setup, the home screen's delete question or workspace picker, the
   key map, an approval or question, an offer, the Ctrl+R panel, or a
   notice's whole text; or the `/` or `@` completion panel while focus is not
   in the conversation. An overlay's own keys, such as an approval's ↑ and ↓,
@@ -1828,6 +1881,7 @@ later release still applies.
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules` | Opens the standing rules. |
+| `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings` | Opens the rebinding screen ("Bindings"). |
@@ -2105,7 +2159,7 @@ tui       212   9,804
 
 Every surface drawn over the screen shares one frame: the
 key map, the quit question, the close-all question, the stop question, home's delete question and workspace picker, the
-`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the import report, the reviewer setup, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,

@@ -21,11 +21,11 @@ fn request() -> ModelRequest {
         tool_choice: "auto".to_owned(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_test".to_owned(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

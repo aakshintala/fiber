@@ -543,6 +543,27 @@ fn a_warming_refresh_uses_the_session_factory_at_the_first_attempt() {
 }
 
 #[test]
+fn a_step_hands_the_provider_and_the_warm_hold_one_conversation() {
+    let mut world = build(Build {
+        warm: Some(1),
+        script: vec![Scripted::text("Warm.")],
+        ..plain_build()
+    });
+    prompt(&world, "hi");
+    assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
+    let requests = world.provider.requests();
+    // One step is one round-trip to the model (`docs/loop.md`, "One step"),
+    // so the completed single-step turn sent exactly one request.
+    assert_eq!(requests.len(), 1);
+    let held = world
+        .looped
+        .warming
+        .held()
+        .expect("the step records its request");
+    assert!(Arc::ptr_eq(&requests[0].conversation, &held.conversation));
+}
+
+#[test]
 fn a_warming_refresh_honours_a_provider_that_never_warms() {
     struct NoWarm {
         inner: Arc<ScriptedProvider>,
@@ -774,11 +795,11 @@ fn minimal_request() -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_test".into(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }
 

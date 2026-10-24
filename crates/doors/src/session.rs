@@ -9,7 +9,7 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::client;
@@ -28,6 +28,7 @@ use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
+use support::lock;
 
 mod accept;
 mod accepted;
@@ -151,7 +152,7 @@ pub(crate) struct Gate {
     images: OnceLock<Arc<dyn contract::images::Images>>,
     /// The cancel a pasted image in flight sees: one per session, cancelled
     /// by shutdown alongside the driver shells, and never by `cancel`.
-    pub(crate) pasting: Arc<crate::shell::ShellCancel>,
+    pub(crate) pasting: Arc<support::cancel::Token>,
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
@@ -936,7 +937,7 @@ fn open_in(
         hooks: Mutex::new(None),
         door: Mutex::new(None),
         images: OnceLock::new(),
-        pasting: Arc::new(crate::shell::ShellCancel::new()),
+        pasting: Arc::new(support::cancel::Token::new()),
         history: OnceLock::new(),
         prompts: crate::prompt_history::Pending::new(),
         home: home.to_owned(),
@@ -1043,10 +1044,6 @@ fn prompt_message(prompt: String) -> Message {
             command_id: Some(CommandId(mint("c_"))),
         },
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Copies every event to `out`, one JSON line each, until `fiber_exited`

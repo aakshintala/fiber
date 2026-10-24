@@ -1,16 +1,14 @@
 //! The images of a tool result, shared by all four protocols: one function
-//! turns (text, images, session_dir, text_only) into the final text plus the
+//! turns (text, images, media, text_only) into the final text plus the
 //! encoded images, and each protocol only wraps them in its own shape; one
 //! function measures a request body's size and whether it carried an image.
-//! The bytes are the stored file's, never re-encoded or resized
-//! (`docs/model-routing.md`, "Image limits"), so a resume sends the same
-//! bytes.
+//! The provider does no file I/O: the loop reads and encodes each stored
+//! file and hands over `media`, a map from the conversation's path to the
+//! file's base64. The bytes are the stored file's, never re-encoded or
+//! resized (`docs/model-routing.md`, "Image limits"), so a resume sends the
+//! same bytes.
 
-use std::path::{Component, Path, PathBuf};
-
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use contract::provider::{ImageRef, Input, InputSize, ModelRequest, PdfRef};
+use contract::provider::{ImageRef, Input, InputSize, Media, ModelRequest, PdfRef};
 use serde_json::{Value, json};
 
 /// The image line when the model does not take images
@@ -76,15 +74,16 @@ pub(crate) struct Document {
 }
 
 /// The final text plus the encoded images: the plain text when no image can
-/// be sent. A file that cannot be read is not sent; the text gets one line
-/// saying so, so the model is never left to believe it saw the image. For a
-/// model that cannot take images (`text_only`), no file is read at all;
-/// each image gets one line saying it was left out instead.
+/// be sent. A file `media` lacks (it could not be read, or must not be) is
+/// not sent; the text gets one line saying so, so the model is never left to
+/// believe it saw the image. For a model that cannot take images
+/// (`text_only`), `media` is ignored; each image gets one line saying it was
+/// left out instead.
 pub(crate) fn prepare(
     text: &str,
     images: &[ImageRef],
     pdfs: &[PdfRef],
-    session_dir: &Path,
+    media: &Media,
     text_only: bool,
     form: PdfForm,
 ) -> Prepared {
@@ -95,7 +94,7 @@ pub(crate) fn prepare(
             append_line(&mut text, &fill(IMAGE_LEFT_OUT, &image.path));
             continue;
         }
-        match encoded_image(image, session_dir) {
+        match encoded_image(image, media) {
             Some(data) => encoded.push(Encoded {
                 mime_type: image.mime_type.clone(),
                 data,
@@ -110,13 +109,13 @@ pub(crate) fn prepare(
             continue;
         }
         match form {
-            PdfForm::Native => match encoded_pdf(pdf, session_dir) {
+            PdfForm::Native => match encoded_pdf(pdf, media) {
                 Some((filename, data)) => documents.push(Document { filename, data }),
                 None => append_line(&mut text, &fill(PDF_UNREADABLE, &pdf.path)),
             },
             PdfForm::Pages => {
                 for page in pdf.pages.iter().flatten() {
-                    match encoded_image(page, session_dir) {
+                    match encoded_image(page, media) {
                         Some(data) => encoded.push(Encoded {
                             mime_type: page.mime_type.clone(),
                             data,
@@ -196,59 +195,20 @@ pub(crate) fn anthropic_content(prepared: Prepared) -> Value {
     Value::Array(blocks)
 }
 
-/// The file `path` names on disk, or `None` when it must not be read. A
-/// relative path stays under `session_dir`; an absolute path is read only
-/// when it names a session's stored artifacts, `<sessions>/<one>/artifacts/`
-/// plus the file, which is how a rewound child names its parent's files:
-/// the parent lives beside the child in the same `sessions/` directory.
-pub(crate) fn media_path(path: &str, session_dir: &Path) -> Option<PathBuf> {
-    let candidate = Path::new(path);
-    if !candidate.is_absolute() {
-        if !candidate
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-        {
-            return None;
-        }
-        return Some(session_dir.join(candidate));
-    }
-    if !candidate
-        .components()
-        .all(|part| matches!(part, Component::Normal(_) | Component::RootDir))
-    {
-        return None;
-    }
-    let rest = candidate.strip_prefix(session_dir.parent()?).ok()?;
-    let mut parts = rest.components();
-    if !matches!(parts.next(), Some(Component::Normal(_))) {
-        return None;
-    }
-    if !matches!(parts.next(), Some(Component::Normal(name)) if name == "artifacts") {
-        return None;
-    }
-    parts.next()?;
-    Some(candidate.to_path_buf())
+/// The file's base64, or `None` when `media` lacks its path.
+fn encoded_image(image: &ImageRef, media: &Media) -> Option<String> {
+    media.get(&image.path).map(|data| data.to_string())
 }
 
-/// The file's bytes as base64, or `None` when its path must not be read
-/// or the file cannot be read.
-fn encoded_image(image: &ImageRef, session_dir: &Path) -> Option<String> {
-    let resolved = media_path(&image.path, session_dir)?;
-    let bytes = std::fs::read(resolved).ok()?;
-    Some(STANDARD.encode(bytes))
-}
-
-/// The stored PDF's base name and bytes as base64, or `None` when its path
-/// must not be read or the file cannot be read. The bytes are never
-/// transformed.
-fn encoded_pdf(pdf: &PdfRef, session_dir: &Path) -> Option<(String, String)> {
-    let resolved = media_path(&pdf.path, session_dir)?;
-    let bytes = std::fs::read(&resolved).ok()?;
-    let filename = resolved
+/// The stored PDF's base name and bytes as base64, or `None` when `media`
+/// lacks its path. The bytes are never transformed.
+fn encoded_pdf(pdf: &PdfRef, media: &Media) -> Option<(String, String)> {
+    let data = media.get(&pdf.path)?;
+    let filename = std::path::Path::new(&pdf.path)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| pdf.path.clone());
-    Some((filename, STANDARD.encode(bytes)))
+    Some((filename, data.to_string()))
 }
 
 #[cfg(test)]

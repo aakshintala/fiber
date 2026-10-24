@@ -348,7 +348,14 @@ fn no_resolution(tap: &Tap) {
 /// Writes `fiber_exited` as the process does at exit, and returns every
 /// line of the session through it.
 fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, signal).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        signal,
+    )
+    .unwrap();
     session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
 }
 
@@ -1562,11 +1569,13 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
         "the step waits on the pending form"
     );
     session.cancel.shutdown(143);
-    let result = Deadline::after(DEADLINE)
+    let run = Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("run returned");
-    assert!(result.is_ok(), "{result:?}");
-    let lines = exit(&mut session, Some(143));
+    assert!(run.result.is_ok(), "{run:?}");
+    // The run consumed the loop, so the exit reads its summary.
+    r#loop::fiber_exited(&session.log, &run.summary, Ok(()), false, Some(143)).unwrap();
+    let lines = session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
     // No `tool_call_completed`: the output was dropped.
     assert_kinds(
         &lines,

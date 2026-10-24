@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use support::lock;
 
 use serde_json::Value;
 
@@ -282,10 +283,6 @@ fn read_lines(
 #[cfg(test)]
 fn set_send_by_before_reset(hook: Option<Box<dyn Fn() + Send>>) {
     SEND_BY_BEFORE_RESET.with(|cell| *cell.borrow_mut() = hook);
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _, Stop};
 use contract::tool::Tool as _;
 use fakes::clock::{FakeClock, Miss};
-use fakes::{CancelToken, Deadline, Recorder, TempDir, Watchdog};
+use fakes::{CancelToken, Deadline, MUST_SUCCEED_WITHIN, Recorder, TempDir, Watchdog};
 use serde_json::{Map, Value, json};
 
 use crate::delegate::message::Attempt;
@@ -33,9 +33,6 @@ use crate::delegate::run::{Launch, Launched};
 use crate::delegate::{DelegateMessage, DelegateSpawn, LastSeq, Resolve, Watch};
 use crate::registry::Registry;
 use crate::support::{delegate_started, opening};
-
-/// How long a test waits on the wall clock before it fails.
-const STEP: Duration = Duration::from_secs(10);
 
 /// The stop bound and closing wait the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
@@ -139,7 +136,7 @@ impl Drop for Scope {
             }
         });
         // A deadline, so a bug fails the test instead of hanging it.
-        let probe_ok = fakes::Deadline::after(Duration::from_secs(5))
+        let probe_ok = fakes::Deadline::after(MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .is_ok();
         let record = Record {
@@ -522,7 +519,7 @@ fn through_launch(
     reached: &mpsc::Receiver<()>,
     release: &mpsc::Sender<()>,
 ) {
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     deadline.recv_or_fail(reached, "the spawn inside its start work");
     // No code under test waits on the clock here: the launch closure is held on a channel and the runner thread does not exist yet; the advance stamps the elapsed milliseconds the record reports (ruling 6179406086).
     clock.advance(step);
@@ -541,7 +538,7 @@ fn a_new_delegate_times_spawn_to_running() {
     let spawn = fixture.spawner(launch, watch);
     let output_rx = spawn_async(spawn, spawn_args(), CancelToken::new());
     through_launch(&fixture.clock, Duration::from_millis(7), &reached, &release);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let (started, delegate) = started_records(&output);
     assert_eq!(started.description, "scan");
@@ -587,7 +584,7 @@ fn a_resumed_delegate_times_the_new_run() {
     let spawn = fixture.spawner(block_launch(&format!(": {first}; exit 0")), refused_watch());
     let output = spawn.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
     let (started, _) = started_records(&output);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     end_after_reap(
         &fixture,
         fixture.clock.origin() + Duration::from_millis(50),
@@ -636,7 +633,7 @@ fn a_resumed_delegate_times_the_new_run() {
 
 #[test]
 fn refused_and_failed_starts_write_nothing() {
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     // A missing model, a refused model and missing arguments: no spawn.
     for (name, arguments) in [
         (
@@ -821,7 +818,7 @@ fn a_pre_cancelled_spawn_still_starts_and_times_once() {
     cancel.cancel();
     let output = spawn.run(&spawn_args(), &cancel, &Recorder::default());
     let (started, _) = started_records(&output);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(probe.calls(), 1);
     let record = closed(&records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 0));
@@ -879,7 +876,7 @@ fn without_timing_nothing_is_called() {
     end_after_reap(
         &fixture,
         fixture.clock.origin() + Duration::from_millis(50),
-        Deadline::after(STEP),
+        Deadline::after(MUST_SUCCEED_WITHIN),
         "the run end",
     );
 }
@@ -899,7 +896,7 @@ fn a_second_install_is_ignored() {
     );
     let output = spawn.run(&spawn_args(), &CancelToken::new(), &Recorder::default());
     let (started, _) = started_records(&output);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(first.calls(), 1);
     assert_eq!(second.calls(), 0, "the second installation never runs");
     closed(&first_records, deadline);
@@ -935,7 +932,7 @@ fn untimed_and_timed_spawns_agree() {
         let ended = end_after_reap(
             &fixture,
             fixture.clock.origin() + Duration::from_millis(50),
-            Deadline::after(STEP),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             "the run end",
         );
         // The receipt names this run's own ids and directory: washed

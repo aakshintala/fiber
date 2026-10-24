@@ -40,19 +40,14 @@ pub fn observe_login_wait(
     extension: String,
     notify: Box<dyn FnOnce(std::thread::ThreadId) + Send>,
 ) {
-    LOGIN_WAIT_OBSERVERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push((extension, notify));
+    support::lock(&LOGIN_WAIT_OBSERVERS).push((extension, notify));
 }
 
 /// Fires one login-wait observer, holding no lock while it runs.
 #[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn login_wait_recorded(extension: &str) {
     let notify = {
-        let mut observers = LOGIN_WAIT_OBSERVERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut observers = support::lock(&LOGIN_WAIT_OBSERVERS);
         observers
             .iter()
             .position(|(name, _)| name == extension)
@@ -112,7 +107,7 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{
-    Model, Providers, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
+    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, leave_out_invalid, refresh_lists,
 };
 pub use release::fetch_nightly_tag;
 pub use release::install_docs_if_missing;
@@ -415,6 +410,10 @@ pub enum Error {
         /// Each match, as `provider/model`.
         matches: Vec<String>,
     },
+    /// A switch to a `scripted/` model the session did not start with:
+    /// the registry a session switches within is fixed at start.
+    #[error("{}", crate::START_ONLY)]
+    ScriptedStartOnly,
     /// A Lua extension's code failed: a Lua error, its memory cap, or its
     /// entry script. Lua starts the message with the file and line.
     #[error("`{extension}`: {message}")]
@@ -627,6 +626,7 @@ impl Error {
             | Self::NoContextWindow { .. } => ErrorCode::NoModel,
             Self::Unconfigured { .. } => ErrorCode::ModelUnconfigured,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
+            Self::ScriptedStartOnly => ErrorCode::InvalidArguments,
             Self::Credential(_) => ErrorCode::CredentialFailed,
             Self::RefreshRejected { .. } | Self::Unattended { .. } | Self::LoginTimedOut { .. } => {
                 ErrorCode::AuthenticationFailed

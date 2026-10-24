@@ -3,7 +3,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
 
 use base64::Engine as _;
 use contract::clock::Clock;
@@ -12,10 +11,7 @@ use fakes::clock::FakeClock;
 use super::{command, spawn};
 use crate::Input;
 use crate::image::View;
-use fakes::Deadline;
-
-/// One deadline per receive: the worker answers promptly.
-const DEADLINE: Duration = Duration::from_secs(5);
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 
 /// A view of `bytes` under `name`.
 fn view(name: &str, bytes: &[u8]) -> View {
@@ -37,10 +33,10 @@ fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), Stri
     viewed(&rx)
 }
 
-/// The worker's answer within [`DEADLINE`].
+/// The worker's answer within [`MUST_SUCCEED_WITHIN`].
 #[track_caller]
 fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
-    match Deadline::after(DEADLINE).recv(rx) {
+    match Deadline::after(MUST_SUCCEED_WITHIN).recv(rx) {
         Ok(Input::Viewed { result, .. }) => result,
         Ok(
             Input::Bytes(_)
@@ -55,10 +51,11 @@ fn viewed(rx: &mpsc::Receiver<Input>) -> Result<(), String> {
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Models(_)
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Tick,
         ) => panic!("the worker answered something else"),
-        Err(err) => panic!("waited {DEADLINE:?} for the worker: {err}"),
+        Err(err) => panic!("waited {MUST_SUCCEED_WITHIN:?} for the worker: {err}"),
     }
 }
 
@@ -260,21 +257,24 @@ fn a_viewer_past_the_deadline_is_not_a_failure() {
         &dyn_clock,
     );
     let pgid = ready
-        .wait(Deadline::after(DEADLINE))
+        .wait(Deadline::after(MUST_SUCCEED_WITHIN))
         .first()
         .copied()
         .unwrap_or_else(|| panic!("no ready line"));
     let watchdog = fakes::Watchdog::group(pgid);
-    assert!(clock.await_parked(end, Deadline::after(DEADLINE)));
+    assert!(clock.await_parked(end, Deadline::after(MUST_SUCCEED_WITHIN)));
     clock.advance_when_parked(
         Some(end),
         None,
         crate::paste_image::READ_LIMIT,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     assert_eq!(viewed(&rx), Ok(()));
-    assert!(fakes::group_empties(pgid, Deadline::after(DEADLINE)));
-    watchdog.stand_down(Deadline::after(DEADLINE));
+    assert!(fakes::group_empties(
+        pgid,
+        Deadline::after(MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
 #[cfg(target_os = "linux")]

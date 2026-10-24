@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use contract::emit::Emit;
 use contract::events::{Control, SkillLoad};
@@ -59,7 +59,7 @@ impl Skill {
     }
 
     fn judged(&self) -> MutexGuard<'_, BTreeMap<String, PathBuf>> {
-        self.judged.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.judged)
     }
 }
 

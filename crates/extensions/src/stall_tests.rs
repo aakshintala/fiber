@@ -14,7 +14,10 @@ use fakes::Deadline;
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::clock::FakeClock;
 
-use super::{advance_past_grace_or_answer, await_grace_or_answer};
+use super::{
+    advance_past_grace_or_answer, advance_past_grace_or_answer_within, await_grace_or_answer,
+    await_grace_or_answer_within,
+};
 
 #[track_caller]
 fn park(clock: &Arc<FakeClock>, until: Instant) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
@@ -186,6 +189,16 @@ fn wrong_park_with_an_answer_returns_the_answer() {
     assert_eq!(outcome, Some("answer"));
 }
 
+/// Releases a parked thread when a `should_panic` test unwinds past it, so
+/// the thread never waits out its bound.
+struct ReleaseOnDrop(mpsc::Sender<()>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        let _sent = self.0.send(());
+    }
+}
+
 #[test]
 #[should_panic(expected = "watched park")]
 fn wrong_park_without_an_answer_panics() {
@@ -196,15 +209,7 @@ fn wrong_park_without_an_answer_panics() {
     let (release_tx, _exited_rx) = park(&clock, elsewhere);
     // The panic unwinds past this test: release the parked thread on
     // the way out so it never waits out its bound.
-    struct ReleaseOnDrop(Option<mpsc::Sender<()>>);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            if let Some(release) = self.0.take() {
-                let _sent = release.send(());
-            }
-        }
-    }
-    let _release = ReleaseOnDrop(Some(release_tx));
+    let _release = ReleaseOnDrop(release_tx);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
     advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
@@ -213,21 +218,21 @@ fn wrong_park_without_an_answer_panics() {
 #[test]
 #[should_panic(expected = "the stalled run neither parks for the grace nor answers")]
 fn post_park_neither_park_nor_answer_hits_the_hang_guard() {
-    // The negative proves itself only by exhausting the shared
-    // ROUNDS x SIGHT bound: no park and no answer ever arrive, so
-    // no signal can release the wait early. The clock's pause
-    // points are #[cfg(test)]-private inside fakes
-    // (crates/fakes/src/clock.rs:120-127, 555-589) and unreachable
-    // from extensions, and ROUNDS/SIGHT are shared with the
-    // sighting helper, so shortening them would loosen its guard
-    // too. Same 8 x 200 ms wait as the pre-existing sighting
-    // hang-guard test below.
+    // Proves the guard fires on the bound it is given; the callers that
+    // delegate with ROUNDS x SIGHT cover that bound.
     let clock = FakeClock::new();
     let kill_at = clock.origin() + Duration::from_secs(30);
     let advance = Duration::from_secs(5);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
-    advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
+    advance_past_grace_or_answer_within(
+        &clock,
+        &answer_rx,
+        kill_at,
+        advance,
+        2,
+        Duration::from_millis(10),
+    );
 }
 
 #[test]
@@ -237,5 +242,138 @@ fn neither_park_nor_answer_hits_the_hang_guard() {
     let until = clock.origin() + Duration::from_secs(30);
     let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
-    await_grace_or_answer(&clock, &answer_rx, until);
+    await_grace_or_answer_within(&clock, &answer_rx, until, 2, Duration::from_millis(10));
+}
+
+/// Wakes the parked run below on every clock move: the run's second park
+/// ends when the helper's follow moves the clock to it.
+struct MoveWaker(mpsc::Sender<()>);
+
+impl contract::clock::Wake for MoveWaker {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
+/// A run that parks at `kill_at` until the test releases it, then re-parks
+/// at `park_at` until the clock moves, then answers. Every wait is a park
+/// or a channel signal: no real-clock hold.
+#[track_caller]
+fn run_that_reparks(
+    clock: &Arc<FakeClock>,
+    kill_at: Instant,
+    park_at: Instant,
+) -> (
+    mpsc::Sender<()>,
+    mpsc::Receiver<&'static str>,
+    Arc<dyn contract::clock::Wake>,
+) {
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let (answer_tx, answer_rx) = mpsc::channel();
+    let waker: Arc<dyn contract::clock::Wake> = Arc::new(MoveWaker(wake_tx));
+    clock.subscribe(Arc::downgrade(&waker));
+    let worker = Arc::clone(clock);
+    thread::spawn(move || {
+        worker.wait_until(Some(kill_at), &mut |_bound| {
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv(&go_rx)
+                .expect("waited for the test to release the parked run");
+        });
+        worker.wait_until(Some(park_at), &mut |_bound| {
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv(&wake_rx)
+                .expect("waited for the clock to move to the re-park");
+        });
+        answer_tx
+            .send("answer")
+            .expect("the test waits for the answer");
+    });
+    (go_tx, answer_rx, waker)
+}
+
+/// A run that leaves the grace park and re-parks at `kill_at + offset` is
+/// followed there: the advance moves the clock to the re-park, not past
+/// the grace, and the run's answer still arrives.
+#[track_caller]
+fn assert_followed_at(offset: Duration) {
+    let clock = Arc::new(FakeClock::new());
+    let kill_at = clock.now() + Duration::from_secs(30);
+    let repark = kill_at + offset;
+    let advance = Duration::from_secs(5);
+    let (go_tx, answer_rx, _waker) = run_that_reparks(&clock, kill_at, repark);
+
+    // The sighting sees the held grace park and no answer yet.
+    assert_eq!(await_grace_or_answer(&clock, &answer_rx, kill_at), None);
+    go_tx
+        .send(())
+        .expect("the run is parked waiting for release");
+    assert!(
+        clock.await_parked(repark, Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the run to park at the re-park"
+    );
+    let outcome = advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
+    assert_eq!(outcome, None);
+    assert_eq!(
+        clock.now(),
+        repark,
+        "the clock moved to the watched instant, not kill_at"
+    );
+    let answer = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&answer_rx)
+        .expect("waited for the run to answer after the follow");
+    assert_eq!(answer, "answer");
+}
+
+#[test]
+fn a_run_that_reparks_past_the_grace_is_followed_to_its_park() {
+    assert_followed_at(Duration::from_secs(1));
+}
+
+#[test]
+fn a_run_that_reparks_at_the_drain_bound_is_followed() {
+    assert_followed_at(support::group::DRAIN);
+}
+
+#[test]
+#[should_panic(expected = "watched park")]
+fn a_park_past_the_drain_bound_still_panics() {
+    let clock = Arc::new(FakeClock::new());
+    let kill_at = clock.now() + Duration::from_secs(30);
+    let past = kill_at + support::group::DRAIN + Duration::from_secs(1);
+    let advance = Duration::from_secs(5);
+    let (release_tx, _exited_rx) = park(&clock, past);
+    // The panic unwinds past this test: release the parked thread on
+    // the way out so it never waits out its bound.
+    let _release = ReleaseOnDrop(release_tx);
+    let (_answer_tx, answer_rx) = mpsc::channel::<()>();
+
+    advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
+}
+
+#[test]
+#[should_panic(expected = "watched park")]
+fn a_park_without_an_instant_still_panics() {
+    let clock = Arc::new(FakeClock::new());
+    let kill_at = clock.now() + Duration::from_secs(30);
+    let advance = Duration::from_secs(5);
+    let (release_tx, release_rx) = mpsc::channel();
+    let parked_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        parked_clock.wait_until(None, &mut |_bound| {
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv(&release_rx)
+                .expect("waited for the test to release the parked thread");
+        });
+    });
+    assert!(
+        clock.await_parked_unbounded(Deadline::after(MUST_SUCCEED_WITHIN)),
+        "waited {MUST_SUCCEED_WITHIN:?} for the thread to park without an instant"
+    );
+    // The panic unwinds past this test: release the parked thread on
+    // the way out so it never waits out its bound.
+    let _release = ReleaseOnDrop(release_tx);
+    let (_answer_tx, answer_rx) = mpsc::channel::<()>();
+
+    advance_past_grace_or_answer(&clock, &answer_rx, kill_at, advance, None);
 }

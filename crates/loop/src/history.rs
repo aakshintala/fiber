@@ -9,7 +9,7 @@ use std::path::Path;
 use contract::events::{
     CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
 };
-use contract::{Envelope, Seq, TurnId};
+use contract::{Envelope, JobId, Seq, SessionId, TurnId};
 use log::{Log, Segment};
 use serde_json::Value;
 
@@ -19,7 +19,8 @@ use crate::resume::Resumed;
 use crate::reviewer::render_reviewed;
 
 /// The kinds the fold reads a payload of. Every other line's envelope is
-/// read and its payload never parsed.
+/// read and its payload never parsed, except the three request kinds the
+/// exit's seed reads from the raw payload.
 const FOLDED: &[&str] = &[
     "session_started",
     "instruction_file",
@@ -36,6 +37,7 @@ const FOLDED: &[&str] = &[
     "tool_call_requested",
     "job_started",
     "job_completed",
+    "delegate_started",
     "rewound",
     "opening_message",
     "skills_resent",
@@ -82,10 +84,12 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // (`docs/permissions.md`, "At a handoff").
         reviewed: Vec::new(),
         orphans: Vec::new(),
+        delegate_sessions: HashMap::new(),
         offers: crate::offer::Folded::default(),
         naming: crate::naming::Naming::default(),
         fired: crate::quota_notice::Fired::default(),
         preamble: None,
+        exit: crate::Summary::default(),
     };
     let mut pass = Pass {
         own_segment: false,
@@ -103,6 +107,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // and one in the child never share it.
         starts: HashMap::new(),
         orphans: crate::jobs::Orphans::default(),
+        delegate_sessions: HashMap::new(),
         summary: false,
     };
     let mut end = 0;
@@ -148,7 +153,10 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         return Err(Error::NoSessionStarted);
     };
     resumed.workspace = workspace;
+    // Every request the own segment left open belongs to an earlier process.
+    resumed.exit.carry();
     resumed.orphans = pass.orphans.finish();
+    resumed.delegate_sessions = pass.delegate_sessions;
     resumed.end = end;
     Ok(resumed)
 }
@@ -164,6 +172,7 @@ struct Pass {
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
+    delegate_sessions: HashMap<JobId, SessionId>,
     summary: bool,
 }
 
@@ -173,6 +182,19 @@ struct Pass {
 /// window. The ledger and the reviewer's block count fold only the own
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
+    // The requests an earlier process left open are read from the raw
+    // payload: a line outside the handoff window never has to parse for the
+    // exit to report them.
+    if pass.own_segment
+        && line.is_durable()
+        && matches!(
+            line.kind.as_str(),
+            "permission_requested" | "interaction_requested" | "interaction_resolved"
+        )
+    {
+        resumed.exit.seed_raw(&line.kind, &line.payload);
+        return Ok(());
+    }
     // Process starts close the reviewer's summary window even though the
     // fold itself does not use them. Leave every other unused payload unread.
     if !line.is_durable() || !(FOLDED.contains(&line.kind.as_str()) || line.kind == "fiber_started")
@@ -235,6 +257,17 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     if pass.own_segment {
         resumed.naming.fold(&event);
         resumed.fired.fold(&event);
+        // The kinds that open and close a request, beside the raw ones read
+        // above.
+        if matches!(
+            event,
+            Event::PermissionResolved(_)
+                | Event::RepositoryCodeOffered(_)
+                | Event::RepositoryCodeResolved(_)
+                | Event::PreambleBuilt(_)
+        ) {
+            resumed.exit.observe(&event, None);
+        }
     }
     pass.running.fold_jobs(&event);
     if let Event::SessionStarted(started) = &event
@@ -252,6 +285,15 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             &mut pass.parent_ledger
         };
         ledger.record(recorded);
+    } else if let Event::DelegateStarted(started) = &event {
+        // The job-to-session map the orphan backfill resolves through:
+        // the own segment's Fiber-harness starts. Another harness names
+        // its own id, and a missing line means no mapping: both resolve to
+        // skip-and-continue at backfill.
+        if pass.own_segment && started.harness == "fiber" {
+            pass.delegate_sessions
+                .insert(started.job_id.clone(), started.delegate_session_id.clone());
+        }
     } else if let Event::PreambleBuilt(built) = &event {
         resumed.model = Some(built.model.clone());
         resumed.credential.clone_from(&built.credential);

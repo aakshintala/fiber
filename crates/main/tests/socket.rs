@@ -22,9 +22,7 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer};
 use serde_json::{Value, json};
-use support::{
-    Deadline, KillGroup, Setup, answered, complete_lines, first_line, group_alive, hello,
-};
+use support::{Deadline, KillGroup, Setup, answered, complete_lines, first_line, hello};
 
 /// `fiber session --id <id> --workspace <workspace>`, drained as `start` drains it.
 #[track_caller]
@@ -261,7 +259,7 @@ fn finish(running: Running) {
     };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     // The group is empty. Skip the drop, which would kill it again.

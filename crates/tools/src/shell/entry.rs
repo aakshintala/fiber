@@ -6,8 +6,6 @@
 //! a basename the built-ins own) is never consulted. Anything neither owns
 //! is not read-only.
 
-use std::path::Path;
-
 use super::classify::Outcome;
 use super::read_only::{COMMANDS, Command, EXACT, Flag};
 use super::syntax::Word;
@@ -40,13 +38,18 @@ pub(super) fn find<'a>(words: &[Word], configured: &'a [(String, Vec<String>)]) 
 }
 
 /// Whether a configured entry name is never consulted: `sed`, which has its
-/// own grammar, a path-qualified basename the built-ins own, or a name a
-/// built-in or exact-match path covers.
+/// own grammar, a wrapper or `cd` step, which the classifier unwraps itself,
+/// a path-qualified basename the built-ins own, or a name a built-in or
+/// exact-match path covers.
 pub(super) fn owned(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    if name.rsplit('/').next().is_some_and(|base| base == "sed") {
+    if name
+        .rsplit('/')
+        .next()
+        .is_some_and(|base| matches!(base, "cd" | "env" | "timeout" | "xargs" | "sed"))
+    {
         return true;
     }
     if name.contains('/') {
@@ -252,7 +255,7 @@ fn short_letter(flag: &Flag) -> Option<char> {
 pub(super) fn configured_outcome(
     flags: &[String],
     words: std::slice::Iter<'_, Word>,
-    workdir: &Path,
+    dirs: &[String],
 ) -> Outcome {
     let mut words = words;
     let mut operands = Vec::new();
@@ -288,7 +291,7 @@ pub(super) fn configured_outcome(
         }
         return Outcome::Executes;
     }
-    super::classify::path_tail(&operands, workdir)
+    super::classify::path_tail(&operands, dirs)
 }
 
 #[cfg(test)]

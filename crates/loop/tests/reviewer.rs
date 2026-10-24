@@ -491,7 +491,7 @@ fn an_unreadable_verdict_is_asked_for_once_more() {
     // The re-ask never quotes the reply: no text of the first reply
     // reaches the second request's system prompt or any of its items.
     assert!(!requests[1].system_prompt.contains("ZQX-UNREAD"));
-    for input in &requests[1].conversation {
+    for input in requests[1].conversation.iter() {
         assert!(!format!("{input:?}").contains("ZQX-UNREAD"));
     }
     assert_eq!(session.requests().len(), 2);
@@ -1348,6 +1348,42 @@ fn a_headless_stage_2_failure_denies_naming_the_reviewer_at_stage_2() {
     assert_eq!(done.payload["reason"], "reviewer");
     assert_eq!(reviewer.requests().len(), 2);
     assert!(tool.ran().is_empty());
+}
+
+#[test]
+fn an_unanswerable_escalation_denies_and_the_turn_carries_on() {
+    // A delegate's escalation is a block, as for any unattended run: with
+    // nobody to answer, the unreadable verdicts deny the call under the
+    // reviewer, and the turn carries on with no approval addressed to
+    // anyone (`docs/delegates.md`, "Permissions").
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![shell(None, None) as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    session.reviewer(vec![
+        Scripted::text("maybe ZQX-FIRST"),
+        Scripted::text("perhaps ZQX-LAST"),
+    ]);
+    let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    // No escalation line: nobody was asked, so no person or model is
+    // named as an approver anywhere in the log.
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&"notice"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "reviewer");
 }
 
 #[test]
@@ -2266,8 +2302,14 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     assert!(!kinds.contains(&"turn_completed"));
     assert!(tool.ran().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
-    let written =
-        r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    let written = r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        Some(143),
+    )
+    .unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);

@@ -138,14 +138,8 @@ pub(crate) fn write(cache: &Path, server: &str, key: &str, lists: &Cached) {
         resources: lists.resources,
     };
     let bytes = serde_json::to_vec(&file).unwrap_or_default();
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id(),));
-    if std::fs::write(&tmp, bytes)
-        .and_then(|()| std::fs::rename(&tmp, &path))
-        .is_err()
-    {
-        match std::fs::remove_file(&tmp) {
-            Ok(()) | Err(_) => {}
-        }
+    match support::write_atomic(&path, &bytes, 0o666) {
+        Ok(()) | Err(_) => {}
     }
 }
 

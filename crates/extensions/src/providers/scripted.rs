@@ -17,6 +17,11 @@ mod tests;
 /// The built-in provider's name.
 pub(super) const SCRIPTED: &str = "scripted";
 
+/// Why a switch to a scripted model the session did not start with is
+/// rejected: the registry a session switches within is fixed at start.
+pub const START_ONLY: &str =
+    "Choose a scripted model when the session starts: `fiber ask --model scripted/<path>`.";
+
 /// A scripted model's context window, in tokens: large enough that no size
 /// notice or handoff fires on a script.
 pub(crate) const SCRIPTED_CONTEXT_WINDOW: u64 = 1_000_000;

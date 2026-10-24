@@ -178,6 +178,9 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            // Notes that are not empty: the reviewer-setup notice, which
+            // takes the next key, does not follow the first escalation.
+            "reviewer": {"context": "### Source control\n- acme is ours\n"},
             "tui": {"rail": {"shown": false}}}),
     );
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);

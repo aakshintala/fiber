@@ -176,10 +176,10 @@ pub(crate) fn request() -> ModelRequest {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: (Vec::new()).into(),
         previous_end: None,
         sent_tools: None,
         max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        media: Default::default(),
     }
 }

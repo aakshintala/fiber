@@ -123,11 +123,11 @@ fn wait_until_parks_and_advance_wakes_it() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
+        clock.await_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "waited for the thread to park at its deadline"
     );
     assert_eq!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the thread to report it had parked"),
         "parked"
@@ -137,7 +137,7 @@ fn wait_until_parks_and_advance_wakes_it() {
     // `Condvar::wait`.
     clock.advance(Duration::from_secs(10));
     assert_eq!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for advance to wake the parked thread"),
         "woke"
@@ -166,12 +166,12 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
+        clock.await_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "waited for a thread to park at the deadline"
     );
     assert_eq!(clock.parked(), vec![Some(until)]);
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("the parked thread exits");
     assert!(clock.parked().is_empty());
@@ -179,7 +179,7 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
 
 /// A thread is already parked. `await_parked` on a helper must answer at once.
 /// Deleting the `!` in its wait would block for the 30 s `within`, and this
-/// test's 5 s wait would fail.
+/// test's must-succeed wait would fail.
 #[test]
 fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
     let clock = FakeClock::new();
@@ -196,7 +196,7 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
         if let Ok(()) = exit_tx.send(()) {}
     });
     assert!(
-        clock.await_parked(until, Deadline::after(Duration::from_secs(5))),
+        clock.await_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "waited for a thread to park at the deadline"
     );
     let clock_t = Arc::clone(&clock);
@@ -207,18 +207,18 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
         }
     });
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for await_parked to see the thread already parked")
     );
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("the parked thread exits");
 }
 
 /// `await_parked_count` on a helper. A mutant that waits out its 30 s `within`
-/// fails this 5 s wait.
+/// fails this must-succeed wait.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
 fn await_count(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
@@ -233,13 +233,14 @@ fn await_count(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) 
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for await_parked_count")
 }
 
 /// Parks `n` threads at `until`. Each reports from inside `wait_until`, which
-/// is past the park, then waits at most 5 s to be released. The returned
+/// is past the park, then waits at most the must-succeed bound to be
+/// released. The returned
 /// lock is `false` until the test sets it and notifies.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
@@ -262,11 +263,11 @@ fn park_n(
                 }
                 let (lock, cv) = &*release;
                 let guard = lock.lock().unwrap();
-                drop(cv.wait_timeout_while(guard, Duration::from_secs(5), |go| !*go));
+                drop(cv.wait_timeout_while(guard, crate::MUST_SUCCEED_WITHIN, |go| !*go));
             });
         });
     }
-    let wait = Deadline::after(Duration::from_secs(5));
+    let wait = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     for _ in 0..n {
         wait.recv(&parked_rx).expect("waited for a thread to park");
     }
@@ -343,16 +344,16 @@ fn two_advances_both_move_the_clock() {
     let first = spawn(Arc::clone(&clock), Arc::clone(&barrier));
     let second = spawn(Arc::clone(&clock), Arc::clone(&barrier));
     barrier.wait();
-    Deadline::after(Duration::from_secs(2))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("the first advance returns");
-    Deadline::after(Duration::from_secs(2))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("the second advance returns");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(2));
 }
 
-/// An await expected true runs on a helper thread with a 5 s `within`,
+/// An await expected true runs on a helper thread with the must-succeed `within`,
 /// so a wait that never matches fails the test instead of blocking it.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
@@ -368,12 +369,12 @@ fn await_since(
         match tx.send(clock.await_parked_since(
             &mark,
             until,
-            Deadline::after(Duration::from_secs(5)),
+            Deadline::after(crate::MUST_SUCCEED_WITHIN),
         )) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for await_parked_since")
 }
@@ -384,17 +385,18 @@ fn await_unbounded(clock: &Arc<FakeClock>) -> bool {
     let (tx, rx) = mpsc::channel();
     let clock = Arc::clone(clock);
     thread::spawn(move || {
-        match tx.send(clock.await_parked_unbounded(Deadline::after(Duration::from_secs(5)))) {
+        match tx.send(clock.await_parked_unbounded(Deadline::after(crate::MUST_SUCCEED_WITHIN))) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for await_parked_unbounded")
 }
 
 /// Parks one thread at `until`; it reports from inside `wait_until`, then
-/// waits at most 5 s to be released. Returns the parked thread's id with
+/// waits at most the must-succeed bound to be released. Returns the parked
+/// thread's id with
 /// the report and the release.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 fn park_once(
@@ -429,11 +431,11 @@ fn a_park_present_at_the_advance_does_not_match() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        clock.await_parked(until, Deadline::after(Duration::from_secs(5))),
+        clock.await_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "waited for the thread to park at the deadline"
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -442,7 +444,7 @@ fn a_park_present_at_the_advance_does_not_match() {
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -485,11 +487,11 @@ fn a_later_park_at_any_deadline_by_a_thread_in_the_mark_matches() {
         });
         if let Ok(()) = exit_tx.send(()) {}
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first_rx)
         .expect("waited for the first park");
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
         .expect("waited for the second park");
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -497,22 +499,22 @@ fn a_later_park_at_any_deadline_by_a_thread_in_the_mark_matches() {
     let clock_wait = Arc::clone(&clock);
     let mark_wait = mark.clone();
     thread::spawn(move || {
-        let result =
-            clock_wait.await_any_parked_since(&mark_wait, Deadline::after(Duration::from_secs(5)));
+        let result = clock_wait
+            .await_any_parked_since(&mark_wait, Deadline::after(crate::MUST_SUCCEED_WITHIN));
         if let Ok(()) = awaited_tx.send(result) {}
     });
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&third_rx)
         .expect("waited for the third park");
     assert!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&awaited_rx)
             .expect("waited for a later park at any deadline"),
         "the third park is later than the mark despite its different deadline"
     );
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("the parked thread exits");
 }
@@ -522,12 +524,12 @@ fn a_park_by_a_thread_absent_from_the_mark_does_not_match() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     assert!(
@@ -540,10 +542,10 @@ fn a_park_by_a_thread_absent_from_the_mark_does_not_match() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -585,7 +587,7 @@ fn only_the_park_with_the_awaited_until_matches() {
         if let Ok(()) = exit_tx.send(()) {}
     });
     assert_eq!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&parked_rx)
             .expect("waited for the first park"),
         "first"
@@ -593,7 +595,7 @@ fn only_the_park_with_the_awaited_until_matches() {
     let mark = clock.advance_marked(Duration::from_millis(1));
     release_tx.send(()).unwrap();
     assert_eq!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&parked_rx)
             .expect("waited for the second park"),
         "second"
@@ -608,7 +610,7 @@ fn only_the_park_with_the_awaited_until_matches() {
     );
     release_tx.send(()).unwrap();
     assert_eq!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&parked_rx)
             .expect("waited for the third park"),
         "third"
@@ -618,7 +620,7 @@ fn only_the_park_with_the_awaited_until_matches() {
         "the re-park without a deadline matches"
     );
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("the parked thread exits");
 }
@@ -642,7 +644,7 @@ fn advance_marked_moves_the_clock_and_wakes_subscribers() {
     clock.advance_marked(Duration::from_millis(5));
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
-    Deadline::after(Duration::from_secs(2))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("advance_marked wakes subscribers");
     drop(wake);
@@ -657,7 +659,7 @@ fn await_parked_unbounded_matches_only_a_park_without_a_deadline() {
     );
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
@@ -665,16 +667,16 @@ fn await_parked_unbounded_matches_only_a_park_without_a_deadline() {
         "the only park has a deadline"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
     let (parked_none, release_none, exit_none, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_none)
         .expect("waited for the thread to park without a deadline");
     assert!(await_unbounded(&clock), "a park without a deadline matches");
     release_none.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_none)
         .expect("the parked thread exits");
 }
@@ -685,15 +687,15 @@ fn mark_parked_marks_only_the_threads_parked_at_until() {
     let until = clock.origin() + Duration::from_secs(30);
     let later = clock.origin() + Duration::from_secs(60);
     let (parked_first, release_first, exit_first, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_first)
         .expect("waited for the first thread to park");
     let (parked_second, release_second, exit_second, _) = park_once(&clock, Some(later));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_second)
         .expect("waited for the second thread to park");
     let mark = clock
-        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
+        .mark_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN))
         .expect("waited for a thread to park at the deadline");
     assert_eq!(
         mark.0.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
@@ -701,10 +703,10 @@ fn mark_parked_marks_only_the_threads_parked_at_until() {
     );
     release_first.send(()).unwrap();
     release_second.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_first)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_second)
         .expect("the second thread exits");
 }
@@ -727,15 +729,15 @@ fn mark_threads_returns_the_parked_threads() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let mark = clock
-        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
+        .mark_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN))
         .expect("waited for a thread to park at the deadline");
     assert_eq!(mark.threads(), vec![id]);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -768,14 +770,14 @@ fn a_later_park_after_mark_parked_matches() {
         });
         if let Ok(()) = exit_tx.send(()) {}
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first_rx)
         .expect("waited for the first park");
     let mark = clock
-        .mark_parked(until, Deadline::after(Duration::from_secs(5)))
+        .mark_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN))
         .expect("waited for the thread to park at the deadline");
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second_rx)
         .expect("waited for the second park");
     assert!(
@@ -783,14 +785,15 @@ fn a_later_park_after_mark_parked_matches() {
         "the second park is later than the mark"
     );
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("the parked thread exits");
 }
 
 /// Parks one thread twice at `until`: reports each park from inside
 /// the wait, leaves the first on release, reports left, waits for the
-/// gate, parks again, exits. The test's own waits bound the run at 5 s wall-clock.
+/// gate, parks again, exits. The test's own waits bound the run at the
+/// must-succeed bound.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 type Twice = (
     mpsc::Receiver<()>,
@@ -842,11 +845,11 @@ fn a_thread_that_left_its_park_before_the_advance_matches_its_next_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (first, left, _second, exit, release, gate) = park_twice(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -856,7 +859,7 @@ fn a_thread_that_left_its_park_before_the_advance_matches_its_next_park() {
         "the park after the advance is later than the mark"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -866,15 +869,15 @@ fn a_re_park_before_the_advance_does_not_match() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (first, left, second, exit, release, gate) = park_twice(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
     gate.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the thread to park again");
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -883,12 +886,12 @@ fn a_re_park_before_the_advance_does_not_match() {
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
 
-/// An await for any later park on a helper thread with a 5 s `within`,
+/// An await for any later park on a helper thread with the must-succeed `within`,
 /// so a wait that never matches fails the test instead of blocking it.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
@@ -897,12 +900,13 @@ fn await_any(clock: &Arc<FakeClock>, mark: &super::Mark) -> bool {
     let clock = Arc::clone(clock);
     let mark = mark.clone();
     thread::spawn(move || {
-        match tx.send(clock.await_any_parked_since(&mark, Deadline::after(Duration::from_secs(5))))
+        match tx
+            .send(clock.await_any_parked_since(&mark, Deadline::after(crate::MUST_SUCCEED_WITHIN)))
         {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("waited for await_any_parked_since")
 }
@@ -928,11 +932,11 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (first, left, second, exit, release, gate) = park_twice(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -941,11 +945,11 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
     let clock_wait = Arc::clone(&clock);
     let mark_wait = mark.clone();
     thread::spawn(move || {
-        let result =
-            clock_wait.await_any_parked_since(&mark_wait, Deadline::after(Duration::from_secs(5)));
+        let result = clock_wait
+            .await_any_parked_since(&mark_wait, Deadline::after(crate::MUST_SUCCEED_WITHIN));
         if let Ok(()) = awaited_tx.send(result) {}
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&checked)
         .expect("waited for await_any to check the predicate");
     release_check.send(()).unwrap();
@@ -955,16 +959,16 @@ fn await_any_parked_since_matches_a_next_park_after_a_leave() {
         "await_any remains unanswered while the re-park is gated"
     );
     gate.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the thread to park again");
     let later = if matches!(before_repark, Err(mpsc::RecvTimeoutError::Timeout)) {
-        Deadline::after(Duration::from_secs(5)).recv(&awaited_rx)
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv(&awaited_rx)
     } else {
         Err(mpsc::RecvTimeoutError::Disconnected)
     };
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
     assert!(
@@ -980,7 +984,7 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (first, left, second, exit, release, gate) = park_twice(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
     let mark = clock.advance_marked(Duration::from_millis(1));
@@ -989,11 +993,11 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
         "the park present at the advance is not a later park"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
     gate.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the thread to park again");
     assert!(
@@ -1001,7 +1005,7 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
         "the re-park past the mark is a later park"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1013,12 +1017,12 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     assert!(
@@ -1027,10 +1031,10 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -1039,20 +1043,20 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
 fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
     let clock = FakeClock::new();
     let (parked_a, release_a, exit_a, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for thread A to park");
     assert!(
-        clock.await_parked_unbounded(Deadline::after(Duration::from_secs(5))),
+        clock.await_parked_unbounded(Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "thread A is parked unbounded"
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for thread B to park");
     assert!(
-        clock.await_thread_parked(b_id, None, Deadline::after(Duration::from_secs(5))),
+        clock.await_thread_parked(b_id, None, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "thread B is parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
@@ -1062,10 +1066,10 @@ fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("thread A exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("thread B exits");
 }
@@ -1074,7 +1078,7 @@ fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
 fn await_thread_parked_is_false_for_a_thread_that_never_parked() {
     let clock = FakeClock::new();
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let idle = thread::current().id();
@@ -1084,7 +1088,7 @@ fn await_thread_parked_is_false_for_a_thread_that_never_parked() {
         clock.parked(),
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1095,7 +1099,7 @@ fn await_thread_parked_is_false_for_the_wrong_until() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = clock.origin() + Duration::from_secs(60);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
@@ -1104,7 +1108,7 @@ fn await_thread_parked_is_false_for_the_wrong_until() {
         clock.parked(),
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1114,16 +1118,16 @@ fn await_thread_parked_is_true_for_the_matching_until() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     assert!(
-        clock.await_thread_parked(id, Some(until), Deadline::after(Duration::from_secs(5))),
+        clock.await_thread_parked(id, Some(until), Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "the thread parked at its deadline: {:?}, thread {id:?}",
         clock.parked(),
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1133,11 +1137,11 @@ fn await_thread_parked_is_false_after_the_thread_leaves_its_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
     assert!(
@@ -1152,7 +1156,7 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     let clock = FakeClock::new();
     // Thread A parks unbounded first.
     let (parked_a, release_a, exit_a, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for thread A to park");
     // Thread B blocks on the start channel before parking twice unbounded.
@@ -1162,7 +1166,7 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     let (exit_tx, exit_rx) = mpsc::channel();
     let clock_b = Arc::clone(&clock);
     let b = thread::spawn(move || {
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&start_rx)
             .expect("waited for the test to start thread B");
         for _ in 0..2 {
@@ -1191,28 +1195,28 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     );
     start_tx.send(()).unwrap();
     assert!(
-        clock.await_thread_parked(b_id, None, Deadline::after(Duration::from_secs(5))),
+        clock.await_thread_parked(b_id, None, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "thread B parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
     release_tx.send(()).unwrap();
-    let wait = Deadline::after(Duration::from_secs(5));
+    let wait = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     wait.recv(&report_rx)
         .expect("waited for thread B to park the first time");
     wait.recv(&report_rx)
         .expect("waited for thread B to park again");
     assert!(
-        clock.await_parked_since(&mark, None, Deadline::after(Duration::from_secs(5))),
+        clock.await_parked_since(&mark, None, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "thread B is in the mark, so its next park matches: {:?}, thread {b_id:?}",
         clock.parked(),
     );
     release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_rx)
         .expect("thread B exits");
     release_a.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("thread A exits");
 }
@@ -1231,12 +1235,12 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
     let (result_tx, result_rx) = mpsc::channel();
     let clock_wait = Arc::clone(&clock);
     thread::spawn(move || {
-        let mark = clock_wait.mark_parked(until, Deadline::after(Duration::from_secs(5)));
+        let mark = clock_wait.mark_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN));
         match result_tx.send(mark) {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         }
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("waited for mark_parked to block with nobody parked");
     release_waiter.send(()).unwrap();
@@ -1257,19 +1261,19 @@ fn mark_parked_returns_the_park_that_arrives_after_it_starts() {
         clock.await_thread_parked(
             parker_id,
             Some(until),
-            Deadline::after(Duration::from_secs(5))
+            Deadline::after(crate::MUST_SUCCEED_WITHIN)
         ),
         "the parker parked at its deadline: {:?}, thread {parker_id:?}",
         clock.parked(),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&result_rx)
         .expect("waited for mark_parked to return the park")
         .expect("a parked thread is marked");
     assert_eq!(mark.0.len(), 1);
     assert_eq!(mark.0[0].0, parker_id);
     parker_release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parker_exit_rx)
         .expect("the parked thread exits");
 }
@@ -1392,7 +1396,7 @@ fn a_stale_park_on_the_named_thread_is_rejected_while_another_thread_reparks_at_
     let e = clock.now() + Duration::from_secs(30);
     let (a_park, a_release, a_exit, a) = park_seq(&clock, vec![Some(e), Some(e)]);
     let (b_park, b_release, b_exit, _) = park_seq(&clock, vec![Some(e), Some(e)]);
-    let parked = Deadline::after(Duration::from_secs(5));
+    let parked = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     parked.recv_or_fail(&a_park, "A's first park");
     parked.recv_or_fail(&b_park, "B's first park");
     let outcome = run_advance_when_parked(
@@ -1400,13 +1404,13 @@ fn a_stale_park_on_the_named_thread_is_rejected_while_another_thread_reparks_at_
         Some(e),
         Some(a),
         Duration::ZERO,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the zero step")
         .unwrap();
     b_release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&b_park, "B's fresh park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&b_park, "B's fresh park");
     let before = clock.now();
     let outcome = run_advance_when_parked(
         &clock,
@@ -1415,7 +1419,7 @@ fn a_stale_park_on_the_named_thread_is_rejected_while_another_thread_reparks_at_
         e.duration_since(before),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the stale named park rejection")
         .unwrap_err();
     assert!(
@@ -1424,21 +1428,21 @@ fn a_stale_park_on_the_named_thread_is_rejected_while_another_thread_reparks_at_
     );
     assert_eq!(clock.now(), before);
     a_release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&a_park, "A's fresh park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&a_park, "A's fresh park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(e),
         Some(a),
         e.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the fresh named park advance")
         .unwrap();
     assert_eq!(clock.now(), e);
     a_release.send(()).unwrap();
     b_release.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&a_exit, "A's exit");
     exited.recv_or_fail(&b_exit, "B's exit");
 }
@@ -1451,15 +1455,15 @@ fn a_step_past_the_named_threads_stale_park_waits_for_its_new_park() {
     let e2 = e1 + Duration::from_secs(10);
     let e3 = e2 + Duration::from_secs(10);
     let (parked, release, exit, a) = park_seq(&clock, vec![Some(e1), Some(e2), Some(e3)]);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "A's first park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "A's first park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(e1),
         Some(a),
         e1.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the first advance")
         .unwrap();
     assert_eq!(clock.now(), e1);
@@ -1472,18 +1476,18 @@ fn a_step_past_the_named_threads_stale_park_waits_for_its_new_park() {
             expected.duration_since(clock.now()),
             Deadline::after(Duration::from_secs(30)),
         );
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&checked, "the helper waiting for a newer park");
         resume.send(()).unwrap();
         release.send(()).unwrap();
-        Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "A's newer park");
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "A's newer park");
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&outcome, "the newer park advance")
             .unwrap();
         assert_eq!(clock.now(), expected);
     }
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "A's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "A's exit");
 }
 
 /// With no active wait, a move is not a competing driver for the next wait.
@@ -1493,21 +1497,21 @@ fn a_move_before_a_wait_does_not_fail_the_next_advance() {
     clock.advance(Duration::from_secs(1));
     let until = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, thread) = park_seq(&clock, vec![Some(until)]);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the fresh park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the fresh park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(until),
         Some(thread),
         until.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the advance after an unwatched move")
         .unwrap();
     assert_eq!(clock.now(), until);
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_secs(31));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -1523,13 +1527,13 @@ fn another_drivers_move_fails_an_active_advance_wait() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&checked, "the active helper's condvar wait");
     // The pause holds the state lock, so release it before reading now().
     resume.send(()).unwrap();
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the other-driver failure")
         .unwrap_err();
     assert!(
@@ -1553,13 +1557,13 @@ fn a_move_then_a_wrong_park_reports_the_move() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
     let (parked, release, exit, _) = park_once(&clock, Some(e + Duration::from_secs(1)));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the later wrong park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the later wrong park");
     resume.send(()).unwrap();
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the first logged failure")
         .unwrap_err();
     assert!(
@@ -1569,7 +1573,7 @@ fn a_move_then_a_wrong_park_reports_the_move() {
     assert!(!message.contains("different instant"), "{message}");
     assert_eq!(clock.now(), before + Duration::from_millis(1));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the wrong parker's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the wrong parker's exit");
 }
 
 #[test]
@@ -1585,13 +1589,13 @@ fn a_wrong_park_then_a_move_reports_the_wrong_park() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let (parked, release, exit, _) = park_once(&clock, Some(e + Duration::from_secs(1)));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the earlier wrong park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the earlier wrong park");
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
     resume.send(()).unwrap();
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the first logged failure")
         .unwrap_err();
     assert!(
@@ -1601,7 +1605,7 @@ fn a_wrong_park_then_a_move_reports_the_wrong_park() {
     assert!(!message.contains("time moved"), "{message}");
     assert_eq!(clock.now(), before + Duration::from_millis(1));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the wrong parker's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the wrong parker's exit");
 }
 
 #[test]
@@ -1617,13 +1621,13 @@ fn a_move_before_the_named_park_fails_rather_than_matches() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
     let (parked, release, exit, _) = park_once(&clock, Some(e));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the later matching park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the later matching park");
     resume.send(()).unwrap();
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the move before the match")
         .unwrap_err();
     assert!(
@@ -1632,7 +1636,7 @@ fn a_move_before_the_named_park_fails_rather_than_matches() {
     );
     assert_eq!(clock.now(), before + Duration::from_millis(1));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the matching parker's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the matching parker's exit");
 }
 
 #[test]
@@ -1641,7 +1645,7 @@ fn a_named_threads_park_held_across_an_advance_does_not_match() {
     let clock = FakeClock::new();
     let e = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, a) = park_once(&clock, Some(e));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "A's park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "A's park");
     clock.advance(Duration::from_millis(1));
     let before = clock.now();
     let outcome = run_advance_when_parked(
@@ -1651,7 +1655,7 @@ fn a_named_threads_park_held_across_an_advance_does_not_match() {
         e.duration_since(before),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the stale park rejection")
         .unwrap_err();
     assert!(
@@ -1660,7 +1664,7 @@ fn a_named_threads_park_held_across_an_advance_does_not_match() {
     );
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(1));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "A's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "A's exit");
 }
 
 #[test]
@@ -1669,7 +1673,7 @@ fn an_unnamed_park_held_across_a_sleep_does_not_match_and_its_re_park_does() {
     let clock = FakeClock::new();
     let e = clock.now() + Duration::from_secs(30);
     let (first, left, second, exit, release, gate) = park_twice(&clock, e);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&first, "the first park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&first, "the first park");
     Clock::sleep(&*clock, Duration::from_millis(1));
     let before = clock.now();
     let outcome = run_advance_when_parked(
@@ -1679,7 +1683,7 @@ fn an_unnamed_park_held_across_a_sleep_does_not_match_and_its_re_park_does() {
         e.duration_since(before),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the stale unnamed park rejection")
         .unwrap_err();
     assert!(
@@ -1688,22 +1692,22 @@ fn an_unnamed_park_held_across_a_sleep_does_not_match_and_its_re_park_does() {
     );
     assert_eq!(clock.now(), before);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&left, "leaving the first park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&left, "leaving the first park");
     gate.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&second, "the second park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&second, "the second park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(e),
         None,
         e.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the fresh unnamed park advance")
         .unwrap();
     assert_eq!(clock.now(), e);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the twice parker's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the twice parker's exit");
 }
 
 #[test]
@@ -1713,20 +1717,20 @@ fn one_fresh_park_beside_stale_parks_matches_with_no_thread_named() {
     let e = clock.now() + Duration::from_secs(30);
     let (a_park, a_release, a_exit, _) = park_once(&clock, Some(e));
     let (b_park, b_release, b_exit, _) = park_once(&clock, Some(e));
-    let parked = Deadline::after(Duration::from_secs(5));
+    let parked = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     parked.recv_or_fail(&a_park, "A's park");
     parked.recv_or_fail(&b_park, "B's park");
     clock.advance(Duration::from_millis(1));
     let (c_park, c_release, c_exit, c) = park_once(&clock, Some(e));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&c_park, "C's fresh park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&c_park, "C's fresh park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(e),
         None,
         e.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the sole fresh thread's advance")
         .unwrap();
     assert!(mark.0.iter().any(|(thread, _)| *thread == c), "{mark:?}");
@@ -1734,7 +1738,7 @@ fn one_fresh_park_beside_stale_parks_matches_with_no_thread_named() {
     a_release.send(()).unwrap();
     b_release.send(()).unwrap();
     c_release.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&a_exit, "A's exit");
     exited.recv_or_fail(&b_exit, "B's exit");
     exited.recv_or_fail(&c_exit, "C's exit");
@@ -1746,22 +1750,22 @@ fn nested_parks_on_one_thread_match_with_no_thread_named() {
     let clock = FakeClock::new();
     let e = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, t) = park_nested(&clock, e);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the nested inner park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the nested inner park");
     let outcome = run_advance_when_parked(
         &clock,
         Some(e),
         None,
         e.duration_since(clock.now()),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the nested park advance")
         .unwrap();
     assert_eq!(mark.0.len(), 1, "{mark:?}");
     assert_eq!(mark.0[0].0, t);
     assert_eq!(clock.now(), e);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the nested parker's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the nested parker's exit");
 }
 
 #[test]
@@ -1769,7 +1773,7 @@ fn advance_when_parked_moves_time_short_of_a_park_present_before_it_starts() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -1779,7 +1783,7 @@ fn advance_when_parked_moves_time_short_of_a_park_present_before_it_starts() {
         Some(until),
         None,
         Duration::from_millis(5),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
@@ -1787,12 +1791,12 @@ fn advance_when_parked_moves_time_short_of_a_park_present_before_it_starts() {
         mark.0.iter().any(|(thread, _)| *thread == id),
         "the returned mark holds the parked thread: thread {id:?}",
     );
-    Deadline::after(Duration::from_secs(2))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&wake_rx)
         .expect("advance_when_parked wakes subscribers");
     drop(wake);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1802,19 +1806,19 @@ fn advance_when_parked_advances_exactly_to_the_named_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     clock.advance_when_parked(
         Some(until),
         None,
         Duration::from_secs(30),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(clock.now(), until);
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_secs(30));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1824,21 +1828,21 @@ fn advance_when_parked_stops_one_instant_short_of_the_named_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     clock.advance_when_parked(
         Some(until),
         None,
         Duration::from_secs(30) - Duration::from_nanos(1),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
         clock.now(),
         until.checked_sub(Duration::from_nanos(1)).unwrap()
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1856,24 +1860,24 @@ fn advance_when_parked_waits_for_a_park_that_arrives_after_it_starts() {
         Some(until),
         None,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("waited for advance_when_parked to wait with nobody parked");
     release_waiter.send(()).unwrap();
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to see the park")
         .expect("advance_when_parked advances for the park");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(mark.0.len(), 1);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1884,12 +1888,12 @@ fn advance_when_parked_fails_a_wrong_park_first() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked, release, exit, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
     let wall = clock.wall();
-    // A 30 s helper bound with a 5 s observation bound: a mismatch fails at
+    // A 30 s helper bound with the must-succeed observation bound: a mismatch fails at
     // once, it does not merely expire.
     let outcome = run_advance_when_parked(
         &clock,
@@ -1898,7 +1902,7 @@ fn advance_when_parked_fails_a_wrong_park_first() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the wrong park")
         .expect_err("advance_when_parked fails a wrong park");
@@ -1909,7 +1913,7 @@ fn advance_when_parked_fails_a_wrong_park_first() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     assert_eq!(clock.wall(), wall, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1920,7 +1924,7 @@ fn advance_when_parked_fails_a_park_one_instant_before_the_named_one() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until.checked_sub(Duration::from_nanos(1)).unwrap();
     let (parked, release, exit, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -1931,7 +1935,7 @@ fn advance_when_parked_fails_a_park_one_instant_before_the_named_one() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the wrong park")
         .expect_err("advance_when_parked fails a park one instant early");
@@ -1941,7 +1945,7 @@ fn advance_when_parked_fails_a_park_one_instant_before_the_named_one() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1951,7 +1955,7 @@ fn advance_when_parked_fails_an_advance_past_the_named_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -1963,7 +1967,7 @@ fn advance_when_parked_fails_an_advance_past_the_named_park() {
         Duration::from_secs(30) + Duration::from_nanos(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the advance")
         .expect_err("advance_when_parked fails an advance past the named park");
@@ -1974,7 +1978,7 @@ fn advance_when_parked_fails_an_advance_past_the_named_park() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     assert_eq!(clock.wall(), wall, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -1984,7 +1988,7 @@ fn advance_when_parked_fails_a_finite_park_where_none_was_named() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -1995,7 +1999,7 @@ fn advance_when_parked_fails_a_finite_park_where_none_was_named() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the finite park")
         .expect_err("advance_when_parked fails a finite park where None was named");
@@ -2005,7 +2009,7 @@ fn advance_when_parked_fails_a_finite_park_where_none_was_named() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2014,19 +2018,19 @@ fn advance_when_parked_fails_a_finite_park_where_none_was_named() {
 fn advance_when_parked_advances_for_an_unbounded_park() {
     let clock = FakeClock::new();
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     clock.advance_when_parked(
         None,
         None,
         Duration::from_millis(5),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(clock.wall(), wall_epoch() + Duration::from_millis(5));
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2036,7 +2040,7 @@ fn advance_when_parked_fails_an_unbounded_park_where_a_finite_instant_was_named(
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -2047,7 +2051,7 @@ fn advance_when_parked_fails_an_unbounded_park_where_a_finite_instant_was_named(
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the unbounded park")
         .expect_err("advance_when_parked fails an unbounded park");
@@ -2061,7 +2065,7 @@ fn advance_when_parked_fails_an_unbounded_park_where_a_finite_instant_was_named(
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2078,7 +2082,7 @@ fn advance_when_parked_fails_at_the_deadline_naming_no_park() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_millis(200)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to expire")
         .expect_err("advance_when_parked fails at the deadline");
@@ -2098,7 +2102,7 @@ fn advance_when_parked_waits_for_the_named_thread() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -2113,7 +2117,7 @@ fn advance_when_parked_waits_for_the_named_thread() {
         Duration::from_millis(5),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to expire")
         .expect_err("advance_when_parked waits for the named thread");
@@ -2127,7 +2131,7 @@ fn advance_when_parked_waits_for_the_named_thread() {
     );
     assert_eq!(clock.now(), now, "an expiry moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2137,26 +2141,26 @@ fn advance_when_parked_advances_for_the_named_thread_among_several_parks() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     clock.advance_when_parked(
         Some(until),
         Some(b_id),
         Duration::from_millis(5),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -2166,11 +2170,11 @@ fn advance_when_parked_fails_several_parks_with_no_thread_named() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, first_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (parked_b, release_b, exit_b, second_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
@@ -2181,7 +2185,7 @@ fn advance_when_parked_fails_several_parks_with_no_thread_named() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the ambiguous wait")
         .expect_err("advance_when_parked fails several parks with no thread named");
@@ -2206,10 +2210,10 @@ fn advance_when_parked_fails_several_parks_with_no_thread_named() {
     assert_eq!(clock.now(), now, "an ambiguous wait moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -2226,7 +2230,7 @@ fn advance_when_parked_rejects_a_named_park_at_now() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the past park")
         .expect_err("advance_when_parked rejects a named park at now");
@@ -2251,7 +2255,7 @@ fn advance_when_parked_rejects_a_named_park_before_now() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the past park")
         .expect_err("advance_when_parked rejects a named park before now");
@@ -2266,7 +2270,7 @@ fn advance_when_parked_rejects_a_named_park_before_now() {
 fn advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
     let clock = FakeClock::new();
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -2278,7 +2282,7 @@ fn advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
         Duration::MAX,
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the advance")
         .expect_err("advance_when_parked rejects an overflowing advance");
@@ -2294,7 +2298,7 @@ fn advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     assert_eq!(clock.wall(), wall, "a rejected wait moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2372,16 +2376,16 @@ fn advance_when_parked_names_the_caller_and_every_park_on_a_wrong_instant() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
     let step = Duration::from_millis(5);
-    let bound = Deadline::after(Duration::from_secs(5));
+    let bound = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     let watch = HookWatch::install();
     let line = line!() + 1;
     let run = || clock.advance_when_parked(Some(until), None, step, &bound);
@@ -2416,10 +2420,10 @@ fn advance_when_parked_names_the_caller_and_every_park_on_a_wrong_instant() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -2429,12 +2433,12 @@ fn advance_when_parked_names_the_caller_on_a_finite_park_where_none_was_named() 
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
     let step = Duration::from_millis(5);
-    let bound = Deadline::after(Duration::from_secs(5));
+    let bound = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     let watch = HookWatch::install();
     let line = line!() + 1;
     let run = || clock.advance_when_parked(None, None, step, &bound);
@@ -2456,7 +2460,7 @@ fn advance_when_parked_names_the_caller_on_a_finite_park_where_none_was_named() 
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2466,12 +2470,12 @@ fn advance_when_parked_names_the_caller_on_an_advance_past_the_named_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
     let step = Duration::from_secs(31);
-    let bound = Deadline::after(Duration::from_secs(5));
+    let bound = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     let watch = HookWatch::install();
     let line = line!() + 1;
     let run = || clock.advance_when_parked(Some(until), None, step, &bound);
@@ -2493,7 +2497,7 @@ fn advance_when_parked_names_the_caller_on_an_advance_past_the_named_park() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2533,11 +2537,11 @@ fn advance_when_parked_fails_a_wrong_park_beside_the_right_one() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
@@ -2550,7 +2554,7 @@ fn advance_when_parked_fails_a_wrong_park_beside_the_right_one() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the wrong park")
         .expect_err("advance_when_parked fails a wrong park beside the right one");
@@ -2561,10 +2565,10 @@ fn advance_when_parked_fails_a_wrong_park_beside_the_right_one() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -2575,11 +2579,11 @@ fn advance_when_parked_advances_for_the_selected_thread_beside_a_wrong_park() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     // Only the named thread is watched: the other thread's wrong park neither
@@ -2589,19 +2593,19 @@ fn advance_when_parked_advances_for_the_selected_thread_beside_a_wrong_park() {
         Some(until),
         Some(b_id),
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to see the named thread")
         .expect("advance_when_parked advances for the named thread");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -2623,7 +2627,7 @@ fn advance_when_parked_fails_a_wrong_park_that_left_before_the_right_one() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("waited for advance_when_parked to wait with nobody parked");
     release_waiter.send(()).unwrap();
@@ -2636,15 +2640,15 @@ fn advance_when_parked_fails_a_wrong_park_that_left_before_the_right_one() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         });
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&wrong_rx)
         .expect("waited for the thread to park at the wrong instant");
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park at the named instant");
     let now = clock.now();
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the wrong park")
         .expect_err("advance_when_parked fails a wrong park that left");
@@ -2654,7 +2658,7 @@ fn advance_when_parked_fails_a_wrong_park_that_left_before_the_right_one() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2665,7 +2669,7 @@ fn advance_when_parked_with_a_wrong_park_held_never_reaches_its_wait_point() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked, release, exit, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     // Armed while a watched mismatch is already held: the helper fails before
@@ -2679,7 +2683,7 @@ fn advance_when_parked_with_a_wrong_park_held_never_reaches_its_wait_point() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to reject the wrong park")
         .expect_err("advance_when_parked fails the held wrong park");
@@ -2688,7 +2692,7 @@ fn advance_when_parked_with_a_wrong_park_held_never_reaches_its_wait_point() {
         "the wait point does not signal while a mismatch is held",
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2698,22 +2702,22 @@ fn advance_when_parked_advances_for_a_re_park_after_a_leave() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (first, left, second, exit, release, gate) = park_twice(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&left)
         .expect("waited for the thread to leave its park");
     gate.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the thread to park again");
     let mark = clock.advance_when_parked(
         Some(until),
         None,
         Duration::from_millis(5),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     assert_eq!(
@@ -2722,7 +2726,7 @@ fn advance_when_parked_advances_for_a_re_park_after_a_leave() {
         "the returned mark holds the re-parked thread",
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2759,11 +2763,11 @@ fn advance_when_parked_wakes_a_subscriber_after_releasing_the_clock_lock() {
     });
     barrier.wait();
     assert!(
-        clock.await_parked(until, Deadline::after(Duration::from_secs(2))),
+        clock.await_parked(until, Deadline::after(crate::MUST_SUCCEED_WITHIN)),
         "waited for the thread to park at its deadline"
     );
     assert_eq!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for the thread to report it had parked"),
         "parked"
@@ -2775,11 +2779,11 @@ fn advance_when_parked_wakes_a_subscriber_after_releasing_the_clock_lock() {
         Some(until),
         None,
         Duration::from_secs(10),
-        &Deadline::after(Duration::from_secs(5)),
+        &Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(mark.0.len(), 1);
     assert_eq!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&rx)
             .expect("waited for advance_when_parked to wake the parked thread"),
         "woke"
@@ -2800,7 +2804,7 @@ fn advance_when_parked_moves_time_before_a_panicking_subscriber_wakes() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let wake: Arc<dyn Wake> = Arc::new(PanicWake);
@@ -2810,7 +2814,7 @@ fn advance_when_parked_moves_time_before_a_panicking_subscriber_wakes() {
             Some(until),
             None,
             Duration::from_millis(5),
-            &Deadline::after(Duration::from_secs(5)),
+            &Deadline::after(crate::MUST_SUCCEED_WITHIN),
         );
     }));
     assert!(
@@ -2822,7 +2826,7 @@ fn advance_when_parked_moves_time_before_a_panicking_subscriber_wakes() {
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     drop(wake);
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -2879,14 +2883,14 @@ fn advance_when_parked_observes_a_park_that_leaves_while_it_waits() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("waited for advance_when_parked to wait with nobody parked");
     release_waiter.send(()).unwrap();
     // Another thread parks at the named instant but is not selected, so the
     // helper keeps waiting while observing it.
     let (parked, release, exit, other_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the other thread to park");
     assert!(
@@ -2898,7 +2902,7 @@ fn advance_when_parked_observes_a_park_that_leaves_while_it_waits() {
     // The other thread leaves before the helper diagnoses anything: the
     // observation stays while the held park goes.
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the other thread exits");
     assert!(
@@ -2914,16 +2918,16 @@ fn advance_when_parked_observes_a_park_that_leaves_while_it_waits() {
     // The selected thread's park resolves the wait, proving the observation
     // of the other thread neither satisfied nor failed it.
     start_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&selected_rx)
         .expect("waited for the selected thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to see the selected thread")
         .expect("advance_when_parked advances for the selected thread");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(5));
     selected_release_tx.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&selected_exit_rx)
         .expect("the selected thread exits");
 }
@@ -2941,16 +2945,16 @@ fn a_failed_advance_wait_clears_its_observations_before_the_next_wait() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first_checked)
         .expect("waited for the first advance wait to start");
     release_first_wait.send(()).unwrap();
 
     let (wrong_parked, release_wrong, wrong_exit, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&wrong_parked)
         .expect("waited for the wrong park to arrive");
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the first advance wait to reject the wrong park")
         .expect_err("the first advance wait rejects a wrong park");
@@ -2964,7 +2968,7 @@ fn a_failed_advance_wait_clears_its_observations_before_the_next_wait() {
         );
     }
     release_wrong.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&wrong_exit)
         .expect("the wrong park exits");
 
@@ -2977,21 +2981,21 @@ fn a_failed_advance_wait_clears_its_observations_before_the_next_wait() {
         Duration::from_millis(1),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second_checked)
         .expect("waited for the second advance wait to start");
     release_second_wait.send(()).unwrap();
     let (right_parked, release_right, right_exit, _) = park_once(&clock, Some(second_expected));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&right_parked)
         .expect("waited for the second wait's matching park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the second advance wait")
         .expect("the second advance wait succeeds with a different expectation");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(1));
     release_right.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&right_exit)
         .expect("the matching park exits");
 }
@@ -3011,7 +3015,7 @@ fn advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("waited for the first advance wait to wait");
     release_waiter.send(()).unwrap();
@@ -3024,7 +3028,7 @@ fn advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let second_message = Deadline::after(Duration::from_secs(5))
+    let second_message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&second)
         .expect("waited for the second advance wait to be rejected")
         .expect_err("the second overlapping advance wait is rejected");
@@ -3041,15 +3045,15 @@ fn advance_when_parked_rejects_a_second_wait_while_one_is_active() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         });
     });
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&wrong_rx)
         .expect("waited for the thread to park at the wrong instant");
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park at the named instant");
     let now = clock.now();
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&first)
         .expect("waited for the first advance wait to reject the wrong park")
         .expect_err("the first advance wait still fails on its wrong park");
@@ -3059,7 +3063,7 @@ fn advance_when_parked_rejects_a_second_wait_while_one_is_active() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -3142,10 +3146,10 @@ fn advance_when_parked_threads_advances_once_the_count_is_parked() {
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let step = Duration::from_millis(5);
@@ -3154,9 +3158,9 @@ fn advance_when_parked_threads_advances_once_the_count_is_parked() {
         Some(until),
         2,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("two threads parked at the named instant advance");
@@ -3176,10 +3180,10 @@ fn advance_when_parked_threads_advances_once_the_count_is_parked() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3190,7 +3194,7 @@ fn advance_when_parked_threads_waits_for_the_last_thread() {
     let until = clock.origin() + Duration::from_secs(30);
     let step = Duration::from_millis(5);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
     let (waiting, release_waiter) = clock.pause_next_advance_wait();
@@ -3201,7 +3205,7 @@ fn advance_when_parked_threads_waits_for_the_last_thread() {
         step,
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("the helper waits for the second thread");
     // The pause holds the state lock, so the release goes first: nothing
@@ -3213,10 +3217,10 @@ fn advance_when_parked_threads_waits_for_the_last_thread() {
         "one parked thread never satisfies a count of two"
     );
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("the second thread completes the count");
@@ -3228,10 +3232,10 @@ fn advance_when_parked_threads_waits_for_the_last_thread() {
     assert_eq!(mark.threads().len(), 2, "the mark holds both threads");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3241,7 +3245,7 @@ fn advance_when_parked_threads_fails_at_the_deadline_with_fewer_threads() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -3252,7 +3256,7 @@ fn advance_when_parked_threads_fails_at_the_deadline_with_fewer_threads() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_millis(200)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to expire")
         .expect_err("one parked thread never satisfies a count of two");
@@ -3274,7 +3278,7 @@ fn advance_when_parked_threads_fails_at_the_deadline_with_fewer_threads() {
     );
     assert_eq!(clock.now(), now, "an expired wait moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 
@@ -3288,7 +3292,7 @@ fn advance_when_parked_threads_fails_at_the_deadline_with_fewer_threads() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_millis(200)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to expire")
         .expect_err("no parked thread never satisfies a count of two");
@@ -3310,13 +3314,13 @@ fn advance_when_parked_threads_fails_with_more_than_the_count() {
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
     let (parked_c, release_c, exit_c, c_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_c)
         .expect("waited for the third thread to park");
     let now = clock.now();
@@ -3328,7 +3332,7 @@ fn advance_when_parked_threads_fails_with_more_than_the_count() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to fail")
         .expect_err("three threads never satisfy a count of two");
@@ -3350,13 +3354,13 @@ fn advance_when_parked_threads_fails_with_more_than_the_count() {
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
     release_c.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_c)
         .expect("the third thread exits");
 }
@@ -3366,7 +3370,7 @@ fn advance_when_parked_threads_counts_nested_parks_on_one_thread_once() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_nested(&clock, until);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the nested parks");
     let now = clock.now();
@@ -3377,7 +3381,7 @@ fn advance_when_parked_threads_counts_nested_parks_on_one_thread_once() {
         Duration::from_millis(5),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to expire")
         .expect_err("one thread's nested parks never satisfy a count of two");
@@ -3392,9 +3396,9 @@ fn advance_when_parked_threads_counts_nested_parks_on_one_thread_once() {
         Some(until),
         1,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("one thread's nested parks satisfy a count of one");
@@ -3405,7 +3409,7 @@ fn advance_when_parked_threads_counts_nested_parks_on_one_thread_once() {
         "nested parks on one thread count once"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -3423,7 +3427,7 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
         step,
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("the helper waits with nobody parked");
     // The pause holds the state lock, so the release goes first.
@@ -3434,17 +3438,17 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
     // A leaver parks at the named instant and exits: its arrival reaches
     // the observation log, then it is gone.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&looked)
         .expect("waited for the helper's look at the leaver's park");
     // The pause holds the state lock: release it before any thread that
     // needs the lock can finish, such as the leaver's exit.
     release_look.send(()).expect("released the look");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the leaver to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the leaver exits");
     assert_eq!(
@@ -3456,10 +3460,10 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
     // a look with a held park, so the looks before the park pass it by.
     let (decided, release_decision) = clock.pause_next_advance_wait_when_held();
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first held thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&decided)
         .expect("the helper looks with one held thread and a leaver in its log");
     release_decision.send(()).expect("released the wait");
@@ -3469,10 +3473,10 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
         "one held thread plus a leaver never satisfies a count of two"
     );
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second held thread to park");
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("two held threads satisfy the count");
@@ -3492,10 +3496,10 @@ fn advance_when_parked_threads_does_not_count_a_thread_that_left() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first held thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second held thread exits");
 }
@@ -3514,15 +3518,15 @@ fn held_advance_wait_pause_stays_armed_until_a_park_is_held() {
         "a look with nobody held must not fire the pause"
     );
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     clock.advance_wait_checked(&super::lock(&clock.state));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&checked)
         .expect("a look with a held park fires the pause");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the thread exits");
 }
@@ -3533,10 +3537,10 @@ fn advance_when_parked_threads_ignores_parks_made_before_the_last_move() {
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     // Even a zero-length move closes the boundary: both parks are stale.
@@ -3549,7 +3553,7 @@ fn advance_when_parked_threads_ignores_parks_made_before_the_last_move() {
         Duration::from_millis(5),
         Deadline::after(Duration::ZERO),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to expire")
         .expect_err("parks made before the last move are stale");
@@ -3560,10 +3564,10 @@ fn advance_when_parked_threads_ignores_parks_made_before_the_last_move() {
     assert_eq!(clock.now(), now, "an expired wait moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3575,10 +3579,10 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
     let earlier = clock.origin() + Duration::from_secs(29);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(earlier));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
@@ -3587,9 +3591,9 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
         Some(until),
         2,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to fail")
         .expect_err("a park at another instant mismatches");
@@ -3600,10 +3604,10 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 
@@ -3611,10 +3615,10 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
     let step = Duration::from_millis(5);
     let (parked_a, release_a, exit_a, a_id) = park_once(&clock, None);
     let (parked_b, release_b, exit_b, b_id) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first unbounded park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second unbounded park");
     let outcome = run_advance_when_parked_threads(
@@ -3622,9 +3626,9 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
         None,
         2,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("two unbounded parks satisfy a count of two");
@@ -3640,10 +3644,10 @@ fn advance_when_parked_threads_fails_a_park_at_another_instant() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3654,7 +3658,7 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
     let until = clock.origin() + Duration::from_secs(30);
     let step = Duration::from_millis(5);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let outcome = run_advance_when_parked_threads(
@@ -3662,9 +3666,9 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
         Some(until),
         1,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to advance")
         .expect("one thread satisfies a count of one");
@@ -3674,7 +3678,7 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
         "time moves by exactly the advance"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 
@@ -3682,10 +3686,10 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
@@ -3694,9 +3698,9 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
         Some(until),
         1,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to fail")
         .expect_err("two threads never satisfy a count of one");
@@ -3711,10 +3715,10 @@ fn advance_when_parked_threads_with_count_one_matches_the_unnamed_helper() {
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3731,7 +3735,7 @@ fn advance_when_parked_threads_rejects_a_zero_count() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to fail")
         .expect_err("a count of zero never waits");
@@ -3746,7 +3750,7 @@ fn advance_when_parked_threads_rejects_a_zero_count() {
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     // The rejected wait never registered: a later wait still proceeds.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let step = Duration::from_millis(5);
@@ -3755,15 +3759,15 @@ fn advance_when_parked_threads_rejects_a_zero_count() {
         Some(until),
         None,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked to advance")
         .expect("the clock still advances after a rejected count");
     assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -3774,10 +3778,10 @@ fn advance_when_parked_threads_rejects_an_advance_past_the_named_park() {
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_a)
         .expect("waited for the first thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_b)
         .expect("waited for the second thread to park");
     let now = clock.now();
@@ -3786,9 +3790,9 @@ fn advance_when_parked_threads_rejects_an_advance_past_the_named_park() {
         Some(until),
         2,
         Duration::from_secs(31),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_threads to fail")
         .expect_err("an advance past the named park never moves");
@@ -3799,10 +3803,10 @@ fn advance_when_parked_threads_rejects_an_advance_past_the_named_park() {
     assert_eq!(clock.now(), now, "an overshoot moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_a)
         .expect("the first thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_b)
         .expect("the second thread exits");
 }
@@ -3863,7 +3867,7 @@ fn advance_when_parked_then_runs_the_hook_between_the_park_and_the_move() {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("the helper waits for the park");
     assert_eq!(
@@ -3874,10 +3878,10 @@ fn advance_when_parked_then_runs_the_hook_between_the_park_and_the_move() {
     // The pause holds the state lock, so the release goes first.
     release_waiter.send(()).expect("released the wait");
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to advance")
         .expect("the parked thread advances");
@@ -3886,7 +3890,7 @@ fn advance_when_parked_then_runs_the_hook_between_the_park_and_the_move() {
     // whichever order the hook took, so this event order alone cannot prove
     // the hook ran before the move: only the hook-panic test proves that.
     assert_eq!(
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(crate::MUST_SUCCEED_WITHIN)
             .recv(&wake_rx)
             .expect("waited for the wake"),
         clock.origin() + step,
@@ -3898,7 +3902,7 @@ fn advance_when_parked_then_runs_the_hook_between_the_park_and_the_move() {
         "time moves by exactly the advance"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -3909,7 +3913,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_wrong_instant() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked, release, exit, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -3920,12 +3924,12 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_wrong_instant() {
         Some(until),
         None,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("a wrong park mismatches");
@@ -3940,7 +3944,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_wrong_instant() {
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -3950,7 +3954,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_finite_park_where_none_was
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -3961,12 +3965,12 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_finite_park_where_none_was
         None,
         None,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("a finite park where none was named mismatches");
@@ -3981,7 +3985,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_finite_park_where_none_was
     );
     assert_eq!(clock.now(), now, "a mismatch moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -4003,7 +4007,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_an_expired_deadline() {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to expire")
         .expect_err("an expired wait never runs the hook");
@@ -4024,7 +4028,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_rejected_advance() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -4035,12 +4039,12 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_rejected_advance() {
         Some(until),
         None,
         Duration::from_secs(31),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("an overshoot never runs the hook");
@@ -4055,7 +4059,7 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_rejected_advance() {
     );
     assert_eq!(clock.now(), now, "a rejected advance moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -4071,12 +4075,12 @@ fn advance_when_parked_then_never_runs_the_hook_for_a_named_park_at_now() {
         Some(now),
         None,
         Duration::from_millis(5),
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("a named park at now never runs the hook");
@@ -4109,14 +4113,14 @@ fn advance_when_parked_then_never_runs_the_hook_for_another_drivers_move() {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&waiting)
         .expect("the helper waits for the park");
     // The pause holds the state lock, so the release goes first.
     release_waiter.send(()).expect("released the wait");
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("another driver's move never runs the hook");
@@ -4145,7 +4149,7 @@ fn advance_when_parked_then_hook_panic_leaves_time_unmoved() {
     let wake: Arc<dyn Wake> = Arc::new(ChanWake(wake_tx));
     clock.subscribe(Arc::downgrade(&wake));
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -4155,10 +4159,10 @@ fn advance_when_parked_then_hook_panic_leaves_time_unmoved() {
         Some(until),
         None,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         || panic!("hook failed"),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to fail")
         .expect_err("a panicking hook fails the wait");
@@ -4170,7 +4174,7 @@ fn advance_when_parked_then_hook_panic_leaves_time_unmoved() {
     assert_eq!(clock.wall(), wall, "a panicking hook moves no time");
     assert!(wake_rx.try_recv().is_err(), "a panicking hook wakes nobody");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -4183,10 +4187,10 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
     let step = Duration::from_millis(5);
     let (parked_other, release_other, exit_other, _) = park_once(&clock, Some(elsewhere));
     let (parked_named, release_named, exit_named, named_id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_other)
         .expect("waited for the other thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked_named)
         .expect("waited for the named thread to park");
     let hooks = Arc::new(AtomicUsize::new(0));
@@ -4196,12 +4200,12 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
         Some(until),
         Some(named_id),
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to advance")
         .expect("the named thread advances among several parks");
@@ -4213,16 +4217,16 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
     );
     release_other.send(()).unwrap();
     release_named.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_other)
         .expect("the other thread exits");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit_named)
         .expect("the named thread exits");
 
     let clock = FakeClock::new();
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the unbounded park");
     let hooks = Arc::new(AtomicUsize::new(0));
@@ -4232,12 +4236,12 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
         None,
         None,
         step,
-        Deadline::after(Duration::from_secs(5)),
+        Deadline::after(crate::MUST_SUCCEED_WITHIN),
         move || {
             hooks_t.fetch_add(1, Ordering::SeqCst);
         },
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&outcome)
         .expect("waited for advance_when_parked_then to advance")
         .expect("an unbounded park advances");
@@ -4252,7 +4256,7 @@ fn advance_when_parked_then_runs_the_hook_for_the_named_thread_among_several_par
         "time moves by exactly the advance"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }
@@ -4262,12 +4266,12 @@ fn try_advance_when_parked_advances_a_named_thread_to_a_park_already_present() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let step = Duration::from_millis(5);
     let outcome =
         run_try_advance_when_parked(&clock, Some(until), Some(id), step, Duration::from_secs(30));
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the soft advance")
         .expect("the worker never panics on a matching park")
         .expect("a park already present is Ok");
@@ -4277,7 +4281,7 @@ fn try_advance_when_parked_advances_a_named_thread_to_a_park_already_present() {
     );
     assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4285,12 +4289,12 @@ fn try_advance_when_parked_advances_without_a_named_thread() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let step = Duration::from_millis(5);
     let outcome =
         run_try_advance_when_parked(&clock, Some(until), None, step, Duration::from_secs(30));
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the soft advance")
         .expect("the worker never panics on a matching park")
         .expect("a park already present is Ok");
@@ -4300,7 +4304,7 @@ fn try_advance_when_parked_advances_without_a_named_thread() {
     );
     assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4317,11 +4321,12 @@ fn try_advance_when_parked_advances_to_a_park_that_arrives_during_the_pause() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&waiting, "the helper waiting for a park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&waiting, "the helper waiting for a park");
     release_waiter.send(()).unwrap();
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the soft advance")
         .expect("the worker never panics on a matching park")
         .expect("a park that arrives during the pause is Ok");
@@ -4331,7 +4336,7 @@ fn try_advance_when_parked_advances_to_a_park_that_arrives_during_the_pause() {
         "time moves by exactly the advance"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4348,9 +4353,9 @@ fn try_advance_when_parked_matches_a_park_present_when_the_pause_expires() {
         Duration::from_millis(5),
         Duration::from_millis(50),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     // A receive longer than the pause expires it while the pass is still
     // held, so the decision below runs with no time left and a park held.
     let held = Deadline::after(Duration::from_millis(500)).recv(&outcome);
@@ -4359,7 +4364,7 @@ fn try_advance_when_parked_matches_a_park_present_when_the_pause_expires() {
         "nothing answers while the pass is held"
     );
     resume.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the expired-pause advance")
         .expect("the worker never panics on a matching park")
         .expect("a park present at expiry still matches");
@@ -4369,7 +4374,7 @@ fn try_advance_when_parked_matches_a_park_present_when_the_pause_expires() {
         "time moves by exactly the advance"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4385,7 +4390,7 @@ fn try_advance_when_parked_reports_no_park_when_nothing_parks() {
         Duration::from_millis(5),
         Duration::from_millis(50),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the NoPark report")
         .expect("the worker never panics on an empty wait");
     assert_eq!(
@@ -4402,7 +4407,7 @@ fn try_advance_when_parked_ignores_a_stale_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     // The held park predates this move, so it is stale: it neither matches
     // nor mismatches.
     clock.advance(Duration::from_millis(1));
@@ -4414,7 +4419,7 @@ fn try_advance_when_parked_ignores_a_stale_park() {
         Duration::from_millis(5),
         Duration::from_millis(50),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the stale-park report")
         .expect("the worker never panics on a stale park");
     assert_eq!(
@@ -4424,7 +4429,7 @@ fn try_advance_when_parked_ignores_a_stale_park() {
     );
     assert_eq!(clock.now(), now, "a Miss moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4433,7 +4438,7 @@ fn try_advance_when_parked_reports_a_mismatch_at_another_instant() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked, release, exit, id) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let wall = clock.wall();
     let outcome = run_try_advance_when_parked(
@@ -4443,7 +4448,7 @@ fn try_advance_when_parked_reports_a_mismatch_at_another_instant() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on a wrong park");
     assert_eq!(
@@ -4457,7 +4462,7 @@ fn try_advance_when_parked_reports_a_mismatch_at_another_instant() {
     assert_eq!(clock.now(), now, "a Miss moves no time");
     assert_eq!(clock.wall(), wall, "a Miss moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4465,7 +4470,7 @@ fn try_advance_when_parked_reports_a_mismatch_for_an_unbounded_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
         &clock,
@@ -4474,7 +4479,7 @@ fn try_advance_when_parked_reports_a_mismatch_for_an_unbounded_park() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on an unbounded park");
     assert_eq!(
@@ -4487,7 +4492,7 @@ fn try_advance_when_parked_reports_a_mismatch_for_an_unbounded_park() {
     );
     assert_eq!(clock.now(), now, "a Miss moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4495,7 +4500,7 @@ fn try_advance_when_parked_reports_a_mismatch_where_none_was_named() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
         &clock,
@@ -4504,7 +4509,7 @@ fn try_advance_when_parked_reports_a_mismatch_where_none_was_named() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on a finite park");
     assert_eq!(
@@ -4517,7 +4522,7 @@ fn try_advance_when_parked_reports_a_mismatch_where_none_was_named() {
     );
     assert_eq!(clock.now(), now, "a Miss moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4526,9 +4531,10 @@ fn try_advance_when_parked_prefers_a_mismatch_beside_the_right_park() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (wrong_parked, release_wrong, exit_wrong, wrong_id) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&wrong_parked, "the wrong thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&wrong_parked, "the wrong thread to park");
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the right thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the right thread to park");
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
         &clock,
@@ -4537,7 +4543,7 @@ fn try_advance_when_parked_prefers_a_mismatch_beside_the_right_park() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on a wrong park");
     assert_eq!(
@@ -4551,7 +4557,7 @@ fn try_advance_when_parked_prefers_a_mismatch_beside_the_right_park() {
     assert_eq!(clock.now(), now, "a Miss moves no time");
     release_wrong.send(()).unwrap();
     release.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&exit_wrong, "the wrong thread's exit");
     exited.recv_or_fail(&exit, "the right thread's exit");
 }
@@ -4562,14 +4568,15 @@ fn try_advance_when_parked_with_a_named_thread_ignores_another_threads_wrong_par
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (parked, release, exit, id) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the named thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the named thread to park");
     let (other_parked, release_other, exit_other, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&other_parked, "the other thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&other_parked, "the other thread to park");
     let now = clock.now();
     let step = Duration::from_millis(5);
     let outcome =
         run_try_advance_when_parked(&clock, Some(until), Some(id), step, Duration::from_secs(30));
-    let mark = Deadline::after(Duration::from_secs(5))
+    let mark = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the soft advance")
         .expect("the worker never panics on an unwatched wrong park")
         .expect("another thread's wrong park is not a Mismatch");
@@ -4580,7 +4587,7 @@ fn try_advance_when_parked_with_a_named_thread_ignores_another_threads_wrong_par
     assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
     release.send(()).unwrap();
     release_other.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&exit, "the named thread's exit");
     exited.recv_or_fail(&exit_other, "the other thread's exit");
 }
@@ -4600,18 +4607,18 @@ fn try_advance_when_parked_reports_a_mismatch_from_the_log_after_the_park_left()
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&entered, "the helper's pass pause");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&entered, "the helper's pass pause");
     let (parked, release, exit, wrong_id) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the wrong thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the wrong thread to park");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the wrong thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the wrong thread's exit");
     assert!(
         clock.parked().is_empty(),
         "the mismatching park left before the helper looked"
     );
     let now = clock.now();
     resume.send(()).unwrap();
-    let miss = Deadline::after(Duration::from_secs(5))
+    let miss = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on a logged wrong park");
     assert_eq!(
@@ -4630,9 +4637,10 @@ fn miss_display_names_threads_instants_and_the_pause() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, a) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_a, "the first thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked_a, "the first thread to park");
     let (parked_b, release_b, exit_b, b) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_b, "the second thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&parked_b, "the second thread to park");
     let mismatch = Miss::Mismatch {
         watched: (a, Some(until)),
         parked: vec![(a, Some(until)), (b, None)],
@@ -4665,7 +4673,7 @@ fn miss_display_names_threads_instants_and_the_pause() {
     );
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&exit_a, "the first thread's exit");
     exited.recv_or_fail(&exit_b, "the second thread's exit");
 }
@@ -4725,7 +4733,7 @@ fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let outcome = run_try_advance_when_parked(
         &clock,
         Some(until),
@@ -4733,7 +4741,7 @@ fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the soft advance")
         .expect("the worker never panics on a matching park")
         .expect("a park already present is Ok");
@@ -4742,11 +4750,11 @@ fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
         "the soft wait stops watching on Ok"
     );
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
     // A strict wait still proceeds: no wait is left active.
     let later = clock.now() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(later));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the later thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the later thread to park");
     let strict = run_advance_when_parked(
         &clock,
         Some(later),
@@ -4754,11 +4762,11 @@ fn try_advance_when_parked_leaves_no_active_wait_after_ok() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&strict, "the strict advance after Ok")
         .expect("the clock still advances after a soft Ok");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the later thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the later thread's exit");
 }
 
 #[test]
@@ -4772,7 +4780,7 @@ fn try_advance_when_parked_leaves_no_active_wait_after_no_park() {
         Duration::from_millis(5),
         Duration::from_millis(50),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the NoPark report")
         .expect("the worker never panics on an empty wait")
         .expect_err("no park within the pause is a Miss");
@@ -4782,7 +4790,7 @@ fn try_advance_when_parked_leaves_no_active_wait_after_no_park() {
     );
     // A strict wait still proceeds: no wait is left active.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let strict = run_advance_when_parked(
         &clock,
         Some(until),
@@ -4790,11 +4798,11 @@ fn try_advance_when_parked_leaves_no_active_wait_after_no_park() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&strict, "the strict advance after NoPark")
         .expect("the clock still advances after a soft NoPark");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4803,7 +4811,8 @@ fn try_advance_when_parked_leaves_no_active_wait_after_mismatch() {
     let until = clock.origin() + Duration::from_secs(30);
     let wrong = until + Duration::from_secs(1);
     let (wrong_parked, release_wrong, exit_wrong, _) = park_once(&clock, Some(wrong));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&wrong_parked, "the wrong thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&wrong_parked, "the wrong thread to park");
     let outcome = run_try_advance_when_parked(
         &clock,
         Some(until),
@@ -4811,7 +4820,7 @@ fn try_advance_when_parked_leaves_no_active_wait_after_mismatch() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the Mismatch report")
         .expect("the worker never panics on a wrong park")
         .expect_err("a park at another instant is a Miss");
@@ -4820,10 +4829,11 @@ fn try_advance_when_parked_leaves_no_active_wait_after_mismatch() {
         "the soft wait stops watching on Mismatch"
     );
     release_wrong.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit_wrong, "the wrong thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&exit_wrong, "the wrong thread's exit");
     // A strict wait still proceeds: no wait is left active.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let strict = run_advance_when_parked(
         &clock,
         Some(until),
@@ -4831,11 +4841,11 @@ fn try_advance_when_parked_leaves_no_active_wait_after_mismatch() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&strict, "the strict advance after Mismatch")
         .expect("the clock still advances after a soft Mismatch");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4850,7 +4860,7 @@ fn try_advance_when_parked_rejects_a_named_park_at_or_before_now() {
         Duration::from_millis(1),
         Duration::from_secs(30),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the at-now rejection")
         .expect_err("the soft wait rejects a named park at now");
     assert!(
@@ -4870,7 +4880,7 @@ fn try_advance_when_parked_rejects_a_named_park_at_or_before_now() {
         Duration::from_millis(1),
         Duration::from_secs(30),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the before-now rejection")
         .expect_err("the soft wait rejects a named park before now");
     assert!(
@@ -4885,7 +4895,7 @@ fn try_advance_when_parked_rejects_an_advance_past_the_named_park() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
         &clock,
@@ -4894,7 +4904,7 @@ fn try_advance_when_parked_rejects_an_advance_past_the_named_park() {
         until.duration_since(now) + Duration::from_secs(1),
         Duration::from_secs(30),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the overshoot rejection")
         .expect_err("the soft wait rejects an advance past the named park");
     assert!(
@@ -4903,19 +4913,19 @@ fn try_advance_when_parked_rejects_an_advance_past_the_named_park() {
     );
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
 fn try_advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
     let clock = FakeClock::new();
     let (parked, release, exit, _) = park_once(&clock, None);
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let now = clock.now();
     let wall = clock.wall();
     let outcome =
         run_try_advance_when_parked(&clock, None, None, Duration::MAX, Duration::from_secs(30));
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the overflowing rejection")
         .expect_err("the soft wait rejects an overflowing advance");
     let overflow = if clock.origin().checked_add(Duration::MAX).is_none() {
@@ -4930,7 +4940,7 @@ fn try_advance_when_parked_rejects_an_advance_the_clock_cannot_represent() {
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     assert_eq!(clock.wall(), wall, "a rejected wait moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4947,7 +4957,8 @@ fn try_advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         Duration::from_millis(5),
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&waiting, "the first wait's condvar wait");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&waiting, "the first wait's condvar wait");
     // Release the first waiter before the soft wait starts: the pause holds
     // the state lock, which the soft wait needs to see the active wait.
     release_waiter.send(()).unwrap();
@@ -4958,7 +4969,7 @@ fn try_advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&second, "the soft wait's rejection")
         .expect_err("a soft wait overlapping an active wait is rejected");
     assert!(
@@ -4970,12 +4981,12 @@ fn try_advance_when_parked_rejects_a_second_wait_while_one_is_active() {
         "the rejected soft wait leaves the first wait's log alone"
     );
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&first, "the first wait's advance")
         .expect("the first wait still advances after the overlap");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -4990,12 +5001,13 @@ fn another_drivers_move_fails_a_soft_advance_wait() {
         Duration::from_millis(1),
         Duration::from_secs(30),
     );
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&checked, "the soft wait's condvar wait");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&checked, "the soft wait's condvar wait");
     // The pause holds the state lock, so release it before reading now().
     resume.send(()).unwrap();
     let before = clock.now();
     clock.advance_marked(Duration::from_millis(1));
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the other-driver failure")
         .expect_err("another driver's move still fails a soft wait");
     assert!(
@@ -5011,9 +5023,10 @@ fn try_advance_when_parked_rejects_several_threads_with_no_thread_named() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_a, "the first thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked_a, "the first thread to park");
     let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked_b, "the second thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&parked_b, "the second thread to park");
     let now = clock.now();
     let outcome = run_try_advance_when_parked(
         &clock,
@@ -5022,7 +5035,7 @@ fn try_advance_when_parked_rejects_several_threads_with_no_thread_named() {
         Duration::from_millis(5),
         Duration::from_secs(30),
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the several-threads rejection")
         .expect_err("the soft wait rejects several unnamed threads");
     assert!(
@@ -5032,7 +5045,7 @@ fn try_advance_when_parked_rejects_several_threads_with_no_thread_named() {
     assert_eq!(clock.now(), now, "a rejected wait moves no time");
     release_a.send(()).unwrap();
     release_b.send(()).unwrap();
-    let exited = Deadline::after(Duration::from_secs(5));
+    let exited = Deadline::after(crate::MUST_SUCCEED_WITHIN);
     exited.recv_or_fail(&exit_a, "the first thread's exit");
     exited.recv_or_fail(&exit_b, "the second thread's exit");
 }
@@ -5049,7 +5062,7 @@ fn try_advance_when_parked_rejects_a_zero_pause() {
         Duration::from_millis(5),
         Duration::ZERO,
     );
-    let message = Deadline::after(Duration::from_secs(5))
+    let message = Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&outcome, "the zero-pause rejection")
         .expect_err("a pause of zero never waits");
     assert!(
@@ -5063,7 +5076,7 @@ fn try_advance_when_parked_rejects_a_zero_pause() {
     );
     // The rejected wait never registered: a later wait still proceeds.
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&parked, "the thread to park");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&parked, "the thread to park");
     let step = Duration::from_millis(5);
     let strict = run_advance_when_parked(
         &clock,
@@ -5072,12 +5085,12 @@ fn try_advance_when_parked_rejects_a_zero_pause() {
         step,
         Deadline::after(Duration::from_secs(30)),
     );
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&strict, "the strict advance after a zero pause")
         .expect("the clock still advances after a rejected pause");
     assert_eq!(clock.now(), now + step, "time moves by exactly the advance");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5)).recv_or_fail(&exit, "the parked thread's exit");
+    Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&exit, "the parked thread's exit");
 }
 
 #[test]
@@ -5085,7 +5098,7 @@ fn try_advance_when_parked_names_the_caller_on_a_loud_failure() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (parked, release, exit, _) = park_once(&clock, Some(until));
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&parked)
         .expect("waited for the thread to park");
     let now = clock.now();
@@ -5111,7 +5124,7 @@ fn try_advance_when_parked_names_the_caller_on_a_loud_failure() {
     );
     assert_eq!(clock.now(), now, "a loud failure moves no time");
     release.send(()).unwrap();
-    Deadline::after(Duration::from_secs(5))
+    Deadline::after(crate::MUST_SUCCEED_WITHIN)
         .recv(&exit)
         .expect("the parked thread exits");
 }

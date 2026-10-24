@@ -6,6 +6,8 @@
     clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
+#[path = "support/hub_start.rs"]
+mod hub_start;
 mod support;
 use serde_json::{Value, json};
 use std::fs;
@@ -64,22 +66,20 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
         .stderr(std::process::Stdio::piped())
         .process_group(0);
     succeeds(&run_to_exit(b.deadline, "the client's git repository", git));
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    write_json(&a.home().join("config.json"), &json!({"hub":{"port":port}}));
     let row = json!({"session_id":"s_remote", "ts":1, "project":"remote-project", "workspace":"/remote/workspace", "name":"remote session", "how":"exited"});
     fs::create_dir_all(a.home().join("projects/remote-project/sessions/s_remote")).unwrap();
     fs::write(a.home().join("recent.jsonl"), format!("{row}\n")).unwrap();
-    let process =
-        HubProc::spawn_command(a.deadline, &mut a.fiber(&["hub", "serve", "--installed"]));
-    let home = a.home();
-    let (ready, hello) = bounded(a.deadline, "the installed hub's hello", move || {
-        doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
-    })
-    .unwrap();
-    assert_eq!(hello.kind, "hub_hello");
-    let address = format!("ws://127.0.0.1:{port}");
+    let served = hub_start::serve_installed(
+        &a,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(&a.home().join("config.json"), &json!({"hub":{"port":port}}));
+            a.fiber(&["hub", "serve", "--installed"])
+        },
+    );
+    assert_eq!(served.hub.1.kind, "hub_hello");
+    let address = format!("ws://127.0.0.1:{}", served.port);
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);
     let code = String::from_utf8(code.stdout).unwrap();
@@ -168,9 +168,61 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["id"], "s_remote");
     assert!(!b.hub_socket().exists());
-    drop(ready);
-    process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    drop(served.hub);
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+}
+
+#[test]
+fn a_taken_port_is_retried_with_a_fresh_one() {
+    let setup = Setup::new();
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    let mut draws = 0;
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut || {
+            draws += 1;
+            if draws == 1 {
+                taken
+            } else {
+                hub_start::free_port()
+            }
+        },
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub":{"port":port}}),
+            );
+            setup.fiber(&["hub", "serve", "--installed"])
+        },
+    );
+    assert_ne!(served.port, taken, "the hub that said hello is the retry");
+    assert!(
+        setup.hub_log().contains(&format!("127.0.0.1:{taken}: ")),
+        "the first hub failed on the taken port: {}",
+        setup.hub_log()
+    );
+    drop(served.hub);
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+    drop(held);
+}
+
+#[test]
+#[should_panic(expected = "Address already in use")]
+fn a_hub_that_never_gets_a_port_fails_with_the_log() {
+    let setup = Setup::new();
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken = held.local_addr().unwrap().port();
+    hub_start::serve_installed(&setup, 3, &mut || taken, &mut |port| {
+        write_json(
+            &setup.home().join("config.json"),
+            &json!({"hub":{"port":port}}),
+        );
+        setup.fiber(&["hub", "serve", "--installed"])
+    });
 }
 
 #[test]

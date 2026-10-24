@@ -67,6 +67,7 @@ const DRAWN_ORDER: &[&str] = &[
     "panel",
     "rail",
     "rules",
+    "reviewer-setup",
     "settings",
     "theme",
     "keys",
@@ -283,13 +284,14 @@ fn an_empty_query_shows_every_row() {
 #[test]
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
-    // `re`: resume starts with it, then name by its alias `rename`,
+    // `re`: resume starts with it, then reviewer-setup, then name by its alias `rename`,
     // reload, and the skill `Review` (case ignored); `prereview`
     // contains it later on.
     assert_eq!(
         names(&filter(&all, "re")),
         [
             "resume",
+            "reviewer-setup",
             "name",
             "reload",
             "Review",

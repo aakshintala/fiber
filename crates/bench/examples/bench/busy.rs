@@ -493,7 +493,7 @@ fn write(file: &Path, text: &str) -> Result<(), String> {
 }
 
 fn busy_home(ctx: &Ctx<'_>, turn: &Turn) -> Result<Home, String> {
-    let home = Home::scripted(ctx.home.fiber(), turn.script.clone())?;
+    let home = ctx.home.child(turn.script.clone())?;
     for (name, body) in &turn.files {
         write(&home.workspace().join(name), body)?;
     }
@@ -591,7 +591,7 @@ pub(crate) fn ten_turn_script(turn: &Turn) -> Vec<Response> {
 fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let turn = Turn::new();
     let script = ten_turn_script(&turn);
-    let home = Home::scripted(ctx.home.fiber(), script)?;
+    let home = ctx.home.child(script)?;
     // The pass asserts only the request count, while each request carries
     // the session's whole conversation so far: retaining every body would
     // hold tens of gigabytes in the harness (see #2188).
@@ -778,7 +778,7 @@ fn web_fetch(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         call_reply("call_fetch", "web_fetch", &arguments, prompt.len()),
         text_reply("fetched", prompt.len() + arguments.len()),
     ];
-    in_home(Home::scripted(ctx.home.fiber(), script)?, |home| {
+    in_home(ctx.home.child(script)?, |home| {
         let rule =
             json!({"decision": "allow", "tool": "web_fetch", "prefix": format!("{}/", site.url())});
         write(&home.home().join("rules"), &format!("{rule}\n"))?;

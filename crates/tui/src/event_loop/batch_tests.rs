@@ -52,6 +52,7 @@ fn described(inputs: &[Input]) -> Vec<String> {
             | Input::Image { .. }
             | Input::Feedback(_)
             | Input::Viewed { .. }
+            | Input::Install { .. }
             | Input::Login { .. }
             | Input::Models(_) => "other".to_owned(),
         })

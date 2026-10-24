@@ -38,6 +38,7 @@ fn example_path() -> PathBuf {
 /// stall fails naming the wait and leaves no process behind.
 #[track_caller]
 fn run_jig(dir: Option<&Path>) -> Output {
+    fakes::warm_up(&example_path(), &[], 2);
     let mut command = Command::new(example_path());
     if let Some(dir) = dir {
         command.arg(dir);

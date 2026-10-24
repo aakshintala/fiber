@@ -5,7 +5,6 @@
 
 pub mod alloc;
 mod blocking;
-mod cancel;
 pub mod children;
 mod client;
 pub mod clock;
@@ -19,6 +18,7 @@ mod finished;
 mod gated_http;
 mod handoff;
 pub(crate) mod http_server;
+mod jig_start;
 pub mod jobs;
 mod locks;
 mod oauth_server;
@@ -36,6 +36,7 @@ mod temp_dir;
 mod tool_io;
 pub mod ustar;
 mod wait_output;
+mod wait_until;
 mod watchdog;
 pub mod wire;
 mod within;
@@ -43,7 +44,6 @@ mod within;
 use std::path::{Path, PathBuf};
 
 pub use blocking::BlockingProvider;
-pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
@@ -51,9 +51,11 @@ pub use emit::{EventLog, Recorder};
 pub use fifo::fifo;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
+pub use jig_start::{START_BOUND, warm_up};
 pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};
 pub use skills::NoSkills;
+pub use support::cancel::Token as CancelToken;
 pub mod git;
 /// The dropped server's own state, read after the drop: the public path
 /// for integration tests, which reach only the public wrappers.
@@ -75,6 +77,7 @@ pub use scripted_provider::{
 pub use temp_dir::TempDir;
 pub use tool_io::{text_of, tool_args};
 pub use wait_output::wait_output;
+pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, within};
 

@@ -382,13 +382,11 @@ fn a_request_goes_to_the_converse_path_in_bedrocks_shape() {
 
 #[test]
 fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() {
-    let session = fakes::TempDir::new("fiber-converse-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let image = json!({"image": {"format": "png", "source": {"bytes": "YWJjZA=="}}});
     let reasoning =
         json!({"reasoningContent": {"reasoningText": {"text": "think", "signature": "sig"}}});
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             Input::User {
                 text: "look".into(),
                 images: vec![png("i.png")],
@@ -419,8 +417,9 @@ fn a_conversation_renders_as_converse_blocks_with_images_beside_their_results() 
             result("a_1", "contents", false, Vec::new()),
             result("a_2", "boom", true, vec![png("i.png")]),
             user("go on"),
-        ],
-        session_dir: session.path().to_path_buf(),
+        ])
+        .into(),
+        media: harness::media(&[("i.png", b"abcd")]),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);
@@ -449,7 +448,7 @@ fn an_id_whose_last_nine_are_not_letters_and_digits_is_replayed_as_its_action_id
     // Mistral reads a `toolUseId`'s last nine characters and refuses any but
     // letters and digits; another provider's id can end otherwise.
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             user("go"),
             call(
                 "a_00000000000000a1",
@@ -467,7 +466,8 @@ fn an_id_whose_last_nine_are_not_letters_and_digits_is_replayed_as_its_action_id
             result("a_00000000000000a1", "one", false, Vec::new()),
             result("a_00000000000000a2", "two", false, Vec::new()),
             result("a_00000000000000a3", "three", false, Vec::new()),
-        ],
+        ])
+        .into(),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);
@@ -486,11 +486,8 @@ fn an_id_whose_last_nine_are_not_letters_and_digits_is_replayed_as_its_action_id
 
 #[test]
 fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines() {
-    let session = fakes::TempDir::new("fiber-converse-request-pdf");
-    std::fs::write(session.path().join("p.pdf"), b"%PDF").unwrap();
-    std::fs::write(session.path().join("p-1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             call(
                 "a_1",
                 Some("tooluse_Ab12Cd34Ef"),
@@ -508,8 +505,9 @@ fn a_pdfs_rendered_pages_ride_beside_its_result_and_a_text_only_model_gets_lines
                     pages: Some(vec![png("p-1.png")]),
                 }],
             },
-        ],
-        session_dir: session.path().to_path_buf(),
+        ])
+        .into(),
+        media: harness::media(&[("p.pdf", b"%PDF"), ("p-1.png", b"abcd")]),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);
@@ -547,7 +545,7 @@ fn cache_points_follow_text_where_anthropics_markers_go_on_a_model_that_declares
     let tool_result =
         json!({"toolResult": {"toolUseId": "tooluse_Ab12Cd34Ef", "content": [{"text": "x"}]}});
     let mut request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             user("first"),
             Input::Assistant {
                 model: format!("bedrock/{MODEL}"),
@@ -556,7 +554,8 @@ fn cache_points_follow_text_where_anthropics_markers_go_on_a_model_that_declares
             },
             call("a_1", Some("tooluse_Ab12Cd34Ef"), "read", json!({})),
             result("a_1", "x", false, Vec::new()),
-        ],
+        ])
+        .into(),
         previous_end: Some(2),
         ..harness::request()
     };
@@ -573,7 +572,9 @@ fn cache_points_follow_text_where_anthropics_markers_go_on_a_model_that_declares
         ])
     );
     // A text after the result takes the new end's marker.
-    request.conversation.push(user("next"));
+    let mut conversation = request.conversation.to_vec();
+    conversation.push(user("next"));
+    request.conversation = conversation.into();
     let body = body_of(cached, &request);
     assert_eq!(
         body["messages"][2]["content"],
@@ -703,7 +704,7 @@ fn an_extra_body_object_for_any_other_field_replaces_fiber_s() {
 #[test]
 fn an_assistant_part_with_no_words_sends_no_text_block() {
     let request = ModelRequest {
-        conversation: vec![
+        conversation: (vec![
             user("look"),
             Input::Assistant {
                 model: format!("bedrock/{MODEL}"),
@@ -717,7 +718,8 @@ fn an_assistant_part_with_no_words_sends_no_text_block() {
                 json!({"path": "a.md"}),
             ),
             result("a_1", "contents", false, Vec::new()),
-        ],
+        ])
+        .into(),
         ..harness::request()
     };
     let body = body_of(endpoint, &request);

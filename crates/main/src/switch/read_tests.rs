@@ -1305,7 +1305,7 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     let clock = FakeClock::new();
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the settle"),
         "the settle retires the late group"
     );
     assert!(
@@ -1873,7 +1873,7 @@ fn settle_sends_again_until_srch_then_never_again() {
     // A retired group earns no more sends: another settle finds nothing.
     let again = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&again, "the second settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&again, "the second settle"),
         "a retired group settles at once"
     );
     assert_eq!(
@@ -2174,7 +2174,7 @@ fn settle_after_cancel_answers_true_at_once_with_nothing_listed() {
     reads.cancel();
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the settle"),
         "nothing listed settles at once"
     );
 }
@@ -2255,7 +2255,7 @@ fn repeat_shutdowns_reuse_the_first_end() {
     // once, without parking.
     let settled = settle_on_thread(&reads, &clock, bound);
     assert!(
-        !Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the spent settle"),
+        !Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the spent settle"),
         "a settle past the shared end answers false at once"
     );
     release.send(()).expect("the spawn's release");
@@ -2292,7 +2292,7 @@ fn an_overflowing_shutdown_end_expires_at_once() {
     let now = clock.now();
     let finished = cancel_and_settle_on_thread(&reads, &clock, Duration::MAX);
     assert!(
-        !Deadline::after(Duration::from_secs(3))
+        !Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&finished)
             .expect("the shutdown"),
         "an overflowing bound expires at once"
@@ -2323,7 +2323,7 @@ fn an_empty_shutdown_answers_true_past_its_end() {
     let reads = Arc::new(Reads::default());
     let first = cancel_and_settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3))
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&first)
             .expect("the first shutdown"),
         "an empty shutdown settles at once"
@@ -2332,7 +2332,7 @@ fn an_empty_shutdown_answers_true_past_its_end() {
     clock.advance(doors::SHUTDOWN_BOUND + Duration::from_secs(1));
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the spent settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the spent settle"),
         "an empty shutdown stays true past its end"
     );
 }
@@ -2732,7 +2732,7 @@ fn a_failed_spawn_does_not_leave_the_count_raised() {
     // parks on the `FakeClock`, so this fails instead of hanging the suite.
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the settle"),
         "the error arm dropped the count"
     );
 }
@@ -2863,7 +2863,7 @@ fn settle_returns_true_at_once_with_nothing_in_flight() {
     // parks on the `FakeClock`, so this fails instead of hanging the suite.
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&settled, "the settle"),
         "nothing in flight settles at once"
     );
 }
@@ -2881,7 +2881,7 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     // Zero side first: true at once with nothing in flight.
     let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        Deadline::after(Duration::from_secs(3))
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&settled, "settle with nothing in flight"),
         "settle is true at count zero"
     );
@@ -2907,7 +2907,7 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     let held_settle = settle_on_thread(&reads, &clock, bound);
     clock.advance_when_parked(Some(end), None, bound, &Deadline::after(DEADLINE));
     assert!(
-        !Deadline::after(Duration::from_secs(3)).recv_or_fail(&held_settle, "the held settle"),
+        !Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&held_settle, "the held settle"),
         "settle is false at its bound while a spawn is held"
     );
     reads.cancel();

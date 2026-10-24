@@ -337,9 +337,7 @@ pub(crate) mod seam {
             } else {
                 &BEFORE_FILE
             };
-            list.lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .retain(|gate| gate.target != self.target);
+            support::lock(list).retain(|gate| gate.target != self.target);
         }
     }
 
@@ -353,13 +351,11 @@ pub(crate) mod seam {
     ) -> (mpsc::Receiver<()>, mpsc::Sender<()>, Pause) {
         let (arrived_tx, arrived_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        list.lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(Gate {
-                target: target.clone(),
-                arrived: arrived_tx,
-                release: release_rx,
-            });
+        support::lock(list).push(Gate {
+            target: target.clone(),
+            arrived: arrived_tx,
+            release: release_rx,
+        });
         (
             arrived_rx,
             release_tx,
@@ -418,9 +414,7 @@ pub(crate) mod seam {
 
     impl Drop for ChunkPause {
         fn drop(&mut self) {
-            BEFORE_CHUNK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            support::lock(&BEFORE_CHUNK)
                 .retain(|gate| gate.name != self.name || gate.offset != self.offset);
         }
     }
@@ -432,15 +426,12 @@ pub(crate) mod seam {
     ) -> (mpsc::Receiver<()>, mpsc::Sender<()>, ChunkPause) {
         let (arrived_tx, arrived_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        BEFORE_CHUNK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(ChunkGate {
-                name: OsString::from(name),
-                offset,
-                arrived: arrived_tx,
-                release: release_rx,
-            });
+        support::lock(&BEFORE_CHUNK).push(ChunkGate {
+            name: OsString::from(name),
+            offset,
+            arrived: arrived_tx,
+            release: release_rx,
+        });
         (
             arrived_rx,
             release_tx,
@@ -454,9 +445,7 @@ pub(crate) mod seam {
     /// A chunk read waits here when armed for its file and offset.
     pub(crate) fn fire_before_chunk(name: &OsStr, offset: u64) {
         let gate = {
-            let mut gates = BEFORE_CHUNK
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut gates = support::lock(&BEFORE_CHUNK);
             gates
                 .iter()
                 .position(|gate| gate.name == name && gate.offset == offset)
@@ -472,7 +461,7 @@ pub(crate) mod seam {
     /// at once.
     fn fire(list: &Mutex<Vec<Gate>>, target: &OsStr) {
         let gate = {
-            let mut gates = list.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut gates = support::lock(list);
             gates
                 .iter()
                 .position(|gate| gate.target == target)
@@ -495,29 +484,19 @@ pub(crate) mod seam {
 
     /// A file's open waits here.
     pub(crate) fn fire_before_file_open(name: &OsStr) {
-        OPENS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(name.to_owned());
+        support::lock(&OPENS).push(name.to_owned());
         fire(&BEFORE_FILE, name);
     }
 
     /// Marks one chunk read: the file, its window offset and its length.
     /// Called only after the descriptor proved regular.
     pub(crate) fn note_chunk(name: &OsStr, offset: u64, len: usize) {
-        CHUNKS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push((name.to_os_string(), offset, len));
+        support::lock(&CHUNKS).push((name.to_os_string(), offset, len));
     }
 
     /// Drains every recorded file open, by file name.
     pub(crate) fn take_opens() -> Vec<OsString> {
-        std::mem::take(
-            &mut *OPENS
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+        std::mem::take(&mut *support::lock(&OPENS))
     }
 
     /// Drains the recorded chunk reads for one file name, leaving other
@@ -525,9 +504,7 @@ pub(crate) mod seam {
     /// steal entries from a test scanning in parallel.
     pub(crate) fn take_chunks_for(name: &str) -> Vec<(u64, usize)> {
         let want = OsStr::new(name);
-        let mut chunks = CHUNKS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut chunks = support::lock(&CHUNKS);
         let mut kept = Vec::new();
         let mut found = Vec::new();
         for (entry, offset, len) in chunks.drain(..) {

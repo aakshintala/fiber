@@ -1052,7 +1052,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
 /// Neither `oauth::listen` nor `oauth::lock` starts once its call has been
 /// cancelled or its extension has stopped: both start under the admission
 /// lock, so no cancel or stop lands between admission and start. Each case
-/// runs `settle` on a worker with a 5 s deadline; the `Pause::Start` hook
+/// runs `settle` on a worker with the must-succeed bound; the `Pause::Start` hook
 /// ends the call only when the start runs outside the lock (`Hub::try_lock`
 /// succeeds). Without the lock hold the end lands, the start still goes
 /// ahead and the parked entry keeps the port bound, failing the first
@@ -1183,12 +1183,12 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                 }
                 // Held until the asserts ran: dropping it frees the port
                 // and ends the wait.
-                match Deadline::after(Duration::from_secs(5)).recv(&done_rx) {
+                match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&done_rx) {
                     Ok(()) | Err(_) => {}
                 }
             });
         }
-        let summary: Vec<(u64, bool)> = Deadline::after(Duration::from_secs(5))
+        let summary: Vec<(u64, bool)> = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&settled_rx)
             .unwrap_or_else(|_| {
                 panic!("settle returned for {case}: calling code that blocks is a wait too")
@@ -1289,7 +1289,7 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 }
             });
         }
-        let summary: Vec<(u64, bool)> = Deadline::after(Duration::from_secs(5))
+        let summary: Vec<(u64, bool)> = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&settled_rx)
             .unwrap_or_else(|_| {
                 panic!("settle returned for {request_kind}: it did not deliver under the lock")
@@ -1542,16 +1542,16 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
+        clock.await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT_FOR_TIMER),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(WAIT_FOR_TIMER)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
     assert_eq!(
@@ -1609,32 +1609,24 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     // the child's `read` parked until the release below.
     let ready = fakes::children::Ready::new(dir.path());
     let block = dir.path().join("block.fifo");
-    assert!(
-        std::process::Command::new("mkfifo")
-            .arg(&block)
-            .status()
-            .unwrap()
-            .success(),
-        "mkfifo {}",
-        block.display()
-    );
+    fakes::fifo(&block);
     let mut hold = HoldExec::hold(&block);
     let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
+        clock.await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT_FOR_TIMER),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     // The child reached its script, so the suspension below stays put:
     // nothing advances the fake clock while the exec is held.
-    let started = ready.wait(fakes::Deadline::after(WAIT_FOR_TIMER));
+    let started = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     {
         let shared = hub.lock();
         assert!(
@@ -1652,17 +1644,25 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
             "the timer callback suspends on its exec"
         );
     }
+    // A host call suspends the callback until the reply arrives
+    // (`docs/extensions.md`, "How an extension runs"), so the suspended
+    // timer has not finished and settles nothing yet.
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
     hold.release();
-    Deadline::after(WAIT_FOR_TIMER)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
+    // Each callback finishes before the next starts (`docs/extensions.md`,
+    // "How an extension runs"), so the released timer settles exactly once.
     assert_eq!(
         timer_done(&log),
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
     );
     assert!(
-        fakes::group_empties(started[0], fakes::Deadline::after(WAIT_FOR_TIMER)),
+        fakes::group_empties(
+            started[0],
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the released exec left its group behind"
     );
 }
@@ -1693,15 +1693,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     let gate = dir.path().join("gate.fifo");
     let block = dir.path().join("block.fifo");
     for fifo in [&gate, &block] {
-        assert!(
-            std::process::Command::new("mkfifo")
-                .arg(fifo)
-                .status()
-                .unwrap()
-                .success(),
-            "mkfifo {}",
-            fifo.display()
-        );
+        fakes::fifo(fifo);
     }
     let mut hold = HoldExec::hold(&block);
     let (hub, armed) =
@@ -1709,18 +1701,18 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
     assert!(
-        clock.await_parked(due, fakes::Deadline::after(WAIT_FOR_TIMER)),
+        clock.await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the timer waits for its due time"
     );
     clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WAIT_FOR_TIMER),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     // The child reached its script, so it is at or on its way to the gate:
     // the gate read comes before the block open, whatever the scheduling.
-    let started = ready.wait(fakes::Deadline::after(WAIT_FOR_TIMER));
+    let started = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     {
         let shared = hub.lock();
         assert!(
@@ -1738,6 +1730,9 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
             "the timer callback suspends on its exec"
         );
     }
+    // A host call suspends the callback until the reply arrives
+    // (`docs/extensions.md`, "How an extension runs"), so the suspended
+    // timer has not finished and settles nothing yet.
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
     // The release lands before the gate opens, and the child's block open
     // comes after its gate read, so the release lands before the open.
@@ -1751,18 +1746,23 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         .open(&gate)
         .unwrap();
     gate_hold.write_all(b"\n").unwrap();
-    Deadline::after(WAIT_FOR_TIMER)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
+    // Each callback finishes before the next starts (`docs/extensions.md`,
+    // "How an extension runs"), so the released timer settles exactly once.
     assert_eq!(
         timer_done(&log),
         vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
     );
     assert!(
-        fakes::group_empties(started[0], fakes::Deadline::after(WAIT_FOR_TIMER)),
+        fakes::group_empties(
+            started[0],
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the released exec left its group behind"
     );
-    watchdog.stand_down(fakes::Deadline::after(WAIT_FOR_TIMER));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A non-timer call that finishes records no `TimerDone`. Without the
@@ -1786,9 +1786,6 @@ fn a_finished_command_records_no_timer_done() {
         "a finished command is no timer"
     );
 }
-
-/// How long a test waits for a timer or a parked call under its fake clock.
-const WAIT_FOR_TIMER: Duration = Duration::from_secs(5);
 
 /// A `HostDelegate` for the abandon tests: `start` reports its call and
 /// waits for the test's answer, `cancel` records the ids and whether the
@@ -1875,7 +1872,7 @@ fn delegate_reply(
     reply_rx: &std::sync::mpsc::Receiver<crate::host::Reply>,
     what: &str,
 ) -> Result<contract::JobId, (contract::ErrorCode, String)> {
-    match fakes::Deadline::after(WAIT_FOR_TIMER)
+    match fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(reply_rx)
         .expect("the reply arrives")
     {
@@ -2281,7 +2278,7 @@ fn an_abandon_between_bind_and_record_cancels_the_started_job() {
             )
         })
     };
-    let (extension, _arguments) = fakes::Deadline::after(WAIT_FOR_TIMER)
+    let (extension, _arguments) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&arrived_rx)
         .expect("the start arrives");
     assert_eq!(
@@ -2300,7 +2297,7 @@ fn an_abandon_between_bind_and_record_cancels_the_started_job() {
     answer_tx
         .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
         .expect("the held start is released");
-    fakes::Deadline::after(WAIT_FOR_TIMER)
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&checked_rx)
         .expect("the worker reaches its post-start check");
     worker.join().expect("the worker ends");
@@ -2344,14 +2341,14 @@ fn a_start_held_across_dispose_is_not_cancelled() {
             )
         })
     };
-    fakes::Deadline::after(WAIT_FOR_TIMER)
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&arrived_rx)
         .expect("the start arrives");
     hub.dispose("ext");
     answer_tx
         .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
         .expect("the held start is released");
-    fakes::Deadline::after(WAIT_FOR_TIMER)
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&checked_rx)
         .expect("the worker reaches its post-start check");
     worker.join().expect("the worker ends");
@@ -2397,7 +2394,7 @@ fn a_start_that_fails_after_bind_leaves_no_binding() {
         &fake,
         reply_tx,
     );
-    fakes::Deadline::after(WAIT_FOR_TIMER)
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&arrived_rx)
         .expect("the start arrives");
     let (code, message) =
@@ -2568,7 +2565,7 @@ fn delegate_starts_from_commands_hooks_timers_and_tools_reach_start() {
             .send(DelegateAnswer::Id(contract::JobId("j_1".to_owned())))
             .expect("the start is answered");
         run_delegate_worker(&hub, dir.path(), target.clone(), &fake, reply_tx);
-        let (extension, _arguments) = fakes::Deadline::after(WAIT_FOR_TIMER)
+        let (extension, _arguments) = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&arrived_rx)
             .expect("the start arrives");
         assert_eq!(extension, "fiber.test/stopped");

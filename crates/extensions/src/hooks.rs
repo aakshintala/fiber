@@ -6,7 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, Weak};
+use support::lock;
 
 use config::Config;
 use contract::ErrorCode;
@@ -731,17 +732,11 @@ impl SessionExtensions {
     /// The names of extensions refused for an undeclared Lua registration,
     /// in load order: what `Providers::add_session` drops the data of.
     pub fn rejected(&self) -> Vec<String> {
-        self.rejected
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.rejected).clone()
     }
 
     fn reject(&self, name: &str) {
-        self.rejected
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(name.to_owned());
+        lock(&self.rejected).push(name.to_owned());
     }
 
     /// Installs the session's diagnostics after `load`, before any
@@ -756,13 +751,8 @@ impl SessionExtensions {
         let mut vms: Vec<Arc<LuaExtension>> = self.lua.iter().map(Arc::clone).collect();
         // Collected under the mutex and released before attaching: no
         // setter runs under it.
-        let provider_vms: Vec<Weak<LuaExtension>> = self
-            .provider_vms
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect();
+        let provider_vms: Vec<Weak<LuaExtension>> =
+            lock(&self.provider_vms).values().cloned().collect();
         for vm in vms.drain(..) {
             vm.set_diagnostics(Arc::clone(&debug));
         }
@@ -785,13 +775,8 @@ impl SessionExtensions {
     /// release it before attaching a sink or sealing a VM.
     pub(crate) fn attached_vms(&self) -> Vec<Arc<LuaExtension>> {
         let mut vms: Vec<Arc<LuaExtension>> = self.lua.iter().map(Arc::clone).collect();
-        let provider_vms: Vec<Weak<LuaExtension>> = self
-            .provider_vms
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .cloned()
-            .collect();
+        let provider_vms: Vec<Weak<LuaExtension>> =
+            lock(&self.provider_vms).values().cloned().collect();
         for weak in provider_vms {
             if let Some(vm) = weak.upgrade()
                 && !vms.iter().any(|held| Arc::ptr_eq(held, &vm))
@@ -947,7 +932,7 @@ impl SessionExtensions {
         let seq = seq.map(|seq| seq.0);
         // The cursor lock is the leaf: the hub lock joins it per push,
         // never the reverse.
-        let mut cursors = self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cursors = lock(&self.cursors);
         for watcher in &self.watchers {
             if !watcher.kinds.iter().any(|kind| kind == event.kind()) {
                 continue;
@@ -969,10 +954,7 @@ impl SessionExtensions {
     /// Records the log end when the subscription is registered: what an
     /// unset cursor defaults to at the drain.
     pub fn set_watermark(&self, count: u64) {
-        *self
-            .watermark
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(count);
+        *lock(&self.watermark) = Some(count);
     }
 
     /// Replays each watcher's `(cursor, end]` log range after `fiber_exited`
@@ -1006,15 +988,8 @@ impl SessionExtensions {
         for extension in &extensions {
             extension.wait_for_watchers_idle();
         }
-        let offered = self
-            .cursors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let watermark = *self
-            .watermark
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let offered = lock(&self.cursors).clone();
+        let watermark = *lock(&self.watermark);
         let mut errors = Vec::new();
         let mut replay = Vec::new();
         // The range the drain replays: what the log held when the session
@@ -1111,10 +1086,7 @@ impl SessionExtensions {
                 advanced.insert(key.clone(), *seq);
             }
         }
-        self.cursors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(advanced);
+        lock(&self.cursors).extend(advanced);
         (errors, stopped)
     }
 
@@ -1122,7 +1094,7 @@ impl SessionExtensions {
     /// `host.widget` and `host.emit`.
     pub fn emit_to(&self, emit: Arc<dyn contract::emit::Emit>) {
         {
-            *self.emitter.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&emit));
+            *lock(&self.emitter) = Some(Arc::clone(&emit));
         }
         #[cfg(test)]
         self.at_late(LatePoint::Stored);
@@ -1133,19 +1105,12 @@ impl SessionExtensions {
 
     #[cfg(test)]
     pub(crate) fn pause_at_late(&self, pause: LatePause) {
-        *self
-            .late_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(pause);
+        *lock(&self.late_pause) = Some(pause);
     }
 
     #[cfg(test)]
     fn at_late(&self, point: LatePoint) {
-        let pause = self
-            .late_pause
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let pause = lock(&self.late_pause).clone();
         if let Some(pause) = pause {
             pause(point);
         }
@@ -1204,10 +1169,7 @@ impl SessionExtensions {
     }
 
     fn set_change_lines(&self, lines: Vec<StateLine>) {
-        let mut slot = self
-            .change_state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut slot = lock(&self.change_state);
         debug_assert!(
             slot.is_empty(),
             "change lines slot not taken before the next hook call"
@@ -1256,12 +1218,7 @@ impl Hooks for SessionExtensions {
     }
 
     fn take_change_state(&self) -> Vec<StateLine> {
-        std::mem::take(
-            &mut *self
-                .change_state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        )
+        std::mem::take(&mut *lock(&self.change_state))
     }
 
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer {
@@ -1425,7 +1382,7 @@ impl Hooks for SessionExtensions {
         // sender, on the retained copy and on every live VM; each extension
         // flushes what ended before the first one. The guard drops before
         // the sweep, so a concurrent late start never waits on this lock.
-        *self.inbox.lock().unwrap_or_else(PoisonError::into_inner) = Some(inbox.clone());
+        *lock(&self.inbox) = Some(inbox.clone());
         // Collected under the weak-map lock and released before handing the
         // sender over, deduped so a shared VM is handed it once.
         for extension in self.attached_vms() {

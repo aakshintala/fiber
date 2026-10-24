@@ -105,7 +105,7 @@ fn ask(setup: &Setup, prompt: &str) -> StdoutRun {
         Err(_) => support::expired(setup.deadline, group, &finished, "`fiber ask` to exit"),
     };
     assert!(
-        !support::group_alive(setup.deadline, group),
+        !fakes::group_alive(group),
         "`fiber` left a process in its group behind"
     );
     watchdog.stand_down(setup.deadline.cleanup_phase());

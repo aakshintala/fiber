@@ -199,24 +199,32 @@ fn scrolled_ignores_repeated_missing_and_still_anchors() {
 
 #[test]
 fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
-    // The faulty wait (`next.rows != prev`) passes on any row change at
-    // all, so an unrelated frame satisfied it with no wheel step written
-    // (see #2934). This drives `wheel`'s real wait over held frames: the
-    // unrelated frame must leave it pending, and only the wheel-driven
-    // frame releases it. Reverting the wait's closure to
-    // `next.rows != prev` returns the unrelated frame and fails the
-    // equality below.
+    // Harness-level regression test (see #3212): no child, no input, so
+    // the readiness rule does not apply. It exercises the wait predicate
+    // itself over manually staged frames. The faulty wait
+    // (`next.rows != prev`) passes on any row change at all, so an
+    // unrelated frame satisfied it with no wheel step written (see
+    // #2934). The predicate below holds only for the full wheel-driven
+    // frame: the unrelated frame and the split frame's first half must
+    // leave it pending. Reverting the predicate to `next.rows != prev`
+    // returns the unrelated frame and fails the equality below.
     let prev = vec!["gone".to_string(), "b".to_string(), "c".to_string()];
     let unrelated = vec!["new".to_string(), "b".to_string(), "c".to_string()];
+    // The wheel-driven frame arrives in two writes, the way a terminal
+    // frame can publish in parts: the first part moves the `gone` anchor
+    // but leaves its last row undrawn, and the remainder draws it. The
+    // predicate promises the whole frame, so the partial grid must not
+    // satisfy it (see #3212).
+    let partial = vec!["new".to_string(), "gone".to_string(), String::new()];
     let wheeled = vec!["new".to_string(), "gone".to_string(), "b".to_string()];
     assert_ne!(unrelated, prev, "the old wait passes with no step written");
     let (main, terminal) = {
         let pair = support::pty::open(80, 24);
         (fs::File::from(pair.main), pair.terminal)
     };
-    // The binary runs the slave with no echo, so `wheel`'s writes never
-    // come back through the drain: echoed input would draw over the
-    // held frames below.
+    // The test sends no input, and the slave runs with no echo, so
+    // nothing comes back through the drain to draw over the held frames
+    // below.
     let mut attrs = rustix::termios::tcgetattr(&terminal).unwrap();
     attrs.local_modes.remove(rustix::termios::LocalModes::ECHO);
     rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &attrs).unwrap();
@@ -230,19 +238,25 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
             .write_all(format!("\x1b[H\x1b[J{}", rows.join("\r\n")).as_bytes())
             .unwrap();
     }
+    /// Writes raw bytes to the slave: one part of a split frame.
+    fn hold_raw(terminal: &std::cell::RefCell<fs::File>, bytes: &str) {
+        use std::io::Write as _;
+        terminal.borrow_mut().write_all(bytes.as_bytes()).unwrap();
+    }
     hold(&terminal, &prev);
     run.wait_screen("the held previous frame", |next| {
         next.rows.iter().take(3).cloned().collect::<Vec<_>>() == prev
     });
-    // Each check short of the goal stages the next held frame, and only
-    // then: the unrelated frame first, and the wheel-driven one only
-    // after a check has seen the unrelated frame. Batching cannot skip
-    // the unrelated frame, since its bytes do not exist until that
-    // check runs. A single step: the wait itself must skip the
-    // unrelated frame and take the wheel-driven one, with no later
-    // step to rescue an early return.
+    // Each check short of the goal stages the next held bytes, and only
+    // then: the unrelated frame after a check has seen the previous
+    // frame, the first part of the wheel-driven frame only after a check
+    // has seen the unrelated frame, and its remainder only after a check
+    // has seen the partial grid. Batching cannot skip a frame, since its
+    // bytes do not exist until that check runs. A single step: the wait
+    // itself must skip the unrelated frame and take the wheel-driven
+    // one, with no later step to rescue an early return.
     let fed = std::cell::Cell::new(0u8);
-    let grid = wheel(&mut run, "one step up", true, 1, |next: &Grid| {
+    let grid = run.wait_screen("the full wheel-driven frame", |next: &Grid| {
         let top: Vec<_> = next.rows.iter().take(3).cloned().collect();
         if top == wheeled {
             return true;
@@ -253,17 +267,30 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
                 fed.set(1);
             }
             1 if top == unrelated => {
-                hold(&terminal, &wheeled);
+                hold_raw(&terminal, "\x1b[H\x1b[Jnew\r\ngone\r\n");
                 fed.set(2);
+            }
+            2 if top == partial => {
+                hold_raw(&terminal, "\x1b[3;1Hb");
+                fed.set(3);
             }
             _ => {}
         }
         false
     });
+    // The wait promises the whole frame: it stayed pending on the
+    // unrelated frame and on the split frame's first half, and completed
+    // with the moved anchor (see #3212). The old wait returns the
+    // unrelated frame, whose second row is `b`. The partial half-frame
+    // already holds the moved anchor, so the last row pins the
+    // completion: only the full frame drew it.
     assert_eq!(
-        grid.rows.iter().take(3).cloned().collect::<Vec<_>>(),
-        wheeled,
-        "the wait skips the unrelated frame and returns the wheel-driven one"
+        grid.rows[1], "gone",
+        "the wait completes with the moved anchor"
+    );
+    assert_eq!(
+        grid.rows[2], "b",
+        "the wait waited for the split frame's remainder"
     );
     assert!(wheel_step_done(&prev, &wheeled, true, false));
     assert!(!wheel_step_done(&prev, &wheeled, false, false));

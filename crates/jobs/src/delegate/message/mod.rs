@@ -576,6 +576,7 @@ impl DelegateMessage {
             | ErrorCode::NotFound
             | ErrorCode::NotStepBoundary
             | ErrorCode::NotSubscribed
+            | ErrorCode::NotesUnchanged
             | ErrorCode::Orphaned
             | ErrorCode::OutputCap
             | ErrorCode::OutputTruncated

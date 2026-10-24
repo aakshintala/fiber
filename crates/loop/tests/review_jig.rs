@@ -23,33 +23,27 @@ use contract::provider::{Input, ModelRequest};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Point, Sender};
 use contract::tool::Tool;
 use contract::{ActionId, CommandId, RequestId, Seq, SessionId, TurnId};
-use fakes::{Deadline, Scripted, Watchdog, kill_group};
+use fakes::{Deadline, START_BOUND, Scripted, Watchdog, kill_group};
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Once, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
 use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
-/// `.config/nextest.toml` kills a slow test after a 30s period times 4
-/// (120s total); with the 30s ready wait, the 30s release hang guard,
-/// the 5s reap and the 5s watchdog stand-down the longest run sums to
-/// 70s, under the 120s timeout, and the longest single deadline stays
-/// 30s: `docs/testing.md`, "Waits and timeouts", needs nextest's timeout
-/// to be at least twice the test's longest single deadline plus its normal
-/// run time, so a hang reports which wait expired.
+/// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
+/// total); the test's start bound and its exchange bound each count alone
+/// against that limit, and a pass-then-hang path adds the start bound, the
+/// exchange deadline and the stand-down, a sum that stays under that limit:
+/// `docs/testing.md`, "Waits and timeouts", needs nextest's timeout to be at
+/// least twice the test's longest single deadline plus its normal run time, so
+/// a hang reports which wait expired.
 const JIG_DEADLINE: Duration = Duration::from_secs(10);
-
-/// How long the built binary's first start may take. The first exec of a
-/// freshly linked binary can stall for seconds under load; the warm-up
-/// below absorbs that stall here, so the exchange keeps its own
-/// [`JIG_DEADLINE`].
-const START_BOUND: Duration = Duration::from_secs(30);
 
 /// One prompt turn, asserting it completes.
 fn prompt_turn(session: &mut Session, text: &str) {
@@ -98,12 +92,10 @@ fn native_session() -> (Session, Arc<fakes::ScriptedProvider>, String) {
 }
 
 /// The native reviewer's request at `at`, with the session-bound fields
-/// blanked: cache key and session directory name the live session, never
-/// the reviewed input.
+/// blanked: the cache key names the live session, never the reviewed input.
 fn native_request(requests: &[ModelRequest], at: usize) -> ModelRequest {
     let mut request = requests.get(at).unwrap().clone();
     request.cache_key = String::new();
-    request.session_dir = Default::default();
     request
 }
 
@@ -111,7 +103,6 @@ fn native_request(requests: &[ModelRequest], at: usize) -> ModelRequest {
 fn replayed_request(requests: &[(RequestKind, ModelRequest)], at: usize) -> ModelRequest {
     let mut request = requests.get(at).unwrap().1.clone();
     request.cache_key = String::new();
-    request.session_dir = Default::default();
     request
 }
 
@@ -299,16 +290,11 @@ fn example_path() -> PathBuf {
 /// Runs the built `review` binary on `dir` with `answers` as its stdin
 /// and `args` after the directory. `keep_open` leaves stdin open, so a
 /// second read would block instead of seeing EOF. A [`START_BOUND`]
-/// warm-up absorbs the first-exec stall, then one [`JIG_DEADLINE`]
-/// covers the exchange and the exit; the watchdog reaps the
-/// process group on every path, including failure.
-/// The first-exec warm-up has run once in this test process: the ticket
-/// asks for a one-time warm-up exec, and every [`run_jig`] caller shares
-/// it instead of spawning its own.
-static WARMED_UP: Once = Once::new();
-
+/// warm-up absorbs the first-exec stall on every call, then one
+/// [`JIG_DEADLINE`] covers the exchange and the exit; the watchdog reaps
+/// the process group on every path, including failure.
 fn run_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> Output {
-    WARMED_UP.call_once(warm_up_binary);
+    fakes::warm_up(&example_path(), &["--bogus"], 2);
     let mut child = Command::new(example_path())
         .arg(dir)
         .args(args)
@@ -344,7 +330,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
         Ok(output) => output.unwrap(),
         Err(_) => {
             kill_group(group, "KILL").unwrap_or(false);
-            let output = Deadline::after(Duration::from_secs(5))
+            let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&finished)
                 .expect("the review jig died after KILL");
             panic!(
@@ -353,26 +339,8 @@ fn wait_under(child: Child, bound: Duration) -> Output {
             );
         }
     };
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     output
-}
-
-/// Runs the already-built binary once under [`START_BOUND`], so a
-/// first-exec scan stall lands here instead of in the exchange's
-/// [`JIG_DEADLINE`]. The `--bogus` flag fails fast with exit 2 before
-/// the binary touches any session directory; asserting that exit proves
-/// the warm-up ran.
-fn warm_up_binary() {
-    let child = Command::new(example_path())
-        .arg("--bogus")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let output = wait_under(child, START_BOUND);
-    assert_eq!(output.status.code(), Some(2), "the warm-up fails fast");
 }
 
 /// The jig's stdout, one parsed JSON value per line.
@@ -794,8 +762,8 @@ fn projected_review(id: &str, first: &ModelRequest, second: &ModelRequest) -> Va
     json!({
         "id": id,
         "stages": [
-            {"stage": 1, "system_prompt": first.system_prompt, "messages": first.conversation},
-            {"stage": 2, "system_prompt": second.system_prompt, "messages": second.conversation},
+            {"stage": 1, "system_prompt": first.system_prompt, "messages": &first.conversation[..]},
+            {"stage": 2, "system_prompt": second.system_prompt, "messages": &second.conversation[..]},
         ],
     })
 }
@@ -805,7 +773,7 @@ fn projected_selection(seq: u64, request: &ModelRequest) -> Value {
     json!({
         "handoff": seq,
         "system_prompt": request.system_prompt,
-        "messages": request.conversation,
+        "messages": &request.conversation[..],
     })
 }
 
@@ -1607,7 +1575,7 @@ fn bad_argv_and_notes_fail_through_the_binary() {
         .process_group(0)
         .spawn()
         .unwrap();
-    let output = wait_under(none, START_BOUND);
+    let output = wait_under(none, JIG_DEADLINE);
     assert_eq!(output.status.code(), Some(2));
 }
 
@@ -1837,7 +1805,7 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
 /// FIFO, and the exchange's result arrives on `finished` once the hold is
 /// released. Dropping this value without releasing kills the group
 /// through the watchdog. The exchange's finish bound is a carried
-/// wall-clock value stamped at release: the release step carries
+/// wall-clock deadline stamped at release: the release step carries
 /// release plus [`START_BOUND`], so the held start takes none of it.
 struct HeldExchange {
     /// The hold directory, kept alive while the FIFOs are held.
@@ -1848,36 +1816,35 @@ struct HeldExchange {
     group: u32,
     watchdog: Watchdog,
     finished: mpsc::Receiver<std::io::Result<Output>>,
-    /// The carried finish expiry, stamped at release. `None` until
+    /// The carried finish deadline, stamped at release. `None` until
     /// [`HeldExchange::release`] runs, so `finish` waits on the same
     /// value the release step carried.
-    expiry: Option<Instant>,
+    finish_deadline: Option<Deadline>,
 }
 
 impl HeldExchange {
-    /// Writes the release line and stamps the exchange's finish bound
+    /// Writes the release line and stamps the exchange's finish deadline
     /// in the actual release path: release plus [`START_BOUND`].
     /// The test reads the carried value before finishing.
-    fn release(&mut self) -> Instant {
+    fn release(&mut self) -> Deadline {
         self.hold.write_all(b"release\n").unwrap();
-        let expiry = fakes::clock::SystemClock.now() + START_BOUND;
-        self.expiry = Some(expiry);
-        expiry
+        let deadline = Deadline::after(START_BOUND);
+        self.finish_deadline = Some(deadline);
+        deadline
     }
 
-    /// Waits only the remaining time until the carried expiry stamped
+    /// Waits only the remaining time until the carried deadline stamped
     /// by [`HeldExchange::release`]: the carried deadline is the wait's
     /// deadline, so the held start takes none of the exchange's bound.
     /// The wait asserts nothing about speed, it only fails a hung child
     /// by name.
     fn finish(self) -> Output {
-        let expiry = self.expiry.expect("release before finish");
-        let remaining = expiry.saturating_duration_since(fakes::clock::SystemClock.now());
-        let output = match Deadline::after(remaining).recv(&self.finished) {
+        let deadline = self.finish_deadline.expect("release before finish");
+        let output = match deadline.recv(&self.finished) {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 kill_group(self.group, "KILL").unwrap_or(false);
-                let output = Deadline::after(Duration::from_secs(5))
+                let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                     .recv(&self.finished)
                     .expect("the review jig died after KILL");
                 panic!(
@@ -1887,7 +1854,7 @@ impl HeldExchange {
             }
         };
         self.watchdog
-            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            .stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
         output
     }
 }
@@ -1948,7 +1915,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
         group,
         watchdog,
         finished,
-        expiry: None,
+        finish_deadline: None,
     }
 }
 
@@ -1971,7 +1938,11 @@ fn stalled_start_keeps_the_exchange_deadline_whole() {
     let before_release = fakes::clock::SystemClock.now();
     let deadline = held.release();
     assert!(
-        deadline >= before_release + START_BOUND,
+        deadline.left().saturating_add(
+            fakes::clock::SystemClock
+                .now()
+                .saturating_duration_since(before_release)
+        ) >= START_BOUND,
         "the exchange deadline starts at release"
     );
     let lines = stdout_lines(&held.finish());

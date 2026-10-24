@@ -28,6 +28,13 @@ nothing installed, not because it has a power another client lacks. The hub
 serves no UI, and which other clients are first-party is decided by the
 application that needs them, not by the hub.
 
+A program that drives sessions, such as a delegation supervisor ("The
+delegation supervisor is external"), is a client of the hub too, and does not
+use `fiber ask`. It starts a supervised session with the hub's `start`
+command, drives it with the commands in "Driver commands", and ends it with
+`close` ("Lifecycle"). A supervised session follows the delegate rules
+(`docs/permissions.md`, "Supervised sessions").
+
 A session started by the hub and a session started by `fiber ask` are the same
 program. Both run the internal session command; `ask` runs it with its prompt
 already supplied and no more coming. There is no second execution path, as
@@ -352,7 +359,7 @@ answer an interaction or steer mid-run. That costs nothing, because
 attached and no answer possible, escalation is a block and the run continues
 under the rule above until it exhausts the block budget" — and cancelling is a
 signal, not a command. A program that wants to talk back is a client of the
-hub, as the terminal is.
+hub, as the terminal is ("Two doors").
 
 ## Driver commands
 
@@ -706,11 +713,12 @@ the request again and the turn goes on from there. `fiber ask --resume` on such
 a session has no one to answer, so it refuses the request, lets the model finish
 the turn, and then runs its prompt as the next turn; the prompt waits behind that
 turn. The hub lists such a session as waiting on the person, from `recent.jsonl` (`docs/state.md`).
-Two cases have no one to wait for, and there escalation is a block as
+Three cases have no one to wait for, and there escalation is a block as
 `docs/permissions.md` ("Headless") describes: a session started by
-`fiber ask`, and a session that has been sent `close`. In both, and in every
-delegate, an `ask_user` question ends the turn instead, and the driver resumes
-the session with the answers (`docs/tools.md`, "Asking the person").
+`fiber ask`, a supervised session, and a session that has been sent `close`.
+In all three, and in every delegate, an `ask_user` question ends the turn
+instead, and the driver resumes or prompts the session with the answers
+(`docs/tools.md`, "Asking the person").
 
 **A pending elicitation waits within its call's timeout.** An MCP call is in
 flight, so the session stays alive for it, and no longer than the call's
@@ -1054,7 +1062,7 @@ websocket for everything it does.
 | `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first, skipping delegates, whose row's `status` carries `parent` (`docs/state.md`), and `total`, the number of rows the pages list for `project` (every project when absent), whatever `before` and the page hold. `project` is the project's key, the name of its `projects/<key>/` directory. |
 | `sessions` | `project` (string, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. `project` keeps only that project's sessions, as for `recent`. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
-| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `continues` (string, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `continues` naming a session id, the session runs in that session's worktree instead of a new one, and the workspace must be that worktree's path ("Isolation"). An unknown session, a missing log, or a removed worktree refuses `session_not_found`; `continues` with `worktree` true, a named session with no worktree, and a workspace that is not the worktree refuse `invalid_arguments`. With `content`, the hub sends it as the session's first prompt after answering: once the session has accepted a `full` `subscribe` for the new session from the connection that sent `start`, at once when that connection closes first, or 1 second after the answer when neither has happened. A client that subscribes `full` when it reads the answer is connected when the session takes the prompt, so it can answer the repository's offer (`docs/extensions.md`, "Code a repository ships"); for a connection that never subscribes `full`, such as a script's, the session takes the prompt after the bound, and it decides with nobody to answer unless another `full` client is connected by then. A `content` that does not fit `prompt`'s `args` is rejected `invalid_arguments` before any session starts. A rejection of the first prompt after the answer is logged, not answered: the hub writes the session id, the `start` command id and the code to `logs/hub.log`, and no client is told. |
+| `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `continues` (string, optional), `content` (optional), `supervised` (boolean, optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `supervised` true, the session is driven by a program, a supervisor outside Fiber, and `session_started` records it: it follows the delegate rules (`docs/permissions.md`, "Supervised sessions") and stays top-level, in the feed. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `continues` naming a session id, the session runs in that session's worktree instead of a new one, and the workspace must be that worktree's path ("Isolation"). An unknown session, a missing log, or a removed worktree refuses `session_not_found`; `continues` with `worktree` true, a named session with no worktree, and a workspace that is not the worktree refuse `invalid_arguments`. With `content`, the hub sends it as the session's first prompt after answering: once the session has accepted a `full` `subscribe` for the new session from the connection that sent `start`, at once when that connection closes first, or 1 second after the answer when neither has happened. A client that subscribes `full` when it reads the answer is connected when the session takes the prompt, so it can answer the repository's offer (`docs/extensions.md`, "Code a repository ships"); for a connection that never subscribes `full`, such as a script's, the session takes the prompt after the bound, and it decides with nobody to answer unless another `full` client is connected by then. A `content` that does not fit `prompt`'s `args` is rejected `invalid_arguments` before any session starts. A rejection of the first prompt after the answer is logged, not answered: the hub writes the session id, the `start` command id and the code to `logs/hub.log`, and no client is told. |
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
@@ -1251,7 +1259,8 @@ sends an `attention` line (`docs/events.md`, "The envelope") naming the
 top-level session, with a `reason` of `waiting` or `finished` and, when it
 waits, the one-line summary from `session_status`. It sends one when a
 session's `session_status` turns to `waiting`, and when a turn ends and the
-session turns `idle`.
+session turns `idle`, except in a supervised session, which sends no
+`finished` line: its supervisor reads the turn's end from the event stream.
 
 When 1,024 attention lines are queued for a connection that has not read
 them, the hub closes the connection, as it does for the feed.
@@ -1426,15 +1435,18 @@ delegates are `docs/delegates.md`. The rationale is
 [ADR 0005](adr/0005-the-delegation-supervisor-is-external.md). Fiber is an
 MCP client, consuming MCP servers, and that is `docs/mcp.md`.
 
-What Fiber owes the delegation slot instead is being cleanly wrappable, and
-that is the whole of it:
+What Fiber owes the delegation slot instead is a hub a supervisor can drive
+as a client ("Two doors"), and that is the whole of it:
 
-- start non-interactively with a prompt, with no tty,
-- put no escape codes on stdout,
-- announce the session id on the first line,
-- emit a documented, versioned event stream,
-- exit with a stable code,
-- run in a workspace path it is given rather than one it makes.
+- start a supervised session with no tty, through the hub's `start`, in a
+  workspace path it is given rather than one it makes, and answer with the
+  session id,
+- take its prompts, steering, cancelling and replies as driver commands
+  ("Driver commands"),
+- serve a documented, versioned event stream to a client that subscribes
+  (`docs/events.md`),
+- end the session on `close`, with `fiber_exited` as the verdict
+  ("Lifecycle", "What a caller gets back").
 
 Everything a supervisor does beyond that — tracking several jobs, waiting on
 any or all of them, running a verification gate afterwards, reporting a git

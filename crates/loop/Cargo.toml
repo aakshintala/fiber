@@ -9,6 +9,7 @@ publish.workspace = true
 # `contract` (docs/architecture.md, "The call rules"), and on `support`,
 # which holds no domain knowledge and sits outside the call rules.
 [dependencies]
+base64.workspace = true
 contract = { path = "../contract" }
 log = { path = "../log" }
 rustix.workspace = true
@@ -22,6 +23,9 @@ thiserror.workspace = true
 # `contract` without `cfg(test)`.
 contract = { path = "../contract", features = ["test-gates"] }
 fakes = { path = "../fakes" }
+# The mid-`jobs wait` cancel test enters the production `JobsTool::wait`
+# on a real registry.
+jobs = { path = "../jobs" }
 proptest.workspace = true
 
 # The jigs (docs/testing.md, "Jigs").

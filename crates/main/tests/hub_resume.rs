@@ -29,8 +29,8 @@ use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, SystemClock, assert_one_continued_log, group_alive, hello_item_done as hello,
-    stream, write_json,
+    Deadline, Setup, SystemClock, assert_one_continued_log, hello_item_done as hello, stream,
+    write_json,
 };
 
 impl Setup {
@@ -107,7 +107,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber {}` left a process in its group behind",
             args.join(" ")
         );
@@ -186,7 +186,7 @@ impl Hub {
     /// path to exit on its own.
     #[track_caller]
     fn finish(mut self) {
-        support::kill_group(self.deadline, self.group, "KILL").unwrap();
+        fakes::kill_group(self.group, "KILL").unwrap();
         if let Some(mut child) = self.child.take() {
             let (done, finished) = mpsc::channel();
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
@@ -217,7 +217,7 @@ impl Drop for Hub {
     /// thread until the cleanup deadline: a drop never blocks past it and
     /// never panics.
     fn drop(&mut self) {
-        support::kill_group_detached(self.group, "KILL");
+        drop(fakes::kill_group(self.group, "KILL"));
         support::kill_matching_detached(&self.workspace);
         if let Some(mut child) = self.child.take() {
             let (done, reaped) = mpsc::channel();

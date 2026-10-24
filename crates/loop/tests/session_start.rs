@@ -144,7 +144,14 @@ fn suspended_session(script: Vec<Scripted>) -> (Session, Arc<support::TestTool>)
     // The wait ends with no turn outcome, on the pending request.
     assert_eq!(session.turn(), None);
     asked.join().unwrap();
-    r#loop::fiber_exited(&session.log, &session.dir, Ok(()), true, Some(143)).unwrap();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        true,
+        Some(143),
+    )
+    .unwrap();
     (session, ask)
 }
 
@@ -258,13 +265,16 @@ fn a_blocking_session_start_failure_at_a_suspended_resume_keeps_the_suspension()
         new_kinds(&session, lines_before),
         vec!["preamble_built", "permission_requested"]
     );
+    // The dead process's exit reads its summary, not the log: snapshot it
+    // before the loop is dropped.
+    let summary = session.looped.as_ref().unwrap().summary().clone();
     drop(session.looped.take());
 
     // As the failed process's exit does: the suspension is recorded
     // again, so the next resume finds it.
     r#loop::fiber_exited(
         &session.log,
-        &session.dir,
+        &summary,
         Err(contract::shapes::Failure {
             code: error.code(),
             message: error.to_string(),

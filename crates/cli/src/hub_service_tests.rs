@@ -1199,7 +1199,7 @@ fn hub_restart_with_no_unit_file_restarts_nothing() {
 fn hub_restart_with_too_long_a_home_is_a_usage_error() {
     let home = PathBuf::from(format!("/tmp/{}", "h".repeat(300)));
     let error = hub_restart(&home).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert_eq!(error.code(), ErrorCode::Usage);
 }
 
 /// The child's marker: set, the test runs one exit-code wrapper and exits

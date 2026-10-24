@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use super::{Error, git_command, git_failed, hooked_command, run};
+use super::{Error, git_failed, run};
 
 /// A worktree `create` made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,8 +162,9 @@ fn shared_body(
     let base = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     // The one command that runs a hook (`post-checkout`, which Git LFS
     // needs): its output is piped, never the caller's. Every other git
-    // command in this crate runs hook-free through `git_command`.
-    let mut command = hooked_command(program);
+    // command in this crate runs hook-free through
+    // `support::git::command`.
+    let mut command = support::git::hooked_command(program);
     command
         .arg("-C")
         .arg(repo)
@@ -212,21 +213,19 @@ fn shared_body(
 /// runs hook-free and keeps its own result: a cleanup step that fails is
 /// left for prune. Never runs after [`create`] has returned `Ok`.
 fn rollback(program: &str, launch: &Path, path: &Path, branch: &str) {
-    match git_command(program)
+    match support::git::command(program)
         .arg("-C")
         .arg(launch)
         .args(["worktree", "remove", "--force"])
         .arg(path)
-        .stdin(Stdio::null())
         .output()
     {
         Ok(_) | Err(_) => {}
     }
-    match git_command(program)
+    match support::git::command(program)
         .arg("-C")
         .arg(launch)
         .args(["branch", "-D", branch])
-        .stdin(Stdio::null())
         .output()
     {
         Ok(_) | Err(_) => {}

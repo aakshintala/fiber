@@ -190,10 +190,7 @@ static LOAD_OBSERVERS: std::sync::Mutex<Vec<LoadObserver>> = std::sync::Mutex::n
 /// opens it. Test-only.
 #[cfg(any(test, feature = "test-hooks"))]
 pub fn observe_load(path: PathBuf, notify: Box<dyn FnOnce() + Send>) {
-    LOAD_OBSERVERS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push((path, notify));
+    support::lock(&LOAD_OBSERVERS).push((path, notify));
 }
 
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
@@ -219,9 +216,7 @@ pub(super) fn load_file(
     // and before the open, holding no lock while it runs.
     #[cfg(any(test, feature = "test-hooks"))]
     let notify = {
-        let mut observers = LOAD_OBSERVERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut observers = support::lock(&LOAD_OBSERVERS);
         observers
             .iter()
             .position(|(watched, _)| *watched == path)

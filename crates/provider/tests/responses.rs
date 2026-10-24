@@ -177,7 +177,7 @@ fn search_input(
     let mut req = request();
     req.tools = tools;
     req.sent_tools = sent_tools;
-    req.conversation = conversation;
+    req.conversation = conversation.into();
     run(protocol.call(&req)).0.unwrap();
     sent_body(server, server.requests().len() - 1)
 }
@@ -755,10 +755,11 @@ fn request() -> ModelRequest {
         tools: vec![weather_tool(), loose_tool()],
         thinking: Some(contract::ThinkingLevel::Low),
         cache_key: "s_root".into(),
-        conversation: vec![Input::User {
+        conversation: (vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
-        }],
+        }])
+        .into(),
         ..harness::request()
     }
 }
@@ -1198,7 +1199,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     let ReplyAction::ToolCall(call) = &reply.actions[2] else {
         panic!("{:?}", reply.actions);
     };
-    let mut conversation = request().conversation;
+    let mut conversation = request().conversation.to_vec();
     conversation.extend([
         Input::Reasoning {
             model: "openai/gpt-6-luna".into(),
@@ -1250,7 +1251,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     )]))])
     .unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(
@@ -1483,11 +1484,13 @@ fn reasoning_deltas_stream_as_reasoning_and_an_empty_reply_text_is_not_sent() {
     )]))])
     .unwrap();
     let mut request = request();
-    request.conversation.push(Input::Assistant {
+    let mut conversation = request.conversation.to_vec();
+    conversation.push(Input::Assistant {
         model: "opencode/muse-spark-1.3-contributor".into(),
         text: String::new(),
         provider_item: None,
     });
+    request.conversation = conversation.into();
     run(Box::new(
         Responses::new(endpoint(&server)).request(&request),
     ))
@@ -1529,11 +1532,13 @@ fn a_message_item_replays_unchanged_to_its_model_and_as_text_to_another() {
         )]))])
         .unwrap();
         let mut request = request();
-        request.conversation.push(Input::Assistant {
+        let mut conversation = request.conversation.to_vec();
+        conversation.push(Input::Assistant {
             model: model.into(),
             text: "Hi.".into(),
             provider_item: Some(item.clone()),
         });
+        request.conversation = conversation.into();
         run(Box::new(
             Responses::new(endpoint(&server)).request(&request),
         ))
@@ -1617,7 +1622,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
         )]))])
         .unwrap();
         let request = ModelRequest {
-            conversation: conversation(is_error),
+            conversation: (conversation(is_error)).into(),
             ..request()
         };
         run(Box::new(
@@ -1717,12 +1722,9 @@ fn pdf_output(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_stored_pdf_is_sent_as_an_input_file_part_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-request-pdf");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/p_1.pdf"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: pdf_conversation(pdf_ref("artifacts/p_1.pdf")),
-        session_dir: session.path().to_path_buf(),
+        conversation: (pdf_conversation(pdf_ref("artifacts/p_1.pdf"))).into(),
+        media: harness::media(&[("artifacts/p_1.pdf", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1757,15 +1759,13 @@ fn image_output(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_stored_image_is_sent_as_input_image_parts_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(
+        conversation: (image_conversation(
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
-        ),
-        session_dir: session.path().to_path_buf(),
+        ))
+        .into(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1789,12 +1789,10 @@ fn a_stored_image_is_sent_as_input_image_parts_after_the_text() {
 
 #[test]
 fn empty_text_sends_no_input_text_part_and_an_unreadable_image_sends_no_part() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
     let imaged = |text: &str, path: &str| {
         let request = ModelRequest {
-            conversation: image_conversation(text, vec![png_ref(path)]),
-            session_dir: session.path().to_path_buf(),
+            conversation: (image_conversation(text, vec![png_ref(path)])).into(),
+            media: harness::media(&[("i.png", b"abcd")]),
             ..request()
         };
         let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1820,15 +1818,13 @@ fn empty_text_sends_no_input_text_part_and_an_unreadable_image_sends_no_part() {
 
 #[test]
 fn a_text_only_model_gets_a_string_output_saying_the_image_was_left_out() {
-    let session = fakes::TempDir::new("fiber-responses-request-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: image_conversation(
+        conversation: (image_conversation(
             "Image: 2x1 image/png.\n",
             vec![png_ref("artifacts/i_1.png")],
-        ),
-        session_dir: session.path().to_path_buf(),
+        ))
+        .into(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
@@ -1917,12 +1913,9 @@ fn user_item(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_users_image_is_sent_as_input_image_parts_after_the_text() {
-    let session = fakes::TempDir::new("fiber-responses-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
     let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
+        conversation: (user_conversation("look", vec![png_ref("artifacts/i_1.png")])).into(),
+        media: harness::media(&[("artifacts/i_1.png", b"abcd")]),
         ..request()
     };
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -2111,7 +2104,7 @@ fn sent_input(conversation: Vec<Input>) -> Value {
     )]))])
     .unwrap();
     let request = ModelRequest {
-        conversation,
+        conversation: conversation.into(),
         ..request()
     };
     run(Box::new(
@@ -2650,7 +2643,7 @@ fn the_recorded_searches_run_through_the_seam_and_replay_their_items() {
             }
         }
         let next = ModelRequest {
-            conversation,
+            conversation: conversation.into(),
             ..request()
         };
         run(provider.call(&next)).0.unwrap();

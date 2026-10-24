@@ -136,8 +136,8 @@ fn a_probe_on_a_live_group_is_bounded() {
     // waits share its budget (`docs/testing.md`, "Waits and timeouts").
     let deadline = Deadline::start();
     let (mut child, group, _guard) = sleeper();
-    assert!(group_alive(deadline, group));
-    assert!(kill_group(deadline, group, "KILL").unwrap());
+    assert!(fakes::group_alive(group));
+    assert!(fakes::kill_group(group, "KILL").unwrap());
     let (done, reaped) = mpsc::channel();
     thread::spawn(move || match done.send(child.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
@@ -147,10 +147,10 @@ fn a_probe_on_a_live_group_is_bounded() {
         "waited until the deadline for the killed sleep to be reaped"
     );
     assert!(fakes::group_empties(group, deadline.cleanup_phase()));
-    assert!(!group_alive(deadline, group));
+    assert!(!fakes::group_alive(group));
 
     let (mut child, group, _guard) = sleeper();
-    kill_group_detached(group, "KILL");
+    drop(fakes::kill_group(group, "KILL"));
     let (done, reaped) = mpsc::channel();
     thread::spawn(move || match done.send(child.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}

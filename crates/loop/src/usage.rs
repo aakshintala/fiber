@@ -1,6 +1,6 @@
 //! The session's usage ledger (`docs/events.md`, `usage` and
-//! `usage_recorded`). One implementation folds `fiber_exited` and the
-//! spending budget, so the two cannot drift.
+//! `usage_recorded`). One implementation folds the process `Summary` and
+//! the spending budget, so the two cannot drift.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError};
@@ -225,6 +225,22 @@ impl crate::Loop {
         Ok(())
     }
 
+    /// Names the originator on a delegate's `usage_recorded` copy: the
+    /// sending delegate when absent, preserved when present so a
+    /// grandchild's line still names the originator. The one
+    /// implementation live copying and backfill share, so the two cannot
+    /// drift.
+    pub(crate) fn normalize_copy(
+        session: &contract::SessionId,
+        line: UsageRecorded,
+    ) -> UsageRecorded {
+        let mut copied = line;
+        if copied.origin_session_id.is_none() {
+            copied.origin_session_id = Some(session.clone());
+        }
+        copied
+    }
+
     /// Copies a delegate's `usage_recorded` into this log: sets
     /// `origin_session_id` to the sending delegate when absent, preserves
     /// it when present so a grandchild's line still names the originator,
@@ -239,10 +255,7 @@ impl crate::Loop {
         session: &contract::SessionId,
         line: UsageRecorded,
     ) -> Result<(), crate::Error> {
-        let mut copied = line;
-        if copied.origin_session_id.is_none() {
-            copied.origin_session_id = Some(session.clone());
-        }
+        let copied = Self::normalize_copy(session, line);
         self.put_usage(&copied, None, None)?;
         self.publish_usage(&copied);
         Ok(())
@@ -288,7 +301,7 @@ impl crate::Loop {
 /// any sequence of records the usage equals [`log::usage`] over the held
 /// lines exactly: a new call takes one step, and a correction folds the
 /// whole ledger again.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Ledger {
     calls: Vec<UsageRecorded>,
     index: BTreeMap<GenerationId, usize>,

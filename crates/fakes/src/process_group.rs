@@ -12,9 +12,10 @@
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
+use support::lock;
 
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
@@ -130,8 +131,10 @@ fn signal_named(name: &str) -> io::Result<Option<Signal>> {
 /// empty, and returns whether it did. One probe right after the group's
 /// leader exits is a race: a transient child, such as a `cat` in a command
 /// substitution, can outlive it for a moment under load. The probes run on
-/// a thread, so the deadline holds even when a probe is slow. Any probe
-/// error (no such group, no permission) counts as empty.
+/// a thread, so the deadline holds even when a probe is slow. Only `ESRCH`
+/// (no such group) counts as empty: `Ok` and every other errno read the
+/// group as still holding a process, since a killed child not yet reaped
+/// probes `EPERM` on macOS and `Ok` on Linux.
 ///
 /// # Panics
 ///
@@ -154,6 +157,12 @@ pub fn group_empties(group: u32, deadline: Deadline) -> bool {
     let result = deadline.recv(&empty).is_ok();
     drop(stop);
     result
+}
+
+/// Whether a probe answer still names a live group: every answer but
+/// `ESRCH` reads live, the same predicate as `support::group::alive`.
+fn lives(answer: rustix::io::Result<()>) -> bool {
+    !matches!(answer, Err(rustix::io::Errno::SRCH))
 }
 
 /// Sends `signal` (`CONT`, `HUP`, `INT`, `KILL`, `TERM`, `WINCH`, or `0` to probe) to
@@ -311,7 +320,7 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
         let result = stdout.read_to_end(&mut out).and_then(|_| {
             loop {
                 let status = {
-                    let mut child = reaping.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut child = lock(&reaping);
                     child.try_wait()
                 };
                 match status {
@@ -336,7 +345,7 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
             // `try_wait`, so this acquires at once; the child killed here
             // is still unreaped. The thread never panics while holding it,
             // so it is never poisoned.
-            match child.lock().unwrap_or_else(PoisonError::into_inner).kill() {
+            match lock(&child).kill() {
                 Ok(()) | Err(_) => {}
             }
             Err(io::Error::new(
@@ -386,23 +395,24 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Whether process group `group` has a member: kill(-group, 0), starting no
-/// process. Panics when `group` is 1 or less.
+/// process. Only `ESRCH` reads empty, through [`lives`]. Panics when
+/// `group` is 1 or less.
 #[allow(
     clippy::expect_used,
     reason = "a probe of an id past the pid range panics, like a refused id"
 )]
 fn group_lives(group: u32) -> bool {
     let id = checked(group, "process group").expect("a group past the pid range is never live");
-    rustix::process::test_kill_process_group(id).is_ok()
+    lives(rustix::process::test_kill_process_group(id))
 }
 
 /// How long each liveness wait holds between probes: one bounded wait
 /// against its stop channel, so no wait spins.
-const POLL: Duration = Duration::from_millis(10);
+pub(crate) const POLL: Duration = Duration::from_millis(10);
 
 /// True once `stop` sent or disconnected: the one bounded wait every probe
 /// loop shares, holding no lock between probes.
-fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
+pub(crate) fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
     !matches!(
         Deadline::after(POLL).recv(stop),
         Err(mpsc::RecvTimeoutError::Timeout)
@@ -521,7 +531,7 @@ fn expiry_error(pids: &[u32]) -> io::Error {
 /// Publishes the latest listing for the expiry error: the wait holds no
 /// lock, so the deadline's read never blocks on it.
 fn publish(published: &Mutex<Vec<u32>>, pids: &[u32]) {
-    *published.lock().unwrap_or_else(PoisonError::into_inner) = pids.to_vec();
+    *lock(published) = pids.to_vec();
 }
 
 /// `matching_exits` with the listing injected: `list` runs before the
@@ -579,10 +589,7 @@ fn listed_exit(
     let result = match Deadline::after(deadline).recv(&finished) {
         Ok(result) => result,
         Err(_) => {
-            let pids = outstanding
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
+            let pids = lock(&outstanding).clone();
             Err(expiry_error(&pids))
         }
     };

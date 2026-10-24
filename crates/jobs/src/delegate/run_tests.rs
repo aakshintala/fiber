@@ -44,9 +44,6 @@ use crate::support::{exited, usage};
 use crate::timing_tests::{Step, try_step};
 use support::clock::Parker;
 
-/// How long a test waits on the wall clock before it fails.
-const DEADLINE: Duration = Duration::from_secs(3);
-
 /// The stop bound the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
 
@@ -63,6 +60,24 @@ struct Script {
     /// `on_line` already returned, so the runner folded the envelope.
     folded_tx: mpsc::Sender<()>,
     folded_rx: Mutex<mpsc::Receiver<()>>,
+    /// The delegate log file production replays after the reap: every
+    /// line this fake delivers is appended here first, as the drain
+    /// appending the child's stdout does in production.
+    output_path: std::path::PathBuf,
+    /// Test-local one-shot gate on watcher-thread delivery, armed only
+    /// by the #3005 regression test: every other test leaves it empty
+    /// and never blocks here.
+    delivery_gate: Mutex<Option<DeliveryGate>>,
+}
+
+/// Holds one watcher-thread delivery of the chosen line before its
+/// fold: the line is already persisted above, so only the claim and
+/// the forward wait. Dropping the sender half releases it, so a failed
+/// test never leaves the watcher parked.
+struct DeliveryGate {
+    seq: u64,
+    parked: mpsc::Sender<u64>,
+    release: mpsc::Receiver<()>,
 }
 
 enum WatchReply {
@@ -82,7 +97,11 @@ enum WatchReply {
 }
 
 impl Script {
-    fn scripted(clock: &Arc<FakeClock>, replies: Vec<WatchReply>) -> Arc<Self> {
+    fn scripted(
+        clock: &Arc<FakeClock>,
+        replies: Vec<WatchReply>,
+        output_path: std::path::PathBuf,
+    ) -> Arc<Self> {
         let (folded_tx, folded_rx) = mpsc::channel();
         Arc::new(Self {
             clock: Arc::clone(clock),
@@ -92,7 +111,64 @@ impl Script {
             replies: Mutex::new(replies.into()),
             folded_tx,
             folded_rx: Mutex::new(folded_rx),
+            output_path,
+            delivery_gate: Mutex::new(None),
         })
+    }
+
+    /// Arms the one-shot watcher-thread delivery gate for `seq`: the
+    /// first delivery of that line parks after persisting it, later
+    /// deliveries pass. Returns the parked signal (carrying the parked
+    /// line's `seq`) and the release half. Only the #3005 regression
+    /// test calls this.
+    fn gate_seq(&self, seq: u64) -> (mpsc::Receiver<u64>, mpsc::Sender<()>) {
+        let (parked_tx, parked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.delivery_gate.lock().unwrap() = Some(DeliveryGate {
+            seq,
+            parked: parked_tx,
+            release: release_rx,
+        });
+        (parked_rx, release_tx)
+    }
+
+    /// Persists a delivered line to the delegate log before its fold,
+    /// as the production drain does for the child's stdout.
+    fn persist(&self, line: &Envelope) {
+        let raw = serde_json::to_string(line).unwrap();
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.output_path)
+            .unwrap();
+        writeln!(file, "{raw}").unwrap();
+    }
+
+    /// Parks the first watcher-thread delivery of the gated line before
+    /// its fold; every other line, and later deliveries of the gated
+    /// line once the gate is spent, pass at once.
+    fn hold(&self, line: &Envelope) {
+        let gated = self
+            .delivery_gate
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|gate| line.seq.is_some_and(|seq| seq.0 == gate.seq));
+        if gated {
+            let gate = self.delivery_gate.lock().unwrap().take().unwrap();
+            let _sent = gate.parked.send(gate.seq);
+            let _released = gate.release.recv();
+        }
+    }
+
+    /// Delivers one line the filter kept: persist first, then the
+    /// test-local gate, then the fold. The file holds the line before
+    /// either path can claim it.
+    fn emit(&self, line: &Envelope, on_line: &mut dyn FnMut(&Envelope)) {
+        self.persist(line);
+        self.hold(line);
+        on_line(line);
     }
 
     fn watch(
@@ -117,7 +193,7 @@ impl Script {
         // stands in for this run's.
         let mut deliver_lines = |lines: &[Envelope]| {
             for line in lines.iter().filter(|line| deliver(line)) {
-                on_line(line);
+                self.emit(line, on_line);
                 if line.kind == "fiber_exited" {
                     break;
                 }
@@ -127,7 +203,7 @@ impl Script {
             None => Err(io::Error::other("refused")),
             Some(WatchReply::Closed(lines)) => {
                 for line in lines.iter().filter(|line| deliver(line)) {
-                    on_line(line);
+                    self.emit(line, on_line);
                 }
                 let _sent = self.folded_tx.send(());
                 Ok(Watched::Closed)
@@ -221,7 +297,8 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
     registry.deliver_to(tx);
     let sessions = dir.path().join("sessions");
     std::fs::create_dir_all(sessions.join("s_child")).unwrap();
-    let script = Script::scripted(&clock, replies);
+    let events = sessions.join("s_child").join("events.jsonl");
+    let script = Script::scripted(&clock, replies, events.clone());
     Rig {
         _dir: dir,
         registry,
@@ -229,7 +306,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         inbox: rx,
         script,
         job: crate::registry::mint_job_id(),
-        events: sessions.join("s_child").join("events.jsonl"),
+        events,
     }
 }
 
@@ -351,7 +428,7 @@ fn park_ahead(clock: &FakeClock) -> Option<std::time::Instant> {
 /// (docs/testing.md, "Waits and timeouts": every wait has a deadline on
 /// the wall clock). The stop flag is set on every outcome of that
 /// receive, before the result is inspected, so the driver always ends
-/// within `DEADLINE` and the scope never outlives the wait.
+/// within `fakes::MUST_SUCCEED_WITHIN` and the scope never outlives the wait.
 #[track_caller]
 fn reported(rig: &Rig) -> contract::inbox::JobNotice {
     reported_before(rig, None)
@@ -370,7 +447,7 @@ fn take_report(
     expiry: &str,
     usages: &mut Vec<(SessionId, String)>,
 ) -> contract::inbox::JobNotice {
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     loop {
         match deadline.recv(&rig.inbox) {
             Ok(Delivery::Job(notice)) => {
@@ -479,7 +556,7 @@ fn reported_with_usage_before(
 ) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     thread::scope(|scope| {
         scope.spawn(|| drive_runner_clock(&stop, &clock, &deadline, horizon));
         let mut usages = Vec::new();
@@ -509,7 +586,7 @@ fn wake_until_draining(
     let stop = Arc::new(AtomicBool::new(false));
     let driver_stop = Arc::clone(&stop);
     let driver_clock = Arc::clone(clock);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let (done_tx, done_rx) = mpsc::channel();
     thread::scope(|scope| {
         scope.spawn(move || {
@@ -593,7 +670,7 @@ fn release_fifo(fifo: &std::path::Path, bytes: &[u8]) {
     let bytes = bytes.to_vec();
     within(
         "a reader opens the fifo",
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 match std::fs::OpenOptions::new()
@@ -625,7 +702,7 @@ fn pid_in_file(pid: &std::path::Path) -> u32 {
     let pid = pid.to_path_buf();
     within(
         "the leader writes its pid",
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 let Ok(text) = std::fs::read_to_string(&pid) else {
@@ -647,7 +724,7 @@ fn pid_in_file(pid: &std::path::Path) -> u32 {
 /// a caller that needs time to pass advances it itself.
 fn wait_calls(rig: &Rig, n: usize) {
     assert!(
-        rig.script.await_calls(n, DEADLINE),
+        rig.script.await_calls(n, fakes::MUST_SUCCEED_WITHIN),
         "the watch was not called {n} times"
     );
 }
@@ -658,7 +735,7 @@ fn wait_calls(rig: &Rig, n: usize) {
 /// fails the test instead of hanging it.
 #[track_caller]
 fn wait_folded(rig: &Rig, n: usize) {
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let folded = rig.script.folded_rx.lock().unwrap();
     for _ in 0..n {
         deadline.recv_or_fail(&folded, "the watch to fold its lines");
@@ -673,11 +750,16 @@ fn wait_folded(rig: &Rig, n: usize) {
 /// backoff 50, 100, 200, 400, 800 ms, then 1 s.
 fn wake_retry(rig: &Rig, at: std::time::Instant, gap: Duration, calls: usize) {
     assert!(
-        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+        rig.clock
+            .await_parked(at, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the runner parks until {at:?}"
     );
-    rig.clock
-        .advance_when_parked(Some(at), None, gap, &Deadline::after(DEADLINE));
+    rig.clock.advance_when_parked(
+        Some(at),
+        None,
+        gap,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     wait_calls(rig, calls);
 }
 
@@ -688,10 +770,41 @@ fn wait_ready(path: &std::path::Path) {
     let path = path.to_path_buf();
     within(
         "the child arms its traps",
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             loop {
                 if std::fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty()) {
+                    return;
+                }
+                thread::yield_now();
+            }
+        },
+    );
+}
+
+/// Waits until the group's sleeper is listed: the stop must land after
+/// the grandchild's `sleep` exists, not just after its trap is armed;
+/// without this the runner never reports. Lists every process with its
+/// numeric group (`ps -g` is not portable: Linux selects sessions where
+/// macOS selects groups) and matches the group and command columns.
+#[track_caller]
+fn wait_sleeper(pgid: u32) {
+    let want = pgid.to_string();
+    within(
+        "the grandchild execs its sleeper",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            loop {
+                let out = std::process::Command::new("ps")
+                    .args(["-e", "-o", "pgid=,comm="])
+                    .output()
+                    .expect("ps lists the processes");
+                let text = String::from_utf8_lossy(&out.stdout);
+                let listed = text.lines().any(|line| {
+                    let mut columns = line.split_whitespace();
+                    columns.next() == Some(want.as_str()) && columns.next() == Some("sleep")
+                });
+                if listed {
                     return;
                 }
                 thread::yield_now();
@@ -708,7 +821,7 @@ fn wait_ready(path: &std::path::Path) {
 /// advances a fake clock only after a signal that the code under test is
 /// waiting on that clock); with no park ahead the wait yields.
 fn wait_retired(clock: &Arc<FakeClock>, pgid: u32) {
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut carried: Option<Instant> = None;
     while listed(pgid) {
         if deadline.left().is_zero() {
@@ -770,7 +883,7 @@ fn the_watch_flow_completes_with_the_delegate_text() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Done.".into())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -836,7 +949,7 @@ fn a_pre_session_error_fails_with_that_error() {
         notice.delegate.as_ref().map(|finish| finish.usage.clone()),
         Some(Usage::default())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -893,7 +1006,7 @@ fn a_full_envelope_error_keeps_its_usage_and_final_message() {
         notice.delegate.as_ref().map(|finish| finish.usage.clone()),
         Some(usage())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// Runs a child that prints `line` on stdout and exits `code` with
@@ -911,7 +1024,7 @@ fn stdout_report(line: &str, code: i32, marker: &str) -> contract::inbox::JobNot
         1024,
     );
     let notice = reported(&rig);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     notice
 }
 
@@ -1089,7 +1202,7 @@ fn the_last_stdout_verdict_wins() {
             .map(|error| error.message.clone()),
         Some("Second.".to_owned())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1120,7 +1233,7 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Quick.".into())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1157,7 +1270,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
     let (release_tx, release_rx) = mpsc::channel();
     super::lock(&super::AFTER_DRAIN_DEADLINE).replace(Box::new(move || {
         let _sent = reached_tx.send(());
-        Deadline::after(Duration::from_secs(5))
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&release_rx)
             .expect("waited for the driver to release the drain pause point");
     }));
@@ -1172,7 +1285,8 @@ fn a_delayed_drain_still_feeds_the_fold() {
         "the fold waits for the drain"
     );
     release_fifo(&release, b"go\n");
-    let Ok(Delivery::Job(notice)) = Deadline::after(DEADLINE).recv(&rig.inbox) else {
+    let Ok(Delivery::Job(notice)) = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&rig.inbox)
+    else {
         panic!("the drain's end did not wake the runner");
     };
     assert_eq!(notice.completed.status, Outcome::Completed);
@@ -1180,7 +1294,7 @@ fn a_delayed_drain_still_feeds_the_fold() {
         notice.delegate.as_ref().map(|finish| finish.text.clone()),
         Some("Late.".into())
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1214,12 +1328,12 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     // for the drain wait and the report together (docs/testing.md,
     // "Waits and timeouts": one deadline for the whole wait). The stop
     // flag is set on every outcome of that receive, before the result
-    // is inspected, so the driver always ends within `DEADLINE` and the
+    // is inspected, so the driver always ends within `fakes::MUST_SUCCEED_WITHIN` and the
     // scope never outlives the wait.
     let stop = Arc::new(AtomicBool::new(false));
     let driver_stop = Arc::clone(&stop);
     let clock = Arc::clone(&rig.clock);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let notice = thread::scope(|scope| {
         scope.spawn(move || {
             let mut carried: Option<Instant> = None;
@@ -1288,10 +1402,13 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     );
     kill_pid(member, "KILL").unwrap();
     assert!(
-        pids_exit(&[member], fakes::Deadline::after(DEADLINE)),
+        pids_exit(
+            &[member],
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the escaped member is reaped"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1311,7 +1428,7 @@ fn exit_zero_with_no_line_anywhere_is_indeterminate() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::Indeterminate)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1355,20 +1472,26 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         // next park, once it has taken the refusal, is the retry.
         let running = rig
             .clock
-            .mark_parked(at + super::POLL, fakes::Deadline::after(DEADLINE))
+            .mark_parked(
+                at + super::POLL,
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            )
             .expect("the runner parks while the watch runs");
         gate.send(()).expect("the held watch takes its release");
         at += Duration::from_millis(gap);
         assert!(
-            rig.clock
-                .await_parked_since(&running, Some(at), fakes::Deadline::after(DEADLINE)),
+            rig.clock.await_parked_since(
+                &running,
+                Some(at),
+                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            ),
             "the runner parks until {at:?}"
         );
         rig.clock.advance_when_parked(
             Some(at),
             None,
             Duration::from_millis(gap),
-            &Deadline::after(DEADLINE),
+            &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         );
         wait_calls(&rig, held + 2);
     }
@@ -1389,7 +1512,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         Some("Bound.".into())
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(
@@ -1397,7 +1520,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         8,
         "after `fiber_exited` the watch rests"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1445,9 +1568,9 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         Some(at + super::POLL),
         None,
         super::POLL,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reached_rx)
         .expect("the runner pauses between the take and the launch");
     // Releases the watch, waits for the `Retry` to fold inside the pause,
@@ -1456,7 +1579,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     gate_tx
         .send(())
         .expect("the blocked watch takes its release");
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&fold_rx)
         .expect("the watcher folds its result");
     super::lock(&super::ON_WATCH_FOLD).take();
@@ -1470,14 +1593,15 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
     for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
         at += Duration::from_millis(gap);
         assert!(
-            rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+            rig.clock
+                .await_parked(at, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
             "the runner parks until {at:?}"
         );
         rig.clock.advance_when_parked(
             Some(at),
             None,
             Duration::from_millis(gap),
-            &Deadline::after(DEADLINE),
+            &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         );
         wait_calls(&rig, calls);
     }
@@ -1494,7 +1618,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         Some("Replayed.".into())
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(
@@ -1502,7 +1626,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
         4,
         "after `fiber_exited` the watch rests"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1543,15 +1667,15 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
         Some(at + super::POLL),
         None,
         super::POLL,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reached_rx)
         .expect("the runner pauses between the take and the launch");
     // Releases the watch, waits for the fold to land inside the pause,
     // then resumes the runner to its launch decision.
     gate_tx.send(()).expect("the gated watch takes its release");
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&fold_rx)
         .expect("the watcher folds its result");
     super::lock(&super::ON_WATCH_FOLD).take();
@@ -1569,7 +1693,7 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
         let _released = go2_rx.recv();
     }));
     go_tx.send(()).expect("the runner resumes to the launch");
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reached2_rx)
         .expect("the runner takes again after the launch decision");
     go2_tx
@@ -1581,11 +1705,11 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let notice = reported_before(&rig, Some(rig.clock.now()));
     assert_eq!(notice.completed.status, Outcome::Completed);
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after `fiber_exited`");
     assert_eq!(rig.script.calls().len(), 1);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1641,7 +1765,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     rig.clock
         .advance_when_parked(Some(origin + timeout), None, timeout, &deadline);
     // Wake subsequent polls without moving beyond the stop bound.
@@ -1658,7 +1782,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     assert!(
         !crate::delegate::group::sent_signals().contains(&(pgid, rustix::process::Signal::KILL))
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1679,10 +1803,10 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
     let notice = timeout_report(&rig, &park);
     assert_eq!(notice.completed.status, Outcome::Completed);
     assert!(!notice.completed.process.unwrap().timed_out);
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("early runner returns");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 fn timeout_report(rig: &Rig, park: &Parker) -> contract::inbox::JobNotice {
@@ -1735,7 +1859,7 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
         Some(143)
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after the trap's exit");
     assert!(
@@ -1745,7 +1869,99 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
                 && *signal == rustix::process::Signal::KILL),
         "no SIGKILL went to the reaped group"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn a_stop_reaches_a_live_grandchild_without_sigkill() {
+    let dir = TempDir::new("fiber-delegate-grandchild");
+    let pidfile = dir.path().join("pid");
+    let ready = dir.path().join("ready");
+    let termed = dir.path().join("termed");
+    let block = fifo(dir.path(), "block");
+    let done = fifo(dir.path(), "done");
+    let go = fifo(dir.path(), "go");
+    // The go fifo holds the grandchild's fork until the runner recorded
+    // the leader's group: a fork before `set_pgid` would keep the
+    // test's own group and never hear the stop. The leader arms its trap
+    // first, so no stop can land between the fork and the arming: the
+    // trap waits for the grandchild's done line, which the grandchild's
+    // own trap writes, so the grandchild's trap causally precedes the
+    // reap. Each trap then `wait`s: the grandchild reaps its sleeper
+    // and the leader reaps the grandchild, so no zombie outlives the
+    // exits to keep the retired group alive under `killpg` signal zero
+    // while the fake clock spins. No retire listing can catch it alive,
+    // and no SIGKILL can beat the trap. The recorded line proves the
+    // stop's SIGTERM reached past the leader.
+    let shell = format!(
+        "trap 'read _ < \"{done}\"; wait; exit 143' TERM; echo $$ > '{pid}'; read _ < '{go}'; sh -c \"trap 'echo termed > \\\"{termed}\\\"; echo x > \\\"{done}\\\"; wait; exit 0' TERM; echo ready > '{ready}'; sleep 300 & wait\" & read _ < '{block}'",
+        done = done.display(),
+        pid = pidfile.display(),
+        go = go.display(),
+        termed = termed.display(),
+        ready = ready.display(),
+        block = block.display(),
+    );
+    let rig = rig(vec![]);
+    let done = rig.start(&shell, BOUND, 1024);
+    let pgid = pid_in_file(&pidfile);
+    let watchdog = Watchdog::group(pgid);
+    release_fifo(&go, b"go\n");
+    wait_ready(&ready);
+    // The grandchild's `sleep` must exist, not just its armed trap: the
+    // stop waits for the sleeper itself.
+    wait_sleeper(pgid);
+    // Fake time never reaches the stop bound, so the traps' own exits
+    // cannot race the timer's SIGKILL (docs/testing.md, "Waits and
+    // timeouts": deadlines are hang guards, never timing assertions).
+    let kill_at = rig.clock.now() + BOUND;
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    // The driver stays up until the runner returns, not just until it
+    // reports: retire waits for the emptied group after the report, and
+    // a reparented zombie can outlive the report, so stopping the driver
+    // at the notice would park retire on a clock that never moves again.
+    let driver_stop = Arc::new(AtomicBool::new(false));
+    let driver_clock = Arc::clone(&rig.clock);
+    let driver_deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let notice = thread::scope(|scope| {
+        scope.spawn(|| {
+            drive_runner_clock(&driver_stop, &driver_clock, &driver_deadline, Some(kill_at))
+        });
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&done)
+            .expect("the runner returns after the traps' exits");
+        driver_stop.store(true, Ordering::Relaxed);
+        take_report(
+            &rig,
+            &driver_stop,
+            "the runner reported before it returned",
+            &mut Vec::new(),
+        )
+    });
+    assert_eq!(notice.completed.status, Outcome::Cancelled);
+    assert_eq!(
+        notice
+            .completed
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(143)
+    );
+    // The runner already returned inside the scope above, which rules
+    // out later watches and timer signals.
+    assert_eq!(
+        std::fs::read_to_string(&termed).unwrap(),
+        "termed\n",
+        "the grandchild's TERM trap ran: no SIGKILL beat it"
+    );
+    assert!(
+        !crate::delegate::group::sent_signals()
+            .iter()
+            .any(|(signalled, signal)| *signalled == pgid
+                && *signal == rustix::process::Signal::KILL),
+        "no SIGKILL went to the reaped group"
+    );
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1788,7 +2004,7 @@ fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
                 && *signal == rustix::process::Signal::KILL),
         "SIGKILL went out once the bound passed"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1797,24 +2013,22 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
     let rig = rig(vec![
-        WatchReply::Closed(vec![envelope(1, "turn_completed", serde_json::json!({}))]),
-        WatchReply::Closed(vec![
-            envelope(1, "turn_completed", serde_json::json!({})),
-            envelope(2, "turn_completed", serde_json::json!({})),
-        ]),
+        WatchReply::Closed(Vec::new()),
+        WatchReply::Closed(Vec::new()),
     ]);
-    // Ten bytes: exactly at the cap. Neither the new line, its replay,
-    // nor a backoff wake may stop the delegate for that. Each receive
-    // below must time out: a report here means the cap tripped at the
-    // boundary, and swallowing it would hang the fifo write below on a
-    // dead child (docs/testing.md, "Waits and timeouts": a receive
-    // with a bound, not a sleep).
+    // Ten bytes: exactly at the cap. The empty replies deliver no lines,
+    // so the fake persists nothing while the log sits at the boundary:
+    // neither a backoff wake nor a replay may stop the delegate for
+    // that. Each receive below must time out: a report here means the
+    // cap tripped at the boundary, and swallowing it would hang the fifo
+    // write below on a dead child (docs/testing.md, "Waits and timeouts":
+    // a receive with a bound, not a sleep).
     std::fs::write(&rig.events, "0123456789").unwrap();
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     rig.start(&shell, BOUND, 10);
-    // Calls 1 and 2 are `Closed` with the new line and its replay;
-    // calls 3 and 4 are refused backoff wakes.
+    // Calls 1 and 2 are empty `Closed` replies with nothing to
+    // persist or replay; calls 3 and 4 are refused backoff wakes.
     wait_calls(&rig, 1);
     let mut at = rig.script.calls()[0];
     for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
@@ -1830,7 +2044,8 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     // The fourth call is refused, so the backoff is 400 ms.
     at += Duration::from_millis(400);
     assert!(
-        rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+        rig.clock
+            .await_parked(at, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the runner parks until {at:?}"
     );
     if Deadline::after(Duration::from_millis(20))
@@ -1854,7 +2069,7 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::OutputCap)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1881,7 +2096,7 @@ fn a_disconnected_cap_trips_on_a_backoff_wake() {
             .map(|error| error.code.clone()),
         Some(ErrorCode::OutputCap)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1916,7 +2131,7 @@ fn a_stop_before_the_cap_keeps_cancelled() {
     release_fifo(&fifo, b"go\n");
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1944,7 +2159,7 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
     let notice = reported_before(&rig, Some(kill_at));
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after the quick exit");
     assert!(
@@ -1954,7 +2169,7 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
                 && *signal == rustix::process::Signal::KILL),
         "the timer found the group retired"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1971,38 +2186,45 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
     rig.start(&shell, BOUND, 1024);
     let pgid = pid_in_file(&leader);
     let watchdog = Watchdog::group(pgid);
-    let survivor: u32 = within("the member writes its pid", Deadline::after(DEADLINE), {
-        let member = member.clone();
-        move || loop {
-            let Ok(text) = std::fs::read_to_string(&member) else {
-                thread::yield_now();
-                continue;
-            };
-            let Ok(pid) = text.trim().parse() else {
-                thread::yield_now();
-                continue;
-            };
-            return pid;
-        }
-    });
+    let survivor: u32 = within(
+        "the member writes its pid",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let member = member.clone();
+            move || loop {
+                let Ok(text) = std::fs::read_to_string(&member) else {
+                    thread::yield_now();
+                    continue;
+                };
+                let Ok(pid) = text.trim().parse() else {
+                    thread::yield_now();
+                    continue;
+                };
+                return pid;
+            }
+        },
+    );
     assert_eq!(rig.registry.stop_delegates(), 1);
     let notice = reported(&rig);
     // The job ends as soon as the leader is reaped, not when the member
     // is gone.
     assert_eq!(notice.completed.status, Outcome::Cancelled);
     assert!(
-        pids_exit(&[survivor], fakes::Deadline::after(DEADLINE)),
+        pids_exit(
+            &[survivor],
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the surviving member got SIGKILL"
     );
     assert!(
-        group_empties(pgid, fakes::Deadline::after(DEADLINE)),
+        group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the group retires once it is empty"
     );
     // Retired, not just empty, once the runner has run: without the
     // retire loop the pgid would stay listed after its members are gone.
     wait_retired(&rig.clock, pgid);
     assert!(!listed(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2051,19 +2273,23 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         Some(clock.origin() + Duration::from_secs(1)),
         None,
         super::POLL,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     for k in 2..=BOUND.as_secs() {
         mark = clock.advance_when_parked(
             Some(clock.origin() + Duration::from_secs(k)),
             None,
             super::POLL,
-            &Deadline::after(DEADLINE),
+            &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         );
     }
     let after_bound = clock.origin() + BOUND + Duration::from_secs(1);
     assert!(
-        clock.await_parked_since(&mark, Some(after_bound), fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_since(
+            &mark,
+            Some(after_bound),
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "retire checks the timer and parks again past the bound"
     );
     assert!(kills(pgid) >= 1, "SIGKILL went out past the bound");
@@ -2073,7 +2299,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         let _status = member.wait();
         let _sent = reaped_tx.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reaped_rx)
         .expect("the killed member was reaped");
 
@@ -2081,13 +2307,13 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         Some(after_bound),
         None,
         super::POLL,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("retire returned once the group was empty");
     assert!(!listed(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2124,14 +2350,18 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
-    within("the first watch call", Deadline::after(DEADLINE), {
-        let script = Arc::clone(&rig.script);
-        move || {
-            while script.calls().is_empty() {
-                thread::yield_now();
+    within(
+        "the first watch call",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        {
+            let script = Arc::clone(&rig.script);
+            move || {
+                while script.calls().is_empty() {
+                    thread::yield_now();
+                }
             }
-        }
-    });
+        },
+    );
     assert_eq!(rig.registry.stop_delegates(), 1);
     // The watch is blocked, so `outstanding` keeps the retry out of the
     // deadline: the runner parks at each poll horizon, then at the stop
@@ -2143,11 +2373,16 @@ fn a_blocked_watch_still_lets_a_stop_through() {
     for k in 1..=5 {
         let at = t0 + Duration::from_secs(k);
         assert!(
-            rig.clock.await_parked(at, fakes::Deadline::after(DEADLINE)),
+            rig.clock
+                .await_parked(at, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
             "the runner parks until {at:?}"
         );
-        rig.clock
-            .advance_when_parked(Some(at), None, super::POLL, &Deadline::after(DEADLINE));
+        rig.clock.advance_when_parked(
+            Some(at),
+            None,
+            super::POLL,
+            &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        );
     }
     let notice = reported(&rig);
     assert_eq!(notice.completed.status, Outcome::Cancelled);
@@ -2167,7 +2402,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
         "SIGKILL went out once the bound passed"
     );
     // Waiting for the runner to return rules out later watches and timer signals.
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the runner returns after the stop");
     assert_eq!(
@@ -2176,7 +2411,7 @@ fn a_blocked_watch_still_lets_a_stop_through() {
         "one watcher runs while it is blocked, never one per wake"
     );
     drop(release);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2206,7 +2441,7 @@ fn a_blocked_watch_does_not_block_the_cap() {
         Some(ErrorCode::OutputCap)
     );
     drop(release);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2423,7 +2658,7 @@ fn the_watch_boundary_skips_an_earlier_run_exit() {
         "every watch call passes the boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2454,7 +2689,7 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
         "every watch call passes no boundary (none when the reap wins): {:?}",
         rig.script.afters()
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2530,7 +2765,7 @@ fn the_fold_starts_from_the_run_boundary() {
     thread::spawn(move || {
         runner.drive(child, Some(listing), finish);
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&called_rx)
         .expect("the watch ran before the release");
     release_fifo(&block, b"go\n");
@@ -2545,7 +2780,7 @@ fn the_fold_starts_from_the_run_boundary() {
         !afters.is_empty() && afters.iter().all(|after| *after == Some(5)),
         "every watch call passes the boundary: {afters:?}"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2634,7 +2869,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
     wait_calls(&rig, 1);
     within(
         "the child reads the fifo",
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             std::fs::write(&fifo, "\n").unwrap();
         },
@@ -2697,68 +2932,13 @@ fn take_report_with_usages(
     })
 }
 
-/// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
-/// tap forwards ahead of the runner's report: the shared core stashes
-/// each while the take loops past them, until the `Job` notice arrives.
-#[track_caller]
-fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
-    reported_with_usage_before(rig, None)
-}
-
-/// The parked forward's gate, shared with the watcher: the test owns
-/// the sender half and releases the park by dropping it, so a failed
-/// test unwinds the sender first and never leaves the watcher parked
-/// (as the `Block` watch reply). Parking forces the order a loaded
-/// machine produces by accident (see #3051): the report lands with
-/// nothing stashed, and the drain collects every line after the
-/// release, instead of racing the watcher's scheduling.
-struct Park {
-    rx: Mutex<mpsc::Receiver<()>>,
-}
-
-impl Park {
-    /// A closed gate: the sender half that releases it, and the shared
-    /// half the forward parks on.
-    fn closed() -> (mpsc::Sender<()>, Arc<Self>) {
-        let (tx, rx) = mpsc::channel();
-        (tx, Arc::new(Self { rx: Mutex::new(rx) }))
-    }
-
-    /// Waits for the release under the plan's bound: expiry names the
-    /// missing release instead of hanging the watcher, and a dropped
-    /// sender (a failed test's unwind) releases at once.
-    fn wait(&self) {
-        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.rx.lock().unwrap()) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("the report never released the parked forward")
-            }
-        }
-    }
-}
-
-/// The registry's forward behind a release gate: every watcher line
-/// parks until the test drops the sender half, then forwards as usual.
-/// The runner's reap and report never wait on the watcher, so parking
-/// cannot deadlock the report the release waits for.
-fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
-    let forward = rig.registry.usage_forward();
-    let park = Arc::clone(park);
-    Arc::new(
-        move |session: SessionId, line: contract::events::UsageRecorded| {
-            park.wait();
-            forward(session, line);
-        },
-    )
-}
-
 /// Collects streamed `DelegateUsage` deliveries until `want` have
 /// arrived, after the run already reported: the watcher's forwards
 /// always follow on the inbox (the tap runs before each offer), so a
 /// Job that precedes them (see #3005) only delays this drain. The
-/// bound is the plan's MUST_SUCCEED_WITHIN, the same bound the parked
-/// forward's release waits on: under saturation the watcher thread can
-/// go unscheduled past the old 3s report deadline (see #3001).
+/// bound is the plan's MUST_SUCCEED_WITHIN: under saturation the
+/// watcher thread can go unscheduled past the old 3s report deadline
+/// (see #3001).
 fn drain_streamed_usages(
     rig: &Rig,
     mut usages: Vec<(SessionId, String)>,
@@ -2794,9 +2974,14 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    // The forward parks until the report lands: a loaded machine
-    // schedules the watcher after the drain otherwise (see #3051).
-    let (release, park) = Park::closed();
+    // No gate on the forward: the fake persists every delivered line,
+    // so the reap's synchronous file replay recovers the usage even
+    // when the watcher loses the race, and the take below holds the
+    // Job and the streamed line whichever lands first. A park here
+    // would wait for the report from inside the forward while the
+    // report waits out the same bound under load; on expiry the parked
+    // thread dies holding the only claim and the line never arrives
+    // (see #3051).
     let waited = rig
         .start_timeout(
             &shell,
@@ -2804,20 +2989,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &park)),
+            Some(rig.registry.usage_forward()),
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
-    // Nothing is stashed: every line is still parked behind the
-    // release, which proves the hold before the drain releases it.
-    assert!(usages.is_empty(), "the parked forward holds every line");
-    drop(release);
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
-    // The Job can precede the watcher's forward, so the tap is read
-    // only after the streamed line lands on the inbox.
-    let usages = drain_streamed_usages(&rig, usages, 1);
+    // The tap runs before the inbox offer on the same forward, so a
+    // streamed line the take holds proves the tap saw it first.
+    let (notice, usages) = take_report_with_usages(&rig, 1);
     assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].0, SessionId("s_child".into()));
@@ -2948,7 +3128,7 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
+    let (notice, usages) = take_report_with_usages(&rig, 1);
     assert_eq!(usages.len(), 1, "the file line forwards once: {usages:?}");
     assert_eq!(usages[0].0, SessionId("s_child".into()));
     assert_eq!(usages[0].1, "g_9");
@@ -3006,7 +3186,7 @@ fn raced_replays() -> Vec<String> {
     };
     // The winner is parked inside its forward; the loser now runs to
     // completion on this thread, so the order is forced, never raced.
-    let entered = Deadline::after(DEADLINE).recv(&entered_rx);
+    let entered = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&entered_rx);
     assert!(entered.is_ok(), "the first replay forwards");
     Watcher::replay_usage(&path, None, &fold, &session, &Some(Arc::clone(&on_usage)));
     release.wait();
@@ -3073,22 +3253,28 @@ impl TripTap {
 
 #[test]
 fn the_trip_calls_stop_once_on_crossing_and_never_before() {
-    // The socket closes without yielding and the log file below holds
-    // three usage lines crossing the budget: the crossing runs on the
-    // synchronous file-replay path, never on the unjoined watcher
-    // thread, so the sum, the single stop and the three forwards hold
-    // whichever replay wins the claim (see #3005). The reap's replay
-    // runs before the report, so all three lines land first. Streamed
-    // delivery stays covered by the tap tests.
-    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
-    let mut text = String::new();
-    for (seq, generation, cost) in [(1, "g_1", 0.1), (2, "g_2", 0.15), (3, "g_3", 0.1)] {
-        text.push_str(
-            &serde_json::to_string(&usage_envelope(seq, generation, Some(cost))).unwrap(),
-        );
-        text.push('\n');
-    }
-    std::fs::write(&rig.events, text).unwrap();
+    // The socket streams three usage lines crossing the budget, but the
+    // watcher parks on the crossing line before its fold: the first
+    // delivery of seq 2 persists to the log, then waits. The runner,
+    // held past its take until that park, reaps and replays the file
+    // synchronously before the report, so the crossing runs on the
+    // file-replay path while the watcher is still parked (see #3005).
+    // Without the fake's persistence the replay finds nothing and the
+    // trip never fires; with it the parked delivery loses the claim and
+    // nothing forwards twice. Streamed delivery stays covered by the
+    // tap tests.
+    let dir = TempDir::new("fiber-delegate-trip");
+    let fifo = fifo(dir.path(), "release");
+    let shell = format!("read _ < '{}'; exit 0", fifo.display());
+    let rig = rig(vec![WatchReply::Closed(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        usage_envelope(2, "g_2", Some(0.15)),
+        usage_envelope(3, "g_3", Some(0.1)),
+    ])]);
+    // One-shot gate on watcher-thread delivery of the crossing line:
+    // the parked signal carries the parked line's `seq`, so holding
+    // any other line fails here instead of tripping later.
+    let (parked_rx, release_tx) = rig.script.gate_seq(2);
     let trip = Arc::new(TripTap {
         sum: Mutex::new(0.0),
         budget: 0.2,
@@ -3099,9 +3285,11 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     rig.registry.install_usage_tap(Some(Arc::new(move |line| {
         tapped.tap(&line);
     })));
-    let waited = rig
+    // Backstop: kills the group if the test fails before the child exits.
+    let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    let done = rig
         .start_timeout(
-            "exit 0",
+            &shell,
             BOUND,
             1 << 20,
             None,
@@ -3109,17 +3297,69 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
             Some(rig.registry.usage_forward()),
         )
         .0;
-    let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
-    // Below the budget nothing trips; the crossing trips once; the line
-    // after never trips again.
+    let _done = done;
+    wait_calls(&rig, 1);
+    // One-shot pause between the result take and the launch decision,
+    // so the runner cannot reach the reap before the watcher parks.
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    super::lock(&super::AFTER_TAKE_RESULT).replace(Box::new(move || {
+        let _sent = reached_tx.send(());
+        let _released = go_rx.recv();
+    }));
+    // Wakes the parked runner into the pause: the clock moves only to
+    // the runner's own park (docs/testing.md, "Waits and timeouts": a
+    // test advances a fake clock only after a signal that the code under
+    // test is waiting on that clock).
+    let at = rig.script.calls()[0];
+    rig.clock.advance_when_parked(
+        Some(at + super::POLL),
+        None,
+        super::POLL,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    // The crossing line persisted and parked before its fold: the first
+    // line already streamed below the budget, so only the replay can
+    // trip the crossing from here.
+    assert_eq!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&parked_rx)
+            .expect("the watcher parks on the crossing line"),
+        2,
+        "the gate holds the crossing line, not an earlier one"
+    );
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reached_rx)
+        .expect("the runner pauses between the take and the launch");
+    // The child may exit only once the runner is held and the watcher
+    // is parked: the reap's synchronous replay then wins the crossing
+    // claim, and the released runner reports after it.
+    release_fifo(&fifo, b"go\n");
+    go_tx.send(()).expect("the runner resumes to the launch");
+    // The replay runs before the report, so the crossing and the single
+    // stop land here while the watcher is still parked: the file, not
+    // the socket, delivered the crossing line.
+    let (notice, usages) = take_report_with_usages(&rig, 2);
+    assert_eq!(trip.sum(), 0.25);
+    // Releases the watcher: its parked delivery loses the already-won
+    // claim, the last line forwards once, and nothing trips again.
+    release_tx
+        .send(())
+        .expect("the parked watcher takes its release");
+    let usages = drain_streamed_usages(&rig, usages, 3);
+    let mut generations: Vec<&str> = usages
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    generations.sort_unstable();
+    assert_eq!(generations, ["g_1", "g_2", "g_3"]);
     assert_eq!(trip.sum(), 0.35);
     assert_eq!(trip.stops(), 1);
-    assert_eq!(usages.len(), 3);
     // The bare shell and the closed socket report no `fiber_exited`,
     // so the job ends without a result; the trip is what this test
     // proves.
     assert_eq!(notice.completed.status, Outcome::Failed);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -3169,7 +3409,7 @@ fn a_correction_applies_only_its_delta() {
     wait_calls(&rig, 1);
     within(
         "the child reads the fifo",
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
             std::fs::write(&fifo, "\n").unwrap();
         },

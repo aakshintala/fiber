@@ -203,21 +203,11 @@ pub(crate) fn group_alive(_deadline: Deadline, group: u32) -> bool {
     fakes::kill_group(group, "0").unwrap()
 }
 
-/// For `Drop` impls: sends `signal` to `group` on a thread and returns at
-/// once, never waiting and never panicking. A thread that cannot start
+/// For `Drop` impls: kills every process whose command line holds
+/// `text`, and its process group, on a thread that returns at once,
+/// never waiting and never panicking. A thread that cannot start
 /// sends nothing; the group's watchdog still kills it when the test
 /// process exits.
-pub(crate) fn kill_group_detached(group: u32, signal: &'static str) {
-    let spawned = thread::Builder::new().spawn(move || match fakes::kill_group(group, signal) {
-        Ok(_) | Err(_) => {}
-    });
-    match spawned {
-        Ok(_) | Err(_) => {}
-    }
-}
-
-/// [`kill_group_detached`] for every process whose command line holds
-/// `text`, and its process group.
 pub(crate) fn kill_matching_detached(text: &str) {
     let text = text.to_owned();
     let spawned = thread::Builder::new().spawn(move || match fakes::kill_matching(&text) {
@@ -239,7 +229,7 @@ pub(crate) fn expired<T>(
     what: &str,
 ) -> ! {
     // A kill that fails shows as the group not emptying below.
-    match kill_group(deadline, group, "KILL") {
+    match fakes::kill_group(group, "KILL") {
         Ok(_) | Err(_) => {}
     }
     let reaped = deadline.cleanup_phase().recv(reap).is_ok();
@@ -561,7 +551,7 @@ impl HubProc {
 
     #[track_caller]
     pub(crate) fn kill(&self, signal: &'static str) {
-        kill_group(self.deadline, self.group, signal).unwrap();
+        fakes::kill_group(self.group, signal).unwrap();
     }
 
     /// Waits under the test's [`Deadline`] for a hub that exits on its own,
@@ -586,7 +576,7 @@ impl HubProc {
             }
         };
         assert!(
-            !group_alive(deadline, group),
+            !fakes::group_alive(group),
             "the hub left a process in its group behind"
         );
         watchdog.stand_down(deadline.cleanup_phase());
@@ -604,7 +594,7 @@ impl HubProc {
             group,
             deadline,
         } = self;
-        kill_group(deadline, group, "KILL").unwrap();
+        fakes::kill_group(group, "KILL").unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         let status = match deadline.recv(&finished) {
@@ -1006,7 +996,7 @@ pub(crate) fn run_to_exit(
         }
     };
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "{what} left a process in its group behind"
     );
     watchdog.stand_down(deadline.cleanup_phase());
@@ -1259,7 +1249,7 @@ pub(crate) struct KillGroup(pub(crate) u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        kill_group_detached(self.0, "KILL");
+        drop(fakes::kill_group(self.0, "KILL"));
     }
 }
 

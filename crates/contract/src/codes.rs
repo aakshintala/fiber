@@ -155,6 +155,8 @@ codes! {
     NotStepBoundary,
     /// A command arrived before `subscribe`.
     NotSubscribed,
+    /// `/reviewer-setup` ended with no change to either layer of the notes.
+    NotesUnchanged,
     /// The process that ran the job died.
     Orphaned,
     /// A job's output file passed 5 GB.

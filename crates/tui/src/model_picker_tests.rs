@@ -2048,3 +2048,22 @@ fn a_failed_spawn_followed_by_two_asks_keeps_the_mark_until_the_last_answer() {
     assert_eq!(picker.refreshing, None);
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
+
+#[test]
+fn move_row_zero_with_no_focus_moves_nothing() {
+    // No model shows but a not-installed row lists: nothing is
+    // focused, so a zero step moves nothing onto the rows.
+    let mut picker = ModelPicker {
+        catalogue: Catalogue {
+            installable: vec!["openai".to_owned()],
+            models: Vec::new(),
+            notices: Vec::new(),
+            lists: Vec::new(),
+        },
+        ..ModelPicker::default()
+    };
+    picker.open(Mode::Choose, None);
+    assert!(picker.focus().is_none());
+    picker.move_row(0);
+    assert!(picker.focus().is_none());
+}

@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use contract::commands::{Reply, ReplyAnswer, RewindArgs};
 use contract::events::{
     CommandResult, Parent, SessionStarted, TurnOutcome, Variables, VariablesSource,
@@ -26,7 +28,7 @@ use contract::events::{
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, StandingRules};
-use contract::shapes::{ContentPart, Origin, Point, Sender, Worktree};
+use contract::shapes::{ContentPart, Failure, Origin, Point, Sender, Worktree};
 use contract::tool::Tool;
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
 use fakes::Deadline;
@@ -375,7 +377,7 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
         "the next turn sent a request"
     );
     for request in provider.requests().iter().skip(1) {
-        for input in &request.conversation {
+        for input in request.conversation.iter() {
             if let Input::User { text, .. } = input {
                 assert!(!text.contains("j_win"), "a stopped job is named: {text}");
             }
@@ -500,13 +502,13 @@ fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
     let after = session.provider.requests();
     assert_eq!(after.len(), requests.len() + 1);
     let request = after.last().unwrap();
-    let mut expected = last.conversation.clone();
+    let mut expected = last.conversation.to_vec();
     expected.push(Input::Assistant {
         model: MODEL.into(),
         text: "two-done".into(),
         provider_item: None,
     });
-    assert_eq!(&request.conversation[..expected.len()], expected.as_slice());
+    assert_eq!(&request.conversation[..expected.len()], &expected[..]);
     assert_eq!(request.conversation.len(), expected.len() + 1);
     assert!(
         matches!(request.conversation.last().unwrap(), Input::User { text, .. } if text.contains("two"))
@@ -588,7 +590,7 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
     let _b = run_turn(b, &tx, "four");
     assert_eq!(
         &resumed_provider.requests()[0].conversation[..request.conversation.len()],
-        request.conversation.as_slice()
+        &request.conversation[..]
     );
 }
 
@@ -911,6 +913,9 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     assert_eq!(images[0].path, expected);
     assert_eq!(fs::read(&images[0].path).unwrap(), bytes);
     assert!(!dir.join("artifacts/i.png").exists());
+    // The child's request carries the parent's file, keyed by the absolute
+    // path the conversation holds, as the same base64.
+    assert_eq!(&*first.media[&expected], STANDARD.encode(bytes));
     drop(session);
 }
 
@@ -1023,6 +1028,20 @@ fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     );
     assert_eq!(fs::read(&pdfs[0].path).unwrap(), pdf_bytes);
     assert!(!dir.join("artifacts/p_3f2a9c0d1e4b5a67.pdf").exists());
+    // The PDF and both rendered pages resolve to the parent's bytes.
+    let media = |name: &str| first.media[&session.dir.join(name).display().to_string()].to_string();
+    assert_eq!(
+        media("artifacts/p_3f2a9c0d1e4b5a67.pdf"),
+        STANDARD.encode(pdf_bytes)
+    );
+    assert_eq!(
+        media("artifacts/i_0a1b2c3d4e5f6071.png"),
+        STANDARD.encode(b"page-one")
+    );
+    assert_eq!(
+        media("artifacts/i_8090a0b0c0d0e0f0.png"),
+        STANDARD.encode(b"page-two")
+    );
     drop(session);
 }
 
@@ -1778,7 +1797,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         assert_eq!(kinds(&lines[before..=summary_end]), expected);
         assert_eq!(lines[summary_end].payload["outcome"], outcome);
         assert!(lines.iter().all(|line| line.kind != "rewound"));
-        let mut conversation = last.conversation.clone();
+        let mut conversation = last.conversation.to_vec();
         conversation.push(Input::Assistant {
             model: MODEL.into(),
             text: "two-done".into(),
@@ -1789,8 +1808,8 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
             images: vec![],
         });
         assert_eq!(
-            session.provider.requests().last().unwrap().conversation,
-            conversation
+            &session.provider.requests().last().unwrap().conversation[..],
+            &conversation[..]
         );
         assert_eq!(
             session.provider.requests().last().unwrap().previous_end,
@@ -1845,7 +1864,7 @@ fn failed_summary_tool_calls_are_absent_on_resume_too() {
     let request = &provider.requests()[0];
     assert_eq!(
         &request.conversation[..live.conversation.len()],
-        live.conversation.as_slice()
+        &live.conversation[..]
     );
     assert_eq!(request.previous_end, Some(live.conversation.len()));
 }
@@ -1863,7 +1882,7 @@ fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
     drop(run_turn(looped, &tx, "next"));
     let request = &provider.requests()[0];
     assert_eq!(request.previous_end, Some(last.conversation.len()));
-    let mut expected = last.conversation;
+    let mut expected = last.conversation.to_vec();
     expected.push(Input::Assistant {
         model: MODEL.into(),
         text: "two-done".into(),
@@ -1873,7 +1892,7 @@ fn a_failed_summary_does_not_move_the_resumed_cache_boundary() {
         text: "next".into(),
         images: vec![],
     });
-    assert_eq!(request.conversation, expected);
+    assert_eq!(&request.conversation[..], &expected[..]);
 }
 
 #[test]
@@ -1971,7 +1990,7 @@ fn the_reviewer_sees_no_failed_summary_live_or_resumed() {
         .unwrap();
         assert_eq!(replay.requests.len(), 2);
         assert_eq!(replay.requests[0].1.conversation, requests[0].conversation);
-        let mut conversation = requests[0].conversation.clone();
+        let mut conversation = requests[0].conversation.to_vec();
         for input in &mut conversation {
             if let Input::User { text, .. } = input {
                 *text = text.replace(session.workspace.to_str().unwrap(), "<workspace>");
@@ -2023,7 +2042,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let reviewer = session.reviewer(vec![Scripted::text("allow")]);
     session.inbox.send(delivery("after crash")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let mut live = reviewer.requests()[0].conversation.clone();
+    let mut live = reviewer.requests()[0].conversation.to_vec();
     // The last two messages describe only the current call and review stage.
     live.truncate(live.len() - 2);
     assert!(
@@ -2036,7 +2055,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     let request = &session.provider.requests()[3];
     assert_eq!(
         &request.conversation[..last.conversation.len()],
-        last.conversation.as_slice()
+        &last.conversation[..]
     );
     assert!(request.conversation.iter().all(
         |input| !matches!(input, Input::Assistant { text, .. } if text == "incomplete summary")
@@ -2055,7 +2074,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
     session.inbox.send(delivery("later prompt")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let rebuilt = reviewer.requests()[0].conversation.clone();
-    assert_eq!(&rebuilt[..live.len()], live.as_slice());
+    assert_eq!(&rebuilt[..live.len()], &live[..]);
     assert!(
         rebuilt
             .iter()
@@ -2421,10 +2440,62 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     );
     // The process ends with nothing more written.
     let count = log::read(&session.dir).unwrap().len();
-    session.looped.take().unwrap().run().unwrap();
+    let ran = session.looped.take().unwrap().run();
+    ran.result.unwrap();
     let after = log::read(&session.dir).unwrap();
     assert_eq!(after.len(), count, "`run` writes nothing after `rewound`");
     assert_eq!(after.last().unwrap().kind, "rewound");
+    // The exit knows the session rewound from the run's own summary: it
+    // writes nothing and reports the run's error.
+    let exited = r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), false, None).unwrap();
+    assert_eq!((exited.code, exited.error), (0, None));
+    let failure = Failure {
+        code: ErrorCode::InvalidRequest,
+        message: "The run failed.".into(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let exited = r#loop::fiber_exited(
+        &session.log,
+        &ran.summary,
+        Err(failure.clone()),
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!((exited.code, exited.error), (1, Some(failure)));
+    assert_eq!(log::read(&session.dir).unwrap().len(), count);
+}
+
+#[test]
+fn a_malformed_line_after_line_0_refuses_the_rewind_log_corrupt_and_writes_no_rewound() {
+    use std::io::Write as _;
+    let mut session = run_a();
+    // The own log's line 0 reads; a later line is not an envelope.
+    let path = session.dir.join("events.jsonl");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"not an envelope\n")
+        .unwrap();
+    let (rw, answered) = rewind(args(None, None, false));
+    session.inbox.send(rw).unwrap();
+    let mut looped = session.looped.take().unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(looped.turn()).unwrap());
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the rewind ended the wait in time");
+    assert_eq!(result.unwrap_err().code(), ErrorCode::LogCorrupt);
+    // The ack is dropped unanswered, and nothing was written before the
+    // check refused it.
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&answered),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("\"kind\":\"rewound\""));
 }
 
 #[test]
@@ -2463,7 +2534,7 @@ fn a_message_after_rewound_is_refused() {
         "admission closed under the ack, with the send never running"
     );
     // The process ends with nothing more written, and admission stays shut.
-    session.looped.take().unwrap().run().unwrap();
+    session.looped.take().unwrap().run().result.unwrap();
     let mut called = false;
     let done = admission.admit(|| {
         called = true;

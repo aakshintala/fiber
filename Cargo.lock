@@ -477,6 +477,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -1563,8 +1564,10 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 name = "loop"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "contract",
  "fakes",
+ "jobs",
  "log 0.0.0",
  "proptest",
  "rustix",
@@ -1657,9 +1660,9 @@ dependencies = [
  "log 0.0.0",
  "loop",
  "mcp",
- "net",
  "picture",
  "provider",
+ "routing",
  "rustix",
  "serde_json",
  "signal-hook",
@@ -2575,6 +2578,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "routing"
+version = "0.0.0"
+dependencies = [
+ "config",
+ "contract",
+ "extensions",
+ "fakes",
+ "provider",
+ "serde_json",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3021,6 +3036,7 @@ dependencies = [
  "fakes",
  "ring",
  "rustix",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -3329,6 +3345,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "signal-hook",
+ "similar",
  "support",
  "thiserror 2.0.21",
 ]
@@ -3841,6 +3858,7 @@ version = "0.0.0"
 dependencies = [
  "contract",
  "fakes",
+ "support",
  "thiserror 2.0.21",
 ]
 

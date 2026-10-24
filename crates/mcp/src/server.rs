@@ -22,10 +22,11 @@ use serde_json::Value;
 
 use crate::cache::Cached;
 use crate::elicit::Asker;
-use crate::registry::{Stopping, before_lock, before_signal, lock};
+use crate::registry::{STOPPING, before_lock, before_signal, lock};
 use crate::rpc::{Outcome, encode_notification, encode_request, encode_result};
 use crate::server_json::{ListedPrompt, ListedTool, entries};
 use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
+use support::cancel::Token;
 use support::group::Listing;
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
@@ -284,7 +285,7 @@ impl Server {
         connection: &mut Option<Box<dyn Send>>,
     ) -> Result<OpenServer, StartError> {
         // Sticky: a start after the stop spawns nothing.
-        if Stopping.is_cancelled() {
+        if STOPPING.is_cancelled() {
             return Err(shutting_down());
         }
         let mut cmd = Command::new(command);
@@ -347,7 +348,6 @@ impl Server {
         client_version: &str,
         connection: &mut Option<Box<dyn Send>>,
     ) -> Result<OpenServer, StartError> {
-        let stopping = Stopping;
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
         let server = Server {
             inner: Inner {
@@ -372,7 +372,7 @@ impl Server {
                     "clientInfo": {"name": "fiber", "version": client_version},
                 }),
                 deadline,
-                &stopping,
+                &*STOPPING,
                 None,
             ) {
                 Ok(value) if value.is_object() => value,
@@ -395,7 +395,7 @@ impl Server {
             }
             server.notify("notifications/initialized", &serde_json::json!({}));
             if remote {
-                server.await_initialized(deadline, &stopping)?;
+                server.await_initialized(deadline, &STOPPING)?;
             }
             // `tools/list` runs only when `initialize` advertises the
             // `tools` capability as an object: a server advertising only
@@ -407,7 +407,7 @@ impl Server {
                 .and_then(|capabilities| capabilities.get("tools"))
                 .is_some_and(Value::is_object);
             let tools: Vec<ListedTool> = if advertises_tools {
-                list_pages(server, clock, "tools/list", "tools", deadline, &stopping)
+                list_pages(server, clock, "tools/list", "tools", deadline, &*STOPPING)
                     .map_err(|error| strict_list_error(error).unwrap_or_else(not_a_list))?
             } else {
                 Vec::new()
@@ -434,7 +434,7 @@ impl Server {
                     "prompts/list",
                     "prompts",
                     deadline,
-                    &stopping,
+                    &*STOPPING,
                 ) {
                     Ok(prompts) => prompts,
                     Err(error) => match strict_list_error(error) {
@@ -469,7 +469,7 @@ impl Server {
                 advertises_prompts,
             }),
             Err(error) => {
-                if stopping.is_cancelled() {
+                if STOPPING.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
                     server.stop();
                     Err(shutting_down())
@@ -481,7 +481,7 @@ impl Server {
         }
     }
 
-    fn await_initialized(&self, deadline: Instant, stopping: &Stopping) -> Result<(), StartError> {
+    fn await_initialized(&self, deadline: Instant, stopping: &Token) -> Result<(), StartError> {
         let inner = &self.inner;
         let bridge = CancelBridge::arm(&inner.shared);
         stopping.subscribe(Arc::downgrade(&(bridge.clone() as Arc<dyn Wake>)));

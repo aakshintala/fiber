@@ -28,8 +28,8 @@ use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, Setup, git, group_alive, hello_inline_completed as hello,
-    is_status, spawn_watched,
+    Deadline, HELLO_KINDS, KillGroup, Setup, git, hello_inline_completed as hello, is_status,
+    spawn_watched,
 };
 
 #[path = "../../provider/tests/support/probes.rs"]
@@ -191,7 +191,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         // The group is empty. Skip the drop, which would kill it again,
@@ -1450,6 +1450,43 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
             .home()
             .join("extensions/muse/providers/muse.json")
             .is_file()
+    );
+}
+
+/// `fiber extension install` ignores a `GIT_DIR` the caller exported:
+/// the install lands with its recorded commit, and the decoy repository
+/// the variable names keeps its own `HEAD`.
+#[test]
+fn an_install_ignores_a_redirected_git_dir() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v1.0.0");
+    let commit = git(setup.deadline, &gh.repo, &["rev-parse", "v1.0.0^{commit}"]);
+    let decoy = setup.root.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    git(setup.deadline, &decoy, &["init", "--quiet"]);
+    git(
+        setup.deadline,
+        &decoy,
+        &["commit", "--quiet", "--allow-empty", "-m", "decoy"],
+    );
+    let decoy_head = git(setup.deadline, &decoy, &["rev-parse", "HEAD"]);
+    let decoy_git = decoy.join(".git").to_str().unwrap().to_owned();
+    let mut env: Vec<(&str, &str)> = gh.env().into_iter().collect();
+    env.push(("GIT_DIR", &decoy_git));
+    let run = setup.fiber_with_env(&["extension", "install", MUSE], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        setup
+            .home()
+            .join("extensions/muse/providers/muse.json")
+            .is_file()
+    );
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert_eq!(listed.raw, [format!("{MUSE} v1.0.0 {commit}")]);
+    assert_eq!(
+        git(setup.deadline, &decoy, &["rev-parse", "HEAD"]),
+        decoy_head
     );
 }
 

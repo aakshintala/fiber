@@ -324,7 +324,7 @@ fn a_fiber_ask_session_messages_a_hub_started_session_and_a_fiber_ask_target_is_
         .expect("the fold carries a status");
     assert_eq!(status["payload"]["clients"], 1, "{status}");
     // Nothing is left behind: B's group, the hub with T, and the guard.
-    support::kill_group(deadline, b_group.0, "TERM").unwrap();
+    fakes::kill_group(b_group.0, "TERM").unwrap();
     b.wait().unwrap();
     b_watchdog.stand_down(deadline.cleanup_phase());
     let t_closer = Socket::connect(deadline, &setup.session_socket(&t_id));
@@ -867,7 +867,7 @@ fn delivered_is_answered_only_after_the_hook_returns() {
     }
     // The sender already exited on its own, so the group may be gone:
     // the kill's result is ignored, as `expired` ignores its cleanup kill.
-    match support::kill_group(deadline, s_group.0, "TERM") {
+    match fakes::kill_group(s_group.0, "TERM") {
         Ok(_) | Err(_) => {}
     }
     s.wait().unwrap();

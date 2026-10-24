@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Run, Setup, group_alive, hello_inline_completed as hello};
+use support::{Deadline, KillGroup, Run, Setup, hello_inline_completed as hello};
 
 impl Setup {
     fn new_with_fx_root() -> Self {
@@ -101,10 +101,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         let stdout = String::from_utf8(output.stdout).unwrap();

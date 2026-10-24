@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::json;
 
@@ -231,13 +231,61 @@ fn a_pdf_ref_round_trips_in_a_tool_result() {
 }
 
 #[test]
-fn a_request_without_a_session_dir_reads_an_empty_one() {
-    let request = json!({
-        "system_prompt": "s", "tools": [], "tool_choice": "auto",
-        "cache_lifetime": "5m", "cache_key": "k", "conversation": [],
-    });
-    let read: ModelRequest = serde_json::from_value(request).unwrap();
-    assert_eq!(read.session_dir, PathBuf::new());
+fn a_request_s_media_is_never_serialized_and_an_old_session_dir_key_is_ignored() {
+    let mut request = ModelRequest {
+        system_prompt: "s".into(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: "k".into(),
+        conversation: Arc::from([]),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+    request.media = Arc::new(Media::from([(
+        "artifacts/i.png".to_owned(),
+        Arc::from("YWJjZA=="),
+    )]));
+
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert!(value.get("media").is_none(), "{value}");
+    assert!(value.get("session_dir").is_none(), "{value}");
+
+    value["session_dir"] = json!("/old/session");
+    let read: ModelRequest = serde_json::from_value(value).unwrap();
+    assert!(read.media.is_empty());
+}
+
+#[test]
+fn a_request_s_conversation_wires_as_a_plain_array_and_reads_back() {
+    let request = ModelRequest {
+        system_prompt: "s".into(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: "k".into(),
+        conversation: Arc::from([Input::User {
+            text: "hi".into(),
+            images: Vec::new(),
+        }]),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        media: Default::default(),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        value["conversation"],
+        json!([{"type": "user", "text": "hi"}])
+    );
+    assert_eq!(
+        serde_json::from_value::<ModelRequest>(value).unwrap(),
+        request
+    );
 }
 
 #[test]
@@ -359,11 +407,11 @@ fn default_warms_is_true() {
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: String::new(),
-        conversation: Vec::new(),
+        conversation: Arc::from([]),
         sent_tools: None,
         previous_end: None,
         max_output_tokens: None,
-        session_dir: PathBuf::new(),
+        media: Default::default(),
     };
     assert!(Fake.warms(&request));
 }
@@ -371,4 +419,100 @@ fn default_warms_is_true() {
 #[test]
 fn a_provider_without_an_override_has_no_cost_lookup() {
     assert!(Fake.cost_lookup().is_none());
+}
+
+fn image_at(path: &str) -> ImageRef {
+    ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 1,
+        height: 1,
+    }
+}
+
+/// The paths as a set: no doc promises the order of an input's media paths.
+fn path_set(input: &Input) -> BTreeSet<&str> {
+    input.media_paths().into_iter().collect()
+}
+
+#[test]
+fn media_paths_of_a_user_message_are_its_images() {
+    let input = Input::User {
+        text: "t".into(),
+        images: vec![image_at("artifacts/a.png"), image_at("artifacts/b.png")],
+    };
+    assert_eq!(
+        path_set(&input),
+        BTreeSet::from(["artifacts/a.png", "artifacts/b.png"])
+    );
+}
+
+#[test]
+fn media_paths_of_a_tool_result_are_its_images_each_pdf_and_its_pages() {
+    let input = Input::ToolResult {
+        action_id: ActionId("a".into()),
+        text: "t".into(),
+        is_error: false,
+        images: vec![image_at("artifacts/i.png")],
+        pdfs: vec![
+            PdfRef {
+                path: "artifacts/p.pdf".into(),
+                page_count: 2,
+                pages: Some(vec![
+                    image_at("artifacts/p1.png"),
+                    image_at("artifacts/p2.png"),
+                ]),
+            },
+            PdfRef {
+                path: "artifacts/q.pdf".into(),
+                page_count: 1,
+                pages: None,
+            },
+        ],
+    };
+    assert_eq!(
+        path_set(&input),
+        BTreeSet::from([
+            "artifacts/i.png",
+            "artifacts/p.pdf",
+            "artifacts/p1.png",
+            "artifacts/p2.png",
+            "artifacts/q.pdf",
+        ])
+    );
+}
+
+#[test]
+fn media_paths_of_an_input_that_cannot_carry_media_are_empty() {
+    let inputs = [
+        Input::Assistant {
+            model: "m".into(),
+            text: "t".into(),
+            provider_item: None,
+        },
+        Input::Reasoning {
+            model: "m".into(),
+            text: "t".into(),
+            provider_item: None,
+        },
+        Input::ToolCall {
+            action_id: ActionId("a".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "artifacts/i.png"}),
+                provider_id: None,
+                repair: None,
+                ran_by: None,
+                provider_item: None,
+            },
+            model: "m".into(),
+        },
+        Input::ToolSearchResult {
+            action_id: ActionId("a".into()),
+            loaded: vec!["x".into()],
+        },
+    ];
+    for input in &inputs {
+        assert!(input.media_paths().is_empty(), "{input:?}");
+    }
 }

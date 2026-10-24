@@ -677,7 +677,7 @@ fn close_while_pending_declines_it_and_every_later_ask() {
     let looped = session.looped.take().unwrap();
     let (done, ran) = mpsc::channel();
     thread::spawn(move || {
-        let _sent = done.send(looped.run());
+        let _sent = done.send(looped.run().result);
     });
     tap.wait_for("interaction_requested");
     let (ack, closed) = acked();
@@ -1567,4 +1567,46 @@ fn an_ask_that_suspends_is_logged_resumes_and_any_other_without_the_key() {
         "{:?}",
         requested[1].payload
     );
+}
+
+#[test]
+fn an_extension_ask_still_open_at_the_exit_is_declined_by_fiber() {
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
+    session
+        .inbox
+        .send(Delivery::Interaction(InteractionRequested {
+            request_id: RequestId("r_ext".into()),
+            interaction: confirm(),
+            action_ids: None,
+            extension: Some("ext".into()),
+            resumes: false,
+        }))
+        .unwrap();
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    session.lines();
+    r#loop::fiber_exited(
+        &session.log,
+        session.looped.as_ref().unwrap().summary(),
+        Ok(()),
+        false,
+        None,
+    )
+    .unwrap();
+    let all = log::read(&session.dir).unwrap();
+    let [.., turn, declined, exited] = all.as_slice() else {
+        panic!("{:?}", kinds(&all));
+    };
+    assert_eq!(
+        (
+            turn.kind.as_str(),
+            declined.kind.as_str(),
+            exited.kind.as_str()
+        ),
+        ("turn_completed", "interaction_resolved", "fiber_exited")
+    );
+    assert_eq!(declined.payload["request_id"], "r_ext");
+    assert_eq!(declined.payload["by"], "fiber");
+    assert_eq!(declined.payload["declined"], true);
+    assert!(exited.payload.get("suspended_on").is_none());
 }

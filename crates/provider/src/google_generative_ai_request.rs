@@ -238,7 +238,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             text,
             images,
             pdfs,
-            &request.session_dir,
+            &request.media,
             endpoint.text_only,
             crate::images::PdfForm::Native,
         );
@@ -307,7 +307,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     // A signature on a `functionCall`, waiting for that call. It never
     // rides onto text or into the next reply.
     let mut signature = None;
-    for input in &request.conversation {
+    for input in request.conversation.iter() {
         match input {
             Input::User { text, images } => {
                 park(&mut out, &mut signature);
@@ -315,7 +315,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     text,
                     images,
                     &[],
-                    &request.session_dir,
+                    &request.media,
                     endpoint.text_only,
                     crate::images::PdfForm::Native,
                 );
@@ -486,11 +486,12 @@ mod body_segments_tests {
             conversation: vec![Input::User {
                 text: "hi".to_owned(),
                 images: Vec::new(),
-            }],
+            }]
+            .into(),
             sent_tools: None,
             previous_end: None,
             max_output_tokens: None,
-            session_dir: std::path::PathBuf::new(),
+            media: Default::default(),
         };
         let (system, tools, contents) = body_segments(&endpoint, &request);
         assert_eq!(system, Some(json!({"parts": [{"text": "You are terse."}]})));

@@ -8,6 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2766,7 +2767,12 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
     let workspace = dir.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
     let shell = Shell::new(workspace, FakeClock::new());
-    for command in ["git status", "git stash list", "git branch --show-current"] {
+    for command in [
+        "git status",
+        "git stash list",
+        "git branch --show-current",
+        "LC_ALL=C git status",
+    ] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -2777,13 +2783,8 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
     }
     // A writing form executes: `git init` creates or updates `.git` state,
     // `git push --dry-run` reaches the remote, and a leading assignment
-    // executes whatever its name (#1497 task 1.3).
-    for command in [
-        "git init",
-        "git push --dry-run",
-        "LC_ALL=C git status",
-        "FOO=1 ls",
-    ] {
+    // with an unlisted name (#1497).
+    for command in ["git init", "git push --dry-run", "FOO=1 ls"] {
         let effects = effects_of(&shell, command);
         assert_eq!(
             effects.declared.effects,
@@ -2798,6 +2799,125 @@ fn a_shell_reads_the_new_git_forms_with_no_paths() {
         effects.declared.effects,
         vec![contract::shapes::Effect::Reads]
     );
+}
+
+#[test]
+fn a_shell_reads_a_cd_call_with_paths_past_the_join() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-cd");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub").join("n.md"), "The note.\n").unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let sub = workspace.join("sub").to_str().unwrap().to_owned();
+    // A `cd` is a read-only step: later paths resolve past the join, and
+    // an operand-less command declares each directory it may run in. The
+    // doc promises which directories, not their order.
+    for (command, paths) in [
+        (
+            "cd sub && cat n.md 2>/dev/null",
+            vec![sub.clone(), format!("{sub}/n.md")],
+        ),
+        (
+            "cd sub ; ls",
+            vec![sub.clone(), workspace.to_str().unwrap().to_owned()],
+        ),
+        (
+            "cd sub | cat f",
+            vec![
+                sub.clone(),
+                workspace.join("f").to_str().unwrap().to_owned(),
+            ],
+        ),
+        ("git status && cd sub", vec![sub.clone()]),
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        let declared: BTreeSet<&str> = effects
+            .declared
+            .paths
+            .as_ref()
+            .map(|paths| paths.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        assert_eq!(
+            declared,
+            BTreeSet::from_iter(paths.iter().map(String::as_str)),
+            "{command}"
+        );
+    }
+    // A `git` after any `cd`, and a `cd` outside the allow-list, execute.
+    for command in [
+        "cd sub && git status",
+        "cd sub ; git status",
+        "cd sub | git status",
+        "cd",
+        "cd -",
+        "cd -P",
+        "cd a b",
+        "timeout 5 cd sub",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+}
+
+#[test]
+fn a_shell_reads_wrapper_calls_with_paths_from_the_inner_command() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-wrap");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    let file = workspace.join("f").to_str().unwrap().to_owned();
+    // A wrapper is classified by the command it runs: an assignment for
+    // a listed name, `env` with listed assignments, and `timeout` with a
+    // duration all read, declaring the inner command's paths. A
+    // path-reading `xargs` target reads only on proven static stdin, so
+    // names from command output stay reviewed (fail-closed).
+    for command in ["LC_ALL=C cat f", "env LC_ALL=C cat f", "timeout 5 cat f"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+        assert!(effects.declared.reversible, "{command}");
+    }
+    assert_eq!(
+        effects_of(&shell, "LC_ALL=C cat f").declared.paths,
+        Some(vec![file.clone()])
+    );
+    // Any other assignment name, a flag of `env`'s own, a refused
+    // duration, an `xargs` target outside its six commands, and an
+    // `xargs` reader fed names from command output execute.
+    for command in [
+        "FOO=1 cat f",
+        "env PATH=/x cat f",
+        "env -i cat f",
+        "timeout -k 1 5 cat f",
+        "timeout 5x cat f",
+        "xargs rm f",
+        "xargs /usr/bin/wc -l f",
+        "xargs grep -R x f",
+        "git ls-files | xargs wc -l",
+    ] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
 }
 
 #[test]
@@ -2877,5 +2997,70 @@ fn a_capped_clone_shares_the_read_only_handle() {
     assert_eq!(
         effects.declared.effects,
         vec![contract::shapes::Effect::Executes]
+    );
+}
+
+#[test]
+fn a_shell_guards_git_reads_by_repository() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-repo");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    // A normal repository reads, declaring operand paths, and the
+    // repository-independent `gh` form declares the default host.
+    for command in ["git status", "git log --oneline f"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+    }
+    let effects = effects_of(&shell, "gh pr view 123");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Network]
+    );
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()])
+    );
+    assert_eq!(
+        effects_of(&shell, "git log --oneline f").declared.paths,
+        Some(vec![workspace.join("f").to_str().unwrap().to_owned()])
+    );
+    // A bare repository executes.
+    let bare = dir.path().join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(bare.join("objects")).unwrap();
+    std::fs::create_dir_all(bare.join("refs")).unwrap();
+    let bare_shell = Shell::new(bare.clone(), FakeClock::new());
+    for command in ["git status", "git log --oneline"] {
+        let effects = effects_of(&bare_shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A worktree checkout whose `.git` file names a target under another
+    // `.git/` reads.
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    let target = workspace.join(".git").join("worktrees").join("wt");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        checkout.join(".git"),
+        format!("gitdir: {}\n", target.to_str().unwrap()),
+    )
+    .unwrap();
+    let checkout_shell = Shell::new(checkout.clone(), FakeClock::new());
+    let effects = effects_of(&checkout_shell, "git status");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
     );
 }

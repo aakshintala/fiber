@@ -14,14 +14,14 @@ pub(crate) enum Case {
     Call(CallCase),
 }
 
-/// A session case: the script, the prompt and the expected event lines.
+/// A session case: the script, the first input and the expected event lines.
 pub(crate) struct SessionCase {
     /// The optional display name, defaulted by the caller from the file stem.
     pub(crate) name: Option<String>,
     /// Inline model steps.
     pub(crate) script: Value,
-    /// The first prompt.
-    pub(crate) prompt: String,
+    /// The first input: a prompt or an extension command.
+    pub(crate) input: Input,
     /// Global configuration written into the case's temporary Fiber home.
     pub(crate) config: Option<Value>,
     /// Extension settings written into the case's temporary Fiber home,
@@ -37,6 +37,25 @@ pub(crate) struct SessionCase {
     pub(crate) expect: Vec<Value>,
     /// Whether a person is attached to the case.
     pub(crate) attended: bool,
+}
+
+/// An extension command a session case sends instead of a prompt: the
+/// command name and the text after it, which defaults to the empty string.
+#[derive(Clone)]
+pub(crate) struct CaseCommand {
+    /// The extension command name.
+    pub(crate) name: String,
+    /// The text typed after the name.
+    pub(crate) text: String,
+}
+
+/// The first input of a session case: one variant, so a case cannot carry
+/// both a prompt and a command (`docs/code-quality.md`, "Types").
+pub(crate) enum Input {
+    /// The first prompt, starting a model turn.
+    Prompt(String),
+    /// An extension command, sent after `extensions_loaded` with no turn.
+    Command(CaseCommand),
 }
 
 /// A provider call case: the call and its one expected outcome.
@@ -134,6 +153,7 @@ impl Case {
         let name = optional_string(map, "name", "case")?;
         let script = map.get("script").cloned();
         let prompt = optional_string(map, "prompt", "case")?;
+        let command = map.get("command").map(parse_command).transpose()?;
         let config = map.get("config").cloned();
         if config.as_ref().is_some_and(|value| !value.is_object()) {
             return Err("config: expected an object".to_owned());
@@ -161,6 +181,9 @@ impl Case {
         if call.is_some() || map.contains_key("calls") {
             if prompt.is_some() {
                 return Err("call and prompt cannot be used in the same case".to_owned());
+            }
+            if command.is_some() {
+                return Err("call and command cannot be used in the same case".to_owned());
             }
             if ["script", "config", "settings", "until", "expect"]
                 .iter()
@@ -229,7 +252,21 @@ impl Case {
                 .map_err(|error| format!("script: cannot encode: {error}"))?;
             provider::scripted::Script::parse(path, &script_bytes)
                 .map_err(|error| format!("script: {error}"))?;
-            let prompt = prompt.ok_or_else(|| "prompt: required for a session case".to_owned())?;
+            let input = match (prompt, command) {
+                (Some(_), Some(_)) => {
+                    return Err("prompt and command cannot be used in the same case".to_owned());
+                }
+                (None, None) => {
+                    return Err("prompt or command: required for a session case".to_owned());
+                }
+                (Some(prompt), None) => Input::Prompt(prompt),
+                (None, Some(command)) => {
+                    if until.is_none() {
+                        return Err("until: required for a command case".to_owned());
+                    }
+                    Input::Command(command)
+                }
+            };
             let attended = match map.get("attended") {
                 None => true,
                 Some(Value::Bool(value)) => *value,
@@ -238,7 +275,7 @@ impl Case {
             Ok(Case::Session(SessionCase {
                 name,
                 script: script_value.clone(),
-                prompt,
+                input,
                 config,
                 settings,
                 host,
@@ -293,6 +330,7 @@ const CASE_FIELDS: &[&str] = &[
     "name",
     "script",
     "prompt",
+    "command",
     "config",
     "settings",
     "host",
@@ -717,6 +755,16 @@ fn parse_expect(value: Option<&Value>) -> Result<Vec<Value>, String> {
             Ok(value.clone())
         })
         .collect()
+}
+
+/// Parses a session case's `command` object: the extension command name and
+/// the optional text after it, defaulting to the empty string.
+fn parse_command(value: &Value) -> Result<CaseCommand, String> {
+    let map = value.as_object().ok_or("command: expected an object")?;
+    only(map, &["name", "text"], "command")?;
+    let name = string(map, "name", "command")?;
+    let text = optional_string(map, "text", "command")?.unwrap_or_default();
+    Ok(CaseCommand { name, text })
 }
 
 fn parse_call(value: &Value) -> Result<Call, String> {

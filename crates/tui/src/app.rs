@@ -74,6 +74,7 @@ mod paste;
 pub(crate) mod rail;
 mod reconnect;
 pub(crate) mod results;
+mod reviewer_setup;
 mod screen;
 mod select;
 mod session_views;
@@ -305,6 +306,9 @@ pub(crate) struct App {
     motion: crate::motion::Motion,
     /// The slabs the last frame drew for its framed surfaces.
     frames: top::Frames,
+    /// The reviewer notes setup, while open (`docs/permissions.md`,
+    /// "Setting up the notes").
+    reviewer_setup: reviewer_setup::State,
 }
 
 impl App {
@@ -364,6 +368,7 @@ impl App {
             launch_overrides: Vec::new(),
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),
+            reviewer_setup: reviewer_setup::State::default(),
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;
@@ -373,6 +378,7 @@ impl App {
     /// Attaches straight to `session`. The `draw` jig uses it: an events
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
+        self.reviewer_setup_attached(&session);
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
@@ -940,6 +946,12 @@ impl App {
                     return false;
                 };
                 let session = SessionId(session.to_owned());
+                if matches!(
+                    line.kind.as_str(),
+                    "stream_reopened" | "stream_closed" | "session_left"
+                ) {
+                    self.reviewer_setup_stream_lost(&session);
+                }
                 match line.kind.as_str() {
                     "stream_reopened" => {
                         // The cause ended for this session: its notice goes.
@@ -1659,6 +1671,11 @@ impl App {
 
     /// Folds one session line, returning command lines to send.
     fn on_session(&mut self, envelope: &Envelope) -> Vec<String> {
+        // The reviewer setup's `propose_notes` answers settle first, and
+        // reach no other path.
+        if self.reviewer_setup_settled(envelope) {
+            return Vec::new();
+        }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
         if approvals::KINDS.contains(&envelope.kind.as_str()) {
@@ -1731,6 +1748,7 @@ impl App {
             return send;
         }
         send.extend(self.panel_line(envelope));
+        self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
         self.session_views_line(envelope);

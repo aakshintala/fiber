@@ -69,9 +69,10 @@ is a real child session process, because it is Fiber. The fakes are:
 - a second client on a session's socket
 - test helpers for what many test files share: `fakes::fifo` makes a FIFO
   by one function, `fakes::tool_args` builds a tool call's argument map
-  and `fakes::text_of` reads a tool result's text, and `fakes::wait_output`
+  and `fakes::text_of` reads a tool result's text, `fakes::wait_output`
   returns a spawned system tool's output under a deadline, killing its
-  group on expiry
+  group on expiry, and `fakes::wait_until` waits for a predicate to hold
+  under a deadline, polling it on a thread
 - a fake clock, whose time moves only when the test advances it to a named
   park through `advance_when_parked`, naming the expected park and the advance
   separately; `advance_marked` marks each thread's latest park, so
@@ -85,6 +86,10 @@ is a real child session process, because it is Fiber. The fakes are:
   before the scope and freed inside it lowers the total; `fakes` only
   exports it, and each test binary that measures installs it as its own
   global allocator and holds nothing else
+- hooks on the scripted provider that observe a call without replacing it:
+  requests are recorded in call order; a before-call hook sees each request
+  before the script pop and an after-reply hook sees each end before it is
+  returned, in call order, each firing on every call or on one numbered call
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,
@@ -149,7 +154,10 @@ program or waiting on a test.
 - **A test runs the jig's built binary.** `cargo test` builds the crate's
   examples, so a jig test starts `target/<profile>/examples/<jig>` (found
   from `std::env::current_exe`) directly. It never runs `cargo run`, which
-  would wait on the build directory's lock inside the test's deadline.
+  would wait on the build directory's lock inside the test's deadline. Its
+  first start runs through the shared helper's start bound
+  (`fakes::warm_up`), because the first exec of a freshly linked binary can
+  stall for seconds on macOS (`docs/testing.md`, the first-run stall).
 - **Its own logic is tested from shared support.** Code in a jig that a
   test checks without running the binary, such as its argument parsing,
   lives in a support file under the crate's `tests/support/`. The jig

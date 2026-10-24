@@ -3,7 +3,8 @@
 //! list and admission onto each extension's ordered stream.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
+use support::lock;
 
 use config::Config;
 use contract::ErrorCode;
@@ -434,10 +435,7 @@ impl Lazy {
         self.started.get_or_init(|| {
             self.read().map_err(|e| {
                 if self.lua.misplaced_provider() {
-                    self.rejected
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .push(self.extension.clone());
+                    lock(&self.rejected).push(self.extension.clone());
                 }
                 Rejection {
                     code: e.code(),

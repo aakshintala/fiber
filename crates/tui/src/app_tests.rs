@@ -924,9 +924,9 @@ fn the_commands_answer_fills_the_list_with_hints_and_tags() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     let id = attached_asking(&mut app, now);
-    // Until the answer arrives, the built-ins only: `/rev` finds no
+    // Until the answer arrives, the built-ins only: `/td` finds no
     // row, so the panel holds only its dim row.
-    assert_eq!(slash_rows(&mut app, "rev", now), ["no matches"]);
+    assert_eq!(slash_rows(&mut app, "td", now), ["no matches"]);
     let answer = commands_answer(
         &id,
         serde_json::json!([
@@ -938,7 +938,10 @@ fn the_commands_answer_fills_the_list_with_hints_and_tags() {
     assert!(app.on_line(answer).is_empty());
     assert_eq!(
         slash_rows(&mut app, "rev", now),
-        ["/review [base]  Review a diff.  template"]
+        [
+            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
+            "/review [base]  Review a diff.  template"
+        ]
     );
     assert_eq!(
         slash_rows(&mut app, "td", now),

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view_tests.rs
-assertion_line: 1140
 expression: "sized(&mut app, 80, 24)"
 ---
 
@@ -13,15 +12,15 @@ expression: "sized(&mut app, 80, 24)"
 
 
 
-
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-  › resume     Goes home, focused on the first exited row.             command
-    name       /rename Names the session. <text>                       command
-    reload     Reloads configuration, MCP servers and extensions.      command
-    review     Reviews a diff. [base]                                 template
-    refactor   Refactors a module.                                       skill
-    credential Switches the credential label, or opens the … [<label>] command
+  › resume         Goes home, focused on the first exited row.         command
+    reviewer-setup Sets up the reviewer's notes with you.              command
+    name           /rename Names the session. <text>                   command
+    reload         Reloads configuration, MCP servers and extensions.  command
+    review         Reviews a diff. [base]                             template
+    refactor       Refactors a module.                                   skill
+    credential     Switches the credential label, or opens … [<label>] command
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

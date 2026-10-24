@@ -5,9 +5,10 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::Instant;
+use support::lock;
 
 use contract::RequestId;
 use contract::clock::Wake;
@@ -40,7 +41,7 @@ impl ModelCancel {
     /// flag is set, so a subscriber that arrives after it is never woken.
     pub(super) fn end(&self) {
         let subscribers = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut state = lock(&self.state);
             if state.0 {
                 return;
             }
@@ -55,11 +56,11 @@ impl ModelCancel {
 
 impl Cancel for ModelCancel {
     fn is_cancelled(&self) -> bool {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).0
+        lock(&self.state).0
     }
 
     fn subscribe(&self, wake: Weak<dyn Wake>) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut state = lock(&self.state);
         if !state.0 {
             state.1.push(wake);
         }
@@ -783,25 +784,18 @@ static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new
 /// Runs `hook` at each `settle` admission point from now on.
 #[cfg(test)]
 pub(crate) fn pause_settle(hook: SettleHook) {
-    *SETTLE_HOOK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    *lock(&SETTLE_HOOK) = Some(hook);
 }
 
 /// Stops pausing at each `settle` admission point.
 #[cfg(test)]
 pub(crate) fn unpause_settle() {
-    *SETTLE_HOOK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *lock(&SETTLE_HOOK) = None;
 }
 
 #[cfg(test)]
 pub(super) fn settle_hook(target: &Target, pause: Pause) {
-    let hook = SETTLE_HOOK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+    let hook = lock(&SETTLE_HOOK).clone();
     if let Some(hook) = hook {
         hook(target, pause);
     }
@@ -835,9 +829,7 @@ pub(crate) fn pause_observed_execution(
 ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
     let (arrived_tx, arrived_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
-    *OBSERVED_PAUSE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(ObservedPause {
+    *lock(&OBSERVED_PAUSE) = Some(ObservedPause {
         provider: provider.to_owned(),
         arrived: arrived_tx,
         release: release_rx,
@@ -848,9 +840,7 @@ pub(crate) fn pause_observed_execution(
 /// Stops pausing observed HTTP workers.
 #[cfg(test)]
 pub(crate) fn unpause_observed_execution() {
-    *OBSERVED_PAUSE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *lock(&OBSERVED_PAUSE) = None;
 }
 
 /// Waits for the test's release when an observed worker of the paused
@@ -858,10 +848,7 @@ pub(crate) fn unpause_observed_execution() {
 /// worker blocks holding no lock.
 #[cfg(test)]
 fn await_observed_release(provider: &str) {
-    let gate = OBSERVED_PAUSE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take_if(|pause| pause.provider == provider);
+    let gate = lock(&OBSERVED_PAUSE).take_if(|pause| pause.provider == provider);
     if let Some(pause) = gate {
         let _ignored = pause.arrived.send(());
         let _ignored = pause.release.recv();

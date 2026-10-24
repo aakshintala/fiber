@@ -234,7 +234,7 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
         std::io::ErrorKind::WouldBlock
     );
 
-    support::kill_group(deadline, group, "TERM").unwrap();
+    fakes::kill_group(group, "TERM").unwrap();
     let (tx, reaped) = mpsc::channel();
     thread::spawn(move || {
         tx.send(b.wait().unwrap()).unwrap();
@@ -243,7 +243,7 @@ fn lists_running_sessions_marks_itself_and_waits_out_a_silent_one() {
     deadline
         .cleanup_phase()
         .recv_or_fail(&read_end, "B stdout closed");
-    assert!(!support::group_alive(deadline, group));
+    assert!(!fakes::group_alive(group));
     watchdog.stand_down(deadline.cleanup_phase());
     std::mem::forget(guard);
 }

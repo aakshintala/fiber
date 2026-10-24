@@ -236,9 +236,6 @@ const PROXY_CHILD: &str = "FIBER_TEST_HOST_HTTP_PROXY_CHILD";
 /// The server URL, passed to the child on its environment.
 const PROXY_CHILD_SERVER: &str = "FIBER_TEST_HOST_HTTP_SERVER";
 
-/// How long the parent waits for the proxy to record a CONNECT.
-const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
-
 /// Runs a GET in a child process whose environment names the proxy, and
 /// checks the proxy recorded `target`. The child re-runs this same test,
 /// which performs the request and fails the child when it does not arrive.
@@ -278,7 +275,7 @@ fn through_proxy_env(test: &str, server_path: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        proxy.await_connects(1, Deadline::after(CONNECT_WITHIN)),
+        proxy.await_connects(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);

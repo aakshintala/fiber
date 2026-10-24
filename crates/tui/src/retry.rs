@@ -145,7 +145,7 @@ impl Retry {
 
     /// The gate, even after a thread panicked holding it.
     fn lock(&self) -> MutexGuard<'_, Gate> {
-        self.gate.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.gate)
     }
 }
 

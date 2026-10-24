@@ -22,9 +22,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{
-    Deadline, Setup, function_call, git, group_alive, hello, kinds, run_to_exit, stream,
-};
+use support::{Deadline, Setup, function_call, git, hello, kinds, run_to_exit, stream};
 
 /// A repository with one commit on `main` at `dir`.
 #[track_caller]
@@ -298,7 +296,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
     let hook_pid: u32 = words.next().unwrap().parse().unwrap();
     let hook_group: u32 = words.next().unwrap().parse().unwrap();
     assert!(hook_pid > 1 && hook_group > 1);
-    support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
+    fakes::kill_pid(fiber_pid, "TERM").unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let out = match setup.deadline.recv(&finished) {
@@ -341,7 +339,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
         "no session directory exists"
     );
     watchdog.stand_down(setup.deadline.cleanup_phase());
-    assert!(!group_alive(setup.deadline, fiber_pid));
+    assert!(!fakes::group_alive(fiber_pid));
 }
 
 #[test]
@@ -929,7 +927,7 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
     let hook_pid: u32 = words.next().unwrap().parse().unwrap();
     let hook_group: u32 = words.next().unwrap().parse().unwrap();
     assert!(hook_pid > 1 && hook_group > 1);
-    support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
+    fakes::kill_pid(fiber_pid, "TERM").unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
     let out = match setup.deadline.recv(&finished) {
@@ -957,7 +955,7 @@ fn a_signal_during_the_recreating_add_leaves_nothing() {
     ));
     assert_eq!(session_log(&setup, &first.id).1, before);
     watchdog.stand_down(setup.deadline.cleanup_phase());
-    assert!(!group_alive(setup.deadline, fiber_pid));
+    assert!(!fakes::group_alive(fiber_pid));
 }
 
 #[test]

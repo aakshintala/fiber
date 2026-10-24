@@ -8,8 +8,9 @@ use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::{Duration, Instant};
+use support::lock;
 
 use contract::clock::Clock;
 use rustix::process::Signal;
@@ -109,10 +110,6 @@ impl contract::clock::Wake for Shared {
     fn wake(&self) {
         self.cv.notify_all();
     }
-}
-
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Latency only: `park` never blocks past `support::group::GROUP_POLL`,
@@ -232,7 +229,38 @@ pub(crate) fn run(
     deadline: Option<Instant>,
     cancel: mpsc::Receiver<()>,
 ) -> Result<Ran, Box<ExecError>> {
-    let mut cmd = Command::new(&req.program);
+    run_with(req, clock, deadline, cancel, Command::new(&req.program))
+}
+
+/// Runs `req` as [`run`] does, except the base command is the scrubbed
+/// `git` builder: `req`'s args follow the builder's `-c` pairs, so the
+/// `git` subcommand appears after them. `req`'s `env` stays empty, so no
+/// request variable re-adds one the builder removed.
+pub(crate) fn run_git(
+    req: &ExecRequest,
+    clock: &dyn Clock,
+    deadline: Option<Instant>,
+    cancel: mpsc::Receiver<()>,
+) -> Result<Ran, Box<ExecError>> {
+    run_with(
+        req,
+        clock,
+        deadline,
+        cancel,
+        support::git::command(&req.program),
+    )
+}
+
+/// [`run`] over a caller-built base command: `req`'s args, directory,
+/// environment, input and cap join it, then the run proceeds as `run`
+/// does, in its own process group or in Fiber's.
+fn run_with(
+    req: &ExecRequest,
+    clock: &dyn Clock,
+    deadline: Option<Instant>,
+    cancel: mpsc::Receiver<()>,
+    mut cmd: Command,
+) -> Result<Ran, Box<ExecError>> {
     cmd.args(&req.args)
         .current_dir(&req.cwd)
         .envs(&req.env)

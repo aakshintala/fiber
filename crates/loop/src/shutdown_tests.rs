@@ -343,7 +343,7 @@ impl World {
         let (done, finished) = mpsc::channel();
         let looped = self.looped;
         thread::spawn(move || {
-            let _sent = done.send(looped.run());
+            let _sent = done.send(looped.run().result);
         });
         (finished, self.inbox, self.held)
     }

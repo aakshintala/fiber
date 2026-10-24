@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -113,15 +112,10 @@ fn remote_texts(workspace: &Path) -> Vec<String> {
 }
 
 fn remote_urls(workspace: &Path) -> Vec<(String, String)> {
-    let output = Command::new("git")
+    let output = support::git::command("git")
         .arg("-C")
         .arg(workspace)
         .args(["remote", "-v"])
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_INDEX_FILE")
-        .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output();
     let Ok(output) = output else {

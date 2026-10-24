@@ -9,7 +9,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use contract::diag::Timing;
 use contract::shapes::Effect;
@@ -470,7 +470,7 @@ impl Shared {
 }
 
 fn session(mutex: &Mutex<Session>) -> MutexGuard<'_, Session> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    support::lock(mutex)
 }
 
 /// A hash of the file's bytes. In-process only: nothing persists or logs it.
