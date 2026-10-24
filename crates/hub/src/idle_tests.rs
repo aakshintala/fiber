@@ -29,12 +29,6 @@ use crate::fake::FakeStarter;
 use crate::listen::Held;
 use fakes::Deadline;
 
-/// One named deadline per wait: the hub answers before it.
-const DEADLINE: Duration = Duration::from_secs(5);
-
-/// How long `await_parked` waits for the hub to park, in wall time.
-const WITHIN: Duration = Duration::from_secs(5);
-
 /// Thirty idle minutes, the documented default.
 const IDLE: Duration = Duration::from_millis(1_800_000);
 
@@ -268,7 +262,7 @@ fn serve_with_hub_at_peak_between_and_starter(
     (hub, got, done_rx)
 }
 
-/// Waits, at most `WITHIN`, until the hub's only park has no deadline: it
+/// Waits, at most `fakes::MUST_SUCCEED_WITHIN`, until the hub's only park has no deadline: it
 /// saw a client open. Panics past the deadline naming the wait.
 #[track_caller]
 fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
@@ -285,17 +279,20 @@ fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
             }
         })
         .unwrap();
-    Deadline::after(WITHIN)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the hub parks with no deadline {what}"));
 }
 
-/// Waits, at most `WITHIN`, until the hub parks until `zero + IDLE`: it saw
+/// Waits, at most `fakes::MUST_SUCCEED_WITHIN`, until the hub parks until `zero + IDLE`: it saw
 /// the count reach 0 at `zero`. Panics past the deadline naming the wait.
 #[track_caller]
 fn await_idle_park(clock: &Arc<fakes::clock::FakeClock>, zero: Instant, what: &str) {
     assert!(
-        clock.await_parked(zero + IDLE, fakes::Deadline::after(WITHIN)),
+        clock.await_parked(
+            zero + IDLE,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the hub parks until idle_exit after the count reached 0 {what}"
     );
 }
@@ -310,7 +307,9 @@ struct Client {
 /// the connection.
 fn connect(temp: &Temp) -> Client {
     let stream = UnixStream::connect(temp.socket()).unwrap();
-    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    stream
+        .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+        .unwrap();
     let mut read = BufReader::new(stream.try_clone().unwrap());
     let mut hello = String::new();
     read.read_line(&mut hello).expect("the hub speaks first");
@@ -355,10 +354,10 @@ fn with_no_clients_the_hub_exits_at_idle_exit() {
         Some(clock.origin() + IDLE),
         Some(serve_id),
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -397,15 +396,16 @@ fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
         Some(clock.origin() + IDLE),
         Some(serve_id),
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
     );
     let (before, last, peak) = last_two(&temp.log());
+    // docs/state.md:288-289 promises `peak_memory` just before each `hub_stopped` at debug.
     assert_eq!(
         (before.as_str(), last.as_str()),
         ("peak_memory", "hub_stopped")
@@ -424,10 +424,10 @@ fn a_hub_whose_socket_was_removed_still_exits_at_idle_exit() {
         Some(clock.origin() + IDLE),
         Some(serve_id),
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -445,7 +445,7 @@ fn one_tick_before_idle_exit_the_hub_still_answers() {
         Some(clock.origin() + IDLE),
         None,
         IDLE.checked_sub(TICK).unwrap(),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     // A hub that had exited answers EOF or refuses: the hello proves it
     // still serves.
@@ -454,9 +454,14 @@ fn one_tick_before_idle_exit_the_hub_still_answers() {
     drop(client);
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
-    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        Some(zero + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -472,15 +477,25 @@ fn a_connected_client_keeps_the_hub_and_leaving_starts_the_timer() {
     let client = connect(&temp);
     await_open_park(&clock, "after the arrival");
     // Far past any deadline: an open client has none.
-    clock.advance_when_parked(None, None, IDLE * 100, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        None,
+        None,
+        IDLE * 100,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     drop(client);
     // The timer starts at the departure, so this park also proves the hub
     // outlived the advance.
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
-    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        Some(zero + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -496,7 +511,12 @@ fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
     await_idle_park(&clock, clock.origin(), "at start");
     let first = connect(&temp);
     await_open_park(&clock, "after the first arrival");
-    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        None,
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     drop(first);
     let first_zero = clock.now();
     await_idle_park(&clock, first_zero, "after the first departure");
@@ -504,13 +524,18 @@ fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
         Some(first_zero + IDLE),
         None,
         IDLE.checked_sub(TICK).unwrap(),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     // Within the window: the hello proves the hub still serves.
     let second = connect(&temp);
     await_open_park(&clock, "after the second arrival");
     // Past the first departure's deadline: the reconnect cleared it.
-    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        None,
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     drop(second);
     let second_zero = clock.now();
     await_idle_park(&clock, second_zero, "after the second departure");
@@ -518,10 +543,10 @@ fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
         Some(second_zero + IDLE),
         None,
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -540,13 +565,23 @@ fn a_spawn_failure_rollback_restarts_the_timer() {
     let (counted, _peer) = UnixStream::pair().unwrap();
     let n = hub.register(&counted).expect("the clone succeeds");
     await_open_park(&clock, "after the count");
-    clock.advance_when_parked(None, None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        None,
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     hub.rollback(n);
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the rollback");
-    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        Some(zero + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -574,11 +609,17 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     let advance = thread::spawn({
         let clock = Arc::clone(&clock);
         move || {
-            clock.advance_when_parked(Some(origin + IDLE), None, IDLE, &Deadline::after(WITHIN));
+            clock.advance_when_parked(
+                Some(origin + IDLE),
+                None,
+                IDLE,
+                &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            );
             a_tx.send(()).unwrap_or(());
         }
     });
-    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the advance to reach its wake");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&attempt_rx, "the advance to reach its wake");
     // Thread B counts a client through a fresh arm. Counting clears
     // `zero_since` before the wake, which blocks on the guard the same
     // way: the report proves the count is in place.
@@ -593,7 +634,8 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
             b_tx.send(n).unwrap_or(());
         }
     });
-    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the arrival to reach its wake");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&attempt_rx, "the arrival to reach its wake");
     // The stale state, read with no waits: a client is counted, yet the
     // only park is still the start-up one.
     assert_eq!(hub.clients(), 1);
@@ -601,7 +643,10 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     // The old gate: the stale park still satisfies the instant wait even
     // with a client counted, so advancing on it races the arrival.
     assert!(
-        clock.await_parked(origin + IDLE, fakes::Deadline::after(WITHIN)),
+        clock.await_parked(
+            origin + IDLE,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the stale start-up park still satisfies the instant gate with a client counted"
     );
     // The new gate: no unbounded park exists while the guard is held. A
@@ -615,14 +660,15 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
     // rechecks under the tick lock with the count and the later time in
     // place, finds a client open, and parks with no deadline.
     drop(held);
-    Deadline::after(DEADLINE).recv_or_fail(&a_done, "the advance to finish its wake");
-    let n = Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&a_done, "the advance to finish its wake");
+    let n = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&b_done, "the arrival to finish its wake")
         .expect("the clone succeeds");
     advance.join().expect("the advance thread joins");
     arrival.join().expect("the arrival thread joins");
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
+        clock.await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the hub parks with no deadline once it saw the client"
     );
     // The departure starts the timer at the advanced time; the advance
@@ -638,9 +684,14 @@ fn a_start_up_park_still_standing_does_not_prove_the_departure() {
         "the advance that raced the arrival does not end the hub"
     );
     // Driving the timer from the departure exits the hub.
-    clock.advance_when_parked(Some(zero + IDLE), None, IDLE, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        Some(zero + IDLE),
+        None,
+        IDLE,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -666,7 +717,9 @@ fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
     // The accept loop sees the claim: the stream is dropped unanswered,
     // and the client retries.
     let (served, mut client) = UnixStream::pair().unwrap();
-    client.set_read_timeout(Some(DEADLINE)).unwrap();
+    client
+        .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+        .unwrap();
     assert!(matches!(
         hub.poll_accept(&served, &stop),
         crate::connection::Accept::Exiting
@@ -688,7 +741,7 @@ fn a_signal_stops_the_hub_with_its_code() {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -727,7 +780,9 @@ fn a_signal_aborts_a_sessions_stop_with_a_partial_answer() {
     }));
     asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
     assert!(
-        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&parked)
+            .is_ok(),
         "the loop parks unconfirmed"
     );
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
@@ -748,7 +803,7 @@ fn a_signal_aborts_a_sessions_stop_with_a_partial_answer() {
     );
     assert!(asker.next("the close").is_none(), "EOF follows the answer");
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -787,7 +842,9 @@ fn a_second_bare_stop_aborts_a_sessions_stop() {
     }));
     asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
     assert!(
-        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&parked)
+            .is_ok(),
         "the loop parks unconfirmed"
     );
     let mut second = connect(&temp);
@@ -818,7 +875,7 @@ fn a_second_bare_stop_aborts_a_sessions_stop() {
     );
     assert!(asker.next("the close").is_none(), "EOF follows the answer");
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -852,7 +909,9 @@ fn a_signal_before_the_first_listing_names_only_the_live_session() {
     let mut starter = connect(&temp);
     starter.send(&json!({"id": "c_1", "command": "start", "args": {"workspace": workspace}}));
     assert!(
-        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&entered)
+            .is_ok(),
         "the start pauses between the admit steps"
     );
     let (waiting_tx, waiting) = mpsc::channel();
@@ -862,7 +921,9 @@ fn a_signal_before_the_first_listing_names_only_the_live_session() {
     let mut asker = connect(&temp);
     asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
     assert!(
-        Deadline::after(DEADLINE).recv(&waiting).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&waiting)
+            .is_ok(),
         "the stop parks on the nonzero count"
     );
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
@@ -884,7 +945,7 @@ fn a_signal_before_the_first_listing_names_only_the_live_session() {
     );
     assert!(asker.next("the close").is_none(), "EOF follows the answer");
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -932,25 +993,29 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
     }));
     asker.send(&json!({"id": "c_stop", "command": "stop", "args": {"sessions": true}}));
     assert!(
-        Deadline::after(DEADLINE).recv(&parked).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&parked)
+            .is_ok(),
         "the loop parks unconfirmed"
     );
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert!(
-        Deadline::after(DEADLINE).recv(&entered).is_ok(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&entered)
+            .is_ok(),
         "the loop sees the abort"
     );
     // The arm parks in its flush wait with the answer still held.
     let end = clock.origin() + SESSIONS_ABORT_FLUSH;
     assert!(
-        clock.await_parked(end, fakes::Deadline::after(WITHIN)),
+        clock.await_parked(end, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the arm parks on the flush bound"
     );
     // The hook records the arm thread, whose flush wait the advances
     // below name: under load the re-woken fan-out worker can re-park
     // at the sessions bound first.
-    let arm = Deadline::after(DEADLINE)
+    let arm = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&flushed)
         .expect("the arm parks in its flush wait");
     // One millisecond short of the bound the hub stays.
@@ -960,17 +1025,17 @@ fn a_signal_abort_flush_expires_when_the_answer_never_lands() {
         SESSIONS_ABORT_FLUSH
             .checked_sub(Duration::from_millis(1))
             .expect("the flush bound exceeds a millisecond"),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert!(done.try_recv().is_err(), "the hub stays before the bound");
     clock.advance_when_parked(
         Some(end),
         Some(arm),
         Duration::from_millis(1),
-        &fakes::Deadline::after(DEADLINE),
+        &fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -992,7 +1057,7 @@ fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1017,7 +1082,7 @@ fn a_signal_shuts_down_connected_clients() {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1043,7 +1108,7 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
         Arc::clone(&fakes::clock::FakeClock::new()),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits at once"),
         0
@@ -1078,7 +1143,7 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1095,6 +1160,7 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         .position(|line| line["code"] == "hub_stopped")
         .expect("the hub logs its stop");
     assert!(at > 0, "a line comes before the stop");
+    // docs/state.md:288-289 promises the hub's peak_memory line just before hub_stopped.
     assert_eq!(lines[at - 1]["code"], "peak_memory");
     assert_eq!(lines[at - 1]["data"]["peak_kib"], 9);
 }
@@ -1123,14 +1189,14 @@ fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
     );
     // An installed hub parks with no deadline even with no client.
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
+        clock.await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the installed hub waits with no idle deadline"
     );
     clock.advance_when_parked(
         None,
         Some(serve_id),
         Duration::from_secs(3600),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let client = connect(&temp);
     drop(client);
@@ -1140,7 +1206,7 @@ fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
     );
     raise_sigterm();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1174,13 +1240,13 @@ fn an_installed_hub_waits_for_the_lock_then_binds() {
     );
     drop(other);
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(WITHIN)),
+        clock.await_parked_unbounded(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the installed hub serves once the lock is released"
     );
     drop(connect(&temp));
     raise_sigterm();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1216,7 +1282,7 @@ fn stop_second_hub(hub: &Arc<Hub>, got: &Arc<AtomicI32>, done: mpsc::Receiver<i3
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the second hub stops"),
         143
@@ -1236,7 +1302,7 @@ fn a_signal_exits_when_run_was_replaced_by_a_second_hub() {
     got_a.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub_a.waker().wake();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done_a)
             .expect("the first hub exits on its signal"),
         143
@@ -1260,10 +1326,10 @@ fn an_idle_exit_lands_when_run_was_replaced_by_a_second_hub() {
         Some(clock.origin() + IDLE),
         None,
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done_a)
             .expect("the first hub exits idle"),
         0
@@ -1284,10 +1350,10 @@ fn an_idle_exit_lands_when_run_is_gone_entirely() {
         Some(clock.origin() + IDLE),
         None,
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -1307,10 +1373,10 @@ fn an_idle_exit_connects_nowhere_through_the_socket_path() {
         Some(clock.origin() + IDLE),
         None,
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -1367,7 +1433,7 @@ fn inherited_env(
 
 /// The fake shell's pid, read under a wall-clock deadline.
 fn shell_pid(temp: &Temp) -> u32 {
-    let deadline = Deadline::after(WITHIN);
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     loop {
         if let Ok(text) = fs::read_to_string(temp.dir.join("pid"))
             && let Ok(pid) = text.trim().parse::<u32>()
@@ -1401,19 +1467,19 @@ fn a_signal_during_a_hung_first_capture_stops_with_no_environment_built() {
     assert!(
         clock.await_parked(
             origin + crate::environment::capture::CAPTURE_DEADLINE,
-            fakes::Deadline::after(WITHIN)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the first capture waits on its deadline"
     );
     raise_sigterm();
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
     );
     assert!(
-        fakes::pids_exit(&[pid], fakes::Deadline::after(WITHIN)),
+        fakes::pids_exit(&[pid], fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the shell is reaped"
     );
     assert!(
@@ -1435,7 +1501,9 @@ fn close_runs_before_hub_stopped_in_the_shutdown_race() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     *support::lock(&environments.before_publish) = Some(Box::new(move || {
         held_tx.send(()).unwrap_or(());
-        Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&release_rx)
+            .unwrap_or(());
     }));
     let (done, _) = serve_mode_env(
         &temp,
@@ -1445,7 +1513,7 @@ fn close_runs_before_hub_stopped_in_the_shutdown_race() {
         crate::Mode::OnDemand,
         Arc::clone(&environments),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&held_rx)
         .expect("the capture holds before publishing");
     raise_sigterm();
@@ -1459,7 +1527,7 @@ fn close_runs_before_hub_stopped_in_the_shutdown_race() {
     );
     release_tx.send(()).unwrap_or(());
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1492,7 +1560,9 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
     let (release_tx, release_rx) = mpsc::channel::<()>();
     *support::lock(&environments.before_publish) = Some(Box::new(move || {
         held_tx.send(()).unwrap_or(());
-        Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&release_rx)
+            .unwrap_or(());
     }));
     let (done, serve_id) = serve_mode_env(
         &temp,
@@ -1502,7 +1572,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         crate::Mode::OnDemand,
         Arc::clone(&environments),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&held_rx)
         .expect("the capture holds before publishing");
     await_idle_park(&clock, clock.origin(), "at start");
@@ -1510,7 +1580,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         Some(clock.origin() + IDLE),
         Some(serve_id),
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     crate::testkit::await_true("close begins", {
         let environments = Arc::clone(&environments);
@@ -1529,7 +1599,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         let read = first.read_to_end(&mut got);
         first_tx.send((read, got)).unwrap_or(());
     });
-    let (read, got) = Deadline::after(DEADLINE)
+    let (read, got) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&first_rx)
         .expect("the first connection ends");
     assert_eq!(
@@ -1565,7 +1635,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
             .map_err(|error| error.kind());
         result_tx.send((size, bytes)).unwrap_or(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reading_rx)
         .expect("the reader probed its read")
         .expect("the second connection stays unanswered while the hold lasts");
@@ -1578,7 +1648,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         "no stop line while the hold lasts"
     );
     release_tx.send(()).unwrap_or(());
-    let (size, bytes) = Deadline::after(DEADLINE)
+    let (size, bytes) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&result_rx)
         .expect("the second connection ends once the socket closes");
     assert!(bytes.is_empty(), "the second connection carries no bytes");
@@ -1588,7 +1658,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         other => panic!("the second connection ends EOF or reset, got {other:?}"),
     }
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub exits idle"),
         0
@@ -1630,7 +1700,7 @@ fn start_stalled_hub() -> Stalled {
         crate::Mode::OnDemand,
         Arc::clone(&environments),
     );
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&held_rx)
         .expect("the capture holds before publishing");
     await_idle_park(&clock, clock.origin(), "at start");
@@ -1638,7 +1708,7 @@ fn start_stalled_hub() -> Stalled {
         Some(clock.origin() + IDLE),
         Some(serve_id),
         IDLE,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     crate::testkit::await_true("close begins", {
         let environments = Arc::clone(&environments);
@@ -1662,7 +1732,7 @@ fn await_drop(stream: &UnixStream, what: &str) {
         let read = probe.read_to_end(&mut sink).map_err(|error| error.kind());
         eof_tx.send(read).unwrap_or(());
     });
-    let read = Deadline::after(DEADLINE)
+    let read = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&eof_rx)
         .unwrap_or_else(|_| panic!("the accept loop drops the connection {what}"));
     assert_eq!(read, Ok(0), "the drop carries no bytes {what}");
@@ -1680,7 +1750,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     let dropped = start_stalled_hub();
     let racy = UnixStream::connect(dropped.temp.socket()).expect("the drop position connects");
     await_drop(&racy, "at the drop position");
-    let timed = racy.set_read_timeout(Some(DEADLINE));
+    let timed = racy.set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN));
     // A read timeout set after the peer's drop is `EINVAL` where the
     // kernel rejects the option on a dead socket.
     #[cfg(target_os = "macos")]
@@ -1693,7 +1763,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     drop(timed);
     dropped.release_tx.send(()).unwrap_or(());
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&dropped.done)
             .expect("the drop position exits idle"),
         0
@@ -1709,7 +1779,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
         let socket = unlinked.temp.socket();
         move || !socket.exists()
     });
-    let timed = queued.set_read_timeout(Some(DEADLINE));
+    let timed = queued.set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN));
     #[cfg(target_os = "macos")]
     assert_eq!(
         timed.map_err(|error| error.raw_os_error()),
@@ -1719,7 +1789,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
     #[cfg(not(target_os = "macos"))]
     drop(timed);
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&unlinked.done)
             .expect("the unlink position exits idle"),
         0
@@ -1739,7 +1809,7 @@ fn each_forced_teardown_position_around_connect_and_set_read_timeout() {
         "connecting after the unlink finds no socket"
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&gone.done)
             .expect("the gone position exits idle"),
         0
@@ -1781,7 +1851,9 @@ fn a_local_stop_accepts_then_ends_the_hub_as_a_signal_with_sessions_intact() {
     let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     let stream = UnixStream::connect(temp.socket()).unwrap();
-    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    stream
+        .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+        .unwrap();
     let mut read = BufReader::new(stream.try_clone().unwrap());
     let mut hello = String::new();
     read.read_line(&mut hello).expect("the hub speaks first");
@@ -1807,7 +1879,7 @@ fn a_local_stop_accepts_then_ends_the_hub_as_a_signal_with_sessions_intact() {
         "the stop carries no result"
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1853,7 +1925,7 @@ fn a_stop_requested_before_the_run_starts_exits_without_waiting() {
     // The fake clock never advances: a check-after-return implementation
     // parks to idle expiry and this deadline fails it.
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done_rx)
             .expect("a preset stop exits without waiting"),
         143
@@ -1886,7 +1958,8 @@ fn a_stop_store_waits_on_the_tick_hold() {
             done_tx.send(()).unwrap_or(());
         }
     });
-    Deadline::after(DEADLINE).recv_or_fail(&attempt_rx, "the stop to reach the held lock");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&attempt_rx, "the stop to reach the held lock");
     // Still held, with the arrival proven: the store has not landed, read
     // with no clock.
     assert!(
@@ -1894,7 +1967,8 @@ fn a_stop_store_waits_on_the_tick_hold() {
         "the stop store rides the tick hold"
     );
     drop(held);
-    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "the store to land once the hold drops");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&done_rx, "the store to land once the hold drops");
     assert!(matches!(
         hub.idle_wait(IDLE, &AtomicBool::new(false), &AtomicI32::new(0)),
         Idle::Signal(signal_hook::consts::SIGTERM)

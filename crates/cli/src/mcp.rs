@@ -16,7 +16,6 @@ use config::{
 use contract::clock::Clock;
 use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
-use contract::shapes::Failure;
 use extensions::{Decision, Index, Store};
 use serde_json::{Map, Value};
 
@@ -81,11 +80,6 @@ pub(crate) struct Streams<'a> {
     pub(crate) out: &'a mut dyn Write,
     pub(crate) err: &'a mut dyn Write,
 }
-
-pub(crate) fn config_failure(e: ConfigError) -> Failure {
-    Failure::from(CliError::from(e))
-}
-// debt: cli-C deletes `config_failure` with the last use in `hub_list.rs`.
 
 /// The name is a config path segment, a tool-name part and part of a
 /// credential file name: non-empty, with no `"`, `/`, NUL, whitespace or

@@ -800,10 +800,11 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
 #[test]
 fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     let setup = Setup::new_with_fa_root();
-    // The held reply, released after the message is acknowledged, keeps the
-    // turn open after the prompt: the message, sent to the session's own
-    // socket, is delivered and applied at the step boundary, inside the
-    // turn. A standing rule allows the command the step runs without asking.
+    // A standing rule asks about the command the step runs, so the turn
+    // parks on a pending approval: the loop reads its inbox while it waits
+    // for the reply. The message, sent to the session's own socket once the
+    // approval is pending, is taken and queued while the turn is held open,
+    // then applied at the step boundary after the reply allows the call.
     let server = ProviderServer::start([
         support::stream(&[support::function_call(
             "call_1",
@@ -813,13 +814,12 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         support::text_reply("Done."),
     ])
     .unwrap();
-    server.hold();
     setup.provider(&server);
     fs::write(
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "true"})
+            json!({"decision": "ask", "tool": "shell", "prefix": "true"})
         ),
     )
     .unwrap();
@@ -849,6 +849,13 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         server.await_requests(1, setup.deadline),
         "the first request is in flight"
     );
+    let mut lines = until_client(setup.deadline, &client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request_id = lines.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     send(
         setup.deadline,
         &client,
@@ -856,29 +863,53 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
             r#"{{"id":"c_msg","command":"message","args":{{"from_session_id":"{id}","text":"Tests pass on main."}}}}"#
         ),
     );
-    // The reply stays held until the release, so the message waits for its
-    // answer until the hook runs post-release.
-    server.release();
-    let mut lines = until_client(setup.deadline, &client, "the answer to c_msg", |line| {
-        line["payload"]["command_id"] == "c_msg"
-    });
+    // The take is answered while the turn waits on the approval, so the
+    // queued row proves the message arrived inside the turn: the reply
+    // releases the hold only after it.
+    lines.extend(until_client(
+        setup.deadline,
+        &client,
+        "the answer to c_msg",
+        |line| line["payload"]["command_id"] == "c_msg",
+    ));
     assert_eq!(lines.last().unwrap()["kind"], "command_accepted");
+    send(
+        setup.deadline,
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
     lines.extend(until_client(
         setup.deadline,
         &client,
         "turn_completed",
         |line| line["kind"] == "turn_completed",
     ));
-    // The complete, ordered kinds, setting aside `clients` and
-    // `session_status`, which the contract writes on their own trigger,
-    // and the `c_msg` take's own pair, which has no fixed position
-    // relative to `tool_call_completed`: the take races the `true` tool
-    // subprocess (20-run census on this head: 15 takes after the
-    // completion, 5 during it). Per `docs/testing.md`, "Event streams",
-    // the pair is pinned on its own below instead of placed in the order.
+    // The complete, ordered kinds, setting aside the lines no area doc
+    // positions relative to the turn (`docs/testing.md`, "Event streams"):
+    // `clients` and `session_status`, written on their own trigger;
+    // `command_accepted`, answered once per command with no promised
+    // position beside the durable lines (`docs/invocation.md`, "Driver
+    // commands"); `usage_recorded`, one per model call with no promised
+    // position (`docs/events.md`, "`usage_recorded`"); and
+    // `steering_queue`, written whenever the queue changes
+    // (`docs/events.md`, "`steering_queue"`). The `c_msg` take's own pair
+    // is pinned on its own below instead of placed in the order.
     let settled: Vec<&Value> = lines
         .iter()
-        .filter(|line| !matches!(line["kind"].as_str(), Some("clients" | "session_status")))
+        .filter(|line| {
+            !matches!(
+                line["kind"].as_str(),
+                Some(
+                    "clients"
+                        | "session_status"
+                        | "command_accepted"
+                        | "usage_recorded"
+                        | "steering_queue"
+                )
+            )
+        })
         .collect();
     let is_c_msg_take = |line: &Value| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_msg"
@@ -892,11 +923,7 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
                     })
     };
     let framed = "Fiber: a message from session s_0123456789abcdef. Another session wrote it, not the person.\n\nTests pass on main.";
-    let queued: Vec<&Value> = settled
-        .iter()
-        .filter(|line| is_c_msg_take(line))
-        .copied()
-        .collect();
+    let queued: Vec<&Value> = lines.iter().filter(|line| is_c_msg_take(line)).collect();
     assert_eq!(
         queued.len(),
         2,
@@ -920,42 +947,100 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         .filter(|line| !is_c_msg_take(line))
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
+    // Each pair below is promised in order by the area doc named with it:
+    // `session_started`, then `fiber_started` (`docs/invocation.md`,
+    // "Lifecycle"); `extensions_loaded`, `preamble_built` and
+    // `opening_message` arrive as a set: each is written at process or
+    // session start before the first model request, with no promised
+    // relative order (`docs/events.md`, "`extensions_loaded`",
+    // "`preamble_built`", "`opening_message`"; `docs/testing.md`,
+    // "Event streams"); `turn_started`, since
+    // `prompt` starts a turn (`docs/invocation.md`, "Driver commands");
+    // `step_started`, then the reply's items in the order the model
+    // produced them, closed by `assistant_message_completed`
+    // (`docs/loop.md`, "One step"; `docs/events.md`, "`text_completed`");
+    // `permission_requested`, then `permission_resolved`, then
+    // `tool_call_started` and `tool_call_completed`: every call is decided
+    // before any runs, and a reply's resolved lines come before any of its
+    // `tool_call_started` (`docs/loop.md`, "One step";
+    // `docs/permissions.md`, "What the log records"); the second
+    // `step_started`, then `steering_applied`, since the inbox drains at
+    // the step boundary and each waiting message is logged as its own
+    // `steering_applied` (`docs/loop.md`, "One step"; `docs/invocation.md`,
+    // "Driver commands", where a `message` during a turn is steering);
+    // then the closing reply's items and `turn_completed`, since a reply
+    // with no tool call ends the turn (`docs/loop.md`, "One step",
+    // "Ending a turn").
     assert_eq!(
-        kinds,
+        &kinds[..2],
+        ["session_started", "fiber_started"],
+        "the log opens in order: {lines:?}"
+    );
+    let mut startup = kinds[2..5].to_vec();
+    startup.sort_unstable();
+    assert_eq!(
+        startup,
+        ["extensions_loaded", "opening_message", "preamble_built"],
+        "the startup set precedes the first model request, in no promised order: {lines:?}"
+    );
+    assert_eq!(
+        &kinds[5..],
         [
-            "session_started",
-            "fiber_started",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
             "turn_started",
-            "command_accepted",
             "step_started",
             "assistant_message_started",
             "tool_call_requested",
-            "usage_recorded",
             "assistant_message_completed",
+            "permission_requested",
             "permission_resolved",
             "tool_call_started",
             "tool_call_completed",
             "step_started",
-            "steering_queue",
             "steering_applied",
             "assistant_message_started",
             "text_completed",
-            "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ],
         "the complete ordered kinds: {lines:?}"
     );
-    let accepts: Vec<&&Value> = settled
+    // Every command is answered with exactly one `command_accepted` or
+    // `command_rejected` (`docs/invocation.md`, "Driver commands"). The
+    // connection sends four commands and consumes `c_sub`'s answer before
+    // `lines` starts, so `lines` holds the other three, in no promised
+    // position relative to the durable lines, asserted as a set.
+    let mut accepted: Vec<&str> = lines
         .iter()
         .filter(|line| line["kind"] == "command_accepted")
+        .map(|line| line["payload"]["command_id"].as_str().unwrap())
         .collect();
-    assert_eq!(accepts.len(), 2, "{lines:?}");
-    assert_eq!(accepts[0]["payload"]["command_id"], "c_prompt");
-    assert_eq!(accepts[1]["payload"]["command_id"], "c_msg");
+    accepted.sort_unstable();
+    assert_eq!(accepted, ["c_msg", "c_prompt", "c_reply"], "{lines:?}");
+    // One `usage_recorded` per model call (`docs/events.md`,
+    // "`usage_recorded`): the turn makes two model calls, the held call's
+    // reply and the closing text reply, as the two requests asserted below
+    // against the provider server show.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "usage_recorded")
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    // `steering_queue` is written whenever the queue changes
+    // (`docs/events.md`, "`steering_queue"`): the take adds `c_msg` and
+    // the step boundary drains it, so exactly two.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "steering_queue")
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    // `clients` is written whenever a `full` connection attaches or leaves
+    // (`docs/events.md`, "`clients`"): one attach, one line.
     assert_eq!(
         lines
             .iter()
