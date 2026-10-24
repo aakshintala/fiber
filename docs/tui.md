@@ -781,7 +781,9 @@ a click on it returns too. The views are:
   -p log"). When the result has an `artifact`, the view pages the whole
   saved output from the session with `artifact_page`
   (`docs/invocation.md`, "What each command does"), as the conversation
-  pages history, and never loads the file whole. A dim marker sits at each
+  pages history, and never loads the file whole. A page that fails to load
+  leaves the view open with the pages it holds and a notice; scrolling to it
+  asks again. A dim marker sits at each
   edge of the model's view, from the result's `kept`: "── end of the
   model's view ──" where it stops and "── the model's view resumes ──" where
   it resumes. A result cut at one end only has the one marker. The view

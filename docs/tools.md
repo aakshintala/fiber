@@ -135,8 +135,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   holds ("Bounded results"), so a client marks the edges of the model's view
   without reading the cut notice. The ranges index the text or raw stream the
   cut saw, after any `after_tool` hook replaced `content`. When a hook returns
-  separate artifact text, the ranges do not index it, and a client must not
-  slice that artifact with them.
+  separate artifact text, the result carries no `kept`, since its ranges would
+  not index that artifact.
 - `control`: instructions to the loop, absent on most results. Four fields
   are defined. `handoff`, a handoff note: the loop restarts the model's
   context from it at the step boundary (`docs/handoff.md`). `questions`, a
