@@ -300,6 +300,10 @@ pub(crate) struct Out {
     /// Display `read_file` command lines the loop sends for the inline
     /// images the frame drew (`docs/tui.md`, "Images").
     pub(crate) display: Vec<String>,
+    /// Kitty bytes the loop writes after the screen draw: each answer's
+    /// transmit and place contiguously, and each shown image's delete
+    /// (`docs/tui.md`, "Images").
+    pub(crate) kitty: Vec<u8>,
 }
 
 #[cfg(test)]

@@ -133,6 +133,78 @@ fn call_rows_sit_at_the_ledger_indent() {
     assert!(matches!(rows[0].1, Some(Target::Image(_))));
 }
 
+/// A layout sizing its images inline with `cell`.
+fn inline_layout(paths: &[&str], cell: (u16, u16)) -> Layout {
+    let mut layout = noted(paths);
+    layout.sizing = crate::image::Sizing::Inline { cell };
+    layout
+}
+
+#[test]
+fn call_rows_draw_the_inline_grid() {
+    let layout = inline_layout(&["artifacts/a.png"], (10, 20));
+    let mut out = Rows::default();
+    call_rows(
+        &[crate::image::Part {
+            session: session(),
+            path: "artifacts/a.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 1280,
+            height: 800,
+        }],
+        60,
+        &layout,
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    // 1280 by 800 at 60 columns with a 10 by 20 cell: 24 by 7
+    // placeholders, then the caption line.
+    assert_eq!(rows.len(), 8);
+    assert!(
+        rows[0]
+            .0
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref().starts_with('\u{10EEEE}')),
+        "the grid draws first"
+    );
+    assert_eq!(rows[7].0.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(rows[7].1, Some(Target::Image(_))));
+}
+
+#[test]
+fn bubble_rows_stay_one_line_when_sized_inline() {
+    let prompt = prompt_of(&session(), &[text("look"), image("artifacts/b.png")]);
+    let layout = inline_layout(&["artifacts/b.png"], (10, 20));
+    let mut out = Rows::default();
+    bubble_rows(&prompt, 60, &layout, &mut out);
+    assert_eq!(
+        texts(out),
+        ["▄▄▄▄▄▄▄", " look ▐", "▀▀▀▀▀▀▀", "▣ b.png · 1280×800"]
+    );
+}
+
+#[test]
+fn steer_rows_stay_one_line_when_sized_inline() {
+    let layout = inline_layout(&["artifacts/s.png"], (10, 20));
+    let mut out = Rows::default();
+    steer_rows(
+        &[crate::image::Part {
+            session: session(),
+            path: "artifacts/s.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 640,
+            height: 480,
+        }],
+        60,
+        &layout,
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "▣ s.png · 640×480");
+}
+
 #[test]
 fn an_image_only_prompt_draws_its_line() {
     // No empty bubble row: the image line is the only row.

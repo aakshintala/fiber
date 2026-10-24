@@ -582,6 +582,186 @@ fn a_rejected_display_answer_leaves_the_line_with_no_notice() {
     assert!(app.take_image_out().display.is_empty());
 }
 
+/// Queues the display fetch for image `id` and returns its command id.
+fn asked(app: &mut App, id: u32) -> String {
+    app.images_drawn(&drawn(id));
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    serde_json::from_str::<Value>(&out.display[0])
+        .ok()
+        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// The hub's accepted answer carrying `data` as `mime`.
+fn accepted(id: &str, data: &str, mime: &str) -> Value {
+    json!({"data": data, "mime_type": mime, "command_id": id})
+}
+
+#[test]
+fn an_accepted_png_answer_transmits_and_places() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    let out = app.take_image_out();
+    let kitty = String::from_utf8(out.kitty).expect("escapes are text");
+    // The transmit and the place post contiguously, over the grid the
+    // answer sizes.
+    let transmit = "\x1b_Ga=t,U=1,f=100,i=1,q=2,m=0;QUJD\x1b\\";
+    assert!(kitty.starts_with(transmit), "{kitty:?}");
+    // The place follows over the grid the answer sizes: a 56-column
+    // conversation holds 22 columns, and the height follows at 6 rows.
+    let place = "\x1b_Ga=p,U=1,i=1,c=22,r=6\x1b\\";
+    let at = kitty.find(place).expect("the place follows the transmit");
+    assert_eq!(&kitty[..at], transmit);
+    assert_eq!(&kitty[at..], place);
+    assert_eq!(app.notice(), None);
+    // Shown: a redraw asks nothing more.
+    app.images_drawn(&drawn(1));
+    let out = app.take_image_out();
+    assert!(out.display.is_empty());
+    assert!(out.kitty.is_empty());
+}
+
+#[test]
+fn a_second_answer_for_a_shown_image_posts_nothing() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    let answer = accepted(&id, "QUJD", "image/png");
+    assert!(app.image_answered(&id, Some(&answer)));
+    assert!(!app.take_image_out().kitty.is_empty());
+    // The duplicate answer draws nowhere.
+    assert!(app.image_answered(&id, Some(&answer)));
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
+    // Shown stands: a redraw asks nothing more.
+    app.images_drawn(&drawn(1));
+    let out = app.take_image_out();
+    assert!(out.display.is_empty());
+    assert!(out.kitty.is_empty());
+}
+
+#[test]
+fn a_display_answer_without_png_bytes_fails_quietly() {
+    for (name, result) in [
+        ("missing", None),
+        ("empty", Some(json!({"data": "", "mime_type": "image/png"}))),
+        (
+            "non-png",
+            Some(json!({"data": "QUJD", "mime_type": "image/jpeg"})),
+        ),
+    ] {
+        let mut app = inline_app();
+        started_with_image(&mut app, "artifacts/shot.png");
+        let id = asked(&mut app, 1);
+        let result = result.clone();
+        assert!(
+            app.image_answered(&id, result.as_ref()),
+            "{name}: the answer is ours"
+        );
+        assert_eq!(app.notice(), None, "{name}: no notice");
+        let out = app.take_image_out();
+        assert!(out.kitty.is_empty(), "{name}: nothing posts");
+        // A failed image is not asked for again in this generation.
+        app.images_drawn(&drawn(1));
+        assert!(
+            app.take_image_out().display.is_empty(),
+            "{name}: no refetch"
+        );
+    }
+}
+
+#[test]
+fn a_stale_generation_answer_posts_nothing() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    let answer = accepted(&id, "QUJD", "image/png");
+    app.images.generation = app.images.generation.saturating_add(1);
+    assert!(app.image_answered(&id, Some(&answer)));
+    assert!(app.take_image_out().kitty.is_empty());
+    assert_eq!(app.notice(), None);
+}
+
+/// The display command asking for `path`.
+fn command_for(lines: &[String], path: &str) -> String {
+    lines
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|line| {
+            line.get("args")
+                .and_then(|args| args.get("path"))
+                .and_then(Value::as_str)
+                == Some(path)
+        })
+        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_kitty_error_fails_only_its_image() {
+    let mut app = inline_app();
+    ancestor_image(&mut app, "artifacts/old.png");
+    started_with_image(&mut app, "artifacts/shot.png");
+    app.images_drawn(&[drawn(1), drawn(2)].concat());
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 2);
+    // The ancestor's image errors: its id is the one noting old.png.
+    let failed = [1, 2]
+        .into_iter()
+        .find(|id| {
+            app.screen
+                .pages()
+                .image(*id)
+                .is_some_and(|part| part.path == "artifacts/old.png")
+        })
+        .expect("the ancestor's id");
+    let kept = if failed == 1 { 2 } else { 1 };
+    app.fail_display_image(failed);
+    // Both answers land: the failed image's drops, the other's shows.
+    let old = command_for(&out.display, "artifacts/old.png");
+    let shot = command_for(&out.display, "artifacts/shot.png");
+    assert!(app.image_answered(&old, Some(&accepted(&old, "QUJD", "image/png"))));
+    assert!(app.image_answered(&shot, Some(&accepted(&shot, "QUJD", "image/png"))));
+    let out = app.take_image_out();
+    let kitty = String::from_utf8(out.kitty).expect("escapes are text");
+    assert_eq!(
+        kitty.matches("i=1,").count() + kitty.matches("i=2,").count(),
+        2
+    );
+    assert!(
+        kitty.contains(&format!("i={kept},")),
+        "only the kept image posts: {kitty:?}"
+    );
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn forgetting_a_shown_image_deletes_it() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().kitty.is_empty());
+    // Attaching a new session deletes the shown image before its id
+    // returns, and drops the old fetch.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
+    let out = app.take_image_out();
+    assert_eq!(out.kitty, crate::graphics::delete(1));
+}
+
+#[test]
+fn forgetting_without_a_shown_image_deletes_nothing() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    asked(&mut app, 1);
+    // Asked but never shown: nothing reached the terminal.
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.take_image_out().kitty.is_empty());
+}
+
 #[test]
 fn a_non_png_draw_asks_for_no_bytes() {
     let mut app = inline_app();

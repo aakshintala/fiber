@@ -733,7 +733,9 @@ impl<B: Backend> Loop<B> {
             );
         }
         // The viewer opens the loop queued: one worker per view, each
-        // answering once with `Input::Viewed`.
+        // answering once with `Input::Viewed`. The display commands and
+        // kitty bytes wait for the post-draw drain: the draw queues the
+        // frame's fetches.
         self.drain_images();
         // The pre-draw sweep births in-frame pushes (page-in loads,
         // image failures) so the draw sees them; the post-draw sweep
@@ -744,6 +746,9 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        // The display fetches the frame drew go out after it, with the
+        // kitty bytes their answers queued (`docs/tui.md`, "Images").
+        self.drain_display();
         self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
@@ -775,9 +780,10 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Opens the queued viewer copies: one worker per view, each
-    /// answering once with `Input::Viewed`.
+    /// answering once with `Input::Viewed`. The display commands and
+    /// kitty bytes stay queued for the post-draw drain.
     fn drain_images(&mut self) {
-        for view in self.app.take_image_out().view {
+        for view in self.app.take_image_views() {
             crate::viewer::spawn(
                 &self.programs.viewer,
                 &self.programs.images_dir,
@@ -785,6 +791,19 @@ impl<B: Backend> Loop<B> {
                 &self.files_out,
                 &self.clock,
             );
+        }
+    }
+
+    /// Sends the display `read_file` commands the frame drew, and writes
+    /// the kitty bytes their answers queued, after the screen draw: each
+    /// posting reaches the terminal through one write
+    /// (`docs/tui.md`, "Images").
+    fn drain_display(&mut self) {
+        let out = self.app.take_image_out();
+        self.hub.send(&out.display, &mut self.app);
+        if !out.kitty.is_empty() {
+            let mut tty = &self.tty;
+            tty.write_all(&out.kitty).unwrap_or(());
         }
     }
 
@@ -827,11 +846,22 @@ impl<B: Backend> Loop<B> {
 
     /// Kitty's graphics reply: the probe's success records graphics
     /// support, so later frames may draw images inline (`docs/tui.md`,
-    /// "Images"). An error, or any other image's id, records nothing
-    /// here: transmit errors fail their image when answers land.
+    /// "Images"). A transmit error fails only its display image, with no
+    /// notice: the line stays, and nothing asks again in this generation.
     fn graphics(&mut self, id: u32, ok: bool) {
-        if id == term::PROBE_ID && ok {
-            self.app.set_graphics();
+        if id == term::PROBE_ID {
+            // The probe's success records graphics support; its error,
+            // like its absence, leaves the one-line form.
+            if ok {
+                self.app.set_graphics();
+            }
+            return;
+        }
+        // A transmit error fails only its display image, with no
+        // notice: the line stays, and nothing asks again in this
+        // generation (`docs/tui.md`, "Images").
+        if !ok {
+            self.app.fail_display_image(id);
         }
     }
 

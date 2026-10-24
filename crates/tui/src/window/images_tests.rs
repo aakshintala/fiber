@@ -228,9 +228,7 @@ fn inline_sizing_counts_the_placeholder_grid() {
     }
     // The ledger draws once its group is open.
     assert!(
-        pages.open(&crate::app::Target::Group(crate::turn::target_id(
-            "a_t"
-        ))),
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
         "the call's group opens"
     );
     let text = pages.rows().len();
@@ -249,9 +247,8 @@ fn inline_sizing_counts_the_placeholder_grid() {
         .count();
     assert_eq!(placeholders, 7);
     assert!(
-        rows.iter().any(|(line, _)| line
-            .to_string()
-            .ends_with("▣ a.png · 1280×800")),
+        rows.iter()
+            .any(|(line, _)| line.to_string().ends_with("▣ a.png · 1280×800")),
         "the caption still counts its row"
     );
 }
