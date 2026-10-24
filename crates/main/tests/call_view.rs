@@ -432,14 +432,21 @@ fn scrolled_to_end_marker(run: &mut Run, grid: Grid) -> Grid {
 /// Enter opens the view again on its `marker`.
 fn esc_keeps_call_focus(run: &mut Run, marker: &str) {
     run.write(b"\x1b[27u");
-    run.wait_screen("the opened call after Esc", |grid| {
+    let grid = run.wait_screen("the opened call after Esc", |grid| {
         grid.rows.iter().any(|row| row.contains("more lines"))
     });
+    let row = find_row(&grid.rows, "more lines").expect("the more row after Esc");
+    assert!(
+        (0..grid.size().0).any(|x| grid.cell(x, row).inverse),
+        "the call row stays focused after Esc: {grid:?}"
+    );
     run.write(b"\r");
     // Enter reopens the view on the focused call row: its top row
     // draws first, then following pages to the tail marker.
     run.wait_screen("the reopened view", |grid| {
-        grid.rows.iter().any(|row| row.contains("Esc returns"))
+        grid.rows
+            .iter()
+            .any(|row| row.contains("y copies the whole call"))
     });
     run.wait_screen("the reopened tail", |grid| {
         grid.rows.iter().any(|row| row.contains(marker))
@@ -521,7 +528,10 @@ fn a_head_only_fetch_cut_pages_with_one_marker() {
     finish(&mut run, "Done.");
     run.turn_finished(from);
     let (_grid, gutter) = open_ledger(&mut run);
-    open_call(&mut run, gutter, "other", &url, "F0000");
+    // The inline call opens on its more row: the 90-line body exceeds the
+    // 20-line cap, so the head lines may scroll off while the more row
+    // at the bottom stays visible.
+    open_call(&mut run, gutter, "other", &url, "more lines");
     // The more row opens the view with one click; following pages to the
     // end through `artifact_page`, where the tail lands with no resume
     // marker: only the head was kept.
