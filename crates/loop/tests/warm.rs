@@ -14,8 +14,7 @@
 
 mod support;
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -23,7 +22,7 @@ use contract::clock::Clock;
 use contract::commands::{Reply as Answer, ReplyAnswer};
 use contract::events::{CacheLifetime, Decision};
 use contract::inbox::{Ack, Delivery};
-use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+use contract::jobs::Jobs;
 use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
 };
@@ -31,7 +30,7 @@ use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{Scripted, ScriptedProvider, call_usage};
+use fakes::{Scripted, ScriptedProvider, StubJobs, call_usage};
 
 use support::{
     CountingHooks, DEADLINE, ENDED, OPENING, REPLY, STEP, Session, Tap, assert_kinds, delivery,
@@ -497,51 +496,6 @@ fn assert_minted_refresh(session: &Session) {
     assert!(after[0].payload["cost"].is_null());
 }
 
-/// Jobs a test turns on and off: one job runs while `running` is set.
-#[derive(Default)]
-struct Toggle {
-    running: AtomicBool,
-}
-
-impl Toggle {
-    fn set(&self, running: bool) {
-        self.running.store(running, Ordering::SeqCst);
-    }
-}
-
-impl Jobs for Toggle {
-    fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError {
-            path: PathBuf::from("jobs"),
-            source: std::io::Error::other("no jobs here"),
-        })
-    }
-
-    fn stop(&self, _job_id: &JobId) -> bool {
-        false
-    }
-
-    fn stop_delegates(&self) -> usize {
-        0
-    }
-
-    fn background(&self) -> usize {
-        0
-    }
-
-    fn foreground(&self, _call: Foreground) {}
-
-    fn running(&self) -> Vec<JobId> {
-        if self.running.load(Ordering::SeqCst) {
-            vec![JobId("j_1".into())]
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
-}
-
 /// A refresh held by a running job goes at once when the job ends, and a
 /// job running across that due park holds it again until the cache
 /// expires: the late wake past the 550 s park to 580 s is the behaviour
@@ -552,8 +506,7 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
         vec![Scripted::text("ok."), refresh_reply(), refresh_reply()],
         CacheLifetime::FiveMinutes,
     );
-    let jobs = Arc::new(Toggle::default());
-    jobs.set(true);
+    let jobs = Arc::new(StubJobs::new([JobId("j_1".into())]));
     let looped = session.looped.take().unwrap();
     session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>));
     let idle = 30 * MINUTE;
@@ -569,7 +522,7 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     assert_refreshes(&session, 0);
 
     // The job ends before the cache does: the late refresh goes at once.
-    jobs.set(false);
+    jobs.set_running([]);
     wake(&session);
     let next = start + Duration::from_secs(550);
     parked(
@@ -580,7 +533,7 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     assert_refreshes(&session, 1);
 
     // A job runs across that due instant and ends as the cache expires.
-    jobs.set(true);
+    jobs.set_running([JobId("j_1".into())]);
     let expired = start + Duration::from_secs(580);
     parked(&session.clock, next, "the due park before the late wake");
     // Late wake past the 550 s park to 580 s; the park is proven just above (ruling 6261259790).
@@ -589,7 +542,7 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
         .advance(expired.saturating_duration_since(session.clock.now()));
     wake(&session);
     parked(&session.clock, check, "a running job holds the refresh");
-    jobs.set(false);
+    jobs.set_running([]);
     wake(&session);
     let exit = expired + idle;
     parked(&session.clock, exit, "an expired cache stops warming");

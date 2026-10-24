@@ -15,8 +15,7 @@
 
 mod support;
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,15 +25,15 @@ use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{Answer, Control, Event, Interaction, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
-use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+use contract::jobs::Jobs;
 use contract::provider::Input;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Question};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
-use fakes::Scripted;
 use fakes::clock::Mark;
+use fakes::{Scripted, StubJobs};
 use r#loop::{Error, Loop};
 use serde_json::{Map, Value, json};
 
@@ -191,45 +190,6 @@ fn blocker(name: &'static str) -> (Arc<Blocker>, Arc<Gate>) {
         gate: Arc::clone(&gate),
     };
     (Arc::new(tool), gate)
-}
-
-/// Jobs a test turns on and off: one job runs while `running` is set.
-#[derive(Default)]
-struct Toggle {
-    running: AtomicBool,
-}
-
-impl Jobs for Toggle {
-    fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError {
-            path: PathBuf::from("jobs"),
-            source: std::io::Error::other("no jobs here"),
-        })
-    }
-
-    fn stop(&self, _job_id: &JobId) -> bool {
-        false
-    }
-
-    fn stop_delegates(&self) -> usize {
-        0
-    }
-
-    fn background(&self) -> usize {
-        0
-    }
-
-    fn foreground(&self, _call: Foreground) {}
-
-    fn running(&self) -> Vec<JobId> {
-        if self.running.load(Ordering::SeqCst) {
-            vec![JobId("j_1".into())]
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
 }
 
 /// The arguments of a `former` call: one question with two options.
@@ -623,8 +583,7 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
 #[test]
 fn a_running_job_keeps_a_pending_form_from_going_idle() {
     let mut session = session(&["former"], vec![Arc::new(Former::new())], Some(IDLE));
-    let jobs = Arc::new(Toggle::default());
-    jobs.running.store(true, Ordering::SeqCst);
+    let jobs = Arc::new(StubJobs::new([JobId("j_1".into())]));
     let looped = session.looped.take().unwrap();
     session.looped = Some(looped.jobs(Arc::clone(&jobs) as Arc<dyn Jobs>));
     let clock = Arc::clone(&session.clock);
@@ -639,7 +598,7 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
     still_running(&finished);
     no_resolution(&tap);
     // The job ends: the delay counts from the wait that sees it.
-    jobs.running.store(false, Ordering::SeqCst);
+    jobs.set_running([]);
     session.inbox.send(Delivery::Cancelled).unwrap();
     let at = clock.now() + IDLE;
     // The step re-parks at the deadline only after it sees the wake, so
