@@ -254,10 +254,5 @@ fn refresh_recovers_a_poisoned_lock() {
     assert!(poisoned.is_err(), "the lock was not poisoned");
     rig.write_global(&serde_json::json!({"shell": {"read_only": {"yq": {"flags": []}}}}));
     refresh_shell_read_only(&handle, &rig.config(Vec::<String>::new()));
-    assert_eq!(
-        *handle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-        vec![("yq".to_owned(), Vec::new())]
-    );
+    assert_eq!(*support::lock(&handle), vec![("yq".to_owned(), Vec::new())]);
 }
