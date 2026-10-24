@@ -1517,3 +1517,296 @@ fn a_drag_leaving_the_noted_box_clamps_to_the_nearest_row() {
         .expect("inside the noted box");
     assert_eq!(clamped, super::Point { row: 1, col: 9 });
 }
+
+/// Esc with no press held clears nothing: the input box's editor
+/// selection survives it (`docs/tui.md`, "Selection and copy": Esc
+/// clears a selection shown before anything it would interrupt, and a
+/// press with no drag yet is the only held press).
+#[test]
+fn esc_with_no_press_keeps_the_draft_selection() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "abcdef");
+    app.draft.select_at(2);
+    app.draft.select_to(5);
+    assert_eq!(app.input().selected(), Some((2, 5)));
+    assert_eq!(app.select_key(&Key::Esc), None);
+    assert_eq!(app.input().selected(), Some((2, 5)));
+}
+
+/// The input box's note clears between frames: a frame that draws no
+/// box leaves no stale slab for the press to claim (`docs/tui.md`,
+/// "Selection and copy": the press maps through the frame that drew it).
+#[test]
+fn the_input_note_clears_between_frames() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "ab");
+    let at = find(&app, "ab");
+    // The draw noted the box: the press maps into the draft.
+    assert!(app.input_at(at.0, at.1).is_some());
+    // The next frame draws no box: the press maps nowhere.
+    app.note_input_area(Rect::new(2, 8, 10, 2), 0);
+    app.clear_input_note();
+    assert_eq!(app.input_at(5, 8), None);
+    assert_eq!(app.input_at(at.0, at.1), None);
+}
+
+/// A press on the noted box's edge columns and rows maps inside it;
+/// a press past them claims nothing (`docs/tui.md`, "Selection and
+/// copy": the drag selects within its surface and does not spill into
+/// a neighbour).
+#[test]
+fn noted_press_holds_only_inside_the_box() {
+    use super::{NotedSurface, SpanRow};
+    use crate::rows::Join;
+    let app = attached(40, 10);
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            SpanRow {
+                y: 5,
+                x: 14,
+                end: 20,
+                text: "upper!".to_owned(),
+                join: Join::Break,
+            },
+            SpanRow {
+                y: 7,
+                x: 10,
+                end: 20,
+                text: "lower row!".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    // The box runs x `10..20`, y `5..8`: the gap row's left edge
+    // column still maps, clamping to the upper row's start.
+    assert_eq!(
+        app.press_at(10, 6, &[]),
+        Some((SurfaceId::Swapped, super::Point { row: 0, col: 0 }))
+    );
+    // One past the right edge starts no selection.
+    assert_eq!(app.press_at(20, 5, &[]), None);
+    // The box's first row still maps from inside its x range.
+    assert_eq!(
+        app.press_at(11, 5, &[]),
+        Some((SurfaceId::Swapped, super::Point { row: 0, col: 0 }))
+    );
+}
+
+/// A press one past a row's last text cell, on the noted box's edge,
+/// starts no selection: the cell is outside the surface's box
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn noted_press_at_the_text_edge_claims_the_surface() {
+    use super::{NotedSurface, SpanRow};
+    use crate::rows::Join;
+    let app = attached(40, 10);
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![SpanRow {
+            y: 5,
+            x: 10,
+            end: 15,
+            text: "hello".to_owned(),
+            join: Join::Break,
+        }],
+    });
+    // The text's last cell still maps to its end.
+    assert_eq!(
+        app.press_at(14, 5, &[]),
+        Some((SurfaceId::Swapped, super::Point { row: 0, col: 4 }))
+    );
+    // One past it is the box's edge: outside, so no claim.
+    assert_eq!(app.press_at(15, 5, &[]), None);
+}
+
+/// A press on the first of two spans sharing a screen row claims the
+/// first span: the press maps to the noted row holding its cell, in
+/// reading order (`docs/tui.md`, "Selection and copy").
+#[test]
+fn noted_press_on_a_shared_row_claims_the_first_span() {
+    use super::{NotedSurface, SpanRow};
+    use crate::rows::Join;
+    let app = attached(40, 10);
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            SpanRow {
+                y: 5,
+                x: 10,
+                end: 14,
+                text: "aaaa".to_owned(),
+                join: Join::Break,
+            },
+            SpanRow {
+                y: 5,
+                x: 16,
+                end: 20,
+                text: "bbbb".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    assert_eq!(
+        app.press_at(11, 5, &[]),
+        Some((SurfaceId::Swapped, super::Point { row: 0, col: 1 }))
+    );
+    assert_eq!(
+        app.press_at(17, 5, &[]),
+        Some((SurfaceId::Swapped, super::Point { row: 1, col: 1 }))
+    );
+}
+
+/// A press past a short row's end, on the box's edge column, starts
+/// no selection even while a wider row holds that column inside the
+/// box (`docs/tui.md`, "Selection and copy").
+#[test]
+fn noted_press_past_a_short_row_claims_nothing() {
+    use super::{NotedSurface, SpanRow};
+    use crate::rows::Join;
+    let app = attached(40, 10);
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            SpanRow {
+                y: 5,
+                x: 10,
+                end: 12,
+                text: "hi".to_owned(),
+                join: Join::Break,
+            },
+            SpanRow {
+                y: 6,
+                x: 10,
+                end: 20,
+                text: "lower row!".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    assert_eq!(app.press_at(20, 5, &[]), None);
+}
+
+/// A noted selection highlights only its covered rows: whole rows
+/// between, clipped to the range's columns on its first and last row
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn noted_selection_highlights_only_the_covered_rows() {
+    use super::{NotedSurface, Point, SpanRow};
+    use crate::rows::Join;
+    let mut app = attached(40, 10);
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            SpanRow {
+                y: 5,
+                x: 10,
+                end: 14,
+                text: "abcd".to_owned(),
+                join: Join::Break,
+            },
+            SpanRow {
+                y: 6,
+                x: 10,
+                end: 14,
+                text: "efgh".to_owned(),
+                join: Join::Break,
+            },
+            SpanRow {
+                y: 7,
+                x: 10,
+                end: 14,
+                text: "ijkl".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    // The middle row from its second cell through the last row's first.
+    app.select.press(SurfaceId::Swapped, Point { row: 1, col: 1 });
+    app.select.drag(Point { row: 2, col: 0 });
+    assert_eq!(
+        app.selection_cells(SurfaceId::Swapped, Rect::new(0, 0, 40, 10)),
+        vec![Rect::new(11, 6, 3, 1), Rect::new(10, 7, 1, 1)]
+    );
+    // The copy reads the same cells: the middle row's tail, a break,
+    // then the last row's head.
+    let (from, to) = app.select.span().expect("a shown selection");
+    assert_eq!(
+        app.select.noted_text(SurfaceId::Swapped, from, to),
+        "fgh\ni".to_owned()
+    );
+}
+
+/// A drag in the home input box copies its text: the home box notes
+/// its shown slab for the press and drag mapping like the
+/// conversation's box does (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_in_the_home_input_box_copies_its_text() {
+    let mut app = attached(200, 40);
+    app.set_home(launch());
+    type_draft(&mut app, "zzqx");
+    let at = {
+        let needle = "zzqx";
+        rows(&app)
+            .iter()
+            .enumerate()
+            .find_map(|(y, row)| {
+                row.find(needle).map(|byte| {
+                    (
+                        u16::try_from(crate::format::width(&row[..byte])).expect("a column"),
+                        u16::try_from(y).expect("a row"),
+                    )
+                })
+            })
+            .unwrap_or_else(|| panic!("{needle:?} is not on screen: {:#?}", rows(&app)))
+    };
+    assert_eq!(select(&mut app, at, right(at, 4)), Effect::Copy("zzqx".to_owned()));
+}
+
+/// A person's own Home binding wins over the input editor's line
+/// start, as their End binding wins over its line end (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn a_person_binding_for_home_wins_over_the_line_edit() {
+    let mut app = replied(40, 12, "hello there");
+    // The person binds Home to delete to the line's start: their
+    // binding wins, so Home never edits the line start.
+    let mut user = serde_json::Map::new();
+    user.insert("delete_to_line_start".to_owned(), json!("home"));
+    app.set_keys(crate::KeysSetup { user });
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    select(&mut app, at, right(at, 4));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    let _ = app.on_press(
+        crate::stroke::Stroke {
+            code: crate::stroke::Code::Home,
+            mods: crate::stroke::Mods::NONE,
+        },
+        now(),
+    );
+    assert_eq!(app.input().expand(), "");
+}
+
+/// Unshifted Home outside the input contexts keeps its dispatch: over
+/// the notice overlay it resolves through the bindings and leaves the
+/// draft's cursor alone (`docs/tui.md`, "Selection and copy").
+#[test]
+fn home_outside_the_input_keeps_its_dispatch() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "ab");
+    assert_eq!(app.input().position(), 2);
+    notice(&mut app, "a notice");
+    app.open_more_notices();
+    assert!(app.notice_overlay().is_some());
+    assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
+    let _ = app.on_press(
+        crate::stroke::Stroke {
+            code: crate::stroke::Code::Home,
+            mods: crate::stroke::Mods::NONE,
+        },
+        now(),
+    );
+    assert_eq!(app.input().position(), 2);
+    assert_eq!(app.input().expand(), "ab");
+}

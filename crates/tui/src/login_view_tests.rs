@@ -3535,3 +3535,33 @@ fn notices_fill_only_the_remaining_budget() {
         "at exactly the budget no notice is added"
     );
 }
+
+/// The failure head starts its own line: the first failed row breaks,
+/// whatever the later rows join with (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn failed_rows_break_first() {
+    let rows = super::failed_rows(
+        "Login to acme failed: ",
+        "token expired while the browser waited",
+        ".",
+        20,
+    );
+    assert!(rows.len() > 1, "the reason wraps: {}", rows.len());
+    assert_eq!(rows[0].1, crate::rows::Join::Break);
+}
+
+/// With no items the failure message is the whole body: no blank row
+/// leads it (`docs/tui.md`, "Logging in").
+#[test]
+fn a_failed_read_starts_the_body_with_the_message() {
+    let fake = failed_fake("config.json: not JSON");
+    let login = Login::open(&ctx(&fake));
+    let (framed, _) = login.list_framed(Rect::new(0, 0, 80, 24));
+    let first = framed.body.first().expect("a body row");
+    let text: String = first.spans.iter().map(|span| span.content.as_ref()).collect();
+    assert!(
+        text.contains("config.json: not JSON"),
+        "the message leads the body: {text:?}"
+    );
+}

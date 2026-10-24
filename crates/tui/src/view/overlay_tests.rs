@@ -737,3 +737,63 @@ fn no_color_boxes_the_overlay_and_keeps_its_cells() {
         }
     }
 }
+
+/// A body row with the focused choice's gutter.
+fn guttered(left: &[&str], right: &[&str]) -> Row {
+    Row {
+        spans: left
+            .iter()
+            .map(|text| Span::raw((*text).to_owned()))
+            .collect(),
+        right: right
+            .iter()
+            .map(|text| Span::raw((*text).to_owned()))
+            .collect(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
+/// The choice's gutter never copies: the focus mark and the indent it
+/// replaces stay out of the selection's text (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn body_text_drops_the_choice_gutter() {
+    assert_eq!(super::body_text(&guttered(&["› ", "choice"], &[]), 20), "choice");
+    assert_eq!(super::body_text(&guttered(&["  ", "choice"], &[]), 20), "choice");
+}
+
+/// The gutter's padding goes with it: a continuation row's padding
+/// stays, but the padding after a gutter never copies (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn body_text_drops_the_gutter_padding() {
+    assert_eq!(
+        super::body_text(&guttered(&["› ", "  ", "choice"], &[]), 20),
+        "choice"
+    );
+}
+
+/// Text after a gutter with no padding keeps every word: only the
+/// gutter and its padding go, never the row's own cells
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn body_text_keeps_text_after_the_gutter() {
+    assert_eq!(super::body_text(&guttered(&["  ", "choice"], &[]), 20), "choice");
+    assert_eq!(
+        super::body_text(&guttered(&["› ", "two words"], &[]), 20),
+        "two words"
+    );
+}
+
+/// The right end follows after the drawn gap, keeping priority when
+/// the row is cut: a copy reads what the row shows (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn body_text_keeps_the_right_end() {
+    assert_eq!(
+        super::body_text(&guttered(&["name"], &["$1"]), 10),
+        "name    $1"
+    );
+    assert_eq!(super::body_text(&guttered(&["name"], &[]), 10), "name");
+}
