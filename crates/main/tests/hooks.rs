@@ -1206,6 +1206,74 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
 }
 
 #[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    use extension_harness::{send as session_send, until_session as session_until};
+    use support::{Diag, session_dir};
+
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let mut client = running.connect(&setup.socket(&id));
+    client.set_diag(Diag::new(
+        running.stderr_snapshot.clone(),
+        session_dir(&setup, &id),
+    ));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_p1","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    // The held model never answers, so the impossible kind never arrives:
+    // the wait expires holding the lines it received.
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session_until(&client, "the turn that never completes", |line| {
+            line["kind"] == "no_such_kind"
+        });
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    let head = message.split("fiber stderr:").next().unwrap_or_default();
+    assert!(head.contains("command_accepted"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    let tail_header = "session log tail (events.jsonl, last 20 lines):";
+    assert!(message.contains(tail_header), "{message}");
+    let tail = message.split(tail_header).nth(1).unwrap_or_default();
+    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    drop(client);
+    let group = running.group;
+    let cleanup = running.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let mut child = running.child;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    match cleanup.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    running.watchdog.stand_down(cleanup);
+    std::mem::forget(running.guard);
+}
+
+#[test]
 fn a_redacted_socket_prompt_joins_the_history_redacted() {
     use extension_harness::{send as session_send, until_session as session_until};
     use support::session_dir;
