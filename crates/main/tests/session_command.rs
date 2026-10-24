@@ -3864,3 +3864,77 @@ fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
         ]
     );
 }
+
+#[test]
+fn commands_answers_with_a_template_added_between_turns() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // A prompt template added between turns: no skill the model loads,
+    // only a `/name` the session runs.
+    workspace_skill(
+        &setup,
+        "ship",
+        "description: Ships it.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
+    );
+    until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The post-turn `commands` answer lists the new template.
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let answered = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["commands"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["name"] == "ship" && row["tag"] == "template"),
+        "the template added between turns is listed: {result:?}"
+    );
+    // The template's slash command resolves as before.
+    send(
+        &client,
+        r#"{"id":"c_third","command":"prompt","args":{"content":[{"type":"text","text":"/ship 1.0"}]}}"#,
+    );
+    let third = until_session(&client, "the third turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = third
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the template prompt started a turn");
+    assert!(
+        turn_started["payload"]["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Body."),
+        "the template expanded: {turn_started:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
