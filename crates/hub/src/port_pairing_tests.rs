@@ -29,7 +29,7 @@ fn text(deadline: Deadline, client: &Ws) -> Value {
 
 fn pair(client: &Ws, code: &str) -> String {
     client.text(&json!({"id":"p1","command":"pair","args":{"code":code}}).to_string());
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let accepted = text(deadline, client);
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "p1");
@@ -100,7 +100,7 @@ fn stop(hub: &Arc<Hub>, got: &AtomicI32, done: &mpsc::Receiver<i32>) {
     await_zero(hub);
     signal(hub, got);
     assert_eq!(
-        Deadline::after(DEADLINE).recv_or_fail(done, "hub stops"),
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(done, "hub stops"),
         128 + signal_hook::consts::SIGTERM
     );
 }
@@ -123,7 +123,7 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
     assert_eq!(record["paired_at"], record["last_connected_at"]);
     client.text(r#"{"id":"status","command":"status"}"#);
     assert_eq!(
-        text(Deadline::after(DEADLINE), &client)["payload"]["result"]["clients"],
+        text(Deadline::after(MUST_SUCCEED_WITHIN), &client)["payload"]["result"]["clients"],
         1
     );
     let log = temp.log();
@@ -132,12 +132,12 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
     let again = helloed(port, None);
     again.text(&json!({"id":"a","command":"authenticate","args":{"token":token}}).to_string());
     assert_eq!(
-        text(Deadline::after(DEADLINE), &again)["kind"],
+        text(Deadline::after(MUST_SUCCEED_WITHIN), &again)["kind"],
         "command_accepted"
     );
     let reused = helloed(port, None);
     reused.text(&json!({"id":"bad","command":"pair","args":{"code":code}}).to_string());
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(text(deadline, &reused)["payload"]["code"], "pairing_failed");
     assert_eq!(
         deadline.recv_or_fail(&reused.rx, "used code closes"),
@@ -170,14 +170,14 @@ fn a_code_exactly_ten_minutes_old_pairs() {
     let code = mint(&hub, "phone");
     // The counted connection keeps the idle wait free of a deadline; no waiter is released.
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_unbounded(fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the idle wait parks with no deadline"
     );
     clock.advance_when_parked(
         None,
         None,
         Duration::from_secs(600),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     pair(&client, &code);
     drop(client);
@@ -192,17 +192,17 @@ fn a_code_past_ten_minutes_fails() {
     let client = helloed(port, None);
     let code = mint(&hub, "phone");
     assert!(
-        clock.await_parked_unbounded(fakes::Deadline::after(DEADLINE)),
+        clock.await_parked_unbounded(fakes::Deadline::after(MUST_SUCCEED_WITHIN)),
         "the idle wait parks with no deadline"
     );
     clock.advance_when_parked(
         None,
         None,
         Duration::from_secs(600) + TICK,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(MUST_SUCCEED_WITHIN),
     );
     client.text(&json!({"id":"p","command":"pair","args":{"code":code}}).to_string());
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let refused = text(deadline, &client);
     assert_eq!(refused["payload"]["code"], "pairing_failed");
     assert_eq!(refused["payload"]["message"], PAIRING_FAILED);
@@ -225,7 +225,7 @@ fn a_wrong_shaped_pair_fails_pairing_failed() {
     for args in [json!({}), json!({"code":1}), json!({"code":"x","extra":1})] {
         let client = helloed(port, None);
         client.text(&json!({"id":"p","command":"pair","args":args}).to_string());
-        let deadline = Deadline::after(DEADLINE);
+        let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
         assert_eq!(text(deadline, &client)["payload"]["code"], "pairing_failed");
         assert_eq!(
             deadline.recv_or_fail(&client.rx, "wrong shape closes"),
@@ -249,7 +249,7 @@ fn a_code_for_a_device_that_now_has_a_record_is_refused_and_consumed() {
     let before = fs::read(temp.dir.join("hub/devices/phone")).unwrap();
     client.text(&json!({"id":"p","command":"pair","args":{"code":code}}).to_string());
     assert_eq!(
-        text(Deadline::after(DEADLINE), &client)["payload"]["code"],
+        text(Deadline::after(MUST_SUCCEED_WITHIN), &client)["payload"]["code"],
         "pairing_failed"
     );
     assert_eq!(
@@ -275,10 +275,10 @@ fn revoke_from_a_second_device_closes_the_first() {
     let token = pair(&a, &mint(&hub, "a"));
     let b = helloed(port, None);
     pair(&b, &mint(&hub, "b"));
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(text(deadline, &a)["payload"]["device"], "b");
     b.text(r#"{"id":"r","command":"revoke","args":{"device":"a"}}"#);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(text(deadline, &b)["kind"], "command_accepted");
     let notice = text(deadline, &b);
     assert_eq!(
@@ -297,7 +297,7 @@ fn revoke_from_a_second_device_closes_the_first() {
     let next = helloed(port, None);
     next.text(&json!({"id":"a","command":"authenticate","args":{"token":token}}).to_string());
     assert_eq!(
-        text(Deadline::after(DEADLINE), &next)["payload"]["code"],
+        text(Deadline::after(MUST_SUCCEED_WITHIN), &next)["payload"]["code"],
         "unauthenticated"
     );
     assert!(!temp.dir.join("hub/devices/a").exists());
@@ -323,7 +323,7 @@ fn revoking_copied_records_refuses_the_token_after_a_restart() {
     fs::create_dir(devices.join("directory")).unwrap();
     std::os::unix::fs::symlink("other", devices.join("link")).unwrap();
     client.text(r#"{"id":"r","command":"revoke","args":{"device":"phone"}}"#);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(text(deadline, &client)["kind"], "command_accepted");
     assert_eq!(text(deadline, &client)["payload"]["change"], "revoked");
     assert_eq!(
@@ -354,7 +354,7 @@ fn revoking_copied_records_refuses_the_token_after_a_restart() {
         authenticate(&next, "a", &token)["payload"]["code"],
         "unauthenticated"
     );
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(
         deadline.recv_or_fail(&next.rx, "revoked token is refused after restart"),
         Item::Close(1008, "unauthenticated".to_owned())
@@ -386,7 +386,7 @@ fn an_unreadable_record_refuses_revoke_without_unlinking_any_record() {
     // Both a sibling and the named record must be readable before any unlink.
     for device in ["phone", "sibling"] {
         client.text(&json!({"id":"r","command":"revoke","args":{"device":device}}).to_string());
-        let refused = text(Deadline::after(DEADLINE), &client);
+        let refused = text(Deadline::after(MUST_SUCCEED_WITHIN), &client);
         assert_eq!(refused["kind"], "command_rejected");
         assert_eq!(refused["payload"]["code"], "io_failed");
         assert!(
@@ -405,7 +405,7 @@ fn an_unreadable_record_refuses_revoke_without_unlinking_any_record() {
     for bytes in ["not json", "{}", r#"{"token_sha256":42}"#] {
         fs::write(&sibling, bytes).unwrap();
         client.text(r#"{"id":"r","command":"revoke","args":{"device":"phone"}}"#);
-        let refused = text(Deadline::after(DEADLINE), &client);
+        let refused = text(Deadline::after(MUST_SUCCEED_WITHIN), &client);
         assert_eq!(refused["payload"]["code"], "io_failed");
         assert!(
             refused["payload"]["message"]
@@ -429,7 +429,7 @@ fn a_device_revoking_itself_gets_the_answer_then_the_close() {
     let client = helloed(port, None);
     pair(&client, &mint(&hub, "phone"));
     client.text(r#"{"id":"r","command":"revoke","args":{"device":"phone"}}"#);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let accepted = text(deadline, &client);
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "r");
@@ -458,13 +458,13 @@ fn a_code_minted_on_the_port_names_its_device_as_issuer() {
     let b = helloed(port, None);
     pair(&b, &mint(&hub, "b"));
     b.text(r#"{"id":"mint","command":"pairing_code","args":{"device":"c"}}"#);
-    let code = text(Deadline::after(DEADLINE), &b)["payload"]["result"]["code"]
+    let code = text(Deadline::after(MUST_SUCCEED_WITHIN), &b)["payload"]["result"]["code"]
         .as_str()
         .unwrap()
         .to_owned();
     let c = helloed(port, None);
     pair(&c, &code);
-    let notice = text(Deadline::after(DEADLINE), &b);
+    let notice = text(Deadline::after(MUST_SUCCEED_WITHIN), &b);
     assert_eq!(notice["payload"]["by"], "b");
     assert_eq!(notice["payload"]["device"], "c");
     drop((b, c));
@@ -480,7 +480,7 @@ fn a_failed_record_write_closes_1011() {
     fs::create_dir_all(temp.dir.join("hub")).unwrap();
     fs::write(temp.dir.join("hub/devices"), "obstacle").unwrap();
     client.text(&json!({"id":"p","command":"pair","args":{"code":code}}).to_string());
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(text(deadline, &client)["payload"]["code"], "io_failed");
     assert_eq!(
         deadline.recv_or_fail(&client.rx, "write failure closes"),
@@ -567,7 +567,7 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
         .mark_parked(end, fakes::Deadline::after(MUST_SUCCEED_WITHIN))
         .expect("finish waits for the pump");
     drop(sink);
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let first = deadline.recv_or_fail(&frames_rx, "acknowledgement after releasing the pump");
     let second = deadline.recv_or_fail(&frames_rx, "revocation after acknowledgement");
     for (item, kind) in [(first, "command_accepted"), (second, "device_changed")] {
@@ -603,7 +603,7 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
                 &Deadline::after(MUST_SUCCEED_WITHIN),
             );
         }
-        Deadline::after(DEADLINE).recv_or_fail(&rx, "finish observes pump completion");
+        Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "finish observes pump completion");
     }
     assert!(
         finished_before_deadline,
@@ -623,7 +623,7 @@ fn a_local_revoke_announces_without_waiting_for_the_clock() {
     client
         .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
         .unwrap();
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     let accepted = wire_value(deadline, &lines, "local revoke acceptance");
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "r");
@@ -644,7 +644,7 @@ fn a_local_revoke_announces_without_waiting_for_the_clock() {
                 );
             }
             wire_value(
-                Deadline::after(DEADLINE),
+                Deadline::after(MUST_SUCCEED_WITHIN),
                 &lines,
                 "local revoke announcement",
             )
@@ -658,7 +658,7 @@ fn a_local_revoke_announces_without_waiting_for_the_clock() {
     assert_eq!(event["payload"]["device"], "phone");
     client.shutdown(Shutdown::Both).unwrap_or(());
     drop(client);
-    Deadline::after(DEADLINE).recv_or_fail(&served, "local revoke connection exits");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&served, "local revoke connection exits");
     assert!(
         announced_without_clock,
         "a revoke with no live device does not wait for fake time"
@@ -689,7 +689,7 @@ fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
     client
         .write_all(b"{\"id\":\"r\",\"command\":\"revoke\",\"args\":{\"device\":\"phone\"}}\n")
         .unwrap();
-    let deadline = Deadline::after(DEADLINE);
+    let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
     assert_eq!(
         wire_value(deadline, &lines, "device revoke acceptance")["kind"],
         "command_accepted"
@@ -713,7 +713,8 @@ fn finishing_a_revoke_returns_at_its_deadline_with_an_undrained_web() {
     if !returned_at_deadline {
         web.drained.store(true, Ordering::SeqCst);
         hub.tick.wake();
-        Deadline::after(DEADLINE).recv_or_fail(&served, "finish exits after releasing the drain");
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&served, "finish exits after releasing the drain");
     }
     drop((client, peer));
     assert!(
@@ -780,9 +781,11 @@ fn revoke_watchdog_closes_a_live_device_at_the_deadline_while_answer_is_blocked(
     };
     client.shutdown(Shutdown::Both).unwrap_or(());
     drop(client);
-    Deadline::after(DEADLINE).recv_or_fail(&served_rx, "blocked revoke answer is released");
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&served_rx, "blocked revoke answer is released");
     if !closed_at_deadline {
-        Deadline::after(DEADLINE).recv_or_fail(&closed_rx, "finish closes the revoked device");
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&closed_rx, "finish closes the revoked device");
     }
     hub.pairing.forget(&hub, &who);
     drop(peer);
@@ -851,7 +854,7 @@ fn attach_web_stores_the_handle_finish_waits_for_its_drain() {
         STOP_CLOSE_WAIT,
         &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    Deadline::after(DEADLINE).recv_or_fail(&rx, "finish returns at its deadline");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "finish returns at its deadline");
     drop((peer, web));
 }
 
@@ -901,7 +904,7 @@ fn attach_web_after_revocation_shuts_the_web() {
             }
         }
     });
-    Deadline::after(DEADLINE).recv_or_fail(&rx, "revocation shuts the late web");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "revocation shuts the late web");
     // The revoke snapshot holds no web or writer, so finish returns at
     // once and releases the revoke watchdog.
     let (done_tx, done_rx) = mpsc::channel();
@@ -910,6 +913,6 @@ fn attach_web_after_revocation_shuts_the_web() {
         working.pairing.finish(&working, revoked);
         done_tx.send(()).unwrap_or(());
     });
-    Deadline::after(DEADLINE).recv_or_fail(&done_rx, "finish releases the revoke");
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&done_rx, "finish releases the revoke");
     drop(web);
 }
