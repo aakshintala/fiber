@@ -138,6 +138,35 @@ impl Setup {
     }
 }
 
+/// How many leading lines of each leftover session log a failure message
+/// carries: paths and lengths are complete, content is a bounded head, so
+/// a large log cannot flood the CI log.
+const LEFTOVER_LOG_HEAD_LINES: usize = 5;
+
+/// Formats leftover session logs for a failure message: every path, each
+/// file's byte and line counts, and a bounded head of its lines. A file
+/// that cannot be read reports its error beside its path, never panicking,
+/// so the message still names every log left behind.
+fn describe_leftover_logs(logs: &[PathBuf]) -> String {
+    logs.iter()
+        .map(|path| match fs::read_to_string(path) {
+            Ok(content) => {
+                let total = content.lines().count();
+                let head: Vec<&str> = content.lines().take(LEFTOVER_LOG_HEAD_LINES).collect();
+                format!(
+                    "{} ({} bytes, {} lines):\n{}",
+                    path.display(),
+                    content.len(),
+                    total,
+                    head.join("\n")
+                )
+            }
+            Err(err) => format!("{} (unreadable: {err})", path.display()),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
@@ -538,7 +567,12 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(server.requests().is_empty());
 }
@@ -655,7 +689,12 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(
         setup.session_dirs().is_empty(),
@@ -739,7 +778,12 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert!(
         setup.session_dirs().is_empty(),
         "a session directory was created"
@@ -750,4 +794,61 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
         "term",
         "the starting server saw SIGTERM"
     );
+}
+
+/// The leftover-log dump names every path with its lengths and a bounded
+/// head: below, at, and above the line cap, plus a log that cannot be read.
+#[test]
+fn leftover_log_dump_names_paths_with_a_bounded_head() {
+    let root = fakes::TempDir::new("leftover-logs");
+    let write_log = |name: &str, count: usize| -> PathBuf {
+        let path = root.path().join(name).join("events.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let body: String = (1..=count)
+            .map(|n| format!("{{\"kind\":\"event-{n}\"}}\n"))
+            .collect();
+        fs::write(&path, &body).unwrap();
+        path
+    };
+    let over = write_log("s_over", LEFTOVER_LOG_HEAD_LINES + 3);
+    let exact = write_log("s_exact", LEFTOVER_LOG_HEAD_LINES);
+    let under = write_log("s_under", 2);
+    let missing = root.path().join("s_gone").join("events.jsonl");
+
+    let dump =
+        describe_leftover_logs(&[over.clone(), exact.clone(), under.clone(), missing.clone()]);
+
+    for path in [&over, &exact, &under, &missing] {
+        assert!(
+            dump.contains(&path.display().to_string()),
+            "names {path:?}:\n{dump}"
+        );
+    }
+    // The head stops at the cap even when the file holds more.
+    assert!(
+        dump.contains(r#""kind":"event-5""#),
+        "head line kept:\n{dump}"
+    );
+    assert!(
+        !dump.contains(r#""kind":"event-6""#),
+        "beyond the cap cut:\n{dump}"
+    );
+    // Lengths are reported for every readable log.
+    for (path, count) in [
+        (&over, LEFTOVER_LOG_HEAD_LINES + 3),
+        (&exact, LEFTOVER_LOG_HEAD_LINES),
+        (&under, 2),
+    ] {
+        let bytes = fs::metadata(path).unwrap().len();
+        assert!(
+            dump.contains(&format!("{bytes} bytes")),
+            "byte length of {path:?}:\n{dump}"
+        );
+        assert!(
+            dump.contains(&format!("{count} lines")),
+            "line count of {path:?}:\n{dump}"
+        );
+    }
+    // A vanished log still names its path with the read error, no panic.
+    assert!(dump.contains("unreadable"), "read error kept:\n{dump}");
 }
