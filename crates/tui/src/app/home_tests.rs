@@ -1201,13 +1201,13 @@ fn an_unreadable_row_does_not_open_and_says_so() {
     assert!(app.session().is_none());
     assert_eq!(
         app.notice(),
-        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+        Some("Cannot attach: its status did not parse.")
     );
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
         if code == "session_held"
-            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+            && text == "Cannot attach: its status did not parse."
     )));
 }
 
@@ -3674,13 +3674,13 @@ fn x_on_an_unreadable_row_says_so() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         app.notice(),
-        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+        Some("Cannot attach: its status did not parse.")
     );
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
         if code == "session_held"
-            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+            && text == "Cannot attach: its status did not parse."
     )));
 }
 

@@ -2,11 +2,12 @@
 
 use fakes::MUST_SUCCEED_WITHIN;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
+use support::lock;
 
 use super::CaseClock;
 use fakes::Deadline;
@@ -62,10 +63,6 @@ impl Wake for CountWake {
 
 fn subscribe(clock: &CaseClock, wake: &Arc<dyn Wake>) {
     clock.subscribe(Arc::downgrade(wake));
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Parks a thread until `until` passes on the case clock and reports each

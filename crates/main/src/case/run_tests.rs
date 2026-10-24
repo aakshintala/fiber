@@ -1057,10 +1057,10 @@ impl Clock for GateClock {
     fn now(&self) -> Instant {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             let (entered, cvar) = &*self.entered;
-            *entered.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            *support::lock(entered) = true;
             cvar.notify_all();
             let (released, cvar) = &*self.released;
-            let guard = released.lock().unwrap_or_else(PoisonError::into_inner);
+            let guard = support::lock(released);
             let (_guard, wait) = cvar
                 .wait_timeout_while(guard, fakes::MUST_SUCCEED_WITHIN, |open| !*open)
                 .unwrap_or_else(PoisonError::into_inner);
@@ -1128,7 +1128,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         .expect("start the case driver");
 
     let (flag, cvar) = &*entered;
-    let guard = flag.lock().unwrap_or_else(PoisonError::into_inner);
+    let guard = support::lock(flag);
     let (_guard, wait) = cvar
         .wait_timeout_while(guard, fakes::MUST_SUCCEED_WITHIN, |seen| !*seen)
         .unwrap_or_else(PoisonError::into_inner);
@@ -1145,7 +1145,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
     .expect("append the race-window delta");
 
     let (flag, cvar) = &*released;
-    *flag.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    *support::lock(flag) = true;
     cvar.notify_all();
 
     let (done_tx, done_rx) = mpsc::channel();

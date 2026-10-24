@@ -43,6 +43,7 @@ const KINDS: &[(&str, Kind)] = &[
     ("extension_shadowed", Kind::Event),
     ("history_loading", Kind::Condition),
     ("hook_failed", Kind::Event),
+    ("hub_version", Kind::Event),
     ("instructions_large", Kind::Event),
     ("invalid_arguments", Kind::Event),
     ("io_failed", Kind::Event),

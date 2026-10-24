@@ -243,11 +243,8 @@ impl App {
             return Effect::None;
         };
         if row.state == State::Unreadable {
-            self.notices.push(
-                "session_held",
-                "Cannot attach: this session's schema is newer than this terminal reads."
-                    .to_owned(),
-            );
+            let text = format!("{}.", self.unreadable_reason());
+            self.notices.push("session_held", text);
             return Effect::None;
         }
         if row.left.is_some() {

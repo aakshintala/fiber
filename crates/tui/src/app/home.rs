@@ -43,6 +43,9 @@ enum ListFocus {
 pub(super) struct Home {
     /// What the terminal knows about where it was launched.
     pub(super) launch: Launch,
+    /// The hub's build as `fiber --version` writes it, when the latest
+    /// `hub_hello` named another version or commit than this terminal's.
+    pub(super) hub_other: Option<String>,
     /// A `start` went out in this run.
     prompted: bool,
     /// The first-run import offer is still eligible: resolved once,
@@ -220,6 +223,7 @@ impl App {
         let import_owed = matches!(launch.location, crate::home::LaunchLocation::Remote { .. });
         self.home = Some(Home {
             launch,
+            hub_other: None,
             prompted: false,
             import_offer: false,
             import_owed,
@@ -403,7 +407,11 @@ impl App {
                                 .unwrap_or(0)
                         })
                     }),
-                    wait: row.note.clone().or_else(|| row.waiting.clone()),
+                    wait: if row.state == State::Unreadable {
+                        row.note.clone().or_else(|| Some(self.unreadable_reason()))
+                    } else {
+                        row.note.clone().or_else(|| row.waiting.clone())
+                    },
                 });
             }
             if !section.exited.is_empty() {

@@ -200,6 +200,34 @@ fn the_first_line_is_hub_hello() {
     assert!(hello.get("session_id").is_none());
 }
 
+/// The payload of the first line a hub built with `commit` sends.
+fn hello_payload_for(commit: Option<&str>) -> Value {
+    let temp = Temp::new();
+    let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let hub = Arc::new(
+        crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed)
+            .with_commit(commit),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello()["payload"].clone()
+}
+
+#[test]
+fn hub_hello_carries_the_commit_the_hub_was_built_from() {
+    let sha = "2121f38d1e4f0a9b6c3d2e1f0a9b8c7d6e5f4a3b";
+    assert_eq!(
+        hello_payload_for(Some(sha)),
+        json!({"fiber_version": "0.0.0", "fiber_commit": sha})
+    );
+}
+
+#[test]
+fn hub_hello_sends_no_commit_for_an_empty_or_missing_one() {
+    let bare = json!({"fiber_version": "0.0.0"});
+    assert_eq!(hello_payload_for(Some("")), bare);
+    assert_eq!(hello_payload_for(None), bare);
+}
+
 #[test]
 fn malformed_lines_carry_no_command_id_without_a_string_id() {
     let temp = Temp::new();
