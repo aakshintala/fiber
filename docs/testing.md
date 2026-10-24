@@ -102,8 +102,9 @@ ordered list is still asserted.
 A line the contract writes on its own trigger, with no position relative to
 the session's other lines, is set aside from the ordered list rather than
 placed in it: `clients`, written when a connection attaches; `session_status`
-and the hub's `attention`, written when the session's summary changes. Where
-its count is fixed, such as one `clients` line per attach, the test asserts
+and the hub's `attention`, written when the session's summary changes;
+`date_changed`, written when the local date changes. Where its count is
+fixed, such as one `clients` line per attach, the test asserts
 the count, so a duplicate or a missing line still fails. Otherwise the test
 asserts it only when it is the line under test.
 
