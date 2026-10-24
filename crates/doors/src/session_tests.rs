@@ -5499,8 +5499,9 @@ fn close_ends_the_writers_while_another_handle_keeps_the_log() {
     );
 }
 
+/// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
 #[test]
-fn a_client_hanging_up_after_the_stop_does_not_end_its_writer_before_the_log_does() {
+fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_completes() {
     reset();
     let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
@@ -5509,8 +5510,8 @@ fn a_client_hanging_up_after_the_stop_does_not_end_its_writer_before_the_log_doe
     drop(client);
     assert!(
         gate.conns
-            .wait_while(Duration::from_millis(300), |state| state.writers_open() > 0),
-        "the writer is still open: it meets STOP and goes on to the log's end"
+            .wait_while(DEADLINE, |state| state.writers_open() > 0),
+        "the hanging-up client ends its writer"
     );
     let (_closer, done) = close_on_thread(opened.session, opened.log);
     Deadline::after(DEADLINE)
