@@ -221,7 +221,7 @@ fn a_hub_that_never_gets_a_port_fails_with_the_log() {
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         hub_start::serve_installed(
             &setup,
-            2,
+            3,
             &mut || {
                 if first_draw {
                     first_draw = false;
