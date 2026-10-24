@@ -623,6 +623,21 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     rows
 }
 
+/// Whether `content` is a chosen chip: `[text]` with a non-empty
+/// spaceless middle, whose brackets never copy
+/// (`docs/tui.md`, "Selection and copy").
+// Exempt: the only mutant no test tells apart is `len() > 2` to `<`,
+// and a string under two bytes long cannot both start with `[` and
+// end with `]`; every other shape of chip or bracket reaches the
+// noted-rows test below.
+#[cfg_attr(false, mutants::skip)]
+fn is_chip(content: &str) -> bool {
+    content.len() > 2
+        && content.starts_with('[')
+        && content.ends_with(']')
+        && !content[1..content.len() - 1].contains(' ')
+}
+
 /// The picker's noted text rows in `area` with the drawn `slab`: each
 /// kept body row's drawn cells with a chosen chip's brackets left out,
 /// the row's targets and bars untouched
@@ -657,11 +672,7 @@ pub(crate) fn note_selection(
                 .iter()
                 .map(|span| {
                     let content = span.content.as_ref();
-                    if content.len() > 2
-                        && content.starts_with('[')
-                        && content.ends_with(']')
-                        && !content[1..content.len() - 1].contains(' ')
-                    {
+                    if is_chip(content) {
                         let inner = content[1..content.len() - 1].to_owned();
                         Span::styled(inner, span.style)
                     } else {

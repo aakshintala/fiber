@@ -265,55 +265,6 @@ fn import_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
 /// Draws the import offer over `area`: the frame centred with its
 /// title, the head and one row per source, and its footer, beside
 /// the delete frame's drawing.
-/// Notes an overlay's kept body rows with their copy text and paints
-/// the selection over them: each row's drawn cells with the choice
-/// gutter left out, titles, key-hint footers and blank gaps never
-/// copied (`docs/tui.md`, "Selection and copy"). `joins` runs parallel
-/// to the frame's body, saying how each row's text follows the row
-/// before it.
-fn note_overlay(
-    app: &App,
-    buf: &mut Buffer,
-    slab: Rect,
-    framed: &super::overlay::Overlay,
-    area: Rect,
-    place: super::overlay::Place,
-    joins: &[crate::rows::Join],
-) {
-    if slab.is_empty() {
-        return;
-    }
-    let (text_x, inner) = super::overlay::inner_width(slab);
-    let (_, placed) = super::overlay::body_rows(framed, area, place);
-    let mut noted = Vec::with_capacity(placed.len());
-    for (y, at) in placed {
-        let (Some(row), Some(join)) = (framed.body.get(at), joins.get(at)) else {
-            continue;
-        };
-        if row.spans.is_empty() {
-            continue;
-        }
-        let text = super::overlay::body_text(row, usize::from(inner));
-        noted.push(crate::app::SpanRow {
-            y,
-            x: text_x,
-            end: slab.x.saturating_add(slab.width),
-            text,
-            join: *join,
-        });
-    }
-    app.note_surface(crate::app::NotedSurface {
-        surface: crate::app::SurfaceId::Overlay,
-        rows: noted,
-    });
-    for rect in app.selection_cells(crate::app::SurfaceId::Overlay, slab) {
-        buf.set_style(
-            rect.intersection(slab),
-            crate::view::marks::selection_style(),
-        );
-    }
-}
-
 /// The import question as drawn, without selection noting: tests draw
 /// it standalone, while `render` notes through
 /// `draw_import_question_noted`.
@@ -363,7 +314,7 @@ fn draw_import_question_inner(
         .collect();
     joins.resize(framed.body.len(), crate::rows::Join::Break);
     if let Some(app) = app {
-        note_overlay(
+        super::overlay::note_overlay(
             app,
             buf,
             slab,
@@ -475,7 +426,7 @@ fn draw_delete_question(
     };
     let before = targets.len();
     let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
-    note_overlay(
+    super::overlay::note_overlay(
         app,
         buf,
         slab,
@@ -1421,7 +1372,7 @@ fn draw_typed_picker(
     // Picker rows are cut to one visual row each; each starts its own
     // line.
     let joins = vec![crate::rows::Join::Break; framed.body.len()];
-    note_overlay(app, buf, slab, &framed, area, place, &joins);
+    super::overlay::note_overlay(app, buf, slab, &framed, area, place, &joins);
     slab
 }
 
@@ -1479,7 +1430,7 @@ fn draw_picker(
     // Picker rows are cut to one visual row each; each starts its own
     // line.
     let joins = vec![crate::rows::Join::Break; framed.body.len()];
-    note_overlay(
+    super::overlay::note_overlay(
         app,
         buf,
         slab,

@@ -826,7 +826,9 @@ fn the_wake_is_the_earliest_unpaused_event_expiry() {
     notices.close();
     assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
     // Past the first fade its row is gone, and the wake moves to the
-    // next expiry; the standing condition row shows throughout.
+    // next expiry; the standing condition row shows throughout
+    // (`docs/tui.md`, "Notices": one row each until dismissed, oldest
+    // first).
     notices.sweep(at(t0, 10_000));
     assert_eq!(texts(&notices.lines()), ["closed", "y", "z"]);
     assert_eq!(notices.notices_wake(), Some(at(t0, 15_000)));
@@ -837,7 +839,9 @@ fn a_row_showing_at_hold_keeps_its_row_past_fade() {
     let t0 = fakes::clock::FakeClock::new().now();
     // A drag holds every visible notice against expiry, not just the
     // ones pushed after the press: the row showing at hold time waits
-    // out its fade, then expires on the first sweep past the release.
+    // out its fade, then expires on the first sweep past the release
+    // (`docs/tui.md`, "Notices": one row each until dismissed; a notice
+    // that arrives during a drag waits for the release).
     let mut notices = Notices::default();
     notices.push("io_failed", "before".to_owned());
     notices.sweep(t0);
@@ -866,7 +870,8 @@ fn a_held_notice_and_an_overlay_notice_pause_expiry() {
     notices.push("io_failed", "during".to_owned());
     notices.sweep(at(t0, 10_000));
     // The visible row waits out its fade still showing; the pushed one
-    // stays unborn and hidden until the release.
+    // stays unborn and hidden until the release (`docs/tui.md`,
+    // "Notices": one row each until dismissed, oldest first).
     assert_eq!(texts(&notices.lines()), ["before"]);
     // The held notice gained no birth while hidden, so it contributes
     // no wake either: expiry counts from showing, not from the push.
@@ -963,7 +968,8 @@ fn an_open_single_notice_on_a_held_notice_gains_no_birth() {
     notices.close();
     // Past the fade the born row waits out the hold still showing,
     // while the held row — never born — stands waiting for the
-    // release with a fresh life.
+    // release with a fresh life (`docs/tui.md`, "Notices": one row
+    // each until dismissed, oldest first).
     notices.sweep(at(t0, 10_000));
     assert_eq!(texts(&notices.lines()), ["shown"]);
     notices.release();

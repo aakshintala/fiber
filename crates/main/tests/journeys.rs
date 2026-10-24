@@ -772,35 +772,17 @@ fn drag(run: &mut Run, from: (u16, u16), to: (u16, u16)) {
 }
 
 /// Standard-base64 decode for OSC 52 payloads, which the clipboard
-/// always pads to a multiple of four.
+/// always pads to a multiple of four (`docs/dependencies.md`: the
+/// `base64` crate covers the terminal's copy through OSC 52).
 fn decode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    use base64::Engine;
     assert!(bytes.len().is_multiple_of(4), "padded base64");
-    let mut vals = Vec::new();
-    for byte in bytes {
-        vals.push(if *byte == b'=' {
-            0
-        } else {
-            u32::try_from(
-                ALPHABET
-                    .iter()
-                    .position(|cell| cell == byte)
-                    .expect("base64 alphabet"),
-            )
-            .unwrap_or(u32::MAX)
-        });
-    }
-    let mut out = Vec::new();
-    for i in (0..vals.len()).step_by(4) {
-        let chunk = &vals[i..i + 4];
-        let triple = (chunk[0] << 18) | (chunk[1] << 12) | (chunk[2] << 6) | chunk[3];
-        out.push(u8::try_from(triple >> 16).unwrap_or(u8::MAX));
-        out.push(u8::try_from((triple >> 8) & 0xff).unwrap_or(u8::MAX));
-        out.push(u8::try_from(triple & 0xff).unwrap_or(u8::MAX));
-    }
-    let pad = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
-    out.truncate(out.len().saturating_sub(pad));
-    String::from_utf8(out).expect("utf-8 copy")
+    String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(bytes)
+            .expect("base64 payload"),
+    )
+    .expect("utf-8 copy")
 }
 
 #[test]
@@ -841,7 +823,12 @@ fn journey_drag_input_box_copies_its_text() {
     );
     run.ready();
     run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let typed = run.output().len();
     run.write(b"hello");
+    // The frame drawing the typed draft settles the input box's rows
+    // before the pointer goes out (`docs/testing/screens.md`,
+    // "Screens").
+    run.wait_bytes(typed, b"hello", "the typed draft drew");
     let screen = run.wait_screen("the typed draft", |screen| shows(screen, "hello"));
     let (x, y) = find_cell(&screen, "hello");
     let from = run.output().len();
@@ -881,7 +868,12 @@ fn journey_drag_notice_copies_its_text() {
     run.wait_screen("the beta-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "beta-2")
     });
+    let switched = run.output().len();
     run.write(b"\r");
+    // The frame drawing the notice settles its row before the pointer
+    // goes out (`docs/testing/screens.md`, "Screens"): the switch
+    // sends no further output, so nothing moves it after this frame.
+    run.wait_bytes(switched, b"cache_rebuild", "the cache-rebuild notice drew");
     let notice = run.wait_screen("the cache-rebuild notice", |screen| {
         shows(screen, "cache_rebuild") && shows(screen, "✕")
     });
@@ -976,7 +968,12 @@ fn journey_drag_overlay_copies_its_text() {
     run.write(b"say hi\r");
     run.wait_screen("the reply", |screen| shows(screen, "Hel"));
     run.turn_finished(from);
+    let opened = run.output().len();
     run.write(b"\x0c");
+    // The frame drawing the picker settles its rows before the pointer
+    // goes out (`docs/testing/screens.md`, "Screens"): the finished
+    // turn sends nothing more, so nothing moves them after this frame.
+    run.wait_bytes(opened, b"alpha-1", "the open picker drew");
     let open = run.wait_screen("the open picker", |screen| {
         shows(screen, "Type to search") && shows(screen, "alpha-1")
     });
@@ -1038,7 +1035,12 @@ fn journey_drag_approval_copies_its_text() {
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let asking = run.output().len();
     run.write(b"run it\r");
+    // The waiting title proves the turn waits on a person before the
+    // pointer goes out (`docs/testing/screens.md`, "Screens"): nothing
+    // streams while it waits, so the panel's rows hold still.
+    run.wait_bytes(asking, WAITING_TITLE, "the waiting turn");
     let panel = run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("Approval 1 of 1 · run it")
     });

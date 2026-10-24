@@ -2271,7 +2271,7 @@ fn stepped(login: &Login, width: u16, height: u16) -> (Buffer, Vec<Target>) {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    login.draw_step(area, &mut buf, &mut targets);
+    login.draw(area, &mut buf, &mut targets);
     (buf, targets)
 }
 
@@ -2433,7 +2433,7 @@ fn tiny_areas_never_panic_a_step() {
             for height in 1..=3 {
                 let area = Rect::new(0, 0, width, height);
                 let mut buf = Buffer::empty(area);
-                login.draw_step(area, &mut buf, &mut Vec::new());
+                login.draw(area, &mut buf, &mut Vec::new());
             }
         }
     }
@@ -3510,9 +3510,9 @@ fn the_failed_reason_reads_error() {
 fn notices_fill_only_the_remaining_budget() {
     // Two models with one notice: at a budget of three the notice draws,
     // and at exactly the models' two rows it is clipped away.
-    fn texts(rows: &[overlay::Row]) -> Vec<String> {
+    fn texts(rows: &[(overlay::Row, crate::rows::Join)]) -> Vec<String> {
         rows.iter()
-            .map(|row| {
+            .map(|(row, _)| {
                 row.spans
                     .iter()
                     .map(|span| span.content.to_string())

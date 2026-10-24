@@ -1444,3 +1444,36 @@ fn ctrl_u_deletes_in_a_draft_typed_during_a_turn() {
     assert_eq!(press(&mut app, "ctrl+u"), Effect::None);
     assert_eq!(app.draft(), "");
 }
+
+/// End with the input editor focused moves the cursor to the line's
+/// end (`docs/tui.md`, "Selection and copy"): the guard keeps every
+/// other context on the jump-to-end arm below.
+#[test]
+fn end_with_the_input_focused_moves_the_cursor_to_the_line_end() {
+    let mut app = attached(80, 24);
+    type_any(&mut app, "ab");
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    assert_eq!(app.input().position(), 1);
+    assert_eq!(app.on_key(Key::End, now()), Effect::None);
+    assert_eq!(app.draft(), "ab");
+    assert_eq!(app.input().position(), 2);
+}
+
+/// End outside the input, steering and conversation contexts only
+/// jumps to the end: the draft cursor stays put (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn end_outside_the_input_contexts_leaves_the_draft_cursor() {
+    let mut app = attached(80, 24);
+    type_any(&mut app, "ab");
+    assert_eq!(app.on_edit(Edit::Left), Effect::None);
+    // The open notice overlay holds the keyboard past the input box,
+    // and takes no key but Esc: End falls through to the jump-to-end
+    // arm below the editor's guard.
+    app.notices.push("extension_failed", "A notice.".to_owned());
+    app.open_notice(0);
+    assert_eq!(app.key_context(), Context::Overlay);
+    assert_eq!(app.on_key(Key::End, now()), Effect::None);
+    assert_eq!(app.draft(), "ab");
+    assert_eq!(app.input().position(), 1);
+}
