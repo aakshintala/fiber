@@ -1190,7 +1190,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     subscribe(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
-    support::kill_group(setup.deadline, running.group, "KILL").unwrap();
+    fakes::kill_group(running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
@@ -7450,7 +7450,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     // child left when it became its own leader. The remaining deadline
     // from here is the kill-to-backfilled window the resume asserts on.
     let killing = setup.deadline.left();
-    support::kill_group(setup.deadline, running.group, "KILL").unwrap();
+    fakes::kill_group(running.group, "KILL").unwrap();
     let (status, _, _) = running.wait();
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with

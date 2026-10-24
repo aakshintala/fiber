@@ -357,7 +357,7 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
     // neither `fiber_exited` nor `rewound`.
     let pids = world.session_pids();
     assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
-    assert!(support::kill_pid(world.setup.deadline, pids[0], "KILL").unwrap());
+    assert!(fakes::kill_pid(pids[0], "KILL").unwrap());
     drop(writer);
 
     first.send(&command("c_after", &id, "tools", &json!({})));

@@ -23,7 +23,6 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::shapes::Failure;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
@@ -32,6 +31,7 @@ use super::{
     Diagnostic, STATUS_WITHIN, Status, diagnose, diagnose_with, installed, probe, probe_with,
     render_json, render_text,
 };
+use crate::CliError;
 use crate::hub_unit::{Manager, name};
 
 /// One named deadline per wait.
@@ -93,7 +93,7 @@ fn hold(stream: &UnixStream) {
 }
 
 #[track_caller]
-fn probed(home: &Path, within: Duration) -> Result<Status, Failure> {
+fn probed(home: &Path, within: Duration) -> Result<Status, CliError> {
     let home = home.to_path_buf();
     let clock = FakeClock::new();
     fakes::within("the probe", Deadline::after(DEADLINE), move || {
@@ -136,7 +136,8 @@ fn a_hub_that_does_not_say_hub_hello_is_a_failure() {
         hold(&stream);
     });
     let error = probed(&home, ANSWER).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
 }
 
 #[test]
@@ -189,8 +190,9 @@ fn a_silent_hub_fails_at_the_deadline() {
         .recv(&result)
         .unwrap()
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "the hub did not answer status in 5 s");
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(error.to_string(), "the hub did not answer status in 5 s");
     assert_eq!(clock.now(), due);
 }
 
@@ -251,11 +253,11 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
         .recv(&done_rx)
         .expect("the probe fails at its total deadline, not a fresh one")
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
     assert!(
-        error.message.contains("did not say hub_hello in 5 s"),
-        "the retry names the shared hello wait: {}",
-        error.message
+        error.to_string().contains("did not say hub_hello in 5 s"),
+        "the retry names the shared hello wait: {error}"
     );
     assert_eq!(clock.now(), due);
 }
@@ -269,7 +271,7 @@ fn probe_signalled(
     clock: &Arc<FakeClock>,
 ) -> (
     Receiver<()>,
-    Receiver<Result<Status, Failure>>,
+    Receiver<Result<Status, CliError>>,
     thread::ThreadId,
 ) {
     let (reads, read) = mpsc::channel();
@@ -332,8 +334,9 @@ fn unrelated_lines_past_the_deadline_end_the_probe() {
         .recv(&result)
         .unwrap()
         .unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
-    assert_eq!(error.message, "the hub did not answer status in 5 s");
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(error.to_string(), "the hub did not answer status in 5 s");
     assert_eq!(clock.now(), due);
 }
 
@@ -495,7 +498,7 @@ fn ask_restores_blocking_after_a_close_before_the_answer() {
         ) else {
             panic!("a close before the answer is an error");
         };
-        assert!(error.message.contains("closed"), "{}", error.message);
+        assert!(matches!(error, CliError::HubStatusClosed), "{error}");
         assert!(
             is_blocking(&stream),
             "a close before the answer leaves the stream blocking"
@@ -521,14 +524,38 @@ fn ask_restores_blocking_after_the_deadline() {
             panic!("a deadline is an error");
         };
         assert!(
-            error.message.contains("did not answer"),
-            "{}",
-            error.message
+            matches!(error, CliError::HubStatusLate { seconds } if seconds == 0.0),
+            "{error}"
         );
         assert!(
             is_blocking(&stream),
             "a deadline leaves the stream blocking"
         );
+    });
+}
+
+#[test]
+fn ask_reports_an_answer_missing_its_fields() {
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    let bare = hub_line(
+        "command_accepted",
+        json!({"command_id": "c_status", "result": {"running": true}}),
+    );
+    peer.write_all(bare.as_bytes()).unwrap();
+    let clock = FakeClock::new();
+    let within = ANSWER;
+    fakes::within("the ask", Deadline::after(DEADLINE), move || {
+        let Err(error) = super::ask(
+            &stream,
+            clock.now() + within,
+            within,
+            &*clock,
+            &mut || {},
+            &mut || {},
+        ) else {
+            panic!("an answer missing its fields is an error");
+        };
+        assert!(matches!(error, CliError::HubStatusAnswerMissing), "{error}");
     });
 }
 
@@ -550,7 +577,11 @@ fn a_close_before_the_answer_is_a_failure() {
     let (_dir, home) = home();
     let (_got, _hub) = fake_hub(&home, drop);
     let error = probed(&home, ANSWER).unwrap_err();
-    assert!(error.message.contains("closed"), "{}", error.message);
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "the hub closed the connection before answering status"
+    );
 }
 
 #[test]
@@ -565,8 +596,9 @@ fn a_rejected_status_is_a_failure_with_its_code() {
         hold(&stream);
     });
     let error = probed(&home, ANSWER).unwrap_err();
-    assert_eq!(error.code, ErrorCode::InvalidArguments);
-    assert_eq!(error.message, "nope");
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(error.to_string(), "nope");
 }
 
 #[test]
@@ -602,7 +634,13 @@ fn an_answer_missing_its_fields_is_a_failure() {
         stream.write_all(bare.as_bytes()).unwrap();
         hold(&stream);
     });
-    assert_eq!(probed(&home, ANSWER).unwrap_err().code, ErrorCode::IoFailed);
+    let error = probed(&home, ANSWER).unwrap_err();
+    assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert_eq!(
+        error.to_string(),
+        "the hub's answer to status has no fiber_version or clients"
+    );
 }
 
 #[test]
@@ -630,10 +668,9 @@ fn the_port_is_the_global_hub_port_only() {
 fn a_hub_port_that_is_not_a_port_is_invalid_config() {
     let (_dir, home) = home();
     fs::write(home.join("config.json"), r#"{"hub": {"port": 70000}}"#).unwrap();
-    assert_eq!(
-        probed(&home, ANSWER).unwrap_err().code,
-        ErrorCode::ConfigInvalid
-    );
+    let error = probed(&home, ANSWER).unwrap_err();
+    assert!(matches!(error, CliError::HubPortInvalid { .. }), "{error}");
+    assert_eq!(error.code(), ErrorCode::ConfigInvalid);
 }
 
 #[test]
@@ -727,7 +764,8 @@ fn devices_is_empty_when_absent_and_an_error_when_not_a_dir() {
     fs::create_dir_all(home.join("hub")).unwrap();
     fs::write(home.join("hub/devices"), b"x").unwrap();
     let error = super::devices(&home).unwrap_err();
-    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(matches!(error, CliError::HubDevicesRead { .. }), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
 }
 
 /// The child's marker: set, the test runs `hub_status` and exits with its
@@ -868,7 +906,7 @@ fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
         let due = origin + within;
         let ahead = Duration::from_secs(6).min(due.saturating_duration_since(clock.now()));
         clock.advance_when_parked(Some(due), Some(id), ahead, &Deadline::after(DEADLINE));
-        let got: Result<Status, Failure> = if reads {
+        let got: Result<Status, CliError> = if reads {
             go.send(()).unwrap_or(());
             // The release is the completing event: the capped real poll
             // delivers the answer with no further advance.
@@ -882,11 +920,11 @@ fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
             assert_eq!(clock.now(), origin + Duration::from_secs(6));
         } else {
             let error = got.unwrap_err();
-            assert_eq!(error.code, ErrorCode::IoFailed);
+            assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+            assert_eq!(error.code(), ErrorCode::IoFailed);
             assert!(
-                error.message.contains("did not answer status"),
-                "{}",
-                error.message
+                error.to_string().contains("did not answer status"),
+                "{error}"
             );
             assert_eq!(clock.now(), due);
         }
