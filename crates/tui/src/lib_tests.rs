@@ -2874,7 +2874,14 @@ fn a_signal_ends_a_history_wait_at_once() {
         .name("lib-signal-wait".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                lp.tick.armed(),
+            );
             done.send((result, lp.hub.stashed().len())).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));

@@ -859,7 +859,14 @@ impl<B: Backend> Loop<B> {
             self.app.tail_ended(None);
         } else if self
             .hub
-            .fetch_tail(rx, &session, &mut self.app, &self.tick)
+            .fetch_tail(
+                rx,
+                &session,
+                &mut self.app,
+                &self.tick,
+                self.clock.as_ref(),
+                self.tick.armed(),
+            )
             .is_err()
         {
             return;
@@ -881,10 +888,15 @@ impl<B: Backend> Loop<B> {
             // Each range loads under its own segment's session: ancestor
             // and descendant logs both start at `Seq(0)`, so a bare range
             // names no page on its own.
-            match self
-                .hub
-                .fetch(rx, &session, &range, &mut self.app, &self.tick)
-            {
+            match self.hub.fetch(
+                rx,
+                &session,
+                &range,
+                &mut self.app,
+                &self.tick,
+                self.clock.as_ref(),
+                self.tick.armed(),
+            ) {
                 Ok(lines) => {
                     self.app.load(&session, lines);
                     // An answer that folded nothing into the page would

@@ -8,10 +8,11 @@ use super::{
     turn_lines,
 };
 use crate::Input;
-use crate::link::{Credits, Feed, Line, read_lines};
+use crate::link::{Credits, Feed, Line, answers, read_lines};
 use crate::retry::Retry;
 use contract::clock::Clock;
 use fakes::Deadline;
+use fakes::clock::FakeClock;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -1043,15 +1044,22 @@ fn wait_behind_replay(
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result =
-                lp.hub
-                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
-                    .map(|answer| match answer {
-                        super::super::hub::Answer::Lines(lines) => lines,
-                        super::super::hub::Answer::Reopened => {
-                            panic!("no reopening in this script")
-                        }
-                    });
+            let result = lp
+                .hub
+                .answer(
+                    &rx,
+                    "a_1",
+                    &mut lp.app,
+                    &lp.tick,
+                    lp.clock.as_ref(),
+                    lp.tick.armed(),
+                )
+                .map(|answer| match answer {
+                    super::super::hub::Answer::Lines(lines) => lines,
+                    super::super::hub::Answer::Reopened => {
+                        panic!("no reopening in this script")
+                    }
+                });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx
@@ -1128,15 +1136,22 @@ fn an_answer_first_leaves_no_stash() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result =
-                lp.hub
-                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
-                    .map(|answer| match answer {
-                        super::super::hub::Answer::Lines(lines) => lines,
-                        super::super::hub::Answer::Reopened => {
-                            panic!("no reopening in this script")
-                        }
-                    });
+            let result = lp
+                .hub
+                .answer(
+                    &rx,
+                    "a_1",
+                    &mut lp.app,
+                    &lp.tick,
+                    lp.clock.as_ref(),
+                    lp.tick.armed(),
+                )
+                .map(|answer| match answer {
+                    super::super::hub::Answer::Lines(lines) => lines,
+                    super::super::hub::Answer::Reopened => {
+                        panic!("no reopening in this script")
+                    }
+                });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1360,15 +1375,22 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
-            let result =
-                lp.hub
-                    .answer(&rx, "a_1", &mut lp.app, &lp.tick)
-                    .map(|answer| match answer {
-                        super::super::hub::Answer::Lines(lines) => lines,
-                        super::super::hub::Answer::Reopened => {
-                            panic!("no reopening in this script")
-                        }
-                    });
+            let result = lp
+                .hub
+                .answer(
+                    &rx,
+                    "a_1",
+                    &mut lp.app,
+                    &lp.tick,
+                    lp.clock.as_ref(),
+                    lp.tick.armed(),
+                )
+                .map(|answer| match answer {
+                    super::super::hub::Answer::Lines(lines) => lines,
+                    super::super::hub::Answer::Reopened => {
+                        panic!("no reopening in this script")
+                    }
+                });
             let peak = lp.hub.answer_stash_peak();
             let stashed = lp.hub.stashed().len();
             answered_tx.send((result, peak, stashed, lp)).unwrap_or(());
@@ -1712,7 +1734,14 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     .unwrap();
     // Every input is ready and EOF bounds the wait without a timer.
     drop(tx);
-    let answer = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+    let answer = lp.hub.answer(
+        &rx,
+        "a_1",
+        &mut lp.app,
+        &lp.tick,
+        lp.clock.as_ref(),
+        lp.tick.armed(),
+    );
     assert_eq!(answer, Ok(super::super::hub::Answer::Lines(want)));
     assert!(!lp.app.pass_open());
     let stashed = lp.hub.stashed();
@@ -3873,7 +3902,15 @@ fn history_fetch_names_each_window_with_its_segment_session() {
     let range: RangeInclusive<Seq> = Seq(0)..=Seq(300);
     let lines = lp
         .hub
-        .fetch(&rx, &serving, &range, &mut lp.app, &lp.tick)
+        .fetch(
+            &rx,
+            &serving,
+            &range,
+            &mut lp.app,
+            &lp.tick,
+            lp.clock.as_ref(),
+            lp.tick.armed(),
+        )
         .unwrap_or_else(|err| panic!("own fetch: {err}"));
     assert_eq!(lines.len(), 301, "both own windows answer");
     // The ancestor's window rides the serving session's chain read: the
@@ -3891,6 +3928,8 @@ fn history_fetch_names_each_window_with_its_segment_session() {
             &arange,
             &mut lp.app,
             &lp.tick,
+            lp.clock.as_ref(),
+            lp.tick.armed(),
         )
         .unwrap_or_else(|err| panic!("ancestor fetch: {err}"));
     assert_eq!(alines.len(), ancestor.len(), "the ancestor window answers");
@@ -3954,6 +3993,8 @@ fn history_fetch_past_the_point_fails_with_its_message() {
             &range,
             &mut lp.app,
             &lp.tick,
+            lp.clock.as_ref(),
+            lp.tick.armed(),
         )
         .expect_err("past the point fails");
     assert_eq!(err, "from_seq is past the point");
@@ -4099,4 +4140,421 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
             && *range == (contract::Seq(0)..=contract::Seq(point))),
         "the ancestor stays paged under its session: {top_needs:?}"
     );
+}
+
+/// The history wait's bound in milliseconds, beside the production
+/// constant it pins.
+const WAIT_MS: u64 = 10_000;
+
+/// The wait's deadline from the fake clock's origin: the clock moves
+/// only when the test moves it, so a wait that starts before the first
+/// move starts at the origin.
+fn wait_deadline(clock: &FakeClock) -> std::time::Instant {
+    clock
+        .origin()
+        .checked_add(super::super::hub::HISTORY_WAIT)
+        .expect("10 s past the origin")
+}
+
+/// Reads one JSON command the loop wrote to the hub's end, within
+/// [`DEADLINE`]: the write precedes the wait, so the line is already
+/// buffered once the writer runs.
+fn read_command(mut theirs: &UnixStream) -> serde_json::Value {
+    let wait = Deadline::after(DEADLINE);
+    let mut bytes = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        match theirs.read(&mut byte) {
+            Ok(0) => panic!("the hub's end closed before the command arrived"),
+            Ok(_) => {
+                bytes.extend_from_slice(&byte);
+                if byte == [b'\n'] {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if wait.left().is_zero() {
+                    panic!("waited {DEADLINE:?} for the history command");
+                }
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("the hub's read failed: {error}"),
+        }
+    }
+    serde_json::from_slice(&bytes).unwrap_or_else(|err| panic!("decode: {err}"))
+}
+
+/// Handles stashed terminal bytes the way the loop does short of the
+/// frame: parsed with the real parser, each event applied to the app,
+/// and a prompt the app sends dropped on the hung-up stream, as
+/// `Loop::handle_events` does with no connection.
+fn press(lp: &mut super::super::Loop<ratatui::backend::TestBackend>, bytes: &[u8]) {
+    use crate::app::Effect;
+    use crate::keys::{Event, Parser};
+    let now = lp.clock.now();
+    for event in Parser::default().feed(bytes) {
+        let effect = match event {
+            Event::Stroke(stroke) => lp.app.on_press(stroke, now),
+            Event::Key(key) => lp.app.on_key(key, now),
+            Event::Edit(edit) => lp.app.on_edit(edit),
+            _ => panic!("a typed key parses to a stroke, key or edit"),
+        };
+        match effect {
+            Effect::None => {}
+            Effect::Send(lines) => lp.hub.send(&lines, &mut lp.app),
+            _ => panic!("a typed key sends at most its prompt"),
+        }
+    }
+}
+
+/// Runs the wait for command `a_1` on a thread of its own and hands the
+/// loop back with it, so a wait that never ends fails on the
+/// [`DEADLINE`] below instead of hanging the suite.
+fn wait_on(
+    mut lp: super::super::Loop<ratatui::backend::TestBackend>,
+    rx: mpsc::Receiver<Input>,
+    frame_deadline: Option<std::time::Instant>,
+) -> mpsc::Receiver<Finished> {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-history-wait".to_owned())
+        .spawn(move || {
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                frame_deadline,
+            );
+            done.send((result, lp, rx)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    finished
+}
+
+/// The wait's result, the loop back, and its channel back.
+type Finished = (
+    Result<super::super::hub::Answer, String>,
+    super::super::Loop<ratatui::backend::TestBackend>,
+    mpsc::Receiver<Input>,
+);
+
+/// A hub that holds the connection and drops the `history` command: once
+/// the injected clock passes 10 seconds the wait ends as a lost
+/// connection, and a key pressed during the wait is handled after it.
+#[test]
+fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
+    use contract::Seq;
+    let (mut lp, mut theirs, tx, rx) = opened();
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    let shared: Arc<dyn Clock> = clock.clone();
+    // Our reader turns the wait's hang-up into `Disconnected`, the way
+    // the loop's reader does.
+    let end = lp
+        .hub
+        .stream()
+        .and_then(|stream| stream.try_clone().ok())
+        .expect("the loop holds the stream");
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (_reader, reader_done) = spawn_reader(end, feed);
+    // The ticker runs on the fake clock, and the fetch waits on a
+    // thread of its own, handing the loop back.
+    lp.tick.start(shared, tx.clone());
+    let deadline = wait_deadline(&clock);
+    let session = lp.app.session().cloned().expect("attached");
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-silent-hub".to_owned())
+        .spawn(move || {
+            let result = lp.hub.fetch(
+                &rx,
+                &session,
+                &(Seq(0)..=Seq(5)),
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                None,
+            );
+            done.send((result, lp, rx)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The write precedes the wait: the command is already buffered, and
+    // the parked ticker proves the wait armed its deadline.
+    let command = read_command(&theirs);
+    assert_eq!(command["command"], "history");
+    assert!(
+        clock.await_parked(deadline, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
+    );
+    // Before the deadline nothing ends: the wait holds past 9.999 s.
+    assert!(matches!(
+        finished.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    tx.send(Input::Bytes(b"x".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    clock.advance(Duration::from_millis(WAIT_MS - 1));
+    assert!(matches!(
+        finished.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    clock.advance(Duration::from_millis(1));
+    let (result, mut lp, rx) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the expired wait hangs up");
+    // The hang-up ends our reader, whose `Disconnected` reconnects like
+    // any other lost connection.
+    Deadline::after(DEADLINE)
+        .recv(&reader_done)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the reader to end: {err}"));
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(Input::Disconnected) => lp.hub.on_disconnected(&mut lp.app),
+        Ok(_) => panic!("the hang-up reads as a disconnect"),
+        Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
+    }
+    assert_eq!(
+        lp.app.banner().as_deref(),
+        Some("Connection lost · reconnecting (attempt 1)…")
+    );
+    // The key pressed during the wait lands in the draft under the
+    // banner once handled as a key pressed while disconnected.
+    let stashed = lp.hub.stashed();
+    assert_eq!(stashed.len(), 1);
+    assert!(matches!(&stashed[0], Input::Bytes(bytes) if bytes.as_slice() == b"x"));
+    let Some(first) = lp.hub.take_batch(&rx) else {
+        panic!("the stashed key");
+    };
+    for input in first {
+        match input {
+            Input::Bytes(bytes) => press(&mut lp, &bytes),
+            _ => panic!("the stash holds only the key"),
+        }
+    }
+    assert_eq!(lp.app.draft(), "x");
+    // Enter while disconnected sends no prompt on the old connection.
+    press(&mut lp, b"\r");
+    let mut byte = [0u8; 1];
+    match theirs.read(&mut byte) {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(_) => panic!("Enter wrote on the hung-up stream"),
+        Err(error) => panic!("the hub's read failed: {error}"),
+    }
+}
+
+/// Starts the loop's ticker on the fake clock: the thread sending its
+/// ticks to the wait's channel.
+fn start_tick(
+    lp: &mut super::super::Loop<ratatui::backend::TestBackend>,
+    clock: Arc<FakeClock>,
+    tx: &mpsc::Sender<Input>,
+) {
+    let shared: Arc<dyn Clock> = clock;
+    lp.tick.start(shared, tx.clone());
+}
+
+/// An answer handled just before the deadline draws: 9.999 s into the
+/// wait the ticker stays quiet and the lines return with no hang-up.
+#[test]
+fn an_answer_just_before_the_deadline_draws() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    start_tick(&mut lp, clock.clone(), &tx);
+    let deadline = wait_deadline(&clock);
+    let want = vec![replay(1000), replay(1001)];
+    let finished = wait_on(lp, rx, None);
+    assert!(
+        clock.await_parked(deadline, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
+    );
+    clock.advance(Duration::from_millis(WAIT_MS - 1));
+    tx.send(Input::Hub(Line::Session(command_answer(
+        "a_1",
+        want.clone(),
+    ))))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    let (result, lp, rx) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Ok(super::super::hub::Answer::Lines(want)));
+    assert!(lp.hub.has_stream(), "no hang-up before the deadline");
+    assert_eq!(lp.hub.stashed().len(), 0);
+    assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+/// An answer handled exactly at the deadline ends the wait as lost: the
+/// deadline wins, and the matching answer waits stashed.
+#[test]
+fn an_answer_at_the_deadline_is_stashed_and_lost() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    let want = vec![replay(1000)];
+    // No ticker runs, so nothing parks on the clock: the worker's
+    // readiness below is the signal the wait holds.
+    let (ready, started) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-late-answer".to_owned())
+        .spawn(move || {
+            let mut lp = lp;
+            // The channel is empty, so the receive below unblocks only
+            // after the test sends, which is after the clock moves.
+            ready.send(()).unwrap_or(());
+            let result = lp
+                .hub
+                .answer(&rx, "a_1", &mut lp.app, &lp.tick, lp.clock.as_ref(), None);
+            done.send((result, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    Deadline::after(DEADLINE)
+        .recv(&started)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the wait to start: {err}"));
+    clock.advance(super::super::hub::HISTORY_WAIT);
+    tx.send(Input::Hub(Line::Session(command_answer("a_1", want))))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (result, lp) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the expired wait hangs up");
+    let stashed = lp.hub.stashed();
+    assert_eq!(stashed.len(), 1);
+    assert!(
+        matches!(&stashed[0], Input::Hub(Line::Session(line)) if answers(line, "a_1")),
+        "the matching answer waits stashed"
+    );
+}
+
+/// At the deadline the tick ends the wait: a matching answer sent after
+/// stays queued, never stashed, and the stream hangs up.
+#[test]
+fn a_tick_at_the_deadline_ends_the_wait_before_a_late_answer() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    start_tick(&mut lp, clock.clone(), &tx);
+    let deadline = wait_deadline(&clock);
+    let finished = wait_on(lp, rx, None);
+    assert!(
+        clock.await_parked(deadline, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
+    );
+    clock.advance(super::super::hub::HISTORY_WAIT);
+    let (result, lp, rx) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the expired wait hangs up");
+    // The wait already ended on the tick: the late answer stays queued.
+    tx.send(Input::Hub(Line::Session(command_answer(
+        "a_1",
+        vec![replay(1000)],
+    ))))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    assert!(matches!(rx.try_recv(), Ok(Input::Hub(_))));
+    assert_eq!(lp.hub.stashed().len(), 0);
+}
+
+/// A frame deadline earlier than the wait's wakes the wait first: its
+/// tick is acked, the wait holds, and the answer draws.
+#[test]
+fn a_frame_tick_during_the_wait_is_acked_and_the_answer_draws() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    start_tick(&mut lp, clock.clone(), &tx);
+    let frame = clock
+        .origin()
+        .checked_add(Duration::from_millis(120))
+        .expect("a frame past the origin");
+    let want = vec![replay(1000)];
+    let finished = wait_on(lp, rx, Some(frame));
+    // The wait arms the earlier deadline: the ticker parks at the
+    // frame's, not the wait's.
+    assert!(
+        clock.await_parked(frame, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
+    );
+    clock.advance(Duration::from_millis(120));
+    // The tick woke the wait and was acked: the answer still draws, and
+    // the stream stays up.
+    tx.send(Input::Hub(Line::Session(command_answer(
+        "a_1",
+        want.clone(),
+    ))))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    let (result, lp, rx) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Ok(super::super::hub::Answer::Lines(want)));
+    assert!(lp.hub.has_stream(), "no hang-up before the deadline");
+    // Acked means acked: with no tick out, a deadline already past
+    // sends at once.
+    lp.tick.arm(Some(clock.origin()));
+    assert!(matches!(
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the next tick: {err}")),
+        Input::Tick
+    ));
+}
+
+/// After a frame tick the wait still ends at its own deadline: the ack
+/// re-arms the wait, and silence past 10 s loses the connection.
+#[test]
+fn after_a_frame_tick_the_wait_still_ends_at_its_deadline() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    start_tick(&mut lp, clock.clone(), &tx);
+    let frame = clock
+        .origin()
+        .checked_add(Duration::from_millis(120))
+        .expect("a frame past the origin");
+    let finished = wait_on(lp, rx, Some(frame));
+    assert!(
+        clock.await_parked(frame, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
+    );
+    clock.advance(Duration::from_millis(120));
+    clock.advance(super::super::hub::HISTORY_WAIT - Duration::from_millis(120));
+    let (result, lp, _) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the expired wait hangs up");
+}
+
+/// A frame deadline later than the wait's leaves the wait's first: the
+/// ticker parks at 10 s, and silence past it loses the connection.
+#[test]
+fn a_later_frame_deadline_leaves_the_wait_deadline_first() {
+    let (mut lp, _theirs, tx, rx) = opened();
+    let clock = FakeClock::new();
+    lp.clock = clock.clone();
+    start_tick(&mut lp, clock.clone(), &tx);
+    let deadline = wait_deadline(&clock);
+    let frame = clock
+        .origin()
+        .checked_add(Duration::from_secs(30))
+        .expect("a frame past the wait");
+    let finished = wait_on(lp, rx, Some(frame));
+    assert!(
+        clock.await_parked(deadline, Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the wait's deadline"
+    );
+    clock.advance(super::super::hub::HISTORY_WAIT);
+    let (result, lp, _) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
+    assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
+    assert!(!lp.hub.has_stream(), "the expired wait hangs up");
 }

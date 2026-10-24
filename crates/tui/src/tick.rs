@@ -156,8 +156,8 @@ impl Ticker {
         }
     }
 
-    /// The armed deadline, if any.
-    #[cfg(test)]
+    /// The armed deadline, if any: what the loop armed without a thread,
+    /// or the frame's current deadline while one runs.
     fn armed(&self) -> Option<std::time::Instant> {
         self.lock().at
     }
@@ -217,9 +217,8 @@ impl TickThread {
         }
     }
 
-    /// The armed deadline, or the last arm while idle: what the loop
-    /// armed without a thread.
-    #[cfg(test)]
+    /// The armed deadline, or the last arm while idle: the frame's
+    /// current deadline, what a history wait arms the earlier of.
     pub(crate) fn armed(&self) -> Option<std::time::Instant> {
         self.ticker.armed()
     }
