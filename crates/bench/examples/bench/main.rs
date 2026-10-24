@@ -12,8 +12,7 @@
 //! 2 on a usage error or a host other than Linux, and 1 when the file
 //! cannot be written. With `--base-fiber` the harness measures the head
 //! and base binaries in one process, alternating head and base samples
-//! (by sample for the repeated rows and the `paging` jig, by row block
-//! for listing, attach and wheel), and writes the base file too; a base
+//! by sample for every timing row, and writes the base file too; a base
 //! file that cannot be written leaves the exit status alone.
 
 #![allow(

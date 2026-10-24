@@ -276,8 +276,8 @@ under 24 MiB and runs the benchmarks that gate each pull request, the 10-busy-tu
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The base binary
 runs only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
-by sample for the repeated rows and the `paging` jig and by row block for listing, attach and
-wheel, and rows the base skips run on the head alone. Memory and exact rows compare
+by sample for every timing row, and rows the base skips run on the head alone. Memory and
+exact rows compare
 against the backstop's stored results for the base commit, the
 `benchmarks-<sha>` artifact, and a memory or exact budget the base fails
 there does not fail the pull request.
