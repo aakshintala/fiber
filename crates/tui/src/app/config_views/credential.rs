@@ -182,7 +182,7 @@ impl Picker {
         };
         Frame {
             title: "Credentials".to_owned(),
-            command: "/credential",
+            command: "/credential".to_owned(),
             rows,
             list: self.list,
             below: vec![below],

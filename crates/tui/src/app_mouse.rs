@@ -144,6 +144,10 @@ impl App {
             // An image's line opens in the system viewer
             // (`docs/tui.md`, "Images").
             TargetId::Line(Target::Image(id)) => self.view_image(id),
+            TargetId::Line(Target::CallView(id)) => {
+                // A click on the more row opens the call's whole view.
+                self.open_session_view(super::SessionView::Call(id))
+            }
             TargetId::Line(line) => {
                 // A click on the pinned row closes what it opened and
                 // scrolls the closed row to the top; any other line

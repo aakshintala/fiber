@@ -12,6 +12,7 @@ use crate::diff::{diff_lines, gutter_prefix, gutter_width, safe_line, styled_spa
 use crate::format::{count, dim};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
+use crate::swapped::Ink;
 use crate::theme::Role;
 
 /// An opened call shows at most this many logical lines, then a dim
@@ -52,15 +53,188 @@ enum End<'a> {
 
 /// One logical line of the opened view: its number when a gutter names
 /// it, whether it stands inside a numbered view, and its text.
-struct Body {
-    number: Option<u64>,
-    gutter: bool,
+#[derive(Debug, Clone)]
+pub(crate) struct Body {
+    pub(crate) number: Option<u64>,
+    pub(crate) gutter: bool,
     line: Line<'static>,
 }
 
-/// The call's opened rows under its ledger row: its headline first,
-/// then the view its `details` choose, at most [`OPENED_LINES`] logical
-/// lines, then at most one dim more row. Every row begins with the
+impl Body {
+    /// The line's cells for a swapped-view frame: each span's text with
+    /// the ink its style draws as. Bold heads and dim hints keep their
+    /// ink, role colours and marked words keep theirs, and the match
+    /// tint keeps its mark; anything else draws plain.
+    pub(crate) fn cells(&self) -> Vec<(String, Ink)> {
+        self.line
+            .spans
+            .iter()
+            .map(|span| (span.content.to_string(), ink_of(&span.style)))
+            .collect()
+    }
+
+    /// The line's whole text, spans joined: what the view's search
+    /// matches against and what `y` never copies with its gutter.
+    pub(crate) fn text(&self) -> String {
+        self.line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+}
+
+/// A span style back to its ink: bold is a heading, dim is muted, a
+/// reversed role colour is that role marked, a role colour is that
+/// role, and the match tint keeps its mark.
+fn ink_of(style: &Style) -> Ink {
+    if style.add_modifier.contains(Modifier::BOLD) {
+        return Ink::Heading;
+    }
+    if style.add_modifier.contains(Modifier::DIM) {
+        return Ink::Muted;
+    }
+    if style.add_modifier.contains(Modifier::REVERSED) {
+        return role_of(style).map_or(Ink::Plain, Ink::Marked);
+    }
+    if style.bg == Some(crate::theme::Role::Match.color()) {
+        return Ink::Marked(crate::theme::Role::Match);
+    }
+    role_of(style).map_or(Ink::Plain, Ink::Role)
+}
+
+/// The role a span style draws in, if it draws one.
+fn role_of(style: &Style) -> Option<crate::theme::Role> {
+    crate::theme::Role::ALL
+        .into_iter()
+        .find(|role| Some(role.color()) == style.fg)
+}
+
+/// The call's opened rows with no line cap and no more row: its
+/// headline first, then the view its `details` choose. The inline
+/// ledger draws the first [`OPENED_LINES`] of these; the call's swapped
+/// view draws them all, and draws paged output between [`prefix`] and
+/// [`closing`] instead when the result has an artifact.
+pub(crate) fn uncapped(call: &Call) -> Vec<Body> {
+    let mut bodies: Vec<Body> = Vec::new();
+    if !call.headline().is_empty() {
+        bodies.push(Body {
+            number: None,
+            gutter: false,
+            line: dim(call.headline().to_owned()),
+        });
+    }
+    let parsed: Option<Value> = parsed_details(call);
+    push_view(&parsed_view(call, &parsed), &mut bodies);
+    bodies
+}
+
+/// The rows a swapped view draws around paged artifact output: the
+/// headline and a shell call's command rows, never the output itself.
+pub(crate) fn prefix(call: &Call) -> Vec<Body> {
+    let mut bodies: Vec<Body> = Vec::new();
+    if !call.headline().is_empty() {
+        bodies.push(Body {
+            number: None,
+            gutter: false,
+            line: dim(call.headline().to_owned()),
+        });
+    }
+    let parsed: Option<Value> = parsed_details(call);
+    if let View::Shell { command, .. } = parsed_view(call, &parsed) {
+        push_command(command, &mut bodies);
+    }
+    bodies
+}
+
+/// The closing row a swapped view draws after paged artifact output:
+/// the shell's or search's closing, if its `details` name one.
+pub(crate) fn closing(call: &Call) -> Vec<Body> {
+    let parsed: Option<Value> = parsed_details(call);
+    let view = parsed_view(call, &parsed);
+    let mut bodies: Vec<Body> = Vec::new();
+    match view {
+        View::Matches { end, .. } | View::Shell { end, .. } => push_closing(&end, &mut bodies),
+        View::Diff(_) | View::Read { .. } | View::Written(_) | View::Plain(_) => {}
+    }
+    bodies
+}
+
+/// The swapped view's inputs for one call: its identity, its kind and
+/// target, its uncapped rows for a result with no artifact, the rows a
+/// paged artifact draws around, and the paging inputs from its result.
+#[derive(Debug, Clone)]
+pub(crate) struct CallSnapshot {
+    /// The call's id: Esc returns with its row still focused.
+    pub(crate) id: usize,
+    /// Whether the call is open inline behind the view.
+    pub(crate) open: bool,
+    /// The capitalised kind word, drawn bold on the top row.
+    pub(crate) title: String,
+    /// The call's target, drawn dim on the top row.
+    pub(crate) command: String,
+    /// The whole call's uncapped rows, drawn when no artifact pages it.
+    pub(crate) plain: Vec<Body>,
+    /// The headline and shell command rows, drawn around paged output.
+    pub(crate) prefix: Vec<Body>,
+    /// The shell or search closing row, drawn after paged output.
+    pub(crate) closing: Vec<Body>,
+    /// The first paged output line's number, for numbered output.
+    pub(crate) numbering: Option<u64>,
+    /// The full output's path, when the result was cut or a hook
+    /// returned text for it.
+    pub(crate) artifact: Option<String>,
+    /// On a cut result, the byte ranges of the full output held in
+    /// `content`: the model's-view edges.
+    pub(crate) kept: Option<Vec<[u64; 2]>>,
+}
+
+/// Snapshots the call `id` names among `calls` for its swapped view:
+/// `None` when it drew no call by that id.
+pub(crate) fn snapshot<'a>(
+    mut calls: impl Iterator<Item = &'a Call>,
+    id: usize,
+) -> Option<CallSnapshot> {
+    let call = calls.find(|call| call.id == id)?;
+    let kind = crate::format::kind(&call.name, &call.arguments);
+    let mut title = kind.word().to_owned();
+    if let Some(first) = title.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    Some(CallSnapshot {
+        id: call.id,
+        open: call.open,
+        title,
+        command: crate::format::summary(&call.name, &call.arguments),
+        plain: uncapped(call),
+        prefix: prefix(call),
+        closing: closing(call),
+        numbering: numbering(call),
+        artifact: call
+            .result
+            .as_deref()
+            .and_then(|result| result.artifact.clone()),
+        kept: call
+            .result
+            .as_deref()
+            .and_then(|result| result.kept.clone()),
+    })
+}
+
+/// The first paged output line's number: a read's `start_line`, 1 for
+/// a written file, none for unnumbered output.
+pub(crate) fn numbering(call: &Call) -> Option<u64> {
+    let parsed: Option<Value> = parsed_details(call);
+    match parsed_view(call, &parsed) {
+        View::Read { start, .. } => Some(start),
+        View::Written(_) => Some(1),
+        View::Diff(_) | View::Matches { .. } | View::Shell { .. } | View::Plain(_) => None,
+    }
+}
+
+/// The call's opened rows under its ledger row: the first
+/// [`OPENED_LINES`] of [`uncapped`], then at most one dim more row.
+/// Every row begins with the
 /// eight-column indent and is at most `width` cells wide, whatever
 /// `width`; a `width` of zero draws nothing. Rows wrap with the indent
 /// on every piece, keeping their text metadata, so copy and search see
@@ -73,26 +247,7 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
         return;
     }
     let room = width.saturating_sub(8);
-    let mut bodies: Vec<Body> = Vec::new();
-    if !call.headline().is_empty() {
-        bodies.push(Body {
-            number: None,
-            gutter: false,
-            line: dim(call.headline().to_owned()),
-        });
-    }
-    // Details ride as JSON text and parse when the call opens, never
-    // on load; a string that fails to parse falls back to the
-    // plain-content view for unrecognised details.
-    let parsed: Option<Value> = call
-        .details_text()
-        .and_then(|text| serde_json::from_str(text).ok());
-    let view = if call.details_text().is_some() && parsed.is_none() {
-        View::Plain(call.content())
-    } else {
-        view_of(call, parsed.as_ref())
-    };
-    push_view(&view, &mut bodies);
+    let bodies = uncapped(call);
     let shown = bodies.len().min(OPENED_LINES);
     let left = bodies.len().saturating_sub(shown);
     // The gutter fits the largest number among the rows drawn, after
@@ -145,6 +300,23 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
             first_piece = false;
             out.push_text((piece, piece_target), text);
         }
+    }
+}
+
+/// The call's parsed details: `None` when it carries none. Details ride
+/// as JSON text and parse when the call opens, never on load.
+fn parsed_details(call: &Call) -> Option<Value> {
+    call.details_text()
+        .and_then(|text| serde_json::from_str(text).ok())
+}
+
+/// The call's view from its parsed details: a string that fails to
+/// parse falls back to the plain-content view for unrecognised details.
+fn parsed_view<'a>(call: &'a Call, parsed: &'a Option<Value>) -> View<'a> {
+    if call.details_text().is_some() && parsed.is_none() {
+        View::Plain(call.content())
+    } else {
+        view_of(call, parsed.as_ref())
     }
 }
 
