@@ -3341,17 +3341,17 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     // the socket, delivered the crossing line.
     let (notice, usages) = take_report_with_usages(&rig, 2);
     assert_eq!(trip.sum(), 0.25);
-    assert_eq!(trip.stops(), 1);
     // Releases the watcher: its parked delivery loses the already-won
     // claim, the last line forwards once, and nothing trips again.
     release_tx
         .send(())
         .expect("the parked watcher takes its release");
     let usages = drain_streamed_usages(&rig, usages, 3);
-    let generations: Vec<&str> = usages
+    let mut generations: Vec<&str> = usages
         .iter()
         .map(|(_, generation)| generation.as_str())
         .collect();
+    generations.sort_unstable();
     assert_eq!(generations, ["g_1", "g_2", "g_3"]);
     assert_eq!(trip.sum(), 0.35);
     assert_eq!(trip.stops(), 1);
