@@ -5867,12 +5867,9 @@ const ASK_CHILD_DURABLE: &[&str] = &[
     "fiber_exited",
 ];
 
-/// The parent's durable kinds, pinned from a real run: the spawn turn,
-/// the wake turn carrying the delegate's questions with the person's form
-/// and the resume, and the final wake. A hub-started session idles
-/// after its turn instead of taking an ending-notice turn, so the
-/// delegate's finish wakes a turn of its own. The log is read before the
-/// test closes the parent, so it ends with the last wake turn.
+/// A separate-notice fixture: the parent idles between both delegate
+/// runs. A notice may instead join a running turn at its next step
+/// (`docs/loop.md`, "One step"), without changing any tool result.
 const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -5937,16 +5934,133 @@ const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
     "turn_completed",
 ];
 
+/// Assert every startup, turn and step without fixing how many turns a
+/// pair of job notices needs (`docs/loop.md`, "One step").
+fn assert_wake_schedule(lines: &[Value]) {
+    let lines = without_copies(lines);
+    for kind in ["delegate_finished", "job_completed"] {
+        assert_eq!(
+            lines.iter().filter(|line| line["kind"] == kind).count(),
+            2,
+            "two delegate runs: {kind}"
+        );
+    }
+    let first = lines
+        .iter()
+        .position(|line| line["kind"] == "turn_started")
+        .unwrap();
+    assert_eq!(
+        support::kinds(&lines[..first]),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message"
+        ]
+    );
+    for turn in lines[first..].split_inclusive(|line| line["kind"] == "turn_completed") {
+        assert_eq!(turn.first().unwrap()["kind"], "turn_started");
+        assert_eq!(turn.last().unwrap()["kind"], "turn_completed");
+        let interior = &turn[1..turn.len() - 1];
+        assert_eq!(interior.first().unwrap()["kind"], "step_started");
+        let mut starts: Vec<usize> = interior
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| (line["kind"] == "step_started").then_some(i))
+            .collect();
+        starts.push(interior.len());
+        for bounds in starts.windows(2) {
+            let step = &interior[bounds[0]..bounds[1]];
+            let assistant = step
+                .iter()
+                .position(|line| line["kind"] == "assistant_message_started")
+                .unwrap();
+            let notice = if support::kinds(&step[..assistant]).contains(&"job_completed") {
+                vec!["delegate_finished", "job_completed"]
+            } else {
+                vec![]
+            };
+            support::assert_set_between(step, 0, assistant, &notice);
+            assert_eq!(
+                support::kinds(&step[1..assistant]),
+                notice,
+                "finish precedes job completion"
+            );
+            let call = step
+                .iter()
+                .find(|line| line["kind"] == "tool_call_requested");
+            let mut expected = vec!["assistant_message_started"];
+            if let Some(call) = call {
+                expected.extend([
+                    "tool_call_requested",
+                    "usage_recorded",
+                    "assistant_message_completed",
+                ]);
+                match call["payload"]["name"].as_str().unwrap() {
+                    "delegate_spawn" | "delegate_message" => expected.extend([
+                        "usage_recorded",
+                        "permission_resolved",
+                        "tool_call_started",
+                        "job_started",
+                        "delegate_started",
+                        "tool_call_completed",
+                    ]),
+                    "ask_user" => expected.extend([
+                        "tool_call_started",
+                        "interaction_requested",
+                        "interaction_resolved",
+                        "tool_call_completed",
+                    ]),
+                    name => panic!("unexpected relay tool {name}"),
+                }
+            } else {
+                expected.extend([
+                    "text_completed",
+                    "usage_recorded",
+                    "assistant_message_completed",
+                ]);
+            }
+            assert_eq!(support::kinds(&step[assistant..]), expected);
+        }
+    }
+}
+
+#[test]
+fn wake_schedule_accepts_a_notice_joining_the_running_turn() {
+    for merged in [false, true] {
+        let mut lines = support::expected(ASK_WAKE_PARENT_DURABLE);
+        for (call, name) in lines
+            .iter_mut()
+            .filter(|line| line["kind"] == "tool_call_requested")
+            .zip(["delegate_spawn", "ask_user", "delegate_message"])
+        {
+            call["payload"] = json!({"name": name});
+        }
+        if merged {
+            let last_turn = lines
+                .iter()
+                .rposition(|line| line["kind"] == "turn_started")
+                .unwrap();
+            lines.remove(last_turn);
+            lines.remove(last_turn - 1);
+        }
+        assert_wake_schedule(&lines);
+    }
+}
+
 #[test]
 fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     let setup = support::Setup::new();
     let guard = arm(&setup);
-    let parent = ProviderServer::start_responding(|request: &Request| {
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let parent = ProviderServer::start_responding(move |request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
         if !text.contains(r#""name":"delegate_spawn""#) {
             return text_reply("allow");
         }
         if text.contains(PORCH_DONE) {
+            completion_tx.send(()).unwrap();
             return support::hello();
         }
         if text.contains("Resumed delegate") {
@@ -6100,12 +6214,21 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
         "the resumed run carries the verbatim answer line"
     );
     child.release();
-    // The resumed run ends on its final message, and the parent's last
-    // wake turn ends on its own: three turns in all.
-    let mut turns = 1;
-    let mut batch = support::until(&main, "the parent's last turn ends", |line| {
-        turns += usize::from(line["kind"] == "turn_completed" && is_session(line, &parent_id));
-        turns == 3
+    let mut batch = support::until(&main, "the resumed job completes", |line| {
+        line["kind"] == "job_completed"
+            && is_session(line, &parent_id)
+            && line["payload"]["job_id"] == job
+    });
+    let completion_turn = batch.last().unwrap()["turn_id"].clone();
+    lines.append(&mut batch);
+    setup.deadline.recv_or_fail(
+        &completion_rx,
+        "the parent request carries the final delegate message",
+    );
+    let mut batch = support::until(&main, "the completion-bearing turn ends", |line| {
+        line["kind"] == "turn_completed"
+            && is_session(line, &parent_id)
+            && line["turn_id"] == completion_turn
     });
     lines.append(&mut batch);
     drop(other);
@@ -6126,10 +6249,10 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             "the wake carries the whole question line: {body}"
         );
     }
-    // Six session requests and two reviewer verdicts: the spawn, the
-    // receipt, the wake, the answer, the resume receipt, and the final
-    // wake. The person's form is never reviewed.
-    assert_eq!(parent.requests().len(), 8, "two reviews and six turns");
+    // The spawn and resume are reviewed; the person's form is not.
+    // Session request counts depend on which step takes the job notice.
+    let requests = parent.requests();
+    assert_eq!(requests.len() - session_bodies(&requests).len(), 2);
 
     let parent_log = sessions_in(&setup.home(), &setup.workspace())
         .join(&parent_id)
@@ -6177,14 +6300,12 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     }
     // The wake turn's input holds one jobs item naming the job, and the
     // parent's own form resolved by the person with one result line.
-    let turns: Vec<&Value> = parent_lines
-        .iter()
-        .filter(|line| line["kind"] == "turn_started")
-        .collect();
-    assert_eq!(turns.len(), 3, "{:?}", owned_kinds(&parent_lines));
-    assert_eq!(
-        turns[1]["payload"]["input"],
-        json!([{"type": "jobs", "job_ids": [job]}])
+    let wake_input = json!([{"type": "jobs", "job_ids": [job]}]);
+    assert!(
+        parent_lines.iter().any(|line| {
+            line["kind"] == "turn_started" && line["payload"]["input"] == wake_input
+        }),
+        "the idle parent's wake names the job"
     );
     let asked = parent_lines
         .iter()
@@ -6280,10 +6401,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     {
         assert_eq!(exited["payload"]["exit_code"], 0);
     }
-    assert_eq!(
-        durable_kinds(&without_copies(&parent_lines)),
-        ASK_WAKE_PARENT_DURABLE
-    );
+    assert_wake_schedule(&parent_lines);
 
     // Closing the parent ends it; its sessions leave no process behind.
     main.send(&format!(
