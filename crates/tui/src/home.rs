@@ -191,6 +191,10 @@ pub struct Launch {
     /// Where the viewer writes the copies it opens: `cache/images` in
     /// Fiber home (`docs/tui.md`, "Images").
     pub images: PathBuf,
+    /// `tui.inline_images`: images draw inline where the terminal
+    /// speaks kitty's graphics protocol (`docs/tui.md`, "Images").
+    /// False in the default, so tests opt in per case.
+    pub inline_images: bool,
     /// `tui.rail.width`: the rail's share of the screen's width, in
     /// percent (`docs/tui.md`, "Layout").
     pub rail_share: f64,

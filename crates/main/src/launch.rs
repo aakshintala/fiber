@@ -115,6 +115,9 @@ pub(crate) fn launch(
         // always safe to delete (`docs/state.md`, `docs/tui.md`,
         // "Images").
         images: config::images_cache_dir(home),
+        // `tui.inline_images`, defaulting to on in the config schema
+        // (`docs/configuration.md`, "Keys").
+        inline_images: on(config, "tui.inline_images"),
         // `terminal` supplies the report writer once it holds Fiber home.
         feedback: None,
         // `main` gives the seam once it holds Fiber home.
