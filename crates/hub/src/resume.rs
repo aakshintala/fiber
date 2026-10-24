@@ -23,7 +23,6 @@
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -187,10 +186,7 @@ fn reach(
     let _admitted = hub.admit()?;
     let _timer = log::diag::timed(&hub.diag, Op::HubResume, None, None);
     let socket = hub.home.join("run").join(&session.0);
-    let _gate = hub
-        .resume_gate
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _gate = support::lock(&hub.resume_gate);
     let deadline = hub.clock.now() + SHUTDOWN_BOUND;
     let mut trusted = trusted;
     let mut held = None;
