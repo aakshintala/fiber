@@ -2381,7 +2381,14 @@ fn a_closed_answer_channel_ends_the_wait_hung_up() {
     drop(tx);
     // The channel is closed, so the wait ends at once instead of hanging
     // the suite: no thread and no deadline needed.
-    let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+    let result = lp.hub.answer(
+        &rx,
+        "a_1",
+        &mut lp.app,
+        &lp.tick,
+        lp.clock.as_ref(),
+        lp.tick.armed(),
+    );
     assert_eq!(result, Err(LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the closed channel hangs the wait up");
 }
@@ -2394,6 +2401,7 @@ fn an_answer_missing_its_final_seq_is_dropped() {
     let mut app = App::new(PathBuf::from("/w"));
     let tick = crate::tick::TickThread::idle();
     let session_id = contract::SessionId(SESSION.to_owned());
+    let clock = fakes::clock::FakeClock::new();
     let (tx, rx) = mpsc::channel();
     // The hub answers every history command with one line carrying no
     // seq, and counts the commands, until the fetch hangs up.
@@ -2430,7 +2438,15 @@ fn an_answer_missing_its_final_seq_is_dropped() {
     std::thread::Builder::new()
         .name("loop-seq-less-fetch".to_owned())
         .spawn(move || {
-            let lines = hub.fetch(&rx, &session_id, &(Seq(0)..=Seq(0)), &mut app, &tick);
+            let lines = hub.fetch(
+                &rx,
+                &session_id,
+                &(Seq(0)..=Seq(0)),
+                &mut app,
+                &tick,
+                clock.as_ref(),
+                tick.armed(),
+            );
             done.send((lines, hub)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2461,6 +2477,7 @@ fn an_empty_fetch_range_asks_nothing() {
     let tick = crate::tick::TickThread::idle();
     let session = contract::SessionId(SESSION.to_owned());
     let (_idle_tx, idle) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
     // An inverted range asks nothing, so the fetch returns at once; it
     // runs on a thread of its own so an ask that never ends fails here
     // instead of hanging the suite.
@@ -2468,7 +2485,15 @@ fn an_empty_fetch_range_asks_nothing() {
     std::thread::Builder::new()
         .name("loop-empty-fetch".to_owned())
         .spawn(move || {
-            let lines = hub.fetch(&idle, &session, &(Seq(5)..=Seq(3)), &mut app, &tick);
+            let lines = hub.fetch(
+                &idle,
+                &session,
+                &(Seq(5)..=Seq(3)),
+                &mut app,
+                &tick,
+                clock.as_ref(),
+                tick.armed(),
+            );
             done.send((lines, hub)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2501,6 +2526,7 @@ fn a_fetch_with_no_stream_is_lost_at_once() {
     let tick = crate::tick::TickThread::idle();
     let session = contract::SessionId(SESSION.to_owned());
     let (_idle_tx, idle) = mpsc::channel();
+    let clock = fakes::clock::FakeClock::new();
     // Nothing is connected, so the fetch fails without waiting; it runs
     // on a thread of its own so a wait that never ends fails here
     // instead of hanging the suite.
@@ -2508,7 +2534,15 @@ fn a_fetch_with_no_stream_is_lost_at_once() {
     std::thread::Builder::new()
         .name("loop-lost-fetch".to_owned())
         .spawn(move || {
-            let lines = hub.fetch(&idle, &session, &(Seq(0)..=Seq(1)), &mut app, &tick);
+            let lines = hub.fetch(
+                &idle,
+                &session,
+                &(Seq(0)..=Seq(1)),
+                &mut app,
+                &tick,
+                clock.as_ref(),
+                tick.armed(),
+            );
             done.send((lines, app)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2586,7 +2620,14 @@ fn a_signal_during_a_history_wait_keeps_the_connection() {
         .name("loop-signal-kept".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                lp.tick.armed(),
+            );
             done.send((result, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));

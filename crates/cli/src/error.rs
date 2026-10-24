@@ -561,6 +561,91 @@ pub enum CliError {
     /// The hub's `devices` answer is not a device list.
     #[error("the hub's answer to `devices` is not a device list")]
     DevicesMalformed,
+    /// The Fiber home's path is too long to name the hub's login service.
+    #[error("{}", hub_unit_name_too_long_message(*.bytes))]
+    HubUnitNameTooLong {
+        /// The overlong service name's length in bytes.
+        bytes: usize,
+    },
+    /// `HOME` is missing or relative, so the hub's login service has no home.
+    #[error("HOME must be an absolute path to find the hub's login service.")]
+    HubHomeUnavailable,
+    /// A path the hub's login service must name is not UTF-8 or holds a
+    /// control character.
+    #[error(
+        "{path:?} is not UTF-8 or holds a control character, so the hub's login service cannot name it."
+    )]
+    HubUnitPathUnrepresentable {
+        /// The path that cannot be named.
+        path: PathBuf,
+    },
+    /// No pairing code was given for a paired hub.
+    #[error("No pairing code was given. Run `fiber --help` for usage.")]
+    HubPairingCodeMissing,
+    /// The hub's pairing answer carries no device token.
+    #[error("the hub's pairing answer has no token")]
+    HubPairingTokenMissing,
+    /// Another `fiber hub add` or `fiber hub remove` holds the name's lock.
+    #[error("another `fiber hub add` or `fiber hub remove` of `{name}` is running")]
+    HubListLocked {
+        /// The hub being added or removed.
+        name: String,
+    },
+    /// The hub is already declared in the global layer.
+    #[error(
+        "`{name}` is already declared in the global layer. Run `fiber hub remove {name}` to remove it first. Run `fiber --help` for usage."
+    )]
+    HubAlreadyDeclared {
+        /// The hub already declared.
+        name: String,
+    },
+    /// No hub with the name is in the client's list.
+    #[error("No hub named `{name}` in this client's list. Run `fiber --help` for usage.")]
+    HubNotFound {
+        /// The hub named.
+        name: String,
+    },
+    /// The hub-list entry write failed, keeping the device token only
+    /// after a paired entry's rename.
+    #[error("{}", hub_entry_failed_message(.source, *.paired))]
+    HubEntryFailed {
+        /// Why the entry write failed.
+        source: ConfigError,
+        /// Whether a device token was just stored for the entry.
+        paired: bool,
+    },
+    /// The global `hub.port` is not a port.
+    #[error("hub.port in {} is not a port: {value}", .path.display())]
+    HubPortInvalid {
+        /// The configured value.
+        value: serde_json::Value,
+        /// The global configuration file holding it.
+        path: PathBuf,
+    },
+    /// A hub path could not be read: the devices directory or the
+    /// login-service unit file.
+    #[error("reading {}: {source}", .path.display())]
+    HubDevicesRead {
+        /// The directory or file that could not be read.
+        path: PathBuf,
+        /// Why the read failed.
+        source: io::Error,
+    },
+    /// The hub did not answer `status` before the deadline.
+    #[error("the hub did not answer status in {seconds} s")]
+    HubStatusLate {
+        /// The deadline in seconds.
+        seconds: f64,
+    },
+    /// The hub closed the connection before answering `status`.
+    #[error("the hub closed the connection before answering status")]
+    HubStatusClosed,
+    /// The hub's `status` answer carries no version or client count.
+    #[error("the hub's answer to status has no fiber_version or clients")]
+    HubStatusAnswerMissing,
+    /// The hub's status could not be written as JSON.
+    #[error("the hub's status: {0}")]
+    HubStatusJson(#[source] serde_json::Error),
 }
 
 /// Why a store refused before anything was read or written: a usage
@@ -686,6 +771,26 @@ fn store_refused_message(refusal: &Refusal, hint: bool) -> String {
     }
 }
 
+/// The `HubUnitNameTooLong` sentence: the overlong name's length and the
+/// service-name limit, which lives with the name.
+fn hub_unit_name_too_long_message(bytes: usize) -> String {
+    format!(
+        "Fiber home's path is too long to name the hub's login service ({bytes} bytes, at most \
+         {}); set FIBER_HOME to a shorter path.",
+        crate::hub_unit::NAME_MAX
+    )
+}
+
+/// The `HubEntryFailed` sentence: the source, keeping the device token
+/// only after a paired entry's rename.
+fn hub_entry_failed_message(source: &ConfigError, paired: bool) -> String {
+    if paired && matches!(source, ConfigError::Unsynced { .. }) {
+        format!("{source} The device token the entry refers to was kept.")
+    } else {
+        source.to_string()
+    }
+}
+
 /// The `Hub` sentence: a local failure names the hub, any other failure
 /// keeps the doors text.
 fn hub_message(error: &doors::Error) -> String {
@@ -753,6 +858,14 @@ impl CliError {
             | Self::StopCountMissing
             | Self::PairingAnswerMissing
             | Self::StatusNoVariables
+            | Self::HubPairingTokenMissing
+            | Self::HubListLocked { .. }
+            | Self::HubDevicesRead { .. }
+            | Self::HubStatusLate { .. }
+            | Self::HubStatusClosed
+            | Self::HubStatusAnswerMissing
+            | Self::HubStatusJson(_)
+            | Self::HubUnitPathUnrepresentable { .. }
             | Self::DevicesMalformed => ErrorCode::IoFailed,
             Self::QrTooLong => ErrorCode::Usage,
             Self::DeleteNobody => ErrorCode::Usage,
@@ -779,9 +892,11 @@ impl CliError {
             }
             Self::NoFirstPartyPackage { .. } => ErrorCode::InvalidArguments,
             Self::SecretsKept(error) => error.code(),
+            Self::HubEntryFailed { source, .. } => source.code(),
             Self::ApprovalChanged { .. }
             | Self::UrlHasUserinfo { .. }
             | Self::McpLoginRefused { .. }
+            | Self::HubPortInvalid { .. }
             | Self::ReviewerNameUnrepresentable { .. } => ErrorCode::ConfigInvalid,
             Self::ReviewerNotSaved { source, .. } => source.code(),
             Self::LoginCancelled => ErrorCode::AuthenticationFailed,
@@ -802,6 +917,11 @@ impl CliError {
             | Self::HostNotHost { .. }
             | Self::LogoutSeveral { .. }
             | Self::LabelNotStorable { .. }
+            | Self::HubPairingCodeMissing
+            | Self::HubAlreadyDeclared { .. }
+            | Self::HubNotFound { .. }
+            | Self::HubUnitNameTooLong { .. }
+            | Self::HubHomeUnavailable
             | Self::StoreRefused { .. }
             | Self::ConfigKeyUnknown { .. }
             | Self::McpName { .. }
@@ -922,6 +1042,21 @@ impl From<CliError> for Failure {
             | CliError::PairingAnswerMissing
             | CliError::QrTooLong
             | CliError::StatusNoVariables
+            | CliError::HubUnitNameTooLong { .. }
+            | CliError::HubHomeUnavailable
+            | CliError::HubUnitPathUnrepresentable { .. }
+            | CliError::HubPairingCodeMissing
+            | CliError::HubPairingTokenMissing
+            | CliError::HubListLocked { .. }
+            | CliError::HubAlreadyDeclared { .. }
+            | CliError::HubNotFound { .. }
+            | CliError::HubEntryFailed { .. }
+            | CliError::HubPortInvalid { .. }
+            | CliError::HubDevicesRead { .. }
+            | CliError::HubStatusLate { .. }
+            | CliError::HubStatusClosed
+            | CliError::HubStatusAnswerMissing
+            | CliError::HubStatusJson(_)
             | CliError::DevicesMalformed) => Failure {
                 code: other.code(),
                 message: other.to_string(),

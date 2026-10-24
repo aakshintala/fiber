@@ -1257,7 +1257,8 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
 /// the relay still leaves. The scripted session holds its listener past
 /// the connection's close, the teardown a descheduled session leaves
 /// behind, then answers the re-routed command on the resumed
-/// connection.
+/// connection. It reads `c_next` on the first connection before closing,
+/// so the hub has finished sending the command before the exit is forced.
 /// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_first_exit_re_routes_and_the_resumed_session_answers() {
@@ -1309,11 +1310,17 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
         .unwrap();
         writeln!(stream, "{}", json!({"kind": "fold_marker", "session_id": SID, "ts": 0, "schema_version": 1, "payload": {}})).unwrap();
         played_tx.send(()).unwrap();
+        // The listener arrives before the hub has finished attaching the
+        // relay; wait for its command before simulating the session exit.
+        text.clear();
+        reader.read_line(&mut text).unwrap();
+        let command: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(command["id"], "c_next");
         // Close the relayed connection while the listener stays bound, as
         // a teardown descheduled mid-close leaves it. The relay's end
-        // re-routes onto the exiting socket, which never read the
-        // command: take it off the wire, then finish the teardown before
-        // closing, so the next end finds no socket and resumes.
+        // re-routes onto the exiting socket, which read the command and
+        // left it unanswered: finish the teardown before closing, so the
+        // next end finds no socket and resumes.
         drop(reader);
         drop(stream);
         // The drain's exiting-socket probe connects without a line; the
