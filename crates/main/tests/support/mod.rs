@@ -1311,52 +1311,59 @@ pub(crate) fn read_kinds() -> Vec<&'static str> {
     kinds
 }
 
-/// The Session card once its `cost` row is drawn: the row is absent only
-/// when spend is `Some(0.0)` with no budget, so a wait that supplies panel
-/// coordinates for a later write, or that snapshots the card, holds until
-/// the row lands (`crates/tui/src/view/panel.rs`, `session_rows`). The
-/// `cost` label draws only with the row: `cost on subscription` draws
-/// without it, so its `cost` prefix does not count. `left` is the panel's
-/// first column: a `cost` elsewhere (a conversation echo, another card)
-/// does not count.
+/// The Session card once its `cost` row shows a figure: the reserved row
+/// draws its label from the first frame with a dim dash, so a wait that
+/// supplies panel coordinates for a later write, or that snapshots the
+/// card, holds until the figure lands (`crates/tui/src/view/panel.rs`,
+/// `session_rows`). The `cost` label draws with the reserved row too:
+/// the row counts only once its value is not the dash. `cost on
+/// subscription` draws without it, so its `cost` prefix does not count.
+/// `left` is the panel's first column: a `cost` elsewhere (a
+/// conversation echo, another card) does not count.
 pub(crate) fn session_cost_drawn(grid: &pty::Grid, left: u16) -> bool {
     let (width, _) = grid.size();
     (0..grid.rows.len()).any(|row| {
         let Some(y) = u16::try_from(row).ok() else {
             return false;
         };
-        (left..width.saturating_sub(3)).any(|x| {
-            // Four cells spell `cost`: `x + 3` stays below `width`, so no
-            // cell read leaves the grid.
-            let spells = ["c", "o", "s", "t"]
-                .iter()
-                .zip(0..4u16)
-                .all(|(want, dx)| grid.cell(x + dx, y).symbol == *want);
-            // A whole word: the cells around the match hold no word char.
-            let before_ok = x == 0
-                || grid
-                    .cell(x - 1, y)
-                    .symbol
-                    .chars()
-                    .last()
-                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-            let after_ok = x + 4 >= width
-                || grid
-                    .cell(x + 4, y)
-                    .symbol
-                    .chars()
-                    .next()
-                    .is_none_or(|c| !c.is_alphanumeric() && c != '_');
-            // The label ends there: the subscription label continues
-            // ` on subscription`, with its value always after it, so
-            // sixteen cells fit while the row is the subscription one;
-            // `&&` short-circuits the cell reads otherwise.
-            let continued = width - x >= 20
-                && " on subscription"
-                    .chars()
-                    .zip(4..20u16)
-                    .all(|(want, dx)| grid.cell(x + dx, y).symbol == want.to_string());
-            spells && before_ok && after_ok && !continued
-        })
+        // The reserved row ends in the dim dash; a figured row does not.
+        let figured = grid
+            .rows
+            .get(row)
+            .is_none_or(|line| !line.trim_end().ends_with('—'));
+        figured
+            && (left..width.saturating_sub(3)).any(|x| {
+                // Four cells spell `cost`: `x + 3` stays below `width`, so no
+                // cell read leaves the grid.
+                let spells = ["c", "o", "s", "t"]
+                    .iter()
+                    .zip(0..4u16)
+                    .all(|(want, dx)| grid.cell(x + dx, y).symbol == *want);
+                // A whole word: the cells around the match hold no word char.
+                let before_ok = x == 0
+                    || grid
+                        .cell(x - 1, y)
+                        .symbol
+                        .chars()
+                        .last()
+                        .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                let after_ok = x + 4 >= width
+                    || grid
+                        .cell(x + 4, y)
+                        .symbol
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+                // The label ends there: the subscription label continues
+                // ` on subscription`, with its value always after it, so
+                // sixteen cells fit while the row is the subscription one;
+                // `&&` short-circuits the cell reads otherwise.
+                let continued = width - x >= 20
+                    && " on subscription"
+                        .chars()
+                        .zip(4..20u16)
+                        .all(|(want, dx)| grid.cell(x + dx, y).symbol == want.to_string());
+                spells && before_ok && after_ok && !continued
+            })
     })
 }

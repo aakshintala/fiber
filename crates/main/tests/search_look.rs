@@ -1030,23 +1030,29 @@ fn the_changed_files_rows_match_the_doc() {
     assert!(changed_file_row_ready(&grid));
 }
 
-/// Turn complete (`✓ READY`) and the Session cost row drawn: no later fold in
-/// this turn moves the cards. The speed row is not part of it: it is absent
-/// when the reply's first and last events share a timestamp.
+/// Turn complete (`✓ READY`) and the Session cost row figured: no later fold in
+/// this turn moves the cards. The speed row keeps its reserved place with
+/// a dash until its timed reply, so it is not part of the settle.
 fn session_settled(grid: &Grid) -> bool {
     // The panel starts at column 100, as in `panel_item_at`: a `cost`
     // elsewhere (a conversation echo, another card) does not settle us.
     support::session_cost_drawn(grid, 100) && grid.contents.contains("✓ READY")
 }
 
-/// The Session spend row drawn in the panel: the parent script reports
+/// The Session spend row figured in the panel: the parent script reports
 /// input usage, so `cache hits` lands with the turn's first fold and
 /// later delegate spend only rewrites the row's values
-/// (`crates/tui/src/view/panel.rs`, `session_rows`). A wait that supplies
-/// panel coordinates for a later write holds until the row lands, so no
-/// later fold moves the cards under the stored coordinates.
+/// (`crates/tui/src/view/panel.rs`, `session_rows`). The reserved row
+/// draws the label with a dim dash, so the wait reads the figure: a row
+/// whose value is not the dash. A wait that supplies panel coordinates
+/// for a later write holds until the figure lands, so no later fold
+/// moves the cards under the stored coordinates.
 fn session_spend_drawn(grid: &Grid) -> bool {
-    panel_item_at(grid, "cache hits").is_some()
+    panel_item_at(grid, "cache hits").is_some_and(|(_, y)| {
+        grid.rows
+            .get(usize::from(y))
+            .is_some_and(|row| row.contains('%'))
+    })
 }
 
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {

@@ -81,6 +81,7 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     ),
     kept("crates/extensions/tests/oauth.rs", "GRACE", GRACE),
     kept("crates/loop/src/retry_tests.rs", "PARTIAL_ADVANCE", STEP),
+    kept("crates/loop/tests/support/mod.rs", "GATE_GRACE", GRACE),
     kept("crates/main/src/read_signals_tests.rs", "HELD_FOR", STEP),
     kept("crates/doors/tests/support/mod.rs", "SLICE", SLICE),
     kept("crates/hub/src/closed_tests.rs", "SLICE", SLICE),
@@ -109,10 +110,8 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         ABSENT,
     ),
     kept("crates/cli/src/doctor/files_tests.rs", "ABSENT", ABSENT),
-    held("crates/tools/tests/shell.rs", "held by #3112"),
     held("crates/hub/src/idle_tests.rs", "held by #3009"),
     held("crates/hub/src/port_tests.rs", "held by #3009"),
-    held("crates/loop/tests/support/mod.rs", "held by #3001"),
     held("crates/main/tests/delegates.rs", "held by #3001"),
 ];
 

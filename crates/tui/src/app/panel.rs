@@ -160,7 +160,7 @@ impl PanelState {
                     self.credential = Some(changed.after.credential);
                 }
             }
-            "turn_started" => {
+            "turn_completed" => {
                 self.turns = self.turns.saturating_add(1);
                 self.started_at = None;
             }
@@ -323,7 +323,7 @@ impl PanelState {
         self.budget
     }
 
-    /// How many turns have started.
+    /// How many turns have completed.
     pub(crate) fn turns(&self) -> u64 {
         self.turns
     }

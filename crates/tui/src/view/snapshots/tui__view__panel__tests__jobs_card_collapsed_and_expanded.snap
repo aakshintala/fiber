@@ -4,6 +4,21 @@ expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                             auto
+
+
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
+   handoff at —                 —
+   then a summary, fresh context
+   tokens in / out              —
+   cache hits                   —
+   cost                         —
+   cost on subscription         —
+   speed, last reply            —
+   turns                        0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Jobs               2 running ▸
      build the workspace
      test the workspace

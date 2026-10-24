@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/rail_tests.rs
+assertion_line: 676
 expression: text(&screen(&app))
 ---
   fibe + $0.41 · 0 ✓
@@ -7,16 +8,16 @@ expression: text(&screen(&app))
 ▌ 2 ✓ READY       9m                                                                                                                                             /Users/you/work/fiber             auto
 ▌ fix the parser                                                                                                                                                 git  main
 ▌ ⎇ main                                                                                                                                                         test/model
-▌ $0.41          11%                                                                                                                                             tokens in / out                  1 / 2
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            cache hits                          0%
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                            cost                             $0.41
-▌ 3 ● WORKING     2h                                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-▌ write the rail
-▌ ⎇ detached
-▌ $0.00
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  hub +  $1.35 · 0 ✓
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ $0.41          11%                                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                    —
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            handoff at —                         —
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                            then a summary, fresh context
+▌ 3 ● WORKING     2h                                                                                                                                             tokens in / out                  1 / 2
+▌ write the rail                                                                                                                                                 cache hits                          0%
+▌ ⎇ detached                                                                                                                                                     cost                             $0.41
+▌ $0.00                                                                                                                                                          cost on subscription             $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                            speed, last reply                    —
+  hub +  $1.35 · 0 ✓                                                                                                                                             turns                                0
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▌ 1 ! NEEDS INPU 16s
 ▌ fix flaky lock tes
 ▌ approval: shell ca
