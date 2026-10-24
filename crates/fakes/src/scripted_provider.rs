@@ -4,8 +4,10 @@
 //! against it (`docs/testing.md`, "Levels", "Across crates").
 
 use std::collections::VecDeque;
+use std::fmt;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use support::lock;
 
 use contract::events::TextCompleted;
@@ -159,6 +161,45 @@ pub fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 pub struct ScriptedProvider {
     script: Mutex<VecDeque<Scripted>>,
     requests: Mutex<Vec<ModelRequest>>,
+    calls: AtomicUsize,
+    before: Mutex<Option<BeforeHook>>,
+    after: Mutex<Option<AfterHook>>,
+}
+
+/// What a before-call hook runs: it sees the request, then the script
+/// still answers the call.
+type BeforeFire = dyn Fn(&ModelRequest) + Send + Sync;
+
+/// What an after-reply hook runs: it sees the call's end, then the call
+/// still returns that end.
+type AfterFire = dyn Fn(&Result<Reply, CallError>) + Send + Sync;
+
+/// A hook that observes a call without replacing it, firing on every call
+/// or on one 1-based call.
+#[derive(Clone)]
+struct BeforeHook {
+    at: Option<usize>,
+    fire: Arc<BeforeFire>,
+}
+
+impl fmt::Debug for BeforeHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BeforeHook").field("at", &self.at).finish()
+    }
+}
+
+/// A hook that observes a call's end without replacing it, firing on every
+/// call or on one 1-based call.
+#[derive(Clone)]
+struct AfterHook {
+    at: Option<usize>,
+    fire: Arc<AfterFire>,
+}
+
+impl fmt::Debug for AfterHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AfterHook").field("at", &self.at).finish()
+    }
 }
 
 impl ScriptedProvider {
@@ -167,12 +208,61 @@ impl ScriptedProvider {
         Self {
             script: Mutex::new(script.into_iter().collect()),
             requests: Mutex::default(),
+            calls: AtomicUsize::new(0),
+            before: Mutex::default(),
+            after: Mutex::default(),
         }
     }
 
     /// Every request it was given, in order.
     pub fn requests(&self) -> Vec<ModelRequest> {
         lock(&self.requests).clone()
+    }
+
+    /// Runs `hook` with each request inside [`Provider::call`], before the
+    /// script pop, on the caller's thread. The hook observes only: the
+    /// script still answers the call.
+    pub fn on_before_call(&self, hook: impl Fn(&ModelRequest) + Send + Sync + 'static) {
+        *lock(&self.before) = Some(BeforeHook {
+            at: None,
+            fire: Arc::new(hook),
+        });
+    }
+
+    /// As [`ScriptedProvider::on_before_call`], firing only on the `at`-th
+    /// call (1-based).
+    pub fn on_before_call_at(
+        &self,
+        at: usize,
+        hook: impl Fn(&ModelRequest) + Send + Sync + 'static,
+    ) {
+        *lock(&self.before) = Some(BeforeHook {
+            at: Some(at),
+            fire: Arc::new(hook),
+        });
+    }
+
+    /// Runs `hook` with each call's end inside [`ModelCall::run`], after the
+    /// scripted end is in hand and before returning it, on the caller's
+    /// thread. The hook observes only: the call still returns that end.
+    pub fn on_after_reply(&self, hook: impl Fn(&Result<Reply, CallError>) + Send + Sync + 'static) {
+        *lock(&self.after) = Some(AfterHook {
+            at: None,
+            fire: Arc::new(hook),
+        });
+    }
+
+    /// As [`ScriptedProvider::on_after_reply`], firing only on the `at`-th
+    /// call (1-based).
+    pub fn on_after_reply_at(
+        &self,
+        at: usize,
+        hook: impl Fn(&Result<Reply, CallError>) + Send + Sync + 'static,
+    ) {
+        *lock(&self.after) = Some(AfterHook {
+            at: Some(at),
+            fire: Arc::new(hook),
+        });
     }
 }
 
@@ -183,6 +273,12 @@ impl Provider for ScriptedProvider {
 
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         lock(&self.requests).push(request.clone());
+        let index = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(hook) = lock(&self.before).as_ref()
+            && hook.at.is_none_or(|at| at == index)
+        {
+            (hook.fire)(request);
+        }
         let next = lock(&self.script).pop_front().unwrap_or_else(|| {
             Scripted::failed(Failure {
                 code: ErrorCode::Other("script_exhausted".into()),
@@ -194,6 +290,8 @@ impl Provider for ScriptedProvider {
         Box::new(Call {
             scripted: Mutex::new(Some(next)),
             cancelled: AtomicBool::new(false),
+            index,
+            after: lock(&self.after).clone(),
         })
     }
 }
@@ -203,10 +301,32 @@ impl Provider for ScriptedProvider {
 struct Call {
     scripted: Mutex<Option<Scripted>>,
     cancelled: AtomicBool,
+    index: usize,
+    after: Option<AfterHook>,
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let end = self.run_inner(sink);
+        if let Some(hook) = self.after.as_ref()
+            && hook.at.is_none_or(|at| at == self.index)
+        {
+            (hook.fire)(&end);
+        }
+        end
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Call {
+    #[allow(
+        clippy::result_large_err,
+        reason = "the seam returns the call's error by value; the test fake mirrors it"
+    )]
+    fn run_inner(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         let scripted = lock(&self.scripted).take();
         let Some(scripted) = scripted else {
             return Err(CallError::Cancelled {
@@ -223,10 +343,6 @@ impl ModelCall for Call {
             return cancelled_end(scripted.end);
         }
         scripted.end
-    }
-
-    fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
     }
 }
 

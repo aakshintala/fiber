@@ -202,6 +202,164 @@ fn wire_tools_is_each_definition_as_an_object_in_name_order() {
 }
 
 #[test]
+fn a_before_call_hook_observes_each_request_before_the_script_pop() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&seen);
+    let provider = ScriptedProvider::new([Scripted::text("A"), Scripted::text("B")]);
+    provider.on_before_call(move |request: &contract::provider::ModelRequest| {
+        moved.lock().unwrap().push(request.system_prompt.clone());
+    });
+    for n in 0..2 {
+        let mut deltas = Vec::new();
+        let end = provider
+            .call(&request(&format!("r{n}")))
+            .run(&mut |d| deltas.push(d));
+        assert!(end.is_ok(), "{end:?}");
+    }
+    assert_eq!(*seen.lock().unwrap(), ["r0", "r1"]);
+    let prompts: Vec<String> = provider
+        .requests()
+        .into_iter()
+        .map(|r| r.system_prompt)
+        .collect();
+    assert_eq!(prompts, ["r0", "r1"]);
+}
+
+#[test]
+fn a_before_call_hook_at_the_second_call_fires_only_there() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&seen);
+    let provider = ScriptedProvider::new([
+        Scripted::text("A"),
+        Scripted::text("B"),
+        Scripted::text("C"),
+    ]);
+    provider.on_before_call_at(2, move |request: &contract::provider::ModelRequest| {
+        moved.lock().unwrap().push(request.system_prompt.clone());
+    });
+    for n in 0..3 {
+        let mut deltas = Vec::new();
+        let end = provider
+            .call(&request(&format!("r{n}")))
+            .run(&mut |d| deltas.push(d));
+        assert!(end.is_ok(), "{end:?}");
+    }
+    assert_eq!(*seen.lock().unwrap(), ["r1"]);
+}
+
+#[test]
+fn an_after_reply_hook_observes_each_end_and_returns_it_unchanged() {
+    use std::sync::{Arc, Mutex};
+    let ends = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&ends);
+    let provider = ScriptedProvider::new([Scripted::text("A"), Scripted::text("B")]);
+    provider.on_after_reply(move |end: &Result<contract::provider::Reply, CallError>| {
+        moved.lock().unwrap().push(format!("{end:?}"));
+    });
+    for expected in ["A", "B"] {
+        let mut deltas = Vec::new();
+        let got = provider
+            .call(&request("r"))
+            .run(&mut |d| deltas.push(d))
+            .unwrap();
+        assert_eq!(got, reply(expected));
+    }
+    assert_eq!(ends.lock().unwrap().len(), 2);
+    assert_eq!(
+        ends.lock().unwrap()[0],
+        format!("{:?}", Ok::<_, CallError>(reply("A")))
+    );
+    assert_eq!(
+        ends.lock().unwrap()[1],
+        format!("{:?}", Ok::<_, CallError>(reply("B")))
+    );
+}
+
+#[test]
+fn an_after_reply_hook_at_the_second_call_fires_only_there() {
+    use std::sync::{Arc, Mutex};
+    let fired = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&fired);
+    let provider = ScriptedProvider::new([
+        Scripted::text("A"),
+        Scripted::text("B"),
+        Scripted::text("C"),
+    ]);
+    provider.on_after_reply_at(2, move |_| {
+        moved.lock().unwrap().push(());
+    });
+    for expected in ["A", "B", "C"] {
+        let mut deltas = Vec::new();
+        let got = provider
+            .call(&request("r"))
+            .run(&mut |d| deltas.push(d))
+            .unwrap();
+        assert_eq!(got, reply(expected));
+    }
+    assert_eq!(fired.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn an_after_reply_hook_observes_script_exhausted_and_the_call_still_fails() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&seen);
+    let provider = ScriptedProvider::new([Scripted::text("A")]);
+    provider.on_after_reply(move |end: &Result<contract::provider::Reply, CallError>| {
+        let code = match end {
+            Ok(_) => "ok".to_string(),
+            Err(CallError::Failed { failure, .. }) => format!("{:?}", failure.code),
+            other => panic!("{other:?}"),
+        };
+        moved.lock().unwrap().push(code);
+    });
+    let mut deltas = Vec::new();
+    assert!(
+        provider
+            .call(&request("r0"))
+            .run(&mut |d| deltas.push(d))
+            .is_ok()
+    );
+    let end = provider.call(&request("r1")).run(&mut |_| {});
+    let Err(CallError::Failed { failure, .. }) = &end else {
+        panic!("{end:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::Other("script_exhausted".into()));
+    assert!(end.is_err());
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            "ok".to_string(),
+            format!("{:?}", ErrorCode::Other("script_exhausted".into())),
+        ]
+    );
+}
+
+#[test]
+fn an_after_reply_hook_passes_a_cancelled_end_through_unchanged() {
+    use super::call_usage;
+    use std::sync::{Arc, Mutex};
+    let usage = call_usage("gen_kept");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let moved = Arc::clone(&seen);
+    let provider = ScriptedProvider::new([Scripted::cancelled_after(usage.clone())]);
+    provider.on_after_reply(move |end: &Result<contract::provider::Reply, CallError>| {
+        moved.lock().unwrap().push(format!("{end:?}"));
+    });
+    let end = provider.call(&request("r")).run(&mut |_| {});
+    assert_eq!(
+        end,
+        Err(CallError::Cancelled {
+            usage: Box::new(usage)
+        })
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(seen.lock().unwrap()[0].contains("Cancelled"));
+}
+
+#[test]
 fn both_fake_providers_wire_tools_the_same_way() {
     let tools = definitions();
     let want = super::wire_tools(&tools);
