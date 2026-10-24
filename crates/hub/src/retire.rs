@@ -370,7 +370,10 @@ enum End {
 /// dropped, never re-routed or answered. After a clean exit (the relay
 /// saw the exited window, or the log ends in `fiber_exited`) each goes
 /// once to the resumed session, in read order, and a command already
-/// handed over once is rejected `closing`. After a `rewound` they are
+/// handed over once is rejected `closing`, unless the session's socket
+/// still accepts: the exiting process is still tearing down, so routing
+/// there would wait the shutdown out and the relay would never leave,
+/// and each is rejected `closing` instead. After a `rewound` they are
 /// dropped. After anything else the session may have run them: each is
 /// rejected `indeterminate` and never re-routed. Then everything queued
 /// unsent is passed on. Drops the entry only in the hold that saw the
@@ -437,6 +440,18 @@ pub(crate) fn drain(
     pump(session, epoch, kept, hub, writer, relays, true);
 }
 
+/// Whether `session`'s socket still accepts while its log ends in
+/// `fiber_exited`: the exiting process has not finished tearing down.
+/// One log lookup and one connection, neither under a lock.
+fn held_by_exiting(hub: &Hub, session: &str) -> bool {
+    if crate::resume::last_kind(&hub.home, &SessionId(session.to_owned())).as_deref()
+        != Some("fiber_exited")
+    {
+        return false;
+    }
+    UnixStream::connect(hub.home.join("run").join(session)).is_ok()
+}
+
 /// How the session ended, by the relay's view and its log's last line.
 /// One log lookup, and none when the relay saw the exited window.
 fn end(hub: &Hub, session: &str, exiting: bool) -> End {
@@ -462,6 +477,25 @@ fn reroute_once(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
 ) {
+    // A socket that still accepts while the log ends in `fiber_exited`
+    // is the exiting process's, still tearing down: routing there would
+    // wait the shutdown out instead of answering, and the relay would
+    // never leave. The session ended without answering, so each command
+    // is rejected `closing` instead.
+    if held_by_exiting(hub, session) {
+        for (id, _) in &sent {
+            refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                &CommandId(id.clone()),
+                &ErrorCode::Closing,
+                ENDED,
+            );
+        }
+        return;
+    }
     for (id, line) in sent {
         if !order.hand_once(&id) {
             refuse(
