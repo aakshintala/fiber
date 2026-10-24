@@ -286,23 +286,101 @@ impl Fixture {
         fixture
     }
 
+    /// Runs the reload preparation, dumping every fake MCP server's
+    /// `stderr.log` and `requests.log` into the failure when the wait
+    /// expires or the preparation panics: the failure then shows whether
+    /// the prepare blocked on a server start or past it.
+    #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
-        fakes::within(
-            "reload prepared",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            move || {
-                state
-                    .prepare_inner(
-                        &r#loop::ReloadRoute {
-                            model: "scripted/s.json".into(),
-                            credential: None,
-                        },
-                        super::Preparation::Explicit,
-                    )
-                    .unwrap()
-            },
-        )
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fakes::within(
+                "reload prepared",
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                move || {
+                    state
+                        .prepare_inner(
+                            &r#loop::ReloadRoute {
+                                model: "scripted/s.json".into(),
+                                credential: None,
+                            },
+                            super::Preparation::Explicit,
+                        )
+                        .unwrap()
+                },
+            )
+        }));
+        match outcome {
+            Ok(prepared) => prepared,
+            Err(payload) => panic!(
+                "{message}\n{dump}",
+                message = panic_text(&payload),
+                dump = dump_fake_servers(self.rig.root.path()),
+            ),
+        }
+    }
+}
+
+/// The text of a caught panic payload, or a fixed line when it is not a
+/// string: the wait's own message already names what expired, and the
+/// server dump below it shows what the fakes saw.
+fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a non-string panic".to_owned()
+    }
+}
+
+/// Every fake server directory under the rig's root, sorted by name: a
+/// directory holding `tools.json` is one `FakeServer` made, whether the
+/// fixture tracks it or a test holds it aside. Each entry shows the
+/// server's stderr and every line it received.
+fn dump_fake_servers(root: &std::path::Path) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if dir.join("tools.json").is_file() {
+                names.extend(
+                    dir.file_name()
+                        .map(|name| name.to_string_lossy().into_owned()),
+                );
+            }
+        }
+    }
+    names.sort();
+    if names.is_empty() {
+        return format!("fake MCP servers: none under {}", root.display());
+    }
+    let mut dump = String::from("fake MCP servers at the prepare timeout:");
+    for name in &names {
+        dump.push_str(&dump_fake_server(&root.join(name), name));
+    }
+    dump
+}
+
+/// One fake server's logs: its stderr, then every request line it read.
+/// A `fail-start` server exits before it reads, so its `requests.log`
+/// reads absent, which itself says the start never reached the loop.
+fn dump_fake_server(dir: &std::path::Path, name: &str) -> String {
+    format!(
+        "\nfake MCP server {name}:\n{stderr}{requests}",
+        stderr = read_server_log(dir, "stderr.log"),
+        requests = read_server_log(dir, "requests.log"),
+    )
+}
+
+/// One log file's contents, naming when it is missing or empty: both
+/// cases diagnose, since a started server always writes `pid.txt` first
+/// and reads into `requests.log` right after.
+fn read_server_log(dir: &std::path::Path, file: &str) -> String {
+    match std::fs::read_to_string(dir.join(file)) {
+        Err(_) => format!("{file}: <absent>\n"),
+        Ok(text) if text.is_empty() => format!("{file}: <empty>\n"),
+        Ok(text) => format!("{file}:\n{}\n", text.trim_end()),
     }
 }
 
@@ -1243,11 +1321,15 @@ impl FakeServer {
         fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
     }
 
-    /// The global-config entry running this fake.
+    /// The global-config entry running this fake: through `/bin/sh` so the
+    /// fake's stderr lands in its directory's `stderr.log`, which a
+    /// prepare timeout dumps beside `requests.log`. The shell execs the
+    /// fixture, so the server keeps its own pid and process group; the
+    /// paths ride as positional parameters, so no path needs quoting.
     fn entry(&self, extra: serde_json::Value) -> serde_json::Value {
         let mut entry = serde_json::json!({
-            "command": fakes::mcp_fixture().display().to_string(),
-            "args": [self.dir.display().to_string()],
+            "command": "/bin/sh",
+            "args": ["-c", "exec \"$0\" \"$1\" 2>\"$1/stderr.log\"", fakes::mcp_fixture().display().to_string(), self.dir.display().to_string()],
         });
         for (key, value) in extra.as_object().unwrap() {
             entry[key] = value.clone();
