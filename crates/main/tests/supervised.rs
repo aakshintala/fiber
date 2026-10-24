@@ -103,22 +103,25 @@ fn started_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
     client
 }
 
-/// The kinds of the lines carrying `seq`: a line is durable exactly then.
-/// `clients`, `session_status` and the hub's `attention` are independently
-/// triggered (`docs/testing.md`, "Event streams"), so they are set aside;
-/// every other line is pinned. Command answers, steering queues and deltas
-/// carry no `seq`, so the filter sets them aside too.
-fn durable_kinds(lines: &[Value]) -> Vec<String> {
-    lines
+/// The ordered event kinds, setting aside only the lines the contract
+/// writes on their own trigger, with no position relative to the session's
+/// other lines (`docs/testing.md`, "Event streams"): `clients`, written when
+/// a connection attaches; `session_status` and the hub's `attention`,
+/// written when the session's summary changes; and `date_changed`, written
+/// when the local date changes. Every other kind is pinned in order,
+/// including the ones without `seq`: the ephemeral deltas, `command_accepted`
+/// and `steering_queue` (`docs/invocation.md`, "Driver commands";
+/// `docs/events.md`, "`steering_queue`", "`assistant_message_delta`").
+/// The projection itself is `support::kinds`, imported through `support::*`.
+fn assert_one_clients_line(lines: &[Value]) {
+    // One `clients` line per attach is fixed (`docs/testing.md`, "Event
+    // streams"), so the count is pinned against the raw lines before the
+    // ordered projection sets it aside.
+    let clients = lines
         .iter()
-        .filter(|line| line.get("seq").is_some())
-        .map(|line| {
-            line["kind"]
-                .as_str()
-                .expect("every line has a kind")
-                .to_owned()
-        })
-        .collect()
+        .filter(|line| line["kind"] == "clients")
+        .count();
+    assert_eq!(clients, 1, "one attach writes one clients line: {lines:?}");
 }
 
 /// Queries `sessions` until the hub lists the session as exited. The
@@ -176,18 +179,23 @@ fn a_supervised_start_denies_without_asking_and_sends_no_attention() {
     let lines = until(&control, "the turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered durable kinds (`docs/testing.md`, "Event streams"):
-    // `clients`, `session_status` and the hub's `attention` are set aside
-    // by `durable_kinds`; every other line is pinned, so a duplicated,
-    // missing or reordered durable event fails. Order follows
+    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
+    // `clients`, `session_status`, the hub's `attention` and `date_changed`
+    // are set aside, so a duplicated, missing or reordered event of any
+    // other kind fails, ephemeral deltas included. Order follows
     // `docs/loop.md`, "One step" with `permission_resolved` standing where
     // `tool_call_started` would (`docs/permissions.md`, "What the log
     // records"), and the deny-then-continue from `docs/permissions.md`,
     // "Supervised sessions" ("An escalation is a block at once, and the run
     // carries on") and "What happens on a block" ("A block is not the end
-    // of the turn. ... The turn continues.").
+    // of the turn. ... The turn continues."). The two
+    // `assistant_message_delta` lines are the closing `Hello.` streaming in
+    // two fragments (`docs/loop.md`, "One step": the loop streams the reply,
+    // emitting its actions as they arrive; `docs/events.md`,
+    // "`assistant_message_delta`").
+    assert_one_clients_line(&lines);
     assert_eq!(
-        durable_kinds(&lines),
+        kinds(&lines),
         [
             "session_started",
             "fiber_started",
@@ -206,12 +214,14 @@ fn a_supervised_start_denies_without_asking_and_sends_no_attention() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ],
-        "complete ordered durable kinds: {lines:?}"
+        "complete ordered kinds: {lines:?}"
     );
     let started = lines
         .iter()
@@ -328,17 +338,29 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
     lines.extend(until(&control, "the second turn end", |line| {
         line["kind"] == "turn_completed"
     }));
-    // Complete ordered durable kinds (`docs/testing.md`, "Event streams"):
-    // the first turn denies as in the block test, then the steered second
-    // turn allows. The deny-then-allow order is forced by the pause point
-    // between them: the first `until` completes before the steer is sent.
-    // The allow turn's `permission_resolved` precedes its
-    // `tool_call_started` (`docs/permissions.md`, "What the log records"),
-    // and the run carries on (`docs/permissions.md`, "Supervised
-    // sessions": "An escalation is a block at once, and the run carries
-    // on"; "the model's retry passes").
+    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
+    // `clients`, `session_status`, the hub's `attention` and `date_changed`
+    // are set aside, so a duplicated, missing or reordered event of any
+    // other kind fails, ephemeral lines included. The first turn denies as
+    // in the block test, then the steered second turn allows. The
+    // deny-then-allow order is forced by the pause point between them: the
+    // first `until` completes before the steer is sent. The allow turn's
+    // `permission_resolved` precedes its `tool_call_started`
+    // (`docs/permissions.md`, "What the log records"), and the run carries
+    // on (`docs/permissions.md`, "Supervised sessions": "An escalation is a
+    // block at once, and the run carries on"; "the model's retry passes").
+    // Between the turns the steer queues, is answered, and drains:
+    // `steering_queue` is written whenever the queue changes (`docs/events.md`,
+    // "`steering_queue`"), the steer's `command_accepted` answers it exactly
+    // once (`docs/invocation.md`, "Driver commands"), and the second
+    // `steering_queue` is the emptied queue the next turn drains
+    // (`docs/loop.md`, "One step": the loop drains the inbox at the step
+    // boundary). The closing `assistant_message_delta` pairs stream each
+    // turn's `Hello.` in two fragments (`docs/loop.md`, "One step";
+    // `docs/events.md`, "`assistant_message_delta`").
+    assert_one_clients_line(&lines);
     assert_eq!(
-        durable_kinds(&lines),
+        kinds(&lines),
         [
             "session_started",
             "fiber_started",
@@ -357,10 +379,15 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
+            "steering_queue",
+            "command_accepted",
+            "steering_queue",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -374,12 +401,14 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ],
-        "complete ordered durable kinds: {lines:?}"
+        "complete ordered kinds: {lines:?}"
     );
     // The steer never answers an approval (`docs/permissions.md`,
     // "Supervised sessions": "The supervisor never answers an approval").
@@ -463,12 +492,19 @@ fn a_supervised_ask_user_completes_with_its_questions() {
     let lines = until(&control, "the turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered durable kinds (`docs/testing.md`, "Event streams").
-    // The `ask_user` turn ends `completed` with the questions on
-    // `turn_completed` (`docs/tools.md`, "When a program drives the
-    // session").
+    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
+    // `clients`, `session_status`, the hub's `attention` and `date_changed`
+    // are set aside, so a duplicated, missing or reordered event of any
+    // other kind fails. The `ask_user` turn ends `completed` with the
+    // questions on `turn_completed` (`docs/tools.md`, "When a program drives
+    // the session"). The `ask_user` call carries no streamed text, so no
+    // `assistant_message_delta` appears: the request runs (`tool_call_started`)
+    // and completes (`tool_call_completed`) between the completed request
+    // (`assistant_message_completed`, `docs/loop.md`, "One step") and the
+    // turn end.
+    assert_one_clients_line(&lines);
     assert_eq!(
-        durable_kinds(&lines),
+        kinds(&lines),
         [
             "session_started",
             "fiber_started",
@@ -485,7 +521,7 @@ fn a_supervised_ask_user_completes_with_its_questions() {
             "tool_call_completed",
             "turn_completed",
         ],
-        "complete ordered durable kinds: {lines:?}"
+        "complete ordered kinds: {lines:?}"
     );
     let end = lines.last().expect("the turn end");
     assert_eq!(end["payload"]["outcome"], "completed");
@@ -574,20 +610,28 @@ fn a_supervised_resume_stays_unanswerable() {
     let lines = until(&resumed, "the resumed turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered durable kinds for the resumed turn (`docs/testing.md`,
-    // "Event streams"). `extensions_loaded` replays on the fresh subscribe
-    // before the turn's own lines; `clients`, `session_status`,
-    // `command_accepted` and deltas carry no `seq`, so `durable_kinds`
-    // sets them aside and every other line is pinned. The resumed turn
-    // denies as a fresh supervised block (`docs/permissions.md`,
-    // "Supervised sessions": "A person driving the session does not change
-    // it: its escalations stay blocks").
+    // Complete ordered kinds for the resumed turn (`docs/testing.md`,
+    // "Event streams"): only `clients`, `session_status`, the hub's
+    // `attention` and `date_changed` are set aside, so a duplicated, missing
+    // or reordered event of any other kind fails, ephemeral lines included.
+    // `extensions_loaded` replays on the fresh subscribe before the turn's
+    // own lines; the prompt's `command_accepted` answers it exactly once
+    // (`docs/invocation.md`, "Driver commands") after the prompt starts the
+    // turn (`turn_started`, same page) and before the first step runs
+    // (`docs/loop.md`, "One step"). The resumed turn denies as a fresh
+    // supervised block (`docs/permissions.md`, "Supervised sessions": "A
+    // person driving the session does not change it: its escalations stay
+    // blocks"), with the closing `Hello.` streaming as two
+    // `assistant_message_delta` lines (`docs/loop.md`, "One step";
+    // `docs/events.md`, "`assistant_message_delta`").
+    assert_one_clients_line(&lines);
     assert_eq!(
-        durable_kinds(&lines),
+        kinds(&lines),
         [
             "extensions_loaded",
             "preamble_built",
             "turn_started",
+            "command_accepted",
             "step_started",
             "assistant_message_started",
             "tool_call_requested",
@@ -599,12 +643,14 @@ fn a_supervised_resume_stays_unanswerable() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
         ],
-        "complete ordered durable kinds: {lines:?}"
+        "complete ordered kinds: {lines:?}"
     );
     let resolved: Vec<&Value> = lines
         .iter()

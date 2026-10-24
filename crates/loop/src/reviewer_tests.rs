@@ -1281,8 +1281,15 @@ mod supervised {
         let lines = session.lines();
         // Complete ordered kinds (`docs/testing.md`, "Event streams": the
         // complete, ordered list of event kinds, so a duplicated, missing or
-        // reordered event fails). The loop log holds only durable lines, so
-        // no independently triggered line is set aside here. Order follows
+        // reordered event fails). Of the lines the contract permits setting
+        // aside (`clients`, `session_status`, the hub's `attention`,
+        // `date_changed`), none is set aside here: the loop log holds only
+        // durable lines, and `clients`, `session_status` and the hub's
+        // `attention` are ephemeral and never reach the log (`docs/events.md`,
+        // "`clients`", "`session_status`"; `docs/invocation.md`, "Driver
+        // commands": acknowledgements carry no `seq`, so they never reach
+        // the log), while `date_changed` cannot fire in this test. Order
+        // follows
         // `docs/loop.md`, "One step" (step_started, the model request,
         // `tool_call_requested`, the permission decision, the next step,
         // `turn_completed`), with `permission_resolved` standing where
@@ -1391,9 +1398,12 @@ mod supervised {
         let lines = session.lines();
         // Complete ordered kinds (`docs/testing.md`, "Event streams"): the
         // first turn denies as above, then the steered second turn allows.
-        // The deny-then-allow order is forced by the pause point between
-        // them: the first `session.turn()` completes before the steer is
-        // sent, and the steer completes before the second `session.turn()`.
+        // Of the permitted set-asides (`clients`, `session_status`, the
+        // hub's `attention`, `date_changed`), none is set aside here, as
+        // above: the loop log holds only durable lines. The deny-then-allow
+        // order is forced by the pause point between them: the first
+        // `session.turn()` completes before the steer is sent, and the steer
+        // completes before the second `session.turn()`.
         // The allow turn's `permission_resolved` stands where
         // `tool_call_started` would on a deny (`docs/permissions.md`, "What
         // the log records"), followed by the run itself
