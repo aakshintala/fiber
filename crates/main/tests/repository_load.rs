@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    KillGroup, Setup, Socket, first_line, group_alive, hello, run_to_exit, session_dir,
-    spawn_watched, until, until_close, write_json,
+    KillGroup, Setup, Socket, first_line, hello, run_to_exit, session_dir, spawn_watched, until,
+    until_close, write_json,
 };
 
 /// The package manifest `name` at `version`, with a `prompt.md` text when
@@ -789,7 +789,7 @@ impl Session {
         });
         let status = setup.deadline.recv(&done).unwrap().unwrap();
         let err = setup.deadline.recv(&stderr).unwrap();
-        assert!(!group_alive(setup.deadline, group));
+        assert!(!fakes::group_alive(group));
         std::mem::forget(guard);
         watchdog.stand_down(setup.deadline.cleanup_phase());
         // The child's stdout is closed, so the reader ended: every line

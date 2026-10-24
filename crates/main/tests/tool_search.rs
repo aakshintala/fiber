@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    HELLO_KINDS, KillGroup, Setup, Socket, StdoutRun, first_line, function_call, group_alive,
-    hello, kinds, read_kinds, run_to_exit, spawn_watched, stream, until, until_close, write_json,
+    HELLO_KINDS, KillGroup, Setup, Socket, StdoutRun, first_line, function_call, hello, kinds,
+    read_kinds, run_to_exit, spawn_watched, stream, until, until_close, write_json,
 };
 
 impl Setup {
@@ -646,7 +646,7 @@ impl Session {
         let status = self.setup.deadline.recv(&done).unwrap().unwrap();
         let stderr = self.setup.deadline.recv(&self.stderr).unwrap();
         assert!(status.success(), "{stderr}");
-        assert!(!group_alive(self.setup.deadline, group));
+        assert!(!fakes::group_alive(group));
         std::mem::forget(self.guard);
         self.watchdog
             .stand_down(self.setup.deadline.cleanup_phase());

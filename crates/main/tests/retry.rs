@@ -21,9 +21,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{
-    Deadline, HELLO_KINDS, KillGroup, Run, Setup, group_alive, is_status, spawn_watched,
-};
+use support::{Deadline, HELLO_KINDS, KillGroup, Run, Setup, is_status, spawn_watched};
 
 impl Setup {
     #[track_caller]
@@ -116,7 +114,7 @@ impl Setup {
             Err(_) => support::expired(self.deadline, group, &finished, &what),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
