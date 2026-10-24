@@ -267,12 +267,6 @@ fn status_reports_a_rejection_with_its_code() {
             "payload": {"command_id": "c_status", "code": "invalid_arguments", "message": "nope"},
         });
         writeln!(stream, "{rejected}").unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
-        let mut rest = Vec::new();
-        use std::io::Read;
-        stream.read_to_end(&mut rest).unwrap_or(0);
     });
     let output = run_to_exit(
         setup.deadline,
@@ -286,6 +280,36 @@ fn status_reports_a_rejection_with_its_code() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "fiber: nope\n");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn status_reports_an_answer_missing_its_fields() {
+    let setup = Setup::new();
+    fake_status_hub(&setup, |mut stream| {
+        use std::io::Write;
+        let bare = serde_json::json!({
+            "kind": "command_accepted", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_status", "result": {"running": true}},
+        });
+        writeln!(stream, "{bare}").unwrap();
+    });
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "fiber: the hub's answer to status has no fiber_version or clients\n"
+    );
     assert!(output.stdout.is_empty());
 }
 
