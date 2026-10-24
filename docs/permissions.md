@@ -552,18 +552,19 @@ A run started with no client, such as `fiber ask`, runs in `auto` like
 every other session. The reviewer is what stands in for the person, which is
 the case it exists for.
 
-A calling harness that wants to answer can. `docs/architecture.md` settles that
-"the terminal is a watcher and a driver, never a participant" — a permission
-request goes on the event stream and any driver replies to it identically, so a
-harness driving Fiber answers exactly as the terminal does and needs no
-private channel.
+A client of the hub that wants to answer can. `docs/architecture.md` settles
+that "the terminal is a watcher and a driver, never a participant" — a
+permission request goes on the event stream and any driver replies to it
+identically, so a client answers exactly as the terminal does and needs no
+private channel. A supervisor is the exception: its session raises no request
+for it to answer ("Supervised sessions").
 
 With no answer possible, escalation is a block and the run continues under
 the rule above until it exhausts the block budget. The turn then completes
 `failed` with code `blocked`, so a headless caller learns the task needed
 permissions it was not given. No answer is possible in a
-session started by `fiber ask`, in a delegate, and in a session that has been
-sent `close`.
+session started by `fiber ask`, in a delegate, in a supervised session, and in
+a session that has been sent `close`.
 Anywhere else, a person may come back: after `session.idle_exit_ms` the session
 exits on the pending escalation and raises it again when resumed
 (`docs/invocation.md`, "Lifecycle").
@@ -590,6 +591,35 @@ mode (`docs/delegates.md`, "Harness extensions"). The credential deny and
 standing rules do not reach inside it: the harness's own rules, as the person
 configured them, apply there. A harness and model are offered as a delegate
 only when their auto mode is declared to work.
+
+## Supervised sessions
+
+A supervised session is one the hub's `start` started with `supervised`, for a
+supervisor outside Fiber (`docs/invocation.md`, "Two doors"). Its supervisor is
+a program called by a model, so the session follows the delegate rules above,
+with these differences.
+
+- Its own reviewer judges every call. An escalation is a block at once, and the
+  run carries on. Nothing waits on a person and no request stays open. The
+  block is on the session's event stream, and sends no `attention` line.
+- The supervisor never answers an approval. It may steer with context, such as
+  "you may run X because Y". The reviewer reads the supervisor's prompts and
+  steers as the person's words, and judges the call again when the model
+  retries it.
+- A person grants a blocked call by saying so in their own `prompt` or
+  `steer`, such as "you may run X". The reviewer reads it as the person's
+  words, and the model's retry passes.
+- It is top-level: it is listed in the feed, and a person may open it and
+  drive it as any client can. It sends no `finished` attention
+  (`docs/invocation.md`, "Attention").
+- `supervised` is fixed at `start`, recorded on `session_started`, and kept
+  across a resume. A person driving the session does not change it: its
+  escalations stay blocks.
+
+The supervisor wrote the brief and wants the run done, which is the pressure
+the reviewer exists to check. Its say already reaches the reviewer through its
+prompts and steers, and it runs outside Fiber, where no Fiber reviewer would
+judge an answer it gave.
 
 ## Not settled here
 
