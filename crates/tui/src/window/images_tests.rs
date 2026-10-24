@@ -178,6 +178,84 @@ fn one_path_noted_under_two_sessions_draws_two_ids() {
     );
 }
 
+/// A call whose result carried the image at `path`: a ledger row, so
+/// inline sizing grids it.
+fn called(path: &str) -> Vec<Envelope> {
+    use contract::Seq;
+    let image = json!({"type": "image", "path": path,
+        "mime_type": "image/png", "width": 1280, "height": 800});
+    let mut seq = 0;
+    let mut acted = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        seq += 1;
+        Envelope {
+            kind: kind.to_owned(),
+            session_id: SessionId(SESSION.to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(|action| contract::ActionId(action.to_owned())),
+            seq: Some(Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        }
+    };
+    vec![
+        acted(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "look"}]}]}),
+        ),
+        acted("step_started", None, json!({})),
+        acted(
+            "tool_call_requested",
+            Some("a_t"),
+            json!({"name": "read", "arguments": {"path": path}}),
+        ),
+        acted(
+            "tool_call_completed",
+            Some("a_t"),
+            json!({"status": "completed", "content": [image]}),
+        ),
+    ]
+}
+
+#[test]
+fn inline_sizing_counts_the_placeholder_grid() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    // The ledger draws once its group is open.
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id(
+            "a_t"
+        ))),
+        "the call's group opens"
+    );
+    let text = pages.rows().len();
+    // 1280 by 800 at 60 columns with a 10 by 20 cell: 24 by 7
+    // placeholders, then the caption line.
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let rows = pages.rows();
+    assert_eq!(rows.len(), text + 7, "the grid replaces the line");
+    let placeholders = rows
+        .iter()
+        .filter(|(line, _)| {
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref().starts_with('\u{10EEEE}'))
+        })
+        .count();
+    assert_eq!(placeholders, 7);
+    assert!(
+        rows.iter().any(|(line, _)| line
+            .to_string()
+            .ends_with("▣ a.png · 1280×800")),
+        "the caption still counts its row"
+    );
+}
+
 #[test]
 fn set_image_sizing_recounts_only_on_change() {
     use crate::image::Sizing;
