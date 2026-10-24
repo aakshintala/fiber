@@ -976,6 +976,7 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
 
 #[test]
 fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
+    // `docs/tools.md`, "Background jobs": delegate and job ends are delivered in order.
     let mut world = finish_suspended_turn(true, true);
     let lines = log::read(&world.dir).unwrap();
     // The finishing turn recorded the waiting start with no turn and no action.
@@ -1321,6 +1322,7 @@ fn messages_and_notices_are_items_in_arrival_order() {
 
 #[test]
 fn a_prompt_after_a_notice_is_accepted_into_the_same_turn() {
+    // `docs/loop.md`, "Starting a turn" and "One step": input items keep arrival order.
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
     let (answered, answer) = mpsc::channel();
     world.send(held(JOB));
@@ -1343,6 +1345,7 @@ fn a_prompt_after_a_notice_is_accepted_into_the_same_turn() {
 
 #[test]
 fn a_second_prompt_after_a_notice_joins_its_turn() {
+    // `docs/loop.md`, "Starting a turn" and "One step": input items keep arrival order.
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
     let (answered, answer) = mpsc::channel();
     world.send(held(JOB));
@@ -1366,6 +1369,7 @@ fn a_second_prompt_after_a_notice_joins_its_turn() {
 
 #[test]
 fn a_notice_whose_claim_fails_starts_no_turn() {
+    // `docs/loop.md`, "Starting a turn": only accepted inbox work starts a turn.
     let mut world = World::new(vec![Scripted::text("Hi.")], Vec::new(), |_| Vec::new());
     let asked = Asked::default();
     world.send(notice(JOB, false, &asked));
@@ -1411,6 +1415,7 @@ fn a_notice_after_close_with_a_message_joins_its_turn() {
 
 #[test]
 fn a_prompt_turn_that_saw_close_in_its_batch_still_takes_a_steer() {
+    // `docs/loop.md`, "One step": steering joins at the boundary in arrival order.
     // `close` lands in the same idle batch as the prompt, after it: the
     // turn still starts with no session message, so `after_close` stays
     // false and a person's steer during the turn is accepted.
@@ -1437,6 +1442,7 @@ fn a_prompt_turn_that_saw_close_in_its_batch_still_takes_a_steer() {
 
 #[test]
 fn a_session_message_turn_without_close_still_takes_a_steer() {
+    // `docs/loop.md`, "One step": steering joins at the boundary in arrival order.
     // No `close`: the message starts the turn, so `after_close` stays
     // false and a person's steer during the turn is accepted.
     let (steered, steer_answer) = mpsc::channel();
@@ -1462,6 +1468,7 @@ fn a_session_message_turn_without_close_still_takes_a_steer() {
 
 #[test]
 fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
+    // `docs/loop.md`, "One step": inbox work joins at the next boundary.
     // A `steer_drop` never removes a session message: the drop names the
     // message's command, but the message stays and starts its turn.
     let (dropped, drop_answer) = mpsc::channel();
@@ -1483,6 +1490,7 @@ fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
 
 #[test]
 fn a_steer_drop_while_idle_skips_notices_and_the_prompt() {
+    // `docs/loop.md`, "Starting a turn" and "One step": remaining input keeps arrival order.
     let mut world = World::new(vec![Scripted::text("Hi.")], Vec::new(), |_| Vec::new());
     world.send(held(JOB));
     world.send(Delivery::Prompt(message("Hello.", "c_same"), ignore()));
@@ -1686,6 +1694,7 @@ fn a_steer_and_a_notice_are_written_in_arrival_order() {
 
 #[test]
 fn a_steer_drop_while_running_finds_the_steer_behind_a_notice() {
+    // `docs/loop.md`, "One step": notices and steering join in arrival order.
     let (answered, answer) = mpsc::channel();
     let mut world = World::new(
         vec![calls("sends"), Scripted::text("Seen.")],
@@ -1850,6 +1859,7 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
 
 #[test]
 fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
+    // `docs/loop.md`, "Interrupt": queued steering starts the next turn.
     let (steered, steer_answer) = mpsc::channel();
     let mut world = World::new(
         vec![calls("gated"), Scripted::text("Seen.")],
@@ -2260,6 +2270,7 @@ fn durable_kinds(world: &World) -> Vec<String> {
 
 #[test]
 fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
+    // `docs/tools.md`, "Background jobs": the session waits for running job ends.
     let world = World::new(
         vec![
             Scripted::text("Done."),
@@ -2345,6 +2356,7 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
 
 #[test]
 fn close_with_no_job_running_exits_with_no_notice() {
+    // `docs/tools.md`, "Background jobs": the session ends when no job runs.
     let world = World::new(vec![Scripted::text("Done.")], Vec::new(), |_| Vec::new());
     let jobs = FakeJobs::new(world.home());
     let job = open_job(&jobs);
@@ -2362,6 +2374,7 @@ fn close_with_no_job_running_exits_with_no_notice() {
 
 #[test]
 fn the_ending_notice_is_given_once_even_when_another_job_starts() {
+    // `docs/tools.md`, "Background jobs": each running job end wakes the model.
     let world = World::new(
         vec![
             Scripted::text("Done."),
@@ -2502,6 +2515,7 @@ fn assert_check(lines: &[Envelope], id: &str) {
 
 #[test]
 fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits() {
+    // `docs/invocation.md`, "Lifecycle": an idle session with running jobs checks again.
     let world = World::new(
         vec![Scripted::text("Checked."), Scripted::text("Seen.")],
         Vec::new(),
@@ -2627,6 +2641,7 @@ fn a_prompt_arms_the_jobs_check_again_from_when_it_was_taken() {
 
 #[test]
 fn a_steer_in_the_check_turn_arms_the_check_again() {
+    // `docs/invocation.md`, "Lifecycle": a turn re-arms the unattended check.
     let world = World::new(
         vec![
             Scripted::text("Checked."),
@@ -2668,6 +2683,7 @@ fn a_steer_in_the_check_turn_arms_the_check_again() {
 
 #[test]
 fn a_steer_while_idle_arms_the_check_again() {
+    // `docs/invocation.md`, "Lifecycle": a turn re-arms the unattended check.
     let world = World::new(
         vec![
             Scripted::text("Checked."),
@@ -2704,6 +2720,7 @@ fn a_steer_while_idle_arms_the_check_again() {
 
 #[test]
 fn a_session_message_while_idle_does_not_arm_the_check_again() {
+    // `docs/invocation.md`, "Lifecycle": a session message does not re-arm the check.
     let world = World::new(
         vec![
             Scripted::text("Checked."),
@@ -2754,6 +2771,7 @@ fn a_session_message_while_idle_does_not_arm_the_check_again() {
 
 #[test]
 fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
+    // `docs/invocation.md`, "Lifecycle": a session message does not re-arm the check.
     let world = World::new(
         vec![
             Scripted::text("Checked."),
@@ -2976,6 +2994,7 @@ fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
 
 #[test]
 fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restarts_it() {
+    // `docs/invocation.md`, "Lifecycle": an unattended running job gets one check.
     let world = World::new(vec![Scripted::text("Checked.")], Vec::new(), |_| Vec::new());
     let jobs = Arc::new(Listed::default());
     let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
@@ -3174,6 +3193,7 @@ fn after_close_a_kept_notice_starts_a_turn_and_a_kept_steer_does_not() {
 
 #[test]
 fn a_steer_in_a_turn_started_after_close_is_rejected_closing() {
+    // `docs/loop.md`, "One step": steering joins only while the turn is open.
     let (during_ending, ending_answer) = mpsc::channel();
     let (during_job, job_answer) = mpsc::channel();
     let world = World::new(
@@ -3232,6 +3252,7 @@ fn a_steer_in_a_turn_started_after_close_is_rejected_closing() {
 
 #[test]
 fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
+    // `docs/loop.md`, "One step": steering joins at the next boundary.
     let (steered, answer) = mpsc::channel();
     let world = World::new(
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
@@ -3270,6 +3291,8 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
 
 #[test]
 fn a_session_message_taken_with_close_in_one_idle_batch_runs_its_turn() {
+    // `docs/loop.md`, "Starting a turn" and "Ending a turn": input starts a turn
+    // before close ends the run.
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
     world.send(session_message("c_message", None, ignore()));
     world.send(Delivery::Close(ignore()));
@@ -3287,6 +3310,7 @@ fn a_session_message_taken_with_close_in_one_idle_batch_runs_its_turn() {
 
 #[test]
 fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
+    // `docs/loop.md`, "One step": inbox messages are applied in arrival order.
     let world = World::new(
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
         vec![vec![
@@ -3568,6 +3592,7 @@ fn counted_job(id: &str, holds: bool, asked: &Asked) -> JobNotice {
 
 #[test]
 fn a_notice_admitted_during_an_approval_wait_is_claimed_once_at_the_next_boundary() {
+    // `docs/loop.md`, "One step": the notice joins at the next boundary.
     let mut world = World::new(
         vec![calls("gated"), Scripted::text("Seen.")],
         Vec::new(),
