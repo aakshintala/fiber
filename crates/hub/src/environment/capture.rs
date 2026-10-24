@@ -145,8 +145,6 @@ impl Wake for ClockWake {
     }
 }
 
-/// Locks, never poisoned: no thread holding one of these locks panics
-/// while holding it.
 /// The shell command running `script` as an interactive login shell: `$SHELL`
 /// with `-l -i -c`, from `base` only, with stdin and stderr on `/dev/null`
 /// and stdout on `stdout`. The shell leads a new session with no

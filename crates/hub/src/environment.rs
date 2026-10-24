@@ -389,8 +389,6 @@ pub(crate) fn refresh(
     Ok(None)
 }
 
-/// Locks, never poisoned: no thread holding this lock panics while
-/// holding it.
 /// `vars` with exactly one `FIBER_HOME`, equal to the hub's home:
 /// any captured or inherited value is replaced, never kept beside it.
 fn with_home(vars: &[(OsString, OsString)], home: &Path) -> Vec<(OsString, OsString)> {
