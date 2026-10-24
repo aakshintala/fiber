@@ -211,18 +211,47 @@ fn a_taken_port_is_retried_with_a_fresh_one() {
 }
 
 #[test]
-#[should_panic(expected = "attempt 3 of 3")]
 fn a_hub_that_never_gets_a_port_fails_with_the_log() {
     let setup = Setup::new();
-    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let taken = held.local_addr().unwrap().port();
-    hub_start::serve_installed(&setup, 3, &mut || taken, &mut |port| {
-        write_json(
-            &setup.home().join("config.json"),
-            &json!({"hub":{"port":port}}),
+    let first = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let second = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let taken_first = first.local_addr().unwrap().port();
+    let taken_second = second.local_addr().unwrap().port();
+    let mut first_draw = true;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        hub_start::serve_installed(
+            &setup,
+            2,
+            &mut || {
+                if first_draw {
+                    first_draw = false;
+                    taken_first
+                } else {
+                    taken_second
+                }
+            },
+            &mut |port| {
+                write_json(
+                    &setup.home().join("config.json"),
+                    &json!({"hub":{"port":port}}),
+                );
+                setup.fiber(&["hub", "serve", "--installed"])
+            },
         );
-        setup.fiber(&["hub", "serve", "--installed"])
-    });
+    }));
+    assert!(
+        failed.is_err(),
+        "a hub with no free port fails instead of serving"
+    );
+    assert!(
+        setup
+            .hub_log()
+            .contains(&format!("127.0.0.1:{taken_second}: ")),
+        "the retry failed on the second held port: {}",
+        setup.hub_log()
+    );
+    drop(first);
+    drop(second);
 }
 
 #[test]
