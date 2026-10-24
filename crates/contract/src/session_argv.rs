@@ -47,6 +47,8 @@ pub struct SessionArgv {
     pub depth: Option<u32>,
     /// The session's environment came from the login-shell capture.
     pub login_shell: bool,
+    /// A program drives the session (`docs/permissions.md`, "Supervised sessions").
+    pub supervised: bool,
 }
 
 impl Default for SessionArgv {
@@ -68,6 +70,7 @@ impl Default for SessionArgv {
             delegate_id: None,
             depth: None,
             login_shell: false,
+            supervised: false,
         }
     }
 }
@@ -81,7 +84,7 @@ impl SessionArgv {
     /// `--workspace`, then `--model`, each `-c`, `--resume`, `--prompt`,
     /// `--credential`, `--worktree`, `--rewound-from`, `--continues`, `--forked-from`,
     /// `--forked-seq`, `--parent`,
-    /// `--delegate-id`, `--depth`, `--login-shell`, each only when set.
+    /// `--delegate-id`, `--depth`, `--login-shell`, `--supervised`, each only when set.
     #[must_use]
     pub fn to_argv(&self) -> Vec<OsString> {
         let mut argv = vec![OsString::from("session")];
@@ -135,6 +138,9 @@ impl SessionArgv {
         }
         if self.login_shell {
             argv.push(OsString::from("--login-shell"));
+        }
+        if self.supervised {
+            argv.push(OsString::from("--supervised"));
         }
         argv
     }

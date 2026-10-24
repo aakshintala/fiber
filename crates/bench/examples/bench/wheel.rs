@@ -263,6 +263,7 @@ fn create_log(home: &Home, id: &str) -> Result<log::Log, String> {
         .to_string();
     log.append(
         &Event::SessionStarted(SessionStarted {
+            supervised: false,
             workspace,
             variables: Variables {
                 path: String::new(),

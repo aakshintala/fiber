@@ -883,6 +883,18 @@ pub(crate) struct SessionArgs {
     /// environment").
     #[arg(long = "login-shell", hide = true)]
     pub(crate) login_shell: bool,
+
+    /// The session is driven by a program, never by a person: its
+    /// escalations stay blocks (`docs/permissions.md`, "Supervised
+    /// sessions"). Hidden and free to change, passed by the hub that
+    /// starts a supervised session; fixed at `start`, so never with a
+    /// resume or a delegate's parent.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["resume", "rewound_from", "parent", "forked_from", "forked_seq"]
+    )]
+    pub(crate) supervised: bool,
 }
 
 impl From<&SessionArgs> for contract::session_argv::SessionArgv {
@@ -904,6 +916,7 @@ impl From<&SessionArgs> for contract::session_argv::SessionArgv {
             delegate_id: args.delegate_id.clone().map(contract::JobId),
             depth: args.depth,
             login_shell: args.login_shell,
+            supervised: args.supervised,
         }
     }
 }

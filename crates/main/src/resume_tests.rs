@@ -41,6 +41,7 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
             forked_from: None,
             rewind: None,
             worktree,
+            supervised: false,
         }),
         None,
         None,

@@ -344,7 +344,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             "parent": {"session_id": "s", "delegate_id": "j"},
             "forked_from": {"session_id": "s", "seq": 3},
             "rewind": {"summary": "s", "note": "n"},
-            "worktree": {"path": "/w", "branch": "fiber/s", "repository": "/r/.git"}}),
+            "worktree": {"path": "/w", "branch": "fiber/s", "repository": "/r/.git"},
+            "supervised": true}),
         ),
         (
             "rewound",
@@ -395,7 +396,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("clients", json!({"count": 1})),
         (
             "session_status",
-            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m", "thinking": "high",
+            json!({"name": "n", "workspace": "/w", "parent": "s0", "supervised": true, "model": "p/m", "thinking": "high",
             "state": "idle", "started": 0, "calls": 0, "turns": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -2142,4 +2143,76 @@ fn an_old_rewound_line_with_jobs_still_reads() {
     .unwrap() else {
         panic!("not a session_started");
     };
+}
+
+#[test]
+fn a_session_started_omits_supervised_when_false_and_round_trips_when_true() {
+    let base = json!({"workspace": "/w",
+        "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "login_shell"}});
+    let Some(Event::SessionStarted(absent)) = read("session_started", base.clone()).unwrap() else {
+        panic!("not a session_started");
+    };
+    assert!(!absent.supervised);
+    assert_eq!(
+        serde_json::to_value(&absent).unwrap(),
+        base,
+        "absent supervised writes back absent"
+    );
+    let mut explicit_false = base.clone();
+    explicit_false["supervised"] = json!(false);
+    let Some(Event::SessionStarted(hidden)) = read("session_started", explicit_false).unwrap()
+    else {
+        panic!("not a session_started");
+    };
+    assert!(!hidden.supervised);
+    assert_eq!(
+        serde_json::to_value(&hidden).unwrap(),
+        base,
+        "explicit false writes back absent"
+    );
+    let mut shown = base.clone();
+    shown["supervised"] = json!(true);
+    let Some(Event::SessionStarted(present)) = read("session_started", shown.clone()).unwrap()
+    else {
+        panic!("not a session_started");
+    };
+    assert!(present.supervised);
+    assert_eq!(serde_json::to_value(&present).unwrap(), shown);
+}
+
+#[test]
+fn a_session_status_omits_supervised_when_false_and_round_trips_when_true() {
+    let (_, base) = samples()
+        .into_iter()
+        .find(|(kind, payload)| {
+            *kind == "session_status" && !payload.as_object().unwrap().contains_key("supervised")
+        })
+        .unwrap();
+    let Some(Event::SessionStatus(absent)) = read("session_status", base.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(!absent.supervised);
+    assert_eq!(
+        serde_json::to_value(&absent).unwrap(),
+        base,
+        "absent supervised writes back absent"
+    );
+    let mut explicit_false = base.clone();
+    explicit_false["supervised"] = json!(false);
+    let Some(Event::SessionStatus(hidden)) = read("session_status", explicit_false).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(!hidden.supervised);
+    assert_eq!(
+        serde_json::to_value(&hidden).unwrap(),
+        base,
+        "explicit false writes back absent"
+    );
+    let mut shown = base.clone();
+    shown["supervised"] = json!(true);
+    let Some(Event::SessionStatus(present)) = read("session_status", shown.clone()).unwrap() else {
+        panic!("not a session_status");
+    };
+    assert!(present.supervised);
+    assert_eq!(serde_json::to_value(&present).unwrap(), shown);
 }

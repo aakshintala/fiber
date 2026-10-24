@@ -237,6 +237,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
             project: "-w".into(),
             clients: 0,
             closing: false,
+            supervised: false,
         }),
         None,
         None,

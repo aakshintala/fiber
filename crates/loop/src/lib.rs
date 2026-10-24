@@ -483,6 +483,9 @@ struct Seed {
     /// True for a delegate's loop: its tree stop must preempt its
     /// failed-turn drain, so the session ends stopped.
     is_delegate: bool,
+    /// True for a supervised session's loop: driven by a program, so it
+    /// never answers an approval.
+    supervised: bool,
 }
 
 /// The failure step 7 escalates without a reviewer, with the default limits.
@@ -500,23 +503,33 @@ impl Loop {
     /// parent. `worktree` is the worktree the session runs in, when Fiber
     /// created one for it.
     pub fn start(session: Session, worktree: Option<Worktree>) -> Result<Self, Error> {
-        Self::open(session, None, worktree)
+        Self::open(session, None, worktree, false)
+    }
+
+    /// A supervised session's loop: as [`Loop::start`], but the session
+    /// is driven by a program, so `session_started` carries `supervised`
+    /// and the loop never answers an approval (`docs/permissions.md`,
+    /// "Supervised sessions").
+    pub fn supervised(session: Session, worktree: Option<Worktree>) -> Result<Self, Error> {
+        Self::open(session, None, worktree, true)
     }
 
     /// A Fiber delegate's loop: as [`Loop::start`], but the session's
     /// `session_started` names its parent (`docs/delegates.md`, "Events").
     /// A delegate never runs in a worktree of its own.
     pub fn delegate(session: Session, parent: Parent) -> Result<Self, Error> {
-        Self::open(session, Some(parent), None)
+        Self::open(session, Some(parent), None, false)
     }
 
-    /// [`Loop::start`] and [`Loop::delegate`] through one writer: the
-    /// session's `session_started` carries `parent` (`None` for a plain
-    /// start) and `worktree` (`None` for a delegate).
+    /// [`Loop::start`], [`Loop::supervised`] and [`Loop::delegate`]
+    /// through one writer: the session's `session_started` carries
+    /// `parent` (`None` for a plain start), `supervised` and `worktree`
+    /// (`None` for a delegate).
     fn open(
         mut session: Session,
         parent: Option<Parent>,
         worktree: Option<Worktree>,
+        supervised: bool,
     ) -> Result<Self, Error> {
         // Registered before `session_started`: a `Tool::definition()` may
         // read the log.
@@ -533,6 +546,7 @@ impl Loop {
                 forked_from: None,
                 rewind: None,
                 worktree,
+                supervised,
             }),
             None,
             None,
@@ -566,6 +580,7 @@ impl Loop {
                 workspace,
                 credentials,
                 is_delegate,
+                supervised,
             },
         )
     }
@@ -608,6 +623,7 @@ impl Loop {
             workspace,
             credentials,
             is_delegate,
+            supervised,
         } = seed;
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
@@ -682,7 +698,10 @@ impl Loop {
             no_model_noticed: false,
             turn_blocked: None,
             workspace_label: permissions.workspace,
-            answerable: true,
+            // A supervised session is driven by a program: nothing in
+            // its life re-enables answering (`docs/permissions.md`,
+            // "Supervised sessions").
+            answerable: !supervised,
             server_prompts: None,
             repository,
             naming,
