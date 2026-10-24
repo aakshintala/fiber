@@ -130,6 +130,7 @@ fn serve_in_env(
                 })
             },
             "0.0.0",
+            None,
             starter,
             fakes::clock::FakeClock::new(),
             environments,
@@ -156,6 +157,7 @@ fn serve_in_with(home: &Path, mode: Mode, settings: crate::Settings) -> Result<i
             mode,
             move || Ok(settings),
             "0.0.0",
+            None,
             starter,
             fakes::clock::FakeClock::new(),
             crate::Environments::ready(crate::Environment {
@@ -409,6 +411,7 @@ fn serve_captures_first_then_reports_the_fallback() {
                 })
             },
             "0.0.0",
+            None,
             starter,
             clock_serve,
             environments,

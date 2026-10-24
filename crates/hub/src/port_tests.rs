@@ -86,14 +86,27 @@ fn serve_with_port(
     origins: Vec<String>,
     clock: Arc<FakeClock>,
 ) -> (u16, Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    serve_with_port_commit(temp, origins, clock, None)
+}
+
+/// [`serve_with_port`] for a hub built from `commit`.
+fn serve_with_port_commit(
+    temp: &Temp,
+    origins: Vec<String>,
+    clock: Arc<FakeClock>,
+    commit: Option<&str>,
+) -> (u16, Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
     let timed: Arc<dyn Clock> = clock;
-    let hub = Arc::new(Hub::new(
-        &temp.dir,
-        "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
-        Arc::clone(&timed),
-        crate::diag::open(&temp.dir, timed),
-    ));
+    let hub = Arc::new(
+        Hub::new(
+            &temp.dir,
+            "0.0.0",
+            Arc::new(FakeStarter::hang(&temp.dir)),
+            Arc::clone(&timed),
+            crate::diag::open(&temp.dir, timed),
+        )
+        .with_commit(commit),
+    );
     hub.diag
         .line(Severity::Info, None, "hub_started", "The hub started.");
     let held_lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
@@ -373,6 +386,21 @@ fn the_handshake_gives_101_then_one_hub_hello() {
         Item::Pong(b"ack".to_vec())
     );
     assert!(client.rx.try_recv().is_err(), "nothing follows hub_hello");
+}
+
+#[test]
+fn the_websocket_hub_hello_carries_the_hubs_commit() {
+    let temp = Temp::new();
+    let sha = "2121f38d1e4f0a9b6c3d2e1f0a9b8c7d6e5f4a3b";
+    let (port, _hub, _got, _done) =
+        serve_with_port_commit(&temp, Vec::new(), FakeClock::new(), Some(sha));
+    let client = Ws::connect(port, None);
+    assert_eq!(client.next("the handshake answer"), Item::Response(101));
+    let hello = text_of(&client, "hub_hello");
+    assert_eq!(
+        hello["payload"],
+        json!({"fiber_version": "0.0.0", "fiber_commit": sha})
+    );
 }
 
 #[test]

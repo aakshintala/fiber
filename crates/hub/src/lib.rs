@@ -186,7 +186,9 @@ pub trait Started: Send {
 /// `doors::signal_code` does, and a hub that cannot accept returns 1.
 ///
 /// The hub takes the `run/` lock, opens `logs/hub.log`, then calls
-/// `configure` for its [`Settings`] and binds `run/hub`. A hub a client
+/// `configure` for its [`Settings`] and binds `run/hub`. `fiber_commit` is
+/// the commit the build recorded, if any; `hub_hello` carries it beside
+/// `fiber_version`. A hub a client
 /// started returns `Ok(0)` on idle exit, and when another hub holds the
 /// lock or answers on `run/hub`; one that loses the lock has written
 /// nothing and never calls `configure`. An installed hub blocks until the
@@ -204,6 +206,7 @@ pub fn serve(
     mode: Mode,
     configure: impl FnOnce() -> Result<Settings, Failure>,
     fiber_version: &str,
+    fiber_commit: Option<&str>,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
     environments: Arc<Environments>,
@@ -280,6 +283,7 @@ pub fn serve(
     let diag = diag.with_level(settings.level);
     let hub = Arc::new(
         Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
+            .with_commit(fiber_commit)
             .with_environments(Arc::clone(&environments))
             .with_machine(machine),
     );

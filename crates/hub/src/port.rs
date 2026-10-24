@@ -245,14 +245,7 @@ pub(crate) fn serve(
 /// bridge. Before authentication succeeds the connection carries only the
 /// hello, the first answer and a close.
 fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>) {
-    let hello = connection::line(
-        &hub,
-        "hub_hello",
-        Map::from_iter([(
-            "fiber_version".to_owned(),
-            Value::String(hub.fiber_version.clone()),
-        )]),
-    );
+    let hello = connection::line(&hub, "hub_hello", connection::hello_payload(&hub));
     if web.text(&hello).is_err() {
         web.shut();
         hub.rollback(n);

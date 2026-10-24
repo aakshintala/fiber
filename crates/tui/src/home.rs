@@ -173,6 +173,9 @@ pub struct Launch {
     pub reduced_motion: bool,
     /// Fiber's version, for the logo.
     pub version: String,
+    /// The commit Fiber was built from, when the build recorded one:
+    /// compared with the hub's (`docs/invocation.md`, "What the hub speaks").
+    pub commit: Option<String>,
     /// `model`: the chip's model, unset on a fresh install with no key.
     pub model: Option<String>,
     /// Bare `fiber`'s `--model` and `-c`, normalized into the per-run
@@ -447,7 +450,7 @@ pub(crate) enum State {
     /// Nothing is in flight.
     Idle,
     /// The status cannot be read: its schema is newer, or it does not
-    /// parse. The row says "cannot attach".
+    /// parse. The row says CANNOT ATTACH and why ("The session list").
     Unreadable,
 }
 
