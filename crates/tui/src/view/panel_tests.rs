@@ -90,6 +90,190 @@ fn spend(
         "cost": cost, "subscription_cost": subscription})
 }
 
+/// The row index of the first row starting with `label`.
+fn row_y(app: &App, width: u16, label: &str) -> usize {
+    rows(app, width)
+        .iter()
+        .position(|row| row.line.to_string().starts_with(label))
+        .unwrap_or_else(|| panic!("{label} in {:?}", texts(app, width)))
+}
+
+/// The Session card keeps every row's absolute position while its data
+/// arrives: the blank branch slot, context rows and all six figures
+/// draw from the first frame, the branch fills its slot at status, and
+/// the rows hold their positions through the first status and timed
+/// reply (`docs/tui.md`, "The panel", Session: reserved rows draw from
+/// the first frame and no row moves when data arrives).
+#[test]
+fn session_card_rows_hold_their_positions_as_figures_land() {
+    use crate::app::panel::Spot;
+    use crate::markdown::{Role, style};
+    use crate::mouse::TargetId;
+    const LABELS: [&str; 6] = [
+        "tokens in / out",
+        "cache hits",
+        "cost",
+        "cost on subscription",
+        "speed, last reply",
+        "turns",
+    ];
+    let mut app = attached(160, 40);
+    // The first frame draws the context rows and every figure in
+    // docs order, after the reserved branch and model slots.
+    let context = ["▆", "handoff at", "then a summary"];
+    let first_context: Vec<usize> = context.iter().map(|label| row_y(&app, 40, label)).collect();
+    assert_eq!(first_context, vec![4, 5, 6]);
+    let first: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
+    assert_eq!(first, vec![7, 8, 9, 10, 11, 12]);
+    let branch_y = first_context[0] - 2;
+    let first_rows = rows(&app, 40);
+    assert_eq!(first_rows[branch_y].line.to_string(), "");
+    assert_eq!(first_rows[branch_y].spot, None);
+    let drawn = rows(&app, 40);
+    assert_eq!(
+        drawn[4]
+            .line
+            .to_string()
+            .chars()
+            .filter(|c| *c == '\u{2586}')
+            .count(),
+        17
+    );
+    assert!(drawn[5].line.to_string().starts_with("handoff at —"));
+    assert_eq!(drawn[6].line.to_string(), "then a summary, fresh context");
+    // Before any data the bar is bare track and every unknown figure
+    // a dim dash: the dash span reads muted, not text.
+    let bar = &drawn[4];
+    assert_eq!(
+        bar.line
+            .spans
+            .iter()
+            .filter(|span| span.content == "\u{2586}")
+            .count(),
+        17
+    );
+    assert!(
+        bar.line
+            .spans
+            .iter()
+            .filter(|span| span.content == "\u{2586}")
+            .all(|span| span.style == style(Role::Rule))
+    );
+    assert!(
+        bar.line
+            .spans
+            .last()
+            .is_some_and(|span| span.content == "—")
+    );
+    assert_eq!(
+        bar.line.spans.last().map(|span| span.style),
+        Some(style(Role::Muted))
+    );
+    for row in [
+        &drawn[5], &drawn[7], &drawn[8], &drawn[9], &drawn[10], &drawn[11],
+    ] {
+        assert!(
+            row.line
+                .spans
+                .last()
+                .is_some_and(|span| span.content == "—"),
+            "{}",
+            row.line
+        );
+        assert_eq!(
+            row.line.spans.last().map(|span| span.style),
+            Some(style(Role::Muted))
+        );
+    }
+    // Zero turns are known, not unknown.
+    assert_eq!(
+        drawn[12].line.spans.last().map(|span| span.style),
+        Some(style(Role::Text))
+    );
+    insta::assert_snapshot!(
+        "session_card_reserved_rows",
+        super::super::text(&draw_targets(&app).0)
+    );
+    // Clicking the empty bar opens the context breakdown's empty
+    // state.
+    let mut bare = attached(160, 40);
+    assert_eq!(
+        bare.on_click(TargetId::Panel(Spot::Context)),
+        crate::app::Effect::None
+    );
+    assert!(
+        screen(&bare, 160, 40).contains("The context shows after the session's first request.")
+    );
+    // The first status fills tokens, costs and the bar: zero input
+    // leaves cache hits reserved, zero costs draw `$0.00`.
+    app.on_line(preamble_line(Some(800)));
+    let mut status = status_line(
+        spend(0, 0, 0, 5, serde_json::json!(0.0), 0.0),
+        Some(serde_json::json!({"tokens": 105, "window": 1000})),
+    );
+    if let Line::Session(envelope) = &mut status {
+        envelope
+            .payload
+            .insert("git".to_owned(), serde_json::json!({"branch": "main"}));
+    } else {
+        panic!("session status is a session line");
+    }
+    app.on_line(status);
+    let after_status: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
+    let context_after_status: Vec<usize> =
+        context.iter().map(|label| row_y(&app, 40, label)).collect();
+    let after_status_rows = rows(&app, 40);
+    assert_eq!(after_status_rows[branch_y].line.to_string(), "git  main");
+    assert_eq!(after_status_rows[branch_y].spot, Some(Spot::Branch));
+    let drawn = texts(&app, 40);
+    assert!(
+        drawn
+            .iter()
+            .any(|row| *row == "cache hits".to_owned() + &" ".repeat(25) + "—"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$0.00"),
+        "{drawn:?}"
+    );
+    // The first timed reply fills the speed at its own row: 500
+    // output tokens over 2000 ms read 250 tokens/s.
+    app.on_line(timed_line(
+        "assistant_message_started",
+        1000,
+        serde_json::json!({}),
+    ));
+    app.on_line(timed_line(
+        "usage_recorded",
+        3000,
+        serde_json::json!({
+            "generation_id": "g_1", "model": "test/model",
+            "tokens": {"input": 10, "cache_read": 0,
+                "cache_write": {}, "output": 500},
+            "input_bytes": 0, "cost": 0.01,
+        }),
+    ));
+    let after_reply: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
+    let context_after_reply: Vec<usize> =
+        context.iter().map(|label| row_y(&app, 40, label)).collect();
+    let drawn = texts(&app, 40);
+    assert!(
+        drawn
+            .iter()
+            .any(|row| *row == "speed, last reply".to_owned() + &" ".repeat(7) + "250 tokens/s"),
+        "{drawn:?}"
+    );
+    for (stage, figures, context_rows) in [
+        ("first status", &after_status, &context_after_status),
+        ("first timed reply", &after_reply, &context_after_reply),
+    ] {
+        assert_eq!(figures, &first, "figure rows after {stage}");
+        assert_eq!(context_rows, &first_context, "context rows after {stage}");
+    }
+}
+
 /// A `preamble_built` with `trigger`: `None` leaves automatic handoff
 /// off.
 fn preamble_line(trigger: Option<u64>) -> Line {
@@ -245,7 +429,7 @@ fn cache_hits_need_input() {
     assert!(
         texts(&app, 40)
             .iter()
-            .all(|row| !row.starts_with("cache hits"))
+            .any(|row| *row == "cache hits".to_owned() + &" ".repeat(25) + "—")
     );
     app.on_line(status_line(
         spend(1, 0, 0, 5, serde_json::json!(0.0), 0.0),
@@ -287,19 +471,38 @@ fn pct_and_bar_floor() {
     );
 }
 
+/// Without a window and a status the bar draws empty: 17 track cells,
+/// the preamble's marker and a dim dash for the size (`docs/tui.md`,
+/// "The panel", Session: the bar is drawn empty until its figures are
+/// known).
 #[test]
 fn context_rows_need_a_window_and_a_status() {
     let mut app = attached(160, 40);
     app.on_line(preamble_line(Some(800)));
+    // The bar draws empty before any status: 17 track cells, the
+    // marker the preamble names, and a dim dash for the size.
+    let drawn = texts(&app, 40);
+    let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(17) + "—";
+    assert!(drawn.contains(&bar), "{drawn:?}");
     assert!(
-        texts(&app, 40).iter().all(|row| !row.contains('▆')
-            && !row.contains("handoff")
-            && !row.contains("of window"))
+        drawn
+            .iter()
+            .any(|row| *row == "handoff at 800".to_owned() + &" ".repeat(21) + "—"),
+        "{drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|row| *row == "then a summary, fresh context"),
+        "{drawn:?}"
     );
 }
 
+/// A zero window holds the empty bar: no context share divides by
+/// zero (`docs/tui.md`, "The panel", Session: the bar is drawn empty
+/// until its figures are known).
 #[test]
-fn a_zero_context_window_has_no_context_rows() {
+fn a_zero_context_window_holds_the_empty_bar() {
     let mut app = attached(160, 40);
     app.on_line(session_line(
         "preamble_built",
@@ -319,10 +522,15 @@ fn a_zero_context_window_has_no_context_rows() {
             .iter()
             .any(|row| *row == "test/model".to_owned() + &" ".repeat(22) + "high")
     );
+    // A zero window is no window: the bar stays empty with dim dashes
+    // for the size and share.
+    let bar = "\u{2586}".repeat(17) + &" ".repeat(18) + "—";
+    assert!(drawn.contains(&bar), "{drawn:?}");
     assert!(
-        drawn.iter().all(|row| !row.contains('▆')
-            && !row.contains("handoff")
-            && !row.contains("of window"))
+        drawn
+            .iter()
+            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+        "{drawn:?}"
     );
 }
 
@@ -338,9 +546,11 @@ fn a_full_context_fills_every_cell() {
     // All 17 cells fill, no marker without a trigger, then the size.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(15) + "1.0k";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // With no trigger the share stands alone, left-aligned.
+    // With no trigger the handoff point is still unknown.
     assert!(
-        drawn.iter().any(|row| *row == "100% of window"),
+        drawn
+            .iter()
+            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(10) + "100% of window"),
         "{drawn:?}"
     );
 }
@@ -397,52 +607,43 @@ fn sides_pads_exact_fit_and_cuts_one_short() {
 
 #[test]
 fn cost_rows() {
+    // A known billed cost draws whenever known, `$0.00` included; the
+    // subscription sum draws on every status, `$0.00` included. A null
+    // cost without a budget reads "unknown".
     for (cost, subscription, billed, on_subscription) in [
-        (serde_json::json!(0.0), 0.0, false, false),
-        (serde_json::json!(0.01), 0.0, true, false),
-        (serde_json::json!(0.41), 1.10, true, true),
-        (serde_json::Value::Null, 0.0, true, false),
+        (
+            serde_json::json!(0.0),
+            0.0,
+            "cost".to_owned() + &" ".repeat(27) + "$0.00",
+            "cost on subscription".to_owned() + &" ".repeat(11) + "$0.00",
+        ),
+        (
+            serde_json::json!(0.01),
+            0.0,
+            "cost".to_owned() + &" ".repeat(27) + "$0.01",
+            "cost on subscription".to_owned() + &" ".repeat(11) + "$0.00",
+        ),
+        (
+            serde_json::json!(0.41),
+            1.10,
+            "cost".to_owned() + &" ".repeat(27) + "$0.41",
+            "cost on subscription".to_owned() + &" ".repeat(11) + "$1.10",
+        ),
+        (
+            serde_json::Value::Null,
+            0.0,
+            "cost".to_owned() + &" ".repeat(25) + "unknown",
+            "cost on subscription".to_owned() + &" ".repeat(11) + "$0.00",
+        ),
     ] {
         let mut app = attached(160, 40);
         app.on_line(status_line(spend(1, 0, 0, 2, cost, subscription), None));
         let drawn = texts(&app, 40);
         // The cost row reads dim "cost" with its figure right-aligned;
         // the subscription row keeps its prose label.
-        assert_eq!(
-            drawn
-                .iter()
-                .any(|row| row.starts_with("cost ") && !row.starts_with("cost on")),
-            billed,
-            "{drawn:?}"
-        );
-        assert_eq!(
-            drawn
-                .iter()
-                .any(|row| row.starts_with("cost on subscription")),
-            on_subscription,
-            "{drawn:?}"
-        );
+        assert!(drawn.contains(&billed), "{drawn:?}");
+        assert!(drawn.contains(&on_subscription), "{drawn:?}");
     }
-    let mut app = attached(160, 40);
-    app.on_line(status_line(
-        spend(1, 0, 0, 2, serde_json::json!(0.01), 0.0),
-        None,
-    ));
-    assert!(
-        texts(&app, 40)
-            .iter()
-            .any(|row| *row == "cost".to_owned() + &" ".repeat(27) + "$0.01")
-    );
-    let mut app = attached(160, 40);
-    app.on_line(status_line(
-        spend(1, 0, 0, 2, serde_json::Value::Null, 0.0),
-        None,
-    ));
-    assert!(
-        texts(&app, 40)
-            .iter()
-            .any(|row| *row == "cost".to_owned() + &" ".repeat(25) + "unknown")
-    );
 }
 
 /// A `preamble_built` setting `budget.usd`.
@@ -541,14 +742,27 @@ fn the_budget_comparison_counts_billed_spend_only() {
     );
 }
 
+/// Zero turns are known, not unknown: the row draws `0` before the first
+/// turn completes (`docs/tui.md`, "The panel", Session: zero is shown
+/// as zero).
 #[test]
-fn turns_at_zero_are_left_out() {
+fn turns_are_zero_until_the_first_turn_completes() {
     let mut app = attached(160, 40);
-    assert!(rows(&app, 40).is_empty());
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| *row == "turns".to_owned() + &" ".repeat(30) + "0")
+    );
     app.on_line(session_line(
         "turn_started",
         serde_json::json!({"input": []}),
     ));
+    assert!(
+        texts(&app, 40)
+            .iter()
+            .any(|row| *row == "turns".to_owned() + &" ".repeat(30) + "0")
+    );
+    app.on_line(session_line("turn_completed", serde_json::json!({})));
     assert!(
         texts(&app, 40)
             .iter()
@@ -585,6 +799,7 @@ fn full_session(app: &mut App) {
         "turn_started",
         serde_json::json!({"input": []}),
     ));
+    app.on_line(session_line("turn_completed", serde_json::json!({})));
     app.on_line(timed_line(
         "assistant_message_started",
         1000,
@@ -838,13 +1053,6 @@ fn screen(app: &App, width: u16, height: u16) -> String {
     crate::view::text(&buf)
 }
 
-/// Draws only the panel rect of `app`.
-fn draw_panel(app: &App) -> Buffer {
-    let (buf, targets) = draw_targets(app);
-    assert!(targets.is_empty());
-    buf
-}
-
 /// Draws only the panel rect of `app`, with its click targets.
 fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
     let rect = app
@@ -861,12 +1069,21 @@ fn draw_targets(app: &App) -> (Buffer, Vec<crate::mouse::Target>) {
 
 #[test]
 fn widget_card() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
     let mut app = attached(160, 40);
     fold_widget(&mut app, "plan", "tasks", &["one", "two", "three"]);
-    let buf = draw_panel(&app);
+    let (buf, targets) = draw_targets(&app);
+    // Only the Session card's reserved rows carry targets.
+    assert!(targets.iter().all(|target| matches!(
+        target.id,
+        TargetId::Panel(Spot::Model | Spot::Context | Spot::Usage)
+    )));
     insta::assert_snapshot!("widget_card", super::super::text(&buf));
 }
 
+/// A widget row too long for the card is cut with "…" (`docs/tui.md`,
+/// "The panel": a row too long for the card is cut with "…").
 #[test]
 fn widget_rows_are_cut_at_the_text_width() {
     let mut app = attached(160, 40);
@@ -881,13 +1098,14 @@ fn widget_rows_are_cut_at_the_text_width() {
         .iter()
         .map(|row| row.line.to_string())
         .collect();
-    // The card's edges frame its two text rows.
-    assert_eq!(drawn.len(), 4);
-    assert!(drawn[1].starts_with("plan · tasks"));
-    assert_eq!(crate::format::width(&drawn[2]), text);
-    assert!(drawn[2].ends_with('\u{2026}'), "{:?}", drawn[2]);
-    assert_eq!(crate::format::width(&drawn[0]), text + 3);
-    assert_eq!(crate::format::width(&drawn[3]), text + 3);
+    // The Session card's fourteen rows and the blank row, then the
+    // widget card's edges framing its two text rows.
+    assert_eq!(drawn.len(), 19);
+    assert!(drawn[16].starts_with("plan · tasks"));
+    assert_eq!(crate::format::width(&drawn[17]), text);
+    assert!(drawn[17].ends_with('\u{2026}'), "{:?}", drawn[17]);
+    assert_eq!(crate::format::width(&drawn[15]), text + 3);
+    assert_eq!(crate::format::width(&drawn[18]), text + 3);
 }
 
 /// Folds `paths` of `(path, added, removed)` as one completed call.
@@ -957,6 +1175,10 @@ fn a_scroll_past_the_end_after_a_resize_is_clamped_when_drawn() {
     assert_eq!(shown.lines().nth(1).unwrap_or_default(), "   line 02");
 }
 
+/// The Changed files card shows the five paths with the most lines
+/// changed, ties by path ascending (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed;
+/// `changed_files_rows`: ties by path ascending).
 #[test]
 fn the_top_five_by_lines_changed_ties_by_path() {
     let mut app = attached(160, 40);
@@ -973,7 +1195,11 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     );
     let drawn = texts(&app, 40);
     // The edge, the title, then the five paths.
-    let files: Vec<&String> = drawn.iter().skip(2).take(5).collect();
+    let at = drawn
+        .iter()
+        .position(|row| row.starts_with("Changed files"))
+        .unwrap_or_else(|| panic!("a Changed files card in {drawn:?}"));
+    let files: Vec<&String> = drawn.iter().skip(at + 1).take(5).collect();
     assert_eq!(files.len(), 5);
     for (row, path) in files
         .iter()
@@ -981,8 +1207,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     {
         assert!(row.starts_with(path), "{row}");
     }
-    assert!(drawn[2].ends_with("+8 \u{2212}2"));
-    assert!(drawn[6].ends_with("+4 \u{2212}2"));
+    assert!(drawn[at + 1].ends_with("+8 \u{2212}2"));
+    assert!(drawn[at + 5].ends_with("+4 \u{2212}2"));
     // Six files: five paths, then dim "… 1 more" with the totals over
     // every path right-aligned.
     let last = drawn.get(drawn.len() - 2).expect("a last row");
@@ -992,6 +1218,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     );
 }
 
+/// Five paths all show with no "more" row (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed).
 #[test]
 fn exactly_five_paths_all_show() {
     let mut app = attached(160, 40);
@@ -1006,7 +1234,9 @@ fn exactly_five_paths_all_show() {
         ],
     );
     let drawn = texts(&app, 40);
-    assert_eq!(drawn.len(), 9);
+    // The Session card's fourteen rows and the blank row, then the
+    // Changed files card's nine.
+    assert_eq!(drawn.len(), 24);
     // With five files or fewer the last row holds the totals alone,
     // right-aligned.
     let last = drawn.get(drawn.len() - 2).expect("a last row");
@@ -1016,7 +1246,11 @@ fn exactly_five_paths_all_show() {
 #[test]
 fn no_changes_no_card() {
     let app = attached(160, 40);
-    assert!(rows(&app, 40).is_empty());
+    assert!(
+        rows(&app, 40)
+            .iter()
+            .all(|row| !row.line.to_string().starts_with("Changed files"))
+    );
 }
 
 #[test]
@@ -1027,7 +1261,11 @@ fn no_jobs_no_card() {
         "job_completed",
         serde_json::json!({"job_id": "j_1", "status": "completed"}),
     ));
-    assert!(rows(&app, 40).is_empty());
+    assert!(
+        rows(&app, 40)
+            .iter()
+            .all(|row| !row.line.to_string().starts_with("Jobs"))
+    );
 }
 
 #[test]
@@ -1054,13 +1292,20 @@ fn the_tools_line_is_a_click_target() {
     assert!(line.contains("\u{2717} relay down"), "{line}");
 }
 
+/// One running job shows the Jobs card (`docs/tui.md`, "The panel",
+/// Jobs: one line saying how many run, shown only while a job runs).
 #[test]
 fn one_job_shows_the_card() {
     let mut app = attached(160, 40);
     fold_job(&mut app, "j_1", "build");
     fold_job(&mut app, "j_2", "test");
+    let drawn = texts(&app, 40);
+    let at = drawn
+        .iter()
+        .position(|row| row.starts_with("Jobs"))
+        .unwrap_or_else(|| panic!("a Jobs card in {drawn:?}"));
     assert_eq!(
-        texts(&app, 40),
+        drawn[at - 1..at + 2],
         vec![
             "\u{2584}".repeat(39),
             "Jobs                     2 running \u{25b8}".to_owned(),
@@ -1069,6 +1314,8 @@ fn one_job_shows_the_card() {
     );
 }
 
+/// The Jobs title line and one row per job are click targets
+/// (`docs/tui.md`, "The panel", Jobs: a click lists them, one row each).
 #[test]
 fn the_jobs_line_and_its_rows_are_targets() {
     use crate::app::panel::Spot;
@@ -1076,15 +1323,31 @@ fn the_jobs_line_and_its_rows_are_targets() {
     fold_job(&mut app, "j_1", "build");
     fold_job(&mut app, "j_2", "test");
     let (_, targets) = draw_targets(&app);
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].id, crate::mouse::TargetId::Panel(Spot::Jobs));
-    assert_eq!(targets[0].rect.x, 3);
-    assert_eq!(targets[0].rect.y, 2);
-    assert_eq!(targets[0].rect.width, 30);
+    let jobs: Vec<_> = targets
+        .iter()
+        .filter(|target| {
+            matches!(
+                target.id,
+                crate::mouse::TargetId::Panel(Spot::Jobs)
+                    | crate::mouse::TargetId::Panel(Spot::Job(_))
+            )
+        })
+        .collect();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].id, crate::mouse::TargetId::Panel(Spot::Jobs));
+    // The Jobs title sits past the Session card's fourteen rows and
+    // the blank row: edge, title, so the title is row 16 at y 17.
+    assert_eq!(jobs[0].rect.x, 3);
+    assert_eq!(jobs[0].rect.y, 17);
+    assert_eq!(jobs[0].rect.width, 30);
     app.on_click(crate::mouse::TargetId::Panel(Spot::Jobs));
     let drawn = texts(&app, 40);
+    let at = drawn
+        .iter()
+        .position(|row| row.starts_with("Jobs"))
+        .unwrap_or_else(|| panic!("a Jobs card in {drawn:?}"));
     assert_eq!(
-        drawn,
+        drawn[at - 1..at + 4],
         vec![
             "\u{2584}".repeat(39),
             "Jobs                     2 running \u{25b8}".to_owned(),
@@ -1101,8 +1364,13 @@ fn the_jobs_line_and_its_rows_are_targets() {
         .serial_of_job(&contract::JobId("j_2".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
     let (_, targets) = draw_targets(&app);
+    let ids: Vec<_> = targets.iter().map(|target| target.id).collect();
+    let at = ids
+        .iter()
+        .position(|id| *id == crate::mouse::TargetId::Panel(Spot::Jobs))
+        .unwrap_or_else(|| panic!("a Jobs target in {ids:?}"));
     assert_eq!(
-        targets.iter().map(|target| target.id).collect::<Vec<_>>(),
+        ids[at..at + 3],
         [
             crate::mouse::TargetId::Panel(Spot::Jobs),
             crate::mouse::TargetId::Panel(Spot::Job(first)),
@@ -1118,6 +1386,9 @@ fn the_jobs_line_and_its_rows_are_targets() {
     );
 }
 
+/// The Changed files card's file rows and title close the target list
+/// after the Session card's targets (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed).
 #[test]
 fn changed_files_card() {
     let mut app = attached(160, 40);
@@ -1129,8 +1400,11 @@ fn changed_files_card() {
         ],
     );
     let (buf, targets) = draw_targets(&app);
+    let ids: Vec<_> = targets.iter().map(|target| target.id).collect();
+    // The Session card's targets come first; the Changed files card's
+    // two file rows and its title close the list.
     assert_eq!(
-        targets.iter().map(|target| target.id).collect::<Vec<_>>(),
+        ids[ids.len() - 3..],
         [
             crate::mouse::TargetId::Panel(crate::app::panel::Spot::File(0)),
             crate::mouse::TargetId::Panel(crate::app::panel::Spot::File(1)),
@@ -1160,9 +1434,10 @@ fn each_card_sits_on_its_surface_with_edges() {
     let mut buf = Buffer::empty(area);
     super::draw(&app, area, &mut buf, &mut Vec::new());
     let surface = Role::Surface.color();
-    // Two cards of two text rows: top edge, text, text, bottom edge, a
+    // The Session card's fourteen rows and the blank row, then two
+    // cards of two text rows: top edge, text, text, bottom edge, a
     // blank row between them, all from the panel's second column.
-    for (top, title) in [(1, "ext · one"), (6, "ext · two")] {
+    for (top, title) in [(16, "ext · one"), (21, "ext · two")] {
         for x in 61..100 {
             assert_eq!(buf[(x, top)].fg, surface, "top edge at ({x}, {top})");
             assert_eq!(buf[(x, top)].symbol(), "▄");
@@ -1186,7 +1461,7 @@ fn each_card_sits_on_its_surface_with_edges() {
     }
     // The separator row between cards stays untinted.
     for x in 60..100 {
-        assert_ne!(buf[(x, 5)].bg, surface, "separator at ({x}, 5)");
+        assert_ne!(buf[(x, 20)].bg, surface, "separator at ({x}, 20)");
     }
 }
 
@@ -1320,11 +1595,12 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
         .layout()
         .and_then(|layout| layout.panel)
         .expect("a panel rect");
-    // The widget card: its top edge on row 1, two text rows, its bottom
+    // The Session card's fourteen rows and the blank row, then the
+    // widget card: its top edge on row 16, two text rows, its bottom
     // edge, from the panel's second column.
     let (left, right) = (1, rect.width.saturating_sub(1));
     for x in left..=right {
-        let top = &buf[(x, 1)];
+        let top = &buf[(x, 16)];
         assert_eq!(
             top.symbol(),
             if x == left {
@@ -1337,7 +1613,7 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
         );
         assert_eq!((top.fg, top.bg), (Color::Reset, Color::Reset));
         assert_eq!(top.modifier, Modifier::DIM);
-        let bottom = &buf[(x, 4)];
+        let bottom = &buf[(x, 19)];
         assert_eq!(
             bottom.symbol(),
             if x == left {
@@ -1351,24 +1627,25 @@ fn no_color_boxes_a_sidebar_card_and_keeps_targets_inside() {
         assert_eq!(bottom.modifier, Modifier::DIM);
     }
     // Each text row sits between │ sides with its text readable inside.
-    for y in 2..=3 {
+    for y in 17..=18 {
         assert_eq!(buf[(left, y)].symbol(), "│");
         assert_eq!(buf[(right, y)].symbol(), "│");
         assert_eq!(buf[(left, y)].modifier, Modifier::DIM);
     }
-    let title: String = ((left + 1)..right).map(|x| buf[(x, 2)].symbol()).collect();
+    let title: String = ((left + 1)..right).map(|x| buf[(x, 17)].symbol()).collect();
     assert!(title.contains("ext · one"), "{title:?}");
-    let body: String = ((left + 1)..right).map(|x| buf[(x, 3)].symbol()).collect();
+    let body: String = ((left + 1)..right).map(|x| buf[(x, 18)].symbol()).collect();
     assert!(body.contains("hello"), "{body:?}");
     // No target reaches a border column.
     for target in &targets {
         assert!(target.rect.x > left, "{target:?}");
         assert!(target.rect.right() <= right, "{target:?}");
     }
-    // Only the widget card draws, with no delegates span: the box keeps
-    // the row indices the delegates span counts on.
+    // The Session card's fourteen rows and the blank row, then the
+    // widget card's four, with no delegates span: the box keeps the row
+    // indices the delegates span counts on.
     let (rows, span) = super::rows_and_delegates(&app, rect.width);
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 19);
     assert_eq!(span, None);
 }
 
@@ -1426,9 +1703,9 @@ fn the_session_title_names_the_workspace_with_auto_right_aligned() {
     ] {
         let app = status_only();
         let drawn = rows(&app, width);
-        // The top edge, the title, the model, tokens and cache rows,
-        // the bottom edge.
-        assert_eq!(drawn.len(), 6, "{width}");
+        // The top edge, the title, blank branch slot, model, context rows,
+        // six figures, and bottom edge.
+        assert_eq!(drawn.len(), 14, "{width}");
         assert!(drawn[0].edge);
         assert_eq!(drawn[1].line.to_string(), title, "{width}");
         // A title row opens no view.
@@ -1468,14 +1745,14 @@ fn each_cards_edges_draw_in_surface() {
     let app = status_only();
     let buf = draw_at(&app, 34, 20);
     let surface = crate::theme::Role::Surface.color();
-    // The top edge on row 1, four text rows, the bottom edge on row 6.
+    // The top edge on row 1, twelve text rows, the bottom edge on row 14.
     for x in 1..34 {
         assert_eq!(buf[(x, 1)].symbol(), "\u{2584}", "top at {x}");
         assert_eq!(buf[(x, 1)].fg, surface, "top at {x}");
-        assert_eq!(buf[(x, 6)].symbol(), "\u{2580}", "bottom at {x}");
-        assert_eq!(buf[(x, 6)].fg, surface, "bottom at {x}");
+        assert_eq!(buf[(x, 14)].symbol(), "\u{2580}", "bottom at {x}");
+        assert_eq!(buf[(x, 14)].fg, surface, "bottom at {x}");
     }
-    for y in 2..=5 {
+    for y in 2..=13 {
         for x in 1..34 {
             assert_eq!(buf[(x, y)].bg, surface, "text at ({x}, {y})");
         }
@@ -1489,38 +1766,68 @@ fn the_blank_row_after_a_card_shows_no_card_tint() {
     let mut app = status_only();
     fold_widget(&mut app, "ext", "one", &["hello"]);
     let drawn = rows(&app, 34);
-    // The Session card's six rows, the blank row, the widget's four.
-    assert_eq!(drawn.len(), 11);
-    assert_eq!(drawn[6].line.to_string(), "");
-    assert_eq!(drawn[6].tint, None);
-    assert_eq!(drawn[6].spot, None);
-    assert!(!drawn[6].edge);
+    // The Session card's fourteen rows, the blank row, the widget's four.
+    assert_eq!(drawn.len(), 19);
+    assert_eq!(drawn[14].line.to_string(), "");
+    assert_eq!(drawn[14].tint, None);
+    assert_eq!(drawn[14].spot, None);
+    assert!(!drawn[14].edge);
     let buf = draw_at(&app, 34, 20);
     let surface = crate::theme::Role::Surface.color();
-    assert_ne!(buf[(3, 7)].bg, surface);
+    assert_ne!(buf[(3, 15)].bg, surface);
 }
 
-/// A card with no content rows draws nothing: no edge, no title and no
-/// blank row (`docs/tui.md`, "The panel").
+/// The Session card draws from the first frame: the working-directory,
+/// branch and model slots; context bar with its handoff and explainer
+/// rows; and every figure row with a dim dash where its figure is
+/// unknown (`docs/tui.md`, "The panel").
 #[test]
-fn cards_without_content_draw_nothing() {
+fn the_session_card_reserves_its_rows_from_the_first_frame() {
     let app = attached(160, 40);
-    assert!(rows(&app, 40).is_empty());
-    // Without a status the session content draws with no title, as the
-    // base drew no directory row: the card opens on the model row.
-    let mut app = attached(160, 40);
-    app.on_line(preamble_line(Some(800)));
-    let drawn = rows(&app, 40);
-    assert_eq!(drawn.len(), 3);
-    assert!(drawn[0].edge);
-    assert_eq!(
-        drawn[1].line.to_string(),
-        "test/model".to_owned() + &" ".repeat(22) + "high"
-    );
+    let drawn = texts(&app, 40);
+    for label in [
+        "tokens in / out",
+        "cache hits",
+        "cost",
+        "cost on subscription",
+        "speed, last reply",
+        "turns",
+        "then a summary, fresh context",
+    ] {
+        assert!(
+            drawn.iter().any(|row| row.starts_with(label)),
+            "{label}: {drawn:?}"
+        );
+    }
+    // No preamble and no status: the bar is bare track with a dim dash
+    // for the size, and the handoff point and share are dim dashes.
+    let bar = "\u{2586}".repeat(17) + &" ".repeat(18) + "—";
+    assert!(drawn.contains(&bar), "{drawn:?}");
     assert!(
         drawn
             .iter()
-            .all(|row| !row.line.to_string().contains("auto"))
+            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+        "{drawn:?}"
+    );
+    // Zero turns are known, not unknown.
+    assert!(
+        drawn
+            .iter()
+            .any(|row| *row == "turns".to_owned() + &" ".repeat(30) + "0"),
+        "{drawn:?}"
+    );
+    // With a preamble but no status the session draws its title, blank
+    // branch slot, model row, context rows and figure rows: twelve
+    // content rows between the edges.
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    let drawn = rows(&app, 40);
+    assert_eq!(drawn.len(), 14);
+    assert!(drawn[0].edge);
+    assert!(drawn[13].edge);
+    assert_eq!(
+        drawn[3].line.to_string(),
+        "test/model".to_owned() + &" ".repeat(22) + "high"
     );
 }
 
@@ -1544,6 +1851,7 @@ fn full_session_on_main(app: &mut App) {
         "turn_started",
         serde_json::json!({"input": []}),
     ));
+    app.on_line(session_line("turn_completed", serde_json::json!({})));
     app.on_line(timed_line(
         "assistant_message_started",
         1000,
@@ -1741,9 +2049,10 @@ fn seven_files_count_two_more() {
         ],
     );
     let drawn = rows(&app, 40);
-    // The edge, the title, five paths, the last row, the edge.
-    assert_eq!(drawn.len(), 9);
-    let title = &drawn[1];
+    // The Session card's fourteen rows and the blank row, then the
+    // edge, the title, five paths, the last row, the edge.
+    assert_eq!(drawn.len(), 24);
+    let title = &drawn[16];
     assert_eq!(
         title.line.to_string(),
         "Changed files".to_owned() + &" ".repeat(22) + "7"
@@ -1757,7 +2066,7 @@ fn seven_files_count_two_more() {
     );
     assert_eq!(title.line.spans[2].content, "7");
     assert_eq!(title.line.spans[2].style, style(Role::Muted));
-    let last = &drawn[7];
+    let last = &drawn[22];
     assert_eq!(
         last.line.to_string(),
         "\u{2026} 2 more".to_owned() + &" ".repeat(22) + "+70 \u{2212}7"
@@ -1783,8 +2092,10 @@ fn the_jobs_title_counts_running_with_a_toggle() {
     fold_job(&mut app, "j_1", "build");
     fold_job(&mut app, "j_2", "test");
     let drawn = rows(&app, 40);
-    assert_eq!(drawn.len(), 3);
-    let title = &drawn[1];
+    // The Session card's fourteen rows and the blank row, then the
+    // Jobs card's three.
+    assert_eq!(drawn.len(), 18);
+    let title = &drawn[16];
     assert_eq!(
         title.line.to_string(),
         "Jobs".to_owned() + &" ".repeat(21) + "2 running \u{25b8}"
@@ -1798,7 +2109,7 @@ fn the_jobs_title_counts_running_with_a_toggle() {
     // Open: the title, then one row per job.
     app.on_click(crate::mouse::TargetId::Panel(Spot::Jobs));
     let drawn = rows(&app, 40);
-    assert_eq!(drawn.len(), 5);
-    assert_eq!(drawn[2].line.to_string(), "  build");
-    assert_eq!(drawn[3].line.to_string(), "  test");
+    assert_eq!(drawn.len(), 20);
+    assert_eq!(drawn[17].line.to_string(), "  build");
+    assert_eq!(drawn[18].line.to_string(), "  test");
 }

@@ -55,8 +55,9 @@ pub(crate) use events::{
     job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
     standing_request, started, steering, text_of, texts, user_turn,
 };
-/// How long a turn may take before a test fails instead of hanging.
-pub(crate) const DEADLINE: Duration = Duration::from_secs(5);
+/// How long a turn may take before a test fails instead of hanging: the
+/// shared must-succeed bound.
+pub(crate) const DEADLINE: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// Runs `run` on its own thread and returns the channel it reports on.
 pub(crate) fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>> {
@@ -70,7 +71,7 @@ pub(crate) fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#lo
 }
 
 /// Reads `watcher` on its own thread with blocking `recv` until `done`
-/// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
+/// accepts a line, under one [`fakes::MUST_SUCCEED_WITHIN`] naming `what`. Returns the
 /// watcher and every line read, the accepted one last.
 #[track_caller]
 pub(crate) fn read_until(
@@ -106,7 +107,7 @@ pub(crate) const REVIEWER_MODEL: &str = "fake/reviewer-1";
 
 /// Watches the log for the turn's `permission_requested`, then runs `send`
 /// with its request id: the signal the loop is waiting for a reply. The wait
-/// is one [`DEADLINE`]: a turn that never asks fails naming the
+/// is one [`fakes::MUST_SUCCEED_WITHIN`]: a turn that never asks fails naming the
 /// missing `permission_requested`, and the thread's end drops its inbox
 /// sender, releasing a loop still waiting for a reply.
 pub(crate) fn on_request(
@@ -208,7 +209,7 @@ impl Trace {
         self.changed.notify_all();
     }
 
-    /// Blocks until `line` has been pushed, and fails the test at [`DEADLINE`].
+    /// Blocks until `line` has been pushed, and fails the test at [`fakes::MUST_SUCCEED_WITHIN`].
     fn wait_for(&self, line: &str) {
         let notes = self.notes.lock().unwrap();
         let (notes, _) = self
@@ -512,16 +513,16 @@ impl Tool for WriteFile {
 pub(crate) enum Script {
     /// Emits `Event` through the call's emitter.
     Emit(Box<Event>),
-    /// Blocks until the test opens the gate, or [`DEADLINE`] passes.
+    /// Blocks until the test opens the gate, or [`GATE_GRACE`] passes.
     Wait(Arc<Gate>),
-    /// Blocks until the call's [`Cancel`] fires, or [`DEADLINE`] passes,
+    /// Blocks until the call's [`Cancel`] fires, or [`fakes::MUST_SUCCEED_WITHIN`] passes,
     /// then records what [`Cancel::is_cancelled`] says: the flag a tool
     /// that stops on cancel sees.
     WaitCancel,
 }
 
 /// What [`Script::WaitCancel`] waits on: set when the call's `Cancel`
-/// fires. The wait carries [`DEADLINE`], so a missed cancel ends the call
+/// fires. The wait carries [`fakes::MUST_SUCCEED_WITHIN`], so a missed cancel ends the call
 /// instead of hanging the turn.
 #[derive(Default)]
 struct CancelLatch {
@@ -553,6 +554,11 @@ impl CancelLatch {
     }
 }
 
+/// How long [`Gate::wait`] holds a tool at a closed gate before letting the
+/// turn proceed: the fake gate's grace. A missed release is recorded for
+/// [`Gate::check`], so the wait itself never fails the test.
+pub(crate) const GATE_GRACE: Duration = Duration::from_secs(5);
+
 /// A test gate: the tool blocks until the test opens it, or a deadline
 /// passes. The deadline keeps a test failure before the release from/// hanging scoped-thread cleanup: the tool proceeds either way, the turn
 /// ends, and the test's own assertion reports (`docs/testing.md`, "Waits
@@ -565,14 +571,14 @@ pub(crate) struct Gate {
 }
 
 impl Gate {
-    /// Blocks until [`Gate::open`] or [`DEADLINE`]; true when opened. Either
+    /// Blocks until [`Gate::open`] or [`GATE_GRACE`]; true when opened. Either
     /// way the caller proceeds, so the turn always ends. A missed release
     /// is recorded for [`Gate::check`].
     pub(crate) fn wait(&self) -> bool {
         let open = self.open.lock().unwrap();
         let (open, _) = self
             .changed
-            .wait_timeout_while(open, DEADLINE, |open| !*open)
+            .wait_timeout_while(open, GATE_GRACE, |open| !*open)
             .unwrap();
         let opened = *open;
         if !opened {
@@ -1641,7 +1647,7 @@ impl Session {
     }
 
     /// Runs one turn on its own thread, failing the test if it outlives
-    /// [`DEADLINE`].
+    /// [`fakes::MUST_SUCCEED_WITHIN`].
     #[track_caller]
     pub(crate) fn turn(&mut self) -> Option<TurnOutcome> {
         let mut looped = self.looped.take().unwrap();
@@ -1692,7 +1698,7 @@ impl Session {
 }
 
 /// Waits until the session's turn thread parks with no deadline, failing
-/// the test at [`DEADLINE`] naming what is parked and which thread ran
+/// the test at [`fakes::MUST_SUCCEED_WITHIN`] naming what is parked and which thread ran
 /// the turn.
 pub(crate) fn await_step_park(session: &Session) {
     let id = session
@@ -1835,7 +1841,7 @@ pub(crate) fn reply_delivery(request_id: RequestId, answer: ReplyAnswer) -> Deli
 }
 
 /// Sends `answer` to `request` and returns how the command was answered,
-/// waiting one [`DEADLINE`] instead of hanging.
+/// waiting one [`fakes::MUST_SUCCEED_WITHIN`] instead of hanging.
 #[track_caller]
 pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> Answer {
     let (tx, rx) = mpsc::channel();
@@ -1858,7 +1864,7 @@ pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> A
 }
 
 /// Sends the JSON `answer` to `request` and returns how the command was
-/// answered, waiting one [`DEADLINE`] instead of hanging.
+/// answered, waiting one [`fakes::MUST_SUCCEED_WITHIN`] instead of hanging.
 #[track_caller]
 pub(crate) fn answer_value(session: &Session, request: &str, value: Value) -> Answer {
     answer(
@@ -2085,7 +2091,7 @@ impl Tap {
     }
 
     /// The next line of `kind`, buffering the rest for later calls, and
-    /// failing the test at [`DEADLINE`].
+    /// failing the test at [`fakes::MUST_SUCCEED_WITHIN`].
     #[track_caller]
     pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
         let owned = kind.to_owned();
@@ -2094,7 +2100,7 @@ impl Tap {
     }
 
     /// The next `tool_call_delta` whose text is `text`, buffering the
-    /// rest, and failing the test at [`DEADLINE`].
+    /// rest, and failing the test at [`fakes::MUST_SUCCEED_WITHIN`].
     #[track_caller]
     pub(crate) fn wait_for_delta(&self, text: &str) -> Envelope {
         let owned = text.to_owned();
@@ -2103,7 +2109,7 @@ impl Tap {
     }
 
     /// The next line `matches` accepts, buffering the rest, and failing the
-    /// test at [`DEADLINE`]. Takes the watcher lock and the buffer lock one
+    /// test at [`fakes::MUST_SUCCEED_WITHIN`]. Takes the watcher lock and the buffer lock one
     /// at a time, never nested, and never holds the buffer lock across the
     /// wait.
     #[track_caller]

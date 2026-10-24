@@ -43,7 +43,7 @@ use contract::{
 };
 use fakes::Deadline;
 use fakes::jobs::FakeJobs;
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{Scripted, ScriptedProvider, StubJobs};
 use log::{Log, Watcher};
 use serde_json::{Map, Value, json};
 
@@ -792,9 +792,12 @@ fn extension_start_racing_a_running_read_neither_holds_idle_nor_notifies_on_clos
         let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
         assert_eq!(wait.recv(&stopped).unwrap(), JobId(DELEGATE.into()));
         {
-            let mut ids = jobs.ids.lock().unwrap();
-            world.send(delegate_held(DELEGATE, "PRIVATE SENTINEL".into()));
-            ids.clear();
+            // The held-delegate send and the list clear share one update,
+            // so the settle never blocks on a notice with nothing to drain.
+            jobs.running.update_running(|ids| {
+                world.send(delegate_held(DELEGATE, "PRIVATE SENTINEL".into()));
+                ids.clear();
+            });
         }
         ran(&finished, &wait);
         let lines = log::read(&world.dir).unwrap();
@@ -1941,7 +1944,7 @@ fn open_job(jobs: &FakeJobs) -> contract::jobs::Opened {
 /// the loop checks. Each read's length goes to `reads` when set.
 #[derive(Default)]
 struct Listed {
-    ids: Mutex<Vec<JobId>>,
+    running: StubJobs,
     racing: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     arriving: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
     reads: Mutex<Option<Sender<usize>>>,
@@ -1950,7 +1953,8 @@ struct Listed {
 
 impl Listed {
     fn set(&self, ids: &[&str]) {
-        *self.ids.lock().unwrap() = ids.iter().map(|id| JobId((*id).into())).collect();
+        self.running
+            .set_running(ids.iter().map(|id| JobId((*id).into())));
     }
 }
 
@@ -1984,20 +1988,24 @@ impl Jobs for Listed {
         // The status observer reads the jobs too; its reads are not the
         // loop's, so they neither fire a scripted arrival nor count.
         if std::thread::current().name() == Some("status") {
-            return self.ids.lock().unwrap().clone();
+            return Jobs::running(&self.running);
         }
         if let Some((inbox, deliveries)) = self.racing.lock().unwrap().take() {
-            for delivery in deliveries {
-                inbox.send(delivery).unwrap();
-            }
-            self.ids.lock().unwrap().clear();
+            // The racing send and the list clear share one update, so a
+            // snapshot never sees the deliveries queued with the old list.
+            self.running.update_running(|ids| {
+                for delivery in deliveries {
+                    inbox.send(delivery).unwrap();
+                }
+                ids.clear();
+            });
         }
         if let Some((inbox, deliveries)) = self.arriving.lock().unwrap().take() {
             for delivery in deliveries {
                 inbox.send(delivery).unwrap();
             }
         }
-        let ids = self.ids.lock().unwrap().clone();
+        let ids = Jobs::running(&self.running);
         if let Some(reads) = self.reads.lock().unwrap().as_ref() {
             let _sent = reads.send(ids.len());
         }

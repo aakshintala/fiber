@@ -4,6 +4,21 @@ expression: "crate::view::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                         auto
+
+
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆        —
+   handoff at —             —
+   then a summary, fresh con…
+   tokens in / out          —
+   cache hits               —
+   cost                     —
+   cost on subscription     —
+   speed, last reply        —
+   turns                    0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates        1 running
    ● review the parser and t…
      fiber · anthropic/claud…

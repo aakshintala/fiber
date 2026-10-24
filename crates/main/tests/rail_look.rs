@@ -351,3 +351,104 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
 }
+
+/// Clicks the cell at `(x, y)`: an SGR press then its release on the
+/// same cell.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// The first session id the hub's feed reports: the test's only live
+/// session is the terminal's.
+fn first_session(control: &support::Socket) -> String {
+    control.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_answer(control, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let lines = support::until(control, "the terminal's session on the feed", |line| {
+        line["session_id"].is_string()
+    });
+    lines
+        .iter()
+        .find_map(|line| line["session_id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("a session id in {lines:?}"))
+}
+
+/// The Session card's Tools row holds still while usage lands: with the
+/// first response held, the row sits below the not-yet-landed figures;
+/// after `usage_recorded` it keeps its y, and a click at the held frame's
+/// coordinates opens Tools (`#3158`).
+#[test]
+fn session_card_rows_hold_still_while_usage_lands() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    // Hold the first response: the turn starts but nothing folds until
+    // the test releases it.
+    server.hold();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "fake/m",
+            "hub": {"idle_exit_ms": 200},
+            "mcp": {"servers": {"relay": {"command": "/no/such/command"}}}
+        }),
+    );
+    let hub = Arc::new(Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    let control = support::Socket::connect(setup.deadline, &setup.hub_socket());
+    assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
+    // The terminal's session arrives on the feed once it starts: the
+    // test's only live session.
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first request reaches the server"
+    );
+    let session = first_session(&control);
+    // Subscribe before the release: the full stream carries both the
+    // down-server notice and the turn's `usage_recorded` envelope.
+    support::subscribe(&control, &session);
+    loop {
+        let line = recv(&control, "the relay's down-server notice");
+        if line["kind"] == json!("mcp_server_failed") && line["payload"]["server"] == json!("relay")
+        {
+            break;
+        }
+    }
+    // The Tools row exists below the reserved figures while the provider
+    // response is held. This remains reachable even on the unfixed card,
+    // where speed and turns have not landed yet.
+    let before = run.wait_screen("the relay down row", |grid| {
+        grid.rows.iter().any(|row| row.contains("relay down"))
+    });
+    let tools_y_before = find_row(&before.rows, "relay down");
+    server.release();
+    // The release's `usage_recorded` envelope, however many folds come
+    // first: each line takes what remains of the test's deadline. The
+    // test asserts no speed text and no timestamp span: a same-millisecond
+    // span that leaves the speed reserved is valid.
+    loop {
+        let line = recv(&control, "the usage_recorded envelope");
+        if line["kind"] == json!("usage_recorded") {
+            break;
+        }
+    }
+    // The frame after the fold: the finished turn proves the terminal
+    // rendered past the usage.
+    let after = run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    let tools_y_after = find_row(&after.rows, "relay down");
+    assert_eq!(tools_y_before, tools_y_after, "the Tools row keeps its y");
+    // The held frame's coordinates still name the Tools row after usage
+    // lands; clicking them opens the Tools view.
+    let x = locate(&before.rows[tools_y_before as usize], "tools");
+    click(&mut run, x, tools_y_before);
+    run.wait_screen("the Tools view", |grid| grid.contents.contains("Tools"));
+    drop((watch, control));
+    quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
+}
