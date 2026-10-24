@@ -10,9 +10,9 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader},
     process::Child,
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread,
 };
 use support::*;
@@ -62,16 +62,16 @@ impl Session {
             }
         });
         let (tx, stderr) = mpsc::channel();
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
         thread::spawn(move || {
-            let mut text = String::new();
-            stderr_pipe
-                .take(u64::MAX)
-                .read_to_string(&mut text)
-                .unwrap();
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             tx.send(text).unwrap();
         });
         first_line(setup.deadline, &lines);
-        let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
+        let mut client = Socket::connect(setup.deadline, &setup.session_socket(&id));
+        client.set_diag(Diag::new(stderr_snapshot, session_dir(&setup, &id)));
         client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
         // `clients` is written whenever a `full` connection attaches, with
         // no order against the startup events (`docs/events.md`): the wait
@@ -246,6 +246,61 @@ fn extension(setup: &Setup, init: &str) {
     .unwrap()
     .commit()
     .unwrap();
+}
+
+#[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let session = Session::start(setup);
+    session.send_prompt();
+    // The held model never answers, so the impossible kind never arrives:
+    // the wait expires holding the lines it received.
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until(&session.client, "the turn that never completes", |line| {
+            line["kind"] == "no_such_kind"
+        });
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    let head = message.split("fiber stderr:").next().unwrap_or_default();
+    assert!(head.contains("command_accepted"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    let tail_header = "session log tail (events.jsonl, last 20 lines):";
+    assert!(message.contains(tail_header), "{message}");
+    let tail = message.split(tail_header).nth(1).unwrap_or_default();
+    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    let group = session.child.id();
+    let cleanup = session.setup.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let Session {
+        mut child,
+        guard,
+        watchdog,
+        ..
+    } = session;
+    let (tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(child.wait()).unwrap();
+    });
+    match cleanup.recv(&done) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    watchdog.stand_down(cleanup);
+    std::mem::forget(guard);
 }
 
 #[test]
