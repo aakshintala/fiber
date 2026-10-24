@@ -24,7 +24,8 @@ use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
-use crate::keys::{Edit, Key};
+use crate::keys::Edit;
+use crate::keys::Key;
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Pages};
@@ -88,6 +89,7 @@ pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
 pub(crate) use select::SurfaceId;
+pub(crate) use select::{NotedSurface, SpanRow};
 pub(crate) use session_views::SessionView;
 pub(crate) use top::Surface;
 
@@ -563,22 +565,22 @@ impl App {
             }
             // End moves to the line's end in the input editor, where
             // typing would reach it, then jumps to the conversation's
-            // end as before (`docs/tui.md`, "Selection and copy"). Every
-            // other context keeps its dispatch: the arm below only adds
-            // the line edit.
-            Key::End => {
+            // end as before (`docs/tui.md`, "Selection and copy"). The
+            // guard keeps every other context on the arm below: End
+            // outside the input editor only jumps to the end.
+            Key::End
                 if matches!(
                     self.key_context(),
                     crate::keyset::Context::Input
                         | crate::keyset::Context::Steering
                         | crate::keyset::Context::Conversation
-                ) {
-                    crate::input::route(Edit::LineEnd, &mut self.draft, &mut self.queue);
-                }
+                ) =>
+            {
+                crate::input::route(Edit::LineEnd, &mut self.draft, &mut self.queue);
                 self.screen.follow();
                 Effect::None
             }
-            Key::CtrlC => {
+            Key::End | Key::CtrlC => {
                 self.screen.follow();
                 Effect::None
             }
@@ -1247,6 +1249,13 @@ impl App {
     /// Drops the input box's note, before the next frame notes its own.
     pub(crate) fn clear_input_note(&self) {
         self.select.clear_input_note();
+        self.select.clear_notes();
+    }
+
+    /// Notes `surface`'s drawn text rows for the press, drag and copy
+    /// mapping, from the frame that drew them.
+    pub(crate) fn note_surface(&self, noted: NotedSurface) {
+        self.select.note_surface(noted);
     }
 
     /// The session's name, if it has one.
