@@ -23,7 +23,7 @@ use support::journey::{
     dismiss_cache_rebuild, grid_text, install_picker_provider, only_session, provider_full,
     provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
 };
-use support::pty::{Grid, KITTY_PUSH, Run, WAITING_TITLE, until_hub_exits};
+use support::pty::{Grid, KITTY_PUSH, MOTION, Run, WAITING_TITLE, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
 
 /// `grid_text` over one row, without its cursor line.
@@ -739,4 +739,312 @@ fn journey_interrupt_then_retried_answer() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
+}
+
+/// The first cell holding `needle`, 0-based, matching cell by cell so
+/// a wide cell before it changes nothing.
+fn find_cell(screen: &Grid, needle: &str) -> (u16, u16) {
+    let want: Vec<char> = needle.chars().collect();
+    let (cols, rows) = screen.size();
+    for y in 0..rows {
+        for x in 0..cols {
+            let mut ok = !want.is_empty();
+            for (dx, want) in want.iter().enumerate() {
+                let xi = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
+                if xi >= cols || screen.cell(xi, y).symbol != want.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                return (x, y);
+            }
+        }
+    }
+    panic!("{needle:?} in\n{}", screen.contents);
+}
+
+/// Drags from `from` to `to`, 0-based cells: a press, one drag report,
+/// and the release whose copy the caller reads.
+fn drag(run: &mut Run, from: (u16, u16), to: (u16, u16)) {
+    run.write(format!("\x1b[<0;{};{}M", from.0 + 1, from.1 + 1).as_bytes());
+    run.write(format!("\x1b[<32;{};{}M", to.0 + 1, to.1 + 1).as_bytes());
+}
+
+/// Standard-base64 decode for OSC 52 payloads, which the clipboard
+/// always pads to a multiple of four.
+fn decode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    assert!(bytes.len().is_multiple_of(4), "padded base64");
+    let mut vals = Vec::new();
+    for byte in bytes {
+        vals.push(if *byte == b'=' {
+            0
+        } else {
+            u32::try_from(
+                ALPHABET
+                    .iter()
+                    .position(|cell| cell == byte)
+                    .expect("base64 alphabet"),
+            )
+            .unwrap_or(u32::MAX)
+        });
+    }
+    let mut out = Vec::new();
+    for i in (0..vals.len()).step_by(4) {
+        let chunk = &vals[i..i + 4];
+        let triple = (chunk[0] << 18) | (chunk[1] << 12) | (chunk[2] << 6) | chunk[3];
+        out.push(u8::try_from(triple >> 16).unwrap_or(u8::MAX));
+        out.push(u8::try_from((triple >> 8) & 0xff).unwrap_or(u8::MAX));
+        out.push(u8::try_from(triple & 0xff).unwrap_or(u8::MAX));
+    }
+    let pad = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
+    out.truncate(out.len().saturating_sub(pad));
+    String::from_utf8(out).expect("utf-8 copy")
+}
+
+#[test]
+fn osc_52_example_payload_decodes() {
+    assert_eq!(decode_base64(b"aGVsbG8="), "hello");
+}
+
+/// The OSC 52 copy the release emitted after `from`: the `\x1b]52;c;`
+/// bytes the test's capture holds, base64-decoded to the unwrapped
+/// text.
+fn osc52_copy(run: &mut Run, from: usize) -> String {
+    let start = run.wait_bytes(from, b"\x1b]52;c;", "the OSC 52 copy");
+    let output = run.output();
+    let rest = &output[start..];
+    let end = rest
+        .iter()
+        .position(|byte| *byte == 0x07)
+        .expect("the BEL terminator");
+    decode_base64(&rest[..end])
+}
+
+/// A drag across the input box's draft copies the draft's text: type,
+/// drag the word, and the capture holds it unwrapped.
+#[test]
+fn journey_drag_input_box_copies_its_text() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    run.write(b"hello");
+    let screen = run.wait_screen("the typed draft", |screen| shows(screen, "hello"));
+    let (x, y) = find_cell(&screen, "hello");
+    let from = run.output().len();
+    drag(&mut run, (x, y), (x + 5, y));
+    run.write(format!("\x1b[<0;{};{}m", x + 5, y + 1).as_bytes());
+    assert_eq!(osc52_copy(&mut run, from), "hello");
+}
+
+/// A drag across a notice row copies the notice's text: switch models
+/// to raise the cache-rebuild notice, then drag its code word.
+#[test]
+fn journey_drag_notice_copies_its_text() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello."), reply("Beta here.")]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
+    run.write(b"\x0c");
+    run.wait_screen("the open picker", |screen| {
+        shows(screen, "Type to search") && shows(screen, "alpha-1")
+    });
+    run.write(b"beta");
+    run.wait_screen("the beta-filtered list", |screen| {
+        shows(screen, "1 of 2 models") && shows(screen, "beta-2")
+    });
+    run.write(b"\r");
+    let notice = run.wait_screen("the cache-rebuild notice", |screen| {
+        shows(screen, "cache_rebuild") && shows(screen, "✕")
+    });
+    let (x, y) = find_cell(&notice, "cache_rebuild");
+    let from = run.output().len();
+    drag(&mut run, (x, y), (x + 13, y));
+    run.write(format!("\x1b[<0;{};{}m", x + 13, y + 1).as_bytes());
+    assert_eq!(osc52_copy(&mut run, from), "cache_rebuild");
+}
+
+/// A drag across a session card's name copies the name: the card
+/// titles the session by its first prompt, so no turn output decides
+/// the text.
+#[test]
+fn journey_drag_panel_card_copies_its_text() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        160,
+        48,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.turn_finished(from);
+    // Coordinates come from a grid settled after the turn: the turn's
+    // end moves rows, so an earlier grid points at the wrong cells.
+    let card = run.wait_screen("the session card name", |screen| {
+        screen
+            .rows
+            .iter()
+            .any(|row| row.get(100..).is_some_and(|side| side.contains("say hi")))
+    });
+    // The card sits on the screen's right side: only its own cells
+    // match, never the conversation's.
+    let (cols, rows) = card.size();
+    let (mut found, mut done) = ((0, 0), false);
+    for y in 0..rows {
+        for x in 100..cols {
+            if card.cell(x, y).symbol == "s"
+                && (0..6).all(|dx| {
+                    x + dx < cols
+                        && card.cell(x + dx, y).symbol
+                            == ["s", "a", "y", " ", "h", "i"][dx as usize]
+                })
+            {
+                found = (x, y);
+                done = true;
+                break;
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    assert!(done, "the card name shows");
+    let (x, y) = found;
+    let from = run.output().len();
+    drag(&mut run, (x, y), (x + 6, y));
+    run.write(format!("\x1b[<0;{};{}m", x + 6, y + 1).as_bytes());
+    assert_eq!(osc52_copy(&mut run, from), "say hi");
+}
+
+/// A drag across a picker row copies the row's text: open the model
+/// picker and drag its first model name.
+#[test]
+fn journey_drag_overlay_copies_its_text() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("Hello.")]).unwrap();
+    install_picker_provider(&setup, &server);
+    let mut run = Run::spawn(
+        &setup,
+        120,
+        32,
+        &[],
+        &[
+            ("TERM", "xterm-256color"),
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+        ],
+    );
+    run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
+    run.write(b"\x0c");
+    let open = run.wait_screen("the open picker", |screen| {
+        shows(screen, "Type to search") && shows(screen, "alpha-1")
+    });
+    let (x, y) = find_cell(&open, "alpha-1");
+    let from = run.output().len();
+    drag(&mut run, (x, y), (x + 7, y));
+    run.write(format!("\x1b[<0;{};{}m", x + 7, y + 1).as_bytes());
+    assert_eq!(osc52_copy(&mut run, from), "alpha-1");
+}
+
+/// A scripted shell call behind a standing ask, like the approval
+/// look's fixture: the approval panel asks, and a drag across the
+/// request copies it.
+fn shell_setup(command: &str) -> Setup {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"tool_calls": [{"name": "shell", "arguments": {"command": command}}]}]}),
+    );
+    setup
+}
+
+/// The config naming the workspace script, with `extra` beside the model.
+fn configure_approval(setup: &Setup, extra: serde_json::Value) {
+    let mut config = json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}});
+    if let Some(into) = config.as_object_mut()
+        && let Some(from) = extra.as_object()
+    {
+        for (key, value) in from {
+            into.insert(key.clone(), value.clone());
+        }
+    }
+    write_json(&setup.home().join("config.json"), &config);
+}
+
+/// A standing project ask for `prefix`.
+fn ask_rule(setup: &Setup, prefix: &str) {
+    let key = log::project_key(&doors::project(&setup.workspace()));
+    let rule = setup.home().join("projects").join(key).join("rules");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(
+        rule,
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": prefix})
+        ),
+    )
+    .unwrap();
+}
+
+/// A drag across the approval panel's request copies the request: the
+/// standing ask opens the panel, and the capture holds the request
+/// text unwrapped.
+#[test]
+fn journey_drag_approval_copies_its_text() {
+    let setup = shell_setup("cargo mutants -p hub");
+    configure_approval(&setup, json!({}));
+    ask_rule(&setup, "cargo");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    run.write(b"run it\r");
+    let panel = run.wait_screen("the approval panel", |grid| {
+        grid.contents.contains("Approval 1 of 1 · run it")
+    });
+    let (x, y) = find_cell(&panel, "run it");
+    let from = run.output().len();
+    drag(&mut run, (x, y), (x + 6, y));
+    run.write(format!("\x1b[<0;{};{}m", x + 6, y + 1).as_bytes());
+    assert_eq!(osc52_copy(&mut run, from), "run it");
 }
