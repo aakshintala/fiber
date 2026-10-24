@@ -15,7 +15,7 @@ use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, HubCommandLine, NoArgs};
 use contract::events::Variables;
 use contract::shapes::Failure;
-use contract::{CommandId, ErrorCode, HubLine};
+use contract::{CommandId, HubLine};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::{AsFd, BorrowedFd};
 use serde::Serialize;
@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use crate::hub_service::manager;
 use crate::hub_unit::{Manager, name, unit_path};
-use crate::{failed, finish, write_line};
+use crate::{CliError, finish, write_line};
 
 /// The `id` of the one command `fiber hub status` sends.
 const STATUS_ID: &str = "c_status";
@@ -53,7 +53,7 @@ pub(crate) struct Status {
 /// a hub runs.
 pub fn hub_status(json: bool, clock: &dyn Clock) -> i32 {
     let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
+        .map_err(CliError::Config)
         .and_then(|home| {
             let installed = installed(manager(), &home, &|key| std::env::var_os(key))?;
             let status = probe(&home, clock, STATUS_WITHIN, installed)?;
@@ -62,7 +62,7 @@ pub fn hub_status(json: bool, clock: &dyn Clock) -> i32 {
             } else {
                 render_text(&status)
             };
-            write_line(&mut io::stdout(), &text)
+            write_line(&mut io::stdout(), &text).map_err(CliError::Forwarded)
         });
     finish(ran)
 }
@@ -72,13 +72,11 @@ pub(crate) fn installed(
     manager: Manager,
     home: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
-) -> Result<bool, Failure> {
+) -> Result<bool, CliError> {
     let unit = unit_path(manager, &name(home)?, var)?;
-    unit.try_exists().map_err(|e| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("reading {}: {e}", unit.display()),
-        )
+    unit.try_exists().map_err(|e| CliError::HubDevicesRead {
+        path: unit.clone(),
+        source: e,
     })
 }
 
@@ -89,7 +87,7 @@ pub(crate) fn probe(
     clock: &dyn Clock,
     answer_within: Duration,
     installed: bool,
-) -> Result<Status, Failure> {
+) -> Result<Status, CliError> {
     probe_with(
         home,
         clock,
@@ -113,7 +111,7 @@ fn probe_with(
     installed: bool,
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
-) -> Result<Status, Failure> {
+) -> Result<Status, CliError> {
     let port = port(home)?;
     let devices = devices(home)?;
     let reply = match diagnose_with(home, clock, answer_within, before_read, before_wait) {
@@ -128,7 +126,7 @@ fn probe_with(
             });
         }
         Diagnostic::Connected(reply) => reply?,
-        Diagnostic::Failed(failure) => return Err(failure),
+        Diagnostic::Failed(failure) => return Err(CliError::Forwarded(failure)),
     };
     Ok(Status {
         running: true,
@@ -184,20 +182,17 @@ fn diagnose_with(
     // A `FIBER_HOME` too long for the hub socket names its cause and fix
     // instead of the connect's raw operating-system error.
     if let Err(failure) = doors::check_socket_path(home, "hub") {
-        return Diagnostic::Failed(failure);
+        return Diagnostic::Failed(CliError::Forwarded(failure).into());
     }
     let deadline = clock.now() + answer_within;
     let connected = doors::hub::probe_until(home, clock, deadline);
     let stream = match connected {
         doors::hub::Probe::Absent => return Diagnostic::Absent,
         doors::hub::Probe::Failed(error) => {
-            return Diagnostic::Failed(failed(ErrorCode::IoFailed, format!("the hub: {error}")));
+            return Diagnostic::Failed(CliError::Hub(doors::Error::Local(error)).into());
         }
         doors::hub::Probe::Connected(Err(error)) => {
-            return Diagnostic::Connected(Err(failed(
-                ErrorCode::IoFailed,
-                format!("the hub: {error}"),
-            )));
+            return Diagnostic::Connected(Err(CliError::Hub(doors::Error::Local(error)).into()));
         }
         doors::hub::Probe::Connected(Ok((stream, _))) => stream,
     };
@@ -210,39 +205,32 @@ fn diagnose_with(
         before_wait,
     ) {
         Ok(reply) => Diagnostic::Connected(Ok(reply)),
-        Err(failure) => Diagnostic::Connected(Err(failure)),
+        Err(error) => Diagnostic::Connected(Err(Failure::from(error))),
     }
 }
 
 /// The global `hub.port`; a project's value is never read.
-fn port(home: &Path) -> Result<Option<u16>, Failure> {
-    let Some(value) = config::get_global(home, "hub.port").map_err(|e| failed(e.code(), e))? else {
+fn port(home: &Path) -> Result<Option<u16>, CliError> {
+    let Some(value) = config::get_global(home, "hub.port").map_err(CliError::Config)? else {
         return Ok(None);
     };
     value
         .as_u64()
         .and_then(|port| u16::try_from(port).ok())
         .map(Some)
-        .ok_or_else(|| {
-            failed(
-                ErrorCode::ConfigInvalid,
-                format!(
-                    "hub.port in {} is not a port: {value}",
-                    config::global_config_file(home).display()
-                ),
-            )
+        .ok_or_else(|| CliError::HubPortInvalid {
+            value: value.clone(),
+            path: config::global_config_file(home),
         })
 }
 
 /// The sorted names of the regular files in `hub/devices/`; none when it is
 /// absent.
-fn devices(home: &Path) -> Result<Vec<String>, Failure> {
+fn devices(home: &Path) -> Result<Vec<String>, CliError> {
     let dir = home.join("hub/devices");
-    let lost = |e: io::Error| {
-        failed(
-            ErrorCode::IoFailed,
-            format!("reading {}: {e}", dir.display()),
-        )
+    let lost = |e: io::Error| CliError::HubDevicesRead {
+        path: dir.clone(),
+        source: e,
     };
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -276,7 +264,7 @@ fn ask(
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
-) -> Result<Reply, Failure> {
+) -> Result<Reply, CliError> {
     let result = exchange(stream, deadline, within, clock, before_read, before_wait);
     // macOS refuses the option once the peer has closed, while its
     // buffered bytes stay readable; ignoring that refusal keeps a
@@ -290,7 +278,7 @@ fn ask(
         Err(exchange) => Err(exchange),
         Ok(reply) => restore
             .map(|()| reply)
-            .map_err(|error| failed(ErrorCode::IoFailed, format!("the hub: {error}"))),
+            .map_err(|error| CliError::Hub(doors::Error::Local(error))),
     }
 }
 
@@ -304,32 +292,23 @@ fn exchange(
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
     before_wait: &mut dyn FnMut(),
-) -> Result<Reply, Failure> {
-    let lost = |e: io::Error| failed(ErrorCode::IoFailed, format!("the hub: {e}"));
-    let late = || {
-        failed(
-            ErrorCode::IoFailed,
-            format!(
-                "the hub did not answer status in {} s",
-                within.as_secs_f64()
-            ),
-        )
+) -> Result<Reply, CliError> {
+    let lost = |e: io::Error| CliError::Hub(doors::Error::Local(e));
+    let late = || CliError::HubStatusLate {
+        seconds: within.as_secs_f64(),
     };
     stream.set_nonblocking(true).map_err(lost)?;
     let mut request = serde_json::to_vec(&HubCommandLine {
         id: CommandId(STATUS_ID.to_owned()),
         command: HubCommand::Status(NoArgs {}),
     })
-    .map_err(|e| failed(ErrorCode::IoFailed, format!("the hub: {e}")))?;
+    .map_err(CliError::HubRequestEncode)?;
     request.push(b'\n');
     let mut sent = 0;
     while sent < request.len() {
         match stream.write(request.get(sent..).unwrap_or_default()) {
             Ok(0) => {
-                return Err(failed(
-                    ErrorCode::IoFailed,
-                    "the hub closed the connection before answering status",
-                ));
+                return Err(CliError::HubStatusClosed);
             }
             Ok(wrote) => sent += wrote,
             Err(error) => {
@@ -357,10 +336,7 @@ fn exchange(
         before_read();
         match stream.read(&mut chunk) {
             Ok(0) => {
-                return Err(failed(
-                    ErrorCode::IoFailed,
-                    "the hub closed the connection before answering status",
-                ));
+                return Err(CliError::HubStatusClosed);
             }
             Ok(read) => {
                 pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
@@ -412,14 +388,14 @@ fn wait_clock(clock: &dyn Clock, until: Instant, fd: BorrowedFd, events: PollFla
 
 /// The version, client count and environment from the hub's answer to
 /// `status`; `None` for any other line.
-fn answer(line: &[u8]) -> Result<Option<Reply>, Failure> {
+fn answer(line: &[u8]) -> Result<Option<Reply>, CliError> {
     let Ok(line) = serde_json::from_slice::<HubLine>(line) else {
         return Ok(None);
     };
     let Some(result) = crate::sessions::answer_of(&line, STATUS_ID, "status") else {
         return Ok(None);
     };
-    let result = result?;
+    let result = result.map_err(CliError::Forwarded)?;
     let version = result.get("fiber_version").and_then(Value::as_str);
     let clients = result.get("clients").and_then(Value::as_u64);
     let variables = match result.get("variables") {
@@ -433,10 +409,7 @@ fn answer(line: &[u8]) -> Result<Option<Reply>, Failure> {
             clients,
             variables,
         })),
-        (Some(_) | None, Some(_) | None) => Err(failed(
-            ErrorCode::IoFailed,
-            "the hub's answer to status has no fiber_version or clients",
-        )),
+        (Some(_) | None, Some(_) | None) => Err(CliError::HubStatusAnswerMissing),
     }
 }
 
@@ -461,9 +434,8 @@ pub(crate) fn render_text(status: &Status) -> String {
 }
 
 /// One JSON line.
-pub(crate) fn render_json(status: &Status) -> Result<String, Failure> {
-    serde_json::to_string(status)
-        .map_err(|e| failed(ErrorCode::IoFailed, format!("the hub's status: {e}")))
+pub(crate) fn render_json(status: &Status) -> Result<String, CliError> {
+    serde_json::to_string(status).map_err(CliError::HubStatusJson)
 }
 
 #[cfg(test)]

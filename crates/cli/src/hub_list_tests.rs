@@ -1,5 +1,6 @@
 use super::*;
 use crate::login::Plain;
+use contract::ErrorCode;
 use fakes::Deadline;
 use fakes::MUST_SUCCEED_WITHIN;
 use serde_json::json;
@@ -13,7 +14,27 @@ fn entry(home: &Path, name: &str) -> Option<Value> {
     config::get_global(home, &format!("hubs.\"{name}\".address")).unwrap()
 }
 
-fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), Failure>, Vec<u8>) {
+fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), CliError>, Vec<u8>) {
+    let (kind, payload) = if accepted {
+        (
+            "command_accepted",
+            json!({"command_id":"c_pair","result":{"device":"laptop","token":"device-token"}}),
+        )
+    } else {
+        (
+            "command_rejected",
+            json!({"command_id":"c_pair", "code":"pairing_failed", "message":"ABCDE12345 is not valid"}),
+        )
+    };
+    pair_with(home, kind, payload, break_config)
+}
+
+fn pair_with(
+    home: &Path,
+    kind: &str,
+    payload: Value,
+    break_config: bool,
+) -> (Result<(), CliError>, Vec<u8>) {
     let (client, mut server) = UnixStream::pair().unwrap();
     let (done, done_rx) = mpsc::channel();
     let (served, served_rx) = mpsc::channel();
@@ -40,11 +61,22 @@ fn pair(home: &Path, accepted: bool, break_config: bool) -> (Result<(), Failure>
         scope.spawn(move || {
             server.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
             let mut text = String::new();
-            io::BufReader::new(server.try_clone().unwrap()).read_line(&mut text).unwrap();
-            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), json!({"id":"c_pair", "command":"pair", "args":{"code":"ABCDE12345"}}));
-            if break_config { std::fs::create_dir(home.join("config.json")).unwrap(); }
-            let payload = if accepted { json!({"command_id":"c_pair","result":{"device":"laptop","token":"device-token"}}) } else { json!({"command_id":"c_pair", "code":"pairing_failed", "message":"ABCDE12345 is not valid"}) };
-            writeln!(server, "{}", json!({"kind":if accepted {"command_accepted"} else {"command_rejected"}, "ts":1,"schema_version":1,"payload":payload})).unwrap();
+            io::BufReader::new(server.try_clone().unwrap())
+                .read_line(&mut text)
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).unwrap(),
+                json!({"id":"c_pair", "command":"pair", "args":{"code":"ABCDE12345"}})
+            );
+            if break_config {
+                std::fs::create_dir(home.join("config.json")).unwrap();
+            }
+            writeln!(
+                server,
+                "{}",
+                json!({"kind":kind, "ts":1,"schema_version":1,"payload":payload})
+            )
+            .unwrap();
             served.send(()).unwrap();
         });
         let result = deadline.recv_or_fail(&done_rx, "hub add completes");
@@ -96,8 +128,16 @@ fn refused_pairing_or_failed_entry_write_leaves_no_token() {
         let dir = fakes::TempDir::new("fiber-hub-add-failed");
         let (result, err) = pair(dir.path(), accepted, broken);
         let error = result.unwrap_err();
-        assert_eq!(error.code, code);
-        assert!(!error.message.contains("ABCDE12345"));
+        assert_eq!(error.code(), code);
+        assert!(!error.to_string().contains("ABCDE12345"), "{error}");
+        if broken {
+            assert!(
+                matches!(error, CliError::HubEntryFailed { paired: true, .. }),
+                "{error}"
+            );
+        } else {
+            assert!(matches!(error, CliError::Forwarded(_)), "{error}");
+        }
 
         assert_eq!(err, b"pairing code: ");
         assert!(
@@ -149,8 +189,18 @@ fn unix_add_never_reads_or_connects_and_default_is_optional() {
         &mut |_| panic!("existing name must not connect"),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
-    assert!(error.message.contains("fiber hub remove fwd"));
+    assert!(
+        matches!(
+            error,
+            CliError::HubAlreadyDeclared { ref name } if name == "fwd"
+        ),
+        "{error}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert!(
+        error.to_string().contains("fiber hub remove fwd"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -167,7 +217,8 @@ fn empty_code_and_unreachable_hub_store_nothing() {
         &mut |_| panic!("empty code must not connect"),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(matches!(error, CliError::HubPairingCodeMissing), "{error}");
+    assert_eq!(error.code(), ErrorCode::Usage);
     let error = add_run(
         dir.path(),
         "box",
@@ -184,7 +235,8 @@ fn empty_code_and_unreachable_hub_store_nothing() {
         },
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::ConnectionFailed);
+    assert!(matches!(error, CliError::Hub(_)), "{error}");
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed);
     assert!(entry(dir.path(), "box").is_none());
     assert!(
         config::read_credential(dir.path(), "hubs", "box")
@@ -218,11 +270,19 @@ fn add_and_remove_refuse_a_held_name_lock_without_touching_its_token() {
     .unwrap_err();
     let remove = remove_run(dir.path(), "box").unwrap_err();
     for error in [add, remove] {
-        assert_eq!(error.code, ErrorCode::IoFailed);
+        assert!(
+            matches!(
+                error,
+                CliError::HubListLocked { ref name } if name == "box"
+            ),
+            "{error}"
+        );
+        assert_eq!(error.code(), ErrorCode::IoFailed);
         assert!(
             error
-                .message
-                .contains("another `fiber hub add` or `fiber hub remove` of `box` is running")
+                .to_string()
+                .contains("another `fiber hub add` or `fiber hub remove` of `box` is running"),
+            "{error}"
         );
     }
     assert_eq!(
@@ -313,10 +373,15 @@ fn remove_deletes_the_entry_token_and_only_a_matching_default() {
                 Some(json!("other"))
             }
         );
-        assert_eq!(
-            remove_run(dir.path(), "box").unwrap_err().code,
-            ErrorCode::Usage
+        let error = remove_run(dir.path(), "box").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CliError::HubNotFound { ref name } if name == "box"
+            ),
+            "{error}"
         );
+        assert_eq!(error.code(), ErrorCode::Usage);
     }
 }
 
@@ -333,9 +398,13 @@ fn entry_failure_names_a_kept_token_only_after_a_paired_entrys_rename() {
             };
             let message = error.to_string();
             let failure = entry_failure(error, paired);
-            assert_eq!(failure.code, ErrorCode::IoFailed);
+            assert!(
+                matches!(&failure, CliError::HubEntryFailed { paired: found, .. } if *found == paired),
+                "{failure}"
+            );
+            assert_eq!(failure.code(), ErrorCode::IoFailed);
             assert_eq!(
-                failure.message,
+                failure.to_string(),
                 if paired && renamed {
                     format!("{message} The device token the entry refers to was kept.")
                 } else {
@@ -344,6 +413,28 @@ fn entry_failure_names_a_kept_token_only_after_a_paired_entrys_rename() {
             );
         }
     }
+}
+
+#[test]
+fn an_accepted_answer_without_a_token_stores_nothing() {
+    let dir = fakes::TempDir::new("fiber-hub-add-no-token");
+    let (result, err) = pair_with(
+        dir.path(),
+        "command_accepted",
+        json!({"command_id":"c_pair","result":{"device":"laptop"}}),
+        false,
+    );
+    let error = result.unwrap_err();
+    assert!(matches!(error, CliError::HubPairingTokenMissing), "{error}");
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+
+    assert_eq!(err, b"pairing code: ");
+    assert!(entry(dir.path(), "box").is_none());
+    assert!(
+        config::read_credential(dir.path(), "hubs", "box")
+            .unwrap()
+            .is_none()
+    );
 }
 
 const PUBLIC_CHILD: &str = "FIBER_HUB_LIST_CHILD";
