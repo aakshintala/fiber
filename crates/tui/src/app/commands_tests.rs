@@ -1603,6 +1603,251 @@ fn an_accepted_unknown_source_import_settles_without_a_report() {
     assert!(app.outbox.pending.is_empty());
 }
 
+/// A `session_status` for `session` with `workspace`, `model` and
+/// optional `thinking`.
+fn clear_status(session: &str, workspace: &str, model: &str, thinking: Option<&str>) -> Line {
+    let mut payload = json!({
+        "name": "fix the parser", "workspace": workspace, "project": "-w",
+        "state": "idle", "started": 0, "calls": 0, "since": 0,
+        "spend": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {},
+            "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
+        "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+    });
+    if let Some(thinking) = thinking {
+        payload["thinking"] = json!(thinking);
+    }
+    Line::Session(contract::Envelope {
+        kind: "session_status".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// A `preamble_built` for `session` naming `credential`.
+fn clear_preamble(session: &str, model: &str, credential: &str) -> Line {
+    let mut line = session_line(
+        "preamble_built",
+        json!({
+            "reason": "start", "model": model, "context_window": 100,
+            "thinking": "high", "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [], "credential": credential,
+        }),
+    );
+    if let Line::Session(envelope) = &mut line {
+        envelope.session_id = contract::SessionId(session.to_owned());
+    }
+    line
+}
+
+/// Accepts hub command `id` with a new `session_id`, returning the lines
+/// the acceptance sends, parsed.
+fn accept_start(app: &mut App, id: &Value, session: &str) -> Vec<Value> {
+    app.on_line(hub_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"session_id": session}}),
+    ))
+    .iter()
+    .map(|line| serde_json::from_str(line).unwrap_or_default())
+    .collect()
+}
+
+/// Folds one assistant reply of `text` into the attached session, so
+/// the screen holds a conversation.
+fn reply(app: &mut App, text: &str) {
+    for (kind, payload) in [
+        ("assistant_message_started", json!({})),
+        ("text_completed", json!({"text": text})),
+        (
+            "assistant_message_completed",
+            json!({"outcome": "completed"}),
+        ),
+    ] {
+        let mut line = session_line(kind, payload);
+        if let Line::Session(envelope) = &mut line {
+            envelope.action_id = Some(contract::ActionId("a_1".to_owned()));
+        }
+        app.on_line(line);
+    }
+}
+
+const NEW: &str = "s_nnnnnnnnnnnnnnnn";
+
+#[test]
+fn clear_sends_a_start_with_the_old_session_s_wire() {
+    let mut app = attached();
+    app.on_line(clear_status(
+        SESSION,
+        "/w/work space",
+        "fake/mod.el",
+        Some("high"),
+    ));
+    app.on_line(clear_preamble(SESSION, "fake/mod.el", "L1"));
+    let lines = sent(enter(&mut app, "/clear"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert!(lines[0].get("session_id").is_none());
+    assert_eq!(lines[0]["args"]["workspace"], "/w/work space");
+    assert_eq!(lines[0]["args"]["model"], "fake/mod.el");
+    assert_eq!(lines[0]["args"]["worktree"], false);
+    assert_eq!(
+        lines[0]["args"]["overrides"],
+        json!([
+            r#"models."fake/mod.el".thinking=high"#,
+            r#"providers."fake".credential=L1"#
+        ])
+    );
+    assert!(lines[0]["args"].get("continues").is_none());
+    assert_eq!(app.draft(), "");
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn clear_omits_thinking_credential_and_continues_when_unset() {
+    let mut app = attached();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let lines = sent(enter(&mut app, "/clear"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert_eq!(lines[0]["args"]["workspace"], "/w");
+    assert_eq!(lines[0]["args"]["model"], "fake/m");
+    assert_eq!(lines[0]["args"]["worktree"], false);
+    assert!(lines[0]["args"].get("overrides").is_none());
+    assert!(lines[0]["args"].get("continues").is_none());
+}
+
+#[test]
+fn clear_of_a_worktree_session_continues_it() {
+    let mut app = attached();
+    app.on_line(clear_status(SESSION, "/w/tree", "fake/m", None));
+    let mut line = session_line(
+        "session_started",
+        json!({
+            "workspace": "/w/tree",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+            "worktree": {"path": "/w/tree", "branch": "b"},
+        }),
+    );
+    if let Line::Session(envelope) = &mut line {
+        envelope.session_id = contract::SessionId(SESSION.to_owned());
+    }
+    app.on_line(line);
+    let lines = sent(enter(&mut app, "/clear"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert_eq!(lines[0]["args"]["continues"], SESSION);
+    assert_eq!(lines[0]["args"]["worktree"], false);
+}
+
+#[test]
+fn clear_switches_only_on_the_start_answer_then_closes_old() {
+    let mut app = attached();
+    turn_starts(&mut app);
+    reply(&mut app, "hello");
+    assert!(!app.lines().is_empty());
+    app.on_line(clear_status(SESSION, "/w", "fake/m", Some("high")));
+    let lines = sent(enter(&mut app, "/clear"));
+    let id = lines[0]["id"].clone();
+    // The start goes out alone: no close before the answer, and the
+    // screen stays on the old session.
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    let after: Vec<Value> = accept_start(&mut app, &id, NEW);
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[0]["command"], "subscribe");
+    assert_eq!(after[0]["session_id"], NEW);
+    assert_eq!(after[0]["args"], json!({"level": "full"}));
+    assert_eq!(after[1]["command"], "commands");
+    assert_eq!(after[1]["session_id"], NEW);
+    assert_eq!(after[2]["command"], "close");
+    assert_eq!(after[2]["session_id"], SESSION);
+    assert_eq!(after[2]["args"], json!({"now": false}));
+    assert_eq!(
+        after
+            .iter()
+            .filter(|line| line["command"] == "prompt")
+            .count(),
+        0
+    );
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    assert_eq!(app.draft(), "");
+    assert!(app.lines().is_empty());
+}
+
+const NEW2: &str = "s_mmmmmmmmmmmmmmmm";
+
+/// Two `/clear`s before any prompt: each `start` uses its session's
+/// `session_status` model, thinking only when present, and keeps the
+/// credential the first `start` named.
+#[test]
+fn clear_twice_before_any_prompt_keeps_the_start_credential() {
+    let mut app = connected();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app.set_launch_overrides(vec![r#"providers."fake".credential=L1"#.to_owned()]);
+    let first = sent(enter(&mut app, "hi"));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["command"], "start");
+    assert_eq!(
+        first[0]["args"]["overrides"],
+        json!([r#"providers."fake".credential=L1"#])
+    );
+    let started: Vec<Value> = accept_start(&mut app, &first[0]["id"], NEW);
+    // The home `start` answers with its first prompt, as today, beside
+    // the feed and recent home refills.
+    assert!(started.iter().any(|line| line["command"] == "prompt"));
+    assert!(started.iter().any(|line| line["command"] == "subscribe"));
+    // The new session's own status names another model with no
+    // thinking level.
+    app.on_line(clear_status(NEW, "/w", "fake/m2", None));
+    let second = sent(enter(&mut app, "/clear"));
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["command"], "start");
+    assert_eq!(second[0]["args"]["model"], "fake/m2");
+    assert_eq!(
+        second[0]["args"]["overrides"],
+        json!([r#"providers."fake".credential=L1"#])
+    );
+    let answered: Vec<Value> = accept_start(&mut app, &second[0]["id"], NEW2);
+    assert_eq!(
+        answered
+            .iter()
+            .filter(|line| line["command"] == "prompt")
+            .count(),
+        0
+    );
+    // The third `start` uses the newest status again, thinking present.
+    app.on_line(clear_status(NEW2, "/w", "fake/m3", Some("low")));
+    let third = sent(enter(&mut app, "/clear"));
+    assert_eq!(third.len(), 1);
+    assert_eq!(third[0]["command"], "start");
+    assert_eq!(third[0]["args"]["model"], "fake/m3");
+    assert_eq!(
+        third[0]["args"]["overrides"],
+        json!([
+            r#"models.fake/m3.thinking=low"#,
+            r#"providers."fake".credential=L1"#
+        ])
+    );
+}
+
 #[test]
 fn a_malformed_accept_leaves_a_non_import_entry_pending() {
     let mut app = attached();

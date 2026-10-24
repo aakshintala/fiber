@@ -1893,6 +1893,7 @@ later release still applies.
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
+| `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |

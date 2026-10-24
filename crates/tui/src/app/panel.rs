@@ -15,13 +15,14 @@ use contract::events::Outcome;
 use contract::events::{
     CommandAccepted, CommandRejected, CommandResult, DelegateStarted, ExtensionUi, FileChange,
     JobCompleted, JobStarted, McpServerFailed, McpServerReady, ModelChanged, PreambleBuilt,
-    SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
+    SessionStarted, SessionState, SessionStatus, ToolCallCompleted, Ui, UsageRecorded,
 };
 
 use super::{App, Effect, Kind, mint};
 use crate::input::Draft;
 use crate::shell;
 use crate::view::panel::delegates::DELEGATES_SHOWN;
+use serde_json::Value;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,11 @@ pub(crate) struct PanelState {
     /// `model_changed` names: `None` before either, `Some(None)` when
     /// the provider takes no credential.
     credential: Option<Option<String>>,
+    /// The credential label this attachment's `start` named, until a
+    /// `preamble_built` or `model_changed` replaces it.
+    start_credential: Option<String>,
+    /// Whether the attached session runs in a worktree Fiber created.
+    worktree: bool,
     window: Option<u64>,
     trigger_at: Option<u64>,
     budget: Option<f64>,
@@ -139,6 +145,11 @@ impl PanelState {
             "session_status" => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
                     self.status = Some(status);
+                }
+            }
+            "session_started" => {
+                if let Some(started) = super::read!(envelope, SessionStarted) {
+                    self.worktree = started.worktree.is_some();
                 }
             }
             "preamble_built" => {
@@ -305,6 +316,33 @@ impl PanelState {
     /// the provider takes no credential.
     pub(crate) fn credential(&self) -> Option<Option<&str>> {
         self.credential.as_ref().map(Option::as_deref)
+    }
+
+    /// Records the credential label a `start`'s `args` name, so a later
+    /// session keeps it until its own build or switch names one. Every
+    /// `start` records, since each attachment supersedes the last.
+    pub(crate) fn note_start(&mut self, args: &Value) {
+        self.start_credential = start_credential_label(args);
+    }
+
+    /// Carries a cleared session's `start` credential onto the session
+    /// that clears it, after the reset the attach starts from.
+    pub(crate) fn carry_start_credential(&mut self, credential: Option<String>) {
+        self.start_credential = credential;
+    }
+
+    /// The credential label a `start` for this attachment names: the
+    /// latest build or switch first, else the label its `start` named.
+    pub(crate) fn clear_credential(&self) -> Option<&str> {
+        self.credential
+            .as_ref()
+            .and_then(Option::as_deref)
+            .or(self.start_credential.as_deref())
+    }
+
+    /// Whether the attached session runs in a worktree Fiber created.
+    pub(crate) fn worktree(&self) -> bool {
+        self.worktree
     }
 
     /// The latest `preamble_built`'s context window, in tokens.
@@ -667,6 +705,21 @@ impl App {
             Spot::Widget => self.toggle_widget_row(),
         }
     }
+}
+
+/// The credential label a `start`'s `args` name, if any: the value of its
+/// `*.credential` override.
+fn start_credential_label(args: &Value) -> Option<String> {
+    args.get("overrides")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find_map(|entry| {
+            let (key, label) = entry.split_once('=')?;
+            key.strip_suffix(".credential")
+                .is_some()
+                .then(|| label.to_owned())
+        })
 }
 
 #[cfg(test)]
