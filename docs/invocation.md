@@ -478,10 +478,6 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. With `now`, it starts a shutdown instead ("Shutdown"): the turn in flight ends, every job and delegate stops, and the session exits 0. A `close` with `now` is accepted also after `close`. |
 | `import` | Runs the same one-time import `fiber import` runs (`docs/configuration.md`, "Importing"), and reports the same imported and left-behind lists. |
 
-**A refused `close` changes nothing.** The session keeps running, and the
-terminal's `/clear` keeps the new session its `start` opened, showing the
-refusal's code and message (`docs/tui.md`, "Clearing").
-
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`, `indeterminate`,

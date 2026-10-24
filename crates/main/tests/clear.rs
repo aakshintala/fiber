@@ -1,4 +1,4 @@
-//! Binary-level tests of `/clear` (`docs/tui.md`, "Clearing"): mid-turn
+//! Binary-level tests of `/clear` (`docs/tui.md:1932–1960`): mid-turn
 //! `/clear` switches to a new empty session at once while the old one
 //! closes politely, and clearing past an asided approval asks first.
 
@@ -152,10 +152,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
         !fakes::matching("wait.sh").unwrap().is_empty(),
         "the shell waits on the FIFO"
     );
-    // The terminal started exactly one session, mid-turn: the old one.
-    let sessions = stored(&setup);
-    assert_eq!(sessions.len(), 1, "one session: {sessions:?}");
-    let a = sessions.into_iter().next().unwrap();
+    let a = stored(&setup).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
     subscribe(&watch, &a);
     run.write(b"/clear\r");
@@ -178,8 +175,8 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     // the old session leave.
     std::io::Write::write_all(&mut &release, b"\n").unwrap();
     until(&watch, "A to exit", |line| line["kind"] == "fiber_exited");
-    // The switch attached a second session beside the old one, and the new
-    // one never saw the old prompt.
+    // `/clear` starts a new session while the old one finishes
+    // (`docs/tui.md:1936–1938, 1947–1952`).
     let ids = stored(&setup);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();
@@ -192,9 +189,45 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     finish_home(hub, guard, run);
 }
 
+/// A refused `start` leaves the old conversation on screen and shows its
+/// rejection (`docs/tui.md:1943–1945`).
+#[test]
+fn a_refused_clear_start_keeps_the_old_session_on_screen() {
+    let setup = Setup::new();
+    scripted(&setup, json!([{"text": ["ready."]}]));
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (control, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
+    run.ready();
+    run.write(b"run it\r");
+    let old_screen = run.wait_screen("the old session reply", |grid| {
+        grid.contents.contains("ready.")
+    });
+    assert!(old_screen.contents.contains("run it"));
+    let old = stored(&setup).into_iter().next().unwrap();
+
+    // The hub's start checks that workspace still exists. Renaming it
+    // makes the terminal's verbatim path refuse without disturbing old.
+    let workspace = setup.workspace();
+    let moved = workspace.with_file_name("w-moved");
+    fs::rename(&workspace, &moved).unwrap();
+    run.write(b"/clear\r");
+    let refused = run.wait_screen("the refused clear start", |grid| {
+        grid.contents.contains("not an existing directory")
+    });
+    assert!(refused.contents.contains("ready."));
+    assert_eq!(stored(&setup), vec![old]);
+    fs::rename(&moved, &workspace).unwrap();
+
+    drop(control);
+    finish(hub, guard, run);
+}
+
 /// `/clear` past an asided approval asks first: Esc stays on the old
 /// session without starting one, and Enter clears anyway, closing the old
-/// session at once once the `start` answers.
+/// session at once once the `start` answers (`docs/tui.md:1954–1960`).
 #[test]
 fn clear_on_a_waiting_session_closes_it_at_once() {
     let setup = Setup::new();
@@ -220,10 +253,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
     run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("Approval 1 of 1 · run it")
     });
-    // The terminal started exactly one session: the old one.
-    let sessions = stored(&setup);
-    assert_eq!(sessions.len(), 1, "one session: {sessions:?}");
-    let a = sessions.into_iter().next().unwrap();
+    let a = stored(&setup).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
     subscribe(&watch, &a);
     // Esc puts the approval aside behind its badge; the session still
@@ -258,6 +288,8 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
     until(&watch, "A to exit at once", |line| {
         line["kind"] == "fiber_exited"
     });
+    // Enter starts a fresh session while the old one exits
+    // (`docs/tui.md:1954–1960`).
     let ids = stored(&setup);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();

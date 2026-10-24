@@ -249,9 +249,8 @@ list is one row tall, it shows the focused row's first line.
   on, in full: "approval: shell cargo publish --dry-run", "question: 2 of 3
   answered".
 - **A session closing after `/clear`** stays a live row, its word "CLOSING",
-  dim, until it exits ("Slash commands"). The old row's number moves to the
-  new session before the next row settles, so `/clear` keeps `⌥1` on the new
-  row while the old row goes numberless.
+  dim, until it exits ("Slash commands"). The row gets that state from
+  `session_status.closing`.
 - **The project's exited sessions** follow under a dim "exited · N": up to
   three, the most recent first, each one dim row: ○, the name, and at the
   right the id, turns, spend and age ("3h ago"). When there are more, a last
@@ -1935,10 +1934,15 @@ on screen (its worktree included), with that session's model, thinking level
 and credential label, and switches the screen to it with an empty
 conversation. The new session builds its own prompt cache; nothing in the old
 session's prefix changes. The new session takes the old one's card on the
-rail, keeping its number. `/clear` keeps the number the old session had: its
-`start` arrives first, and only the answer moves the plan's flow to the new
-session. The `/clear` above never leaves the session the person looks at: the
-start names the workspace as the hub's `start` does.
+rail, keeping its number. The terminal keeps the old session on screen until
+the hub answers with the new session's id. It sends the old session's workspace
+path unchanged.
+
+Before the session has built its first prompt, its credential label is the one
+its `start` named; with none named, the new session picks its credential as any
+new session does. When the hub refuses or fails the `start`, the screen stays
+on the session it shows, a notice gives the start's code and message, and no
+`close` is sent.
 
 The old session is sent `close` without `now` (`docs/invocation.md`, "What
 each command does"): it takes no more prompts, finishes the turn and the jobs
@@ -1952,10 +1956,8 @@ When the old session waits on an approval or a question, a `close` without
 ("Look", "Overlays"): the title "Clear", then "review #688 waits on an
 approval." dim, then two choices, "Enter" to clear anyway and "Esc" to stay,
 with Enter's focused. Clearing anyway sends `close` with `now`, which drops
-the wait.
-
-Entries the session list draws from the hub's answers keep their order; a new
-answer redraws the rows in the answers' order, not the entered order.
+the wait. A wait that begins after `/clear` asked nothing keeps the close
+polite: the old session's request waits in the queue for an answer.
 
 ### Logging in
 

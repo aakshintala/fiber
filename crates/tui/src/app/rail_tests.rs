@@ -224,6 +224,8 @@ fn an_exited_card_leaves_a_gap_until_a_new_session_fills_it() {
     assert_eq!(number(&app, C), Some(3));
 }
 
+/// Exiting removes a card but leaves the other card's number
+/// (`docs/tui.md:362–364`, "The rail").
 #[test]
 fn an_exited_row_gives_up_its_number() {
     let mut app = with(&[A, B]);
@@ -232,6 +234,7 @@ fn an_exited_row_gives_up_its_number() {
     assert_eq!(number(&app, B), Some(2));
 }
 
+/// A closing session has no card or rail number (`docs/tui.md:251–253, 362–364, 1936–1937`).
 #[test]
 fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
     let mut app = with(&[A, B]);
@@ -247,7 +250,7 @@ fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
 /// The accepted `start` answer moves the old session's number to the
 /// new id before the new row folds: a third session folding first
 /// takes the next number, the old id keeps no card and no number, and
-/// no number is duplicated.
+/// no number is duplicated (`docs/tui.md:1936–1937, 362–364`).
 #[test]
 fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
     let mut app = with(&[A, B]);
@@ -267,7 +270,8 @@ fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
 }
 
 /// A replaced session with no number leaves the new id unnumbered
-/// until its row folds, when it takes the smallest free number.
+/// until its row folds, when it takes the smallest free number
+/// (`docs/tui.md:1936–1937, 362–364`).
 #[test]
 fn a_replaced_session_without_a_number_reserves_nothing() {
     let mut app = with(&[A]);

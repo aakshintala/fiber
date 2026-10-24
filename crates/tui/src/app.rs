@@ -190,13 +190,13 @@ enum Pass {
 }
 
 /// A `/clear` whose `start` waits for its answer: the cleared session,
-/// that `start`'s id, the credential its args named, and whether its
+/// that `start`'s id, the credential state it carries, and whether its
 /// `close` goes with `now`.
 #[derive(Debug, Clone)]
 pub(crate) struct ClearPending {
     old: SessionId,
     command_id: String,
-    credential: Option<String>,
+    credential: Option<Option<String>>,
     now: bool,
 }
 
@@ -1508,6 +1508,7 @@ impl App {
                 let Some(id) = command_id else {
                     return Vec::new();
                 };
+                self.clear_close_settled(&id);
                 if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
                     return lines;
                 }
@@ -1608,7 +1609,7 @@ impl App {
         self.rail_state
             .replace(pending.old.clone(), session.clone());
         self.panel_state.reset();
-        self.panel_state.carry_start_credential(pending.credential);
+        self.panel_state.carry_clear_credential(pending.credential);
         self.attached_screen_mut().clear();
         self.attach(session.clone());
         let id = mint();

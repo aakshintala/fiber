@@ -4,8 +4,9 @@
 use super::draw;
 use crate::app::{App, Effect};
 use crate::home::Launch;
-use crate::keys::Key;
+use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
+use crate::mouse::{Pointer, TargetId};
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -94,6 +95,7 @@ fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
         .collect()
 }
 
+/// Enter is the single focused choice (`docs/tui.md:1957–1959`).
 #[test]
 fn clear_names_the_approval_wait_with_enter_barred() {
     let mut app = home(80, 24, "s_aaaaaaaaaaaaaaaa");
@@ -154,6 +156,53 @@ fn clear_names_the_approval_wait_with_enter_barred() {
         }
     }
     assert_eq!(barred, 1);
+}
+
+/// Clicking the drawn clear choice routes through its screen coordinates
+/// and sends the staged start.
+#[test]
+fn clear_choice_click_uses_the_drawn_screen_target() {
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = home(80, 24, session);
+    app.on_line(waiting(session));
+    enter(&mut app, "/clear");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    draw(&app, area, &mut buf, &mut targets);
+    let target = targets
+        .iter()
+        .find(|target| {
+            target.id == TargetId::Home(crate::home::Spot::Clear(crate::home::ClearChoice::Clear))
+        })
+        .copied()
+        .unwrap_or_else(|| panic!("the drawn clear choice has a target"));
+    let mouse = Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col: target.rect.x + target.rect.width / 2,
+        row: target.rect.y + target.rect.height / 2,
+    };
+    let mut pointer = Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(
+        app.on_mouse(&mouse, &targets, &mut pointer, true, now),
+        Effect::None
+    );
+    let effect = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            ..mouse
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let Effect::Send(lines) = effect else {
+        panic!("clicking clear sends the start");
+    };
+    assert!(lines[0].contains("\"command\":\"start\""));
+    assert!(!app.clear_open());
 }
 
 #[test]

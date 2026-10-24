@@ -744,6 +744,10 @@ impl App {
     /// and the old session is sent `close` only then. The phase stays
     /// attached to the old session until that answer.
     pub(super) fn clear(&mut self) -> Effect {
+        if self.clear_pending.is_some() {
+            self.draft.clear();
+            return Effect::None;
+        }
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
@@ -778,6 +782,9 @@ impl App {
         old: SessionId,
         now: bool,
     ) -> Effect {
+        if self.clear_pending.is_some() {
+            return Effect::None;
+        }
         let mut overrides = Vec::new();
         if let Some(thinking) = status.thinking.as_deref() {
             overrides.push(format!(
@@ -785,8 +792,11 @@ impl App {
                 super::model_picker::canonical_thinking_key(&status.model)
             ));
         }
-        let credential = self.panel_state.clear_credential().map(str::to_owned);
-        if let Some(label) = credential.as_deref() {
+        let credential = self
+            .panel_state
+            .clear_credential()
+            .map(|credential| credential.map(str::to_owned));
+        if let Some(Some(label)) = credential.as_ref() {
             let provider = status.model.split('/').next().unwrap_or(&status.model);
             overrides.push(format!("providers.\"{provider}\".credential={label}"));
         }

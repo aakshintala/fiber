@@ -325,19 +325,20 @@ impl PanelState {
         self.start_credential = start_credential_label(args);
     }
 
-    /// Carries a cleared session's `start` credential onto the session
-    /// that clears it, after the reset the attach starts from.
-    pub(crate) fn carry_start_credential(&mut self, credential: Option<String>) {
-        self.start_credential = credential;
+    /// Carries the effective credential state into the cleared session's
+    /// fresh panel, after the reset the attach starts from.
+    pub(crate) fn carry_clear_credential(&mut self, credential: Option<Option<String>>) {
+        self.start_credential = credential.clone().flatten();
+        self.credential = credential;
     }
 
-    /// The credential label a `start` for this attachment names: the
-    /// latest build or switch first, else the label its `start` named.
-    pub(crate) fn clear_credential(&self) -> Option<&str> {
+    /// The credential state a clear carries: the latest build or switch,
+    /// including an explicit absence, otherwise the label its `start` named.
+    pub(crate) fn clear_credential(&self) -> Option<Option<&str>> {
         self.credential
             .as_ref()
-            .and_then(Option::as_deref)
-            .or(self.start_credential.as_deref())
+            .map(Option::as_deref)
+            .or_else(|| self.start_credential.as_deref().map(Some))
     }
 
     /// Whether the attached session runs in a worktree Fiber created.

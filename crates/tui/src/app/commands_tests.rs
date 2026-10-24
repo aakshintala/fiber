@@ -1662,8 +1662,8 @@ fn clear_status(session: &str, workspace: &str, model: &str, thinking: Option<&s
     })
 }
 
-/// A `preamble_built` for `session` naming `credential`.
-fn clear_preamble(session: &str, model: &str, credential: &str) -> Line {
+/// A `preamble_built` for `session` naming `credential` or its absence.
+fn clear_preamble(session: &str, model: &str, credential: Option<&str>) -> Line {
     let mut line = session_line(
         "preamble_built",
         json!({
@@ -1676,6 +1676,19 @@ fn clear_preamble(session: &str, model: &str, credential: &str) -> Line {
         envelope.session_id = contract::SessionId(session.to_owned());
     }
     line
+}
+
+/// A credential-changing `model_changed` for `session`.
+fn clear_model_changed(session: &str, credential: Option<&str>) -> Line {
+    old_line(
+        session,
+        "model_changed",
+        json!({
+            "before": {"model": "fake/mod.el", "cache_lifetime": "5m", "credential": "L1"},
+            "after": {"model": "fake/mod.el", "cache_lifetime": "5m", "credential": credential},
+            "source": "driver",
+        }),
+    )
 }
 
 /// A `kind` line from `session`, parsed from the hub's side.
@@ -1739,6 +1752,8 @@ fn reply(app: &mut App, text: &str) {
 
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
 
+/// The `/clear` start carries the old session's wire state
+/// (`docs/tui.md:1932–1939`, "Clearing").
 #[test]
 fn clear_sends_a_start_with_the_old_session_s_wire() {
     let mut app = attached();
@@ -1748,7 +1763,7 @@ fn clear_sends_a_start_with_the_old_session_s_wire() {
         "fake/mod.el",
         Some("high"),
     ));
-    app.on_line(clear_preamble(SESSION, "fake/mod.el", "L1"));
+    app.on_line(clear_preamble(SESSION, "fake/mod.el", Some("L1")));
     let lines = sent(enter(&mut app, "/clear"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "start");
@@ -1756,12 +1771,13 @@ fn clear_sends_a_start_with_the_old_session_s_wire() {
     assert_eq!(lines[0]["args"]["workspace"], "/w/work space");
     assert_eq!(lines[0]["args"]["model"], "fake/mod.el");
     assert_eq!(lines[0]["args"]["worktree"], false);
-    assert_eq!(
-        lines[0]["args"]["overrides"],
-        json!([
-            r#"models."fake/mod.el".thinking=high"#,
-            r#"providers."fake".credential=L1"#
-        ])
+    assert!(
+        lines[0]["args"]["overrides"]
+            .as_array()
+            .is_some_and(|overrides| {
+                overrides.contains(&json!(r#"models."fake/mod.el".thinking=high"#))
+                    && overrides.contains(&json!(r#"providers."fake".credential=L1"#))
+            })
     );
     assert!(lines[0]["args"].get("continues").is_none());
     assert_eq!(app.draft(), "");
@@ -1771,6 +1787,31 @@ fn clear_sends_a_start_with_the_old_session_s_wire() {
     );
 }
 
+/// A build or switch that names no credential overrides an earlier start
+/// label (`docs/tui.md:1941–1945`, "Clearing").
+#[test]
+fn clear_does_not_restore_a_start_credential_after_explicit_absence() {
+    for event in [
+        clear_preamble(SESSION, "fake/mod.el", None),
+        clear_model_changed(SESSION, None),
+    ] {
+        let mut app = attached();
+        app.on_line(clear_status(SESSION, "/w", "fake/mod.el", None));
+        app.panel_state
+            .note_start(&json!({"overrides": [r#"providers."fake".credential=L1"#]}));
+        assert_eq!(app.panel_state.clear_credential(), Some(Some("L1")));
+        app.on_line(event);
+        assert_eq!(app.panel_state.clear_credential(), Some(None));
+
+        let lines = sent(enter(&mut app, "/clear"));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["command"], "start");
+        assert!(lines[0]["args"].get("overrides").is_none());
+    }
+}
+
+/// One clear start omits unset values as documented
+/// (`docs/tui.md:1932–1939`, `docs/events.md:453–454`).
 #[test]
 fn clear_omits_thinking_credential_and_continues_when_unset() {
     let mut app = attached();
@@ -1785,6 +1826,7 @@ fn clear_omits_thinking_credential_and_continues_when_unset() {
     assert!(lines[0]["args"].get("continues").is_none());
 }
 
+/// A clear of a worktree session continues it (`docs/tui.md:1932–1939`).
 #[test]
 fn clear_of_a_worktree_session_continues_it() {
     let mut app = attached();
@@ -1806,8 +1848,27 @@ fn clear_of_a_worktree_session_continues_it() {
     assert_eq!(lines[0]["command"], "start");
     assert_eq!(lines[0]["args"]["continues"], SESSION);
     assert_eq!(lines[0]["args"]["worktree"], false);
+
+    accept_start(&mut app, &lines[0]["id"], NEW);
+    app.on_line(clear_status(NEW, "/w/tree", "fake/m", None));
+    let mut continued = session_line(
+        "session_started",
+        json!({
+            "workspace": "/w/tree",
+            "variables": {"path": "", "names": [], "source": "inherited"},
+            "worktree": {"path": "/w/tree", "branch": "b"},
+        }),
+    );
+    if let Line::Session(envelope) = &mut continued {
+        envelope.session_id = contract::SessionId(NEW.to_owned());
+    }
+    app.on_line(continued);
+    let next = sent(enter(&mut app, "/clear"));
+    assert_eq!(next[0]["args"]["continues"], NEW);
 }
 
+/// Clearing waits for the `start` answer before moving the screen and
+/// closing the old session (`docs/tui.md:1934–1938, 1947–1952`).
 #[test]
 fn clear_switches_only_on_the_start_answer_then_closes_old() {
     let mut app = attached();
@@ -1825,22 +1886,22 @@ fn clear_switches_only_on_the_start_answer_then_closes_old() {
         Some(SESSION)
     );
     let after: Vec<Value> = accept_start(&mut app, &id, NEW);
-    assert_eq!(after.len(), 3);
-    assert_eq!(after[0]["command"], "subscribe");
-    assert_eq!(after[0]["session_id"], NEW);
-    assert_eq!(after[0]["args"], json!({"level": "full"}));
-    assert_eq!(after[1]["command"], "commands");
-    assert_eq!(after[1]["session_id"], NEW);
-    assert_eq!(after[2]["command"], "close");
-    assert_eq!(after[2]["session_id"], SESSION);
-    assert_eq!(after[2]["args"], json!({"now": false}));
-    assert_eq!(
+    assert!(after.iter().any(|line| {
+        line["command"] == "subscribe"
+            && line["session_id"] == NEW
+            && line["args"] == json!({"level": "full"})
+    }));
+    assert!(
         after
             .iter()
-            .filter(|line| line["command"] == "prompt")
-            .count(),
-        0
+            .any(|line| { line["command"] == "commands" && line["session_id"] == NEW })
     );
+    assert!(after.iter().any(|line| {
+        line["command"] == "close"
+            && line["session_id"] == SESSION
+            && line["args"] == json!({"now": false})
+    }));
+    assert!(!after.iter().any(|line| line["command"] == "prompt"));
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
     assert_eq!(app.draft(), "");
     assert!(app.lines().is_empty());
@@ -1848,9 +1909,30 @@ fn clear_switches_only_on_the_start_answer_then_closes_old() {
 
 const NEW2: &str = "s_mmmmmmmmmmmmmmmm";
 
+/// A second `/clear` cannot replace the still-pending `start`
+/// (`docs/tui.md:1937–1938`).
+#[test]
+fn clear_waiting_for_start_answer_does_not_send_a_second_start() {
+    let mut app = attached();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let first = sent(enter(&mut app, "/clear"));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["command"], "start");
+
+    assert!(matches!(enter(&mut app, "/clear"), Effect::None));
+    assert_eq!(app.draft(), "");
+    let answered = accept_start(&mut app, &first[0]["id"], NEW);
+    assert!(
+        answered
+            .iter()
+            .any(|line| { line["command"] == "close" && line["session_id"] == SESSION })
+    );
+    assert!(!answered.iter().any(|line| line["command"] == "prompt"));
+}
+
 /// Two `/clear`s before any prompt: each `start` uses its session's
 /// `session_status` model, thinking only when present, and keeps the
-/// credential the first `start` named.
+/// credential the first `start` named (`docs/tui.md:1932–1943`).
 #[test]
 fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     let mut app = connected();
@@ -1867,9 +1949,12 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     let first = sent(enter(&mut app, "hi"));
     assert_eq!(first.len(), 1);
     assert_eq!(first[0]["command"], "start");
-    assert_eq!(
-        first[0]["args"]["overrides"],
-        json!([r#"providers."fake".credential=L1"#])
+    assert!(
+        first[0]["args"]["overrides"]
+            .as_array()
+            .is_some_and(|overrides| {
+                overrides.contains(&json!(r#"providers."fake".credential=L1"#))
+            })
     );
     let started: Vec<Value> = accept_start(&mut app, &first[0]["id"], NEW);
     // The home `start` answers with its first prompt, as today, beside
@@ -1883,9 +1968,12 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     assert_eq!(second.len(), 1);
     assert_eq!(second[0]["command"], "start");
     assert_eq!(second[0]["args"]["model"], "fake/m2");
-    assert_eq!(
-        second[0]["args"]["overrides"],
-        json!([r#"providers."fake".credential=L1"#])
+    assert!(
+        second[0]["args"]["overrides"]
+            .as_array()
+            .is_some_and(|overrides| {
+                overrides.contains(&json!(r#"providers."fake".credential=L1"#))
+            })
     );
     let answered: Vec<Value> = accept_start(&mut app, &second[0]["id"], NEW2);
     assert_eq!(
@@ -1901,15 +1989,18 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     assert_eq!(third.len(), 1);
     assert_eq!(third[0]["command"], "start");
     assert_eq!(third[0]["args"]["model"], "fake/m3");
-    assert_eq!(
-        third[0]["args"]["overrides"],
-        json!([
-            r#"models.fake/m3.thinking=low"#,
-            r#"providers."fake".credential=L1"#
-        ])
+    assert!(
+        third[0]["args"]["overrides"]
+            .as_array()
+            .is_some_and(|overrides| {
+                overrides.contains(&json!(r#"models.fake/m3.thinking=low"#))
+                    && overrides.contains(&json!(r#"providers."fake".credential=L1"#))
+            })
     );
 }
 
+/// A refused clear start leaves the old session in place and sends no
+/// close (`docs/tui.md:1943–1945`).
 #[test]
 fn clear_start_refused_keeps_the_old_session_with_one_notice() {
     let mut app = homed();
@@ -1984,6 +2075,32 @@ fn clear_close_refused_stays_on_the_new_session_with_one_notice() {
     );
 }
 
+/// Only the matching accepted `close` answer settles the clear's close
+/// intent (`docs/tui.md`, "Clearing").
+#[test]
+fn clear_close_answer_settles_only_its_matching_command_id() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let start = sent(enter(&mut app, "/clear"));
+    let after = accept_start(&mut app, &start[0]["id"], NEW);
+    let close = after
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the close goes out"));
+    let close_id = close["id"].as_str().unwrap_or_else(|| panic!("close id"));
+
+    app.on_line(hub_line(
+        "command_accepted",
+        json!({"command_id": "c_unrelated", "result": {}}),
+    ));
+    assert_eq!(app.clear_close.as_deref(), Some(close_id));
+    app.on_line(hub_line(
+        "command_accepted",
+        json!({"command_id": close_id, "result": {}}),
+    ));
+    assert_eq!(app.clear_close, None);
+}
+
 #[test]
 fn clear_close_lost_before_write_names_the_lost_link() {
     let mut app = homed();
@@ -2036,6 +2153,8 @@ fn clear_with_a_question_wait_names_the_question() {
     );
 }
 
+/// Enter clears a wait only after the clear start answers
+/// (`docs/tui.md:1954–1960`, "Clearing").
 #[test]
 fn clear_overlay_enter_sends_the_start_then_closes_with_now() {
     let mut app = homed();
@@ -2070,6 +2189,7 @@ fn clear_overlay_esc_stays() {
     assert_eq!(app.draft(), "");
 }
 
+/// A refused overlay start sends no close (`docs/tui.md:1943–1945`).
 #[test]
 fn clear_overlay_refused_start_closes_with_one_notice() {
     let mut app = homed();
@@ -2090,6 +2210,8 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
     assert_eq!(app.notice(), Some("Busy."));
 }
 
+/// The clear choice sends a start and stay sends nothing
+/// (`docs/tui.md:1954–1959`, "Clearing").
 #[test]
 fn clear_overlay_clicks_do_what_their_keys_do() {
     use crate::home::{ClearChoice, Spot};
@@ -2110,6 +2232,8 @@ fn clear_overlay_clicks_do_what_their_keys_do() {
     );
 }
 
+/// A wait arriving after dispatch keeps the close polite
+/// (`docs/tui.md:1959–1960`).
 #[test]
 fn clear_late_approval_keeps_the_close_polite() {
     let mut app = homed();

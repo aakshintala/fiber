@@ -642,7 +642,8 @@ fn a_left_with_an_unknown_how_changes_nothing() {
 }
 
 /// A live row whose latest status accepted `close` stays on home as a
-/// CLOSING row with no ⌥N, while the other live row keeps its number.
+/// CLOSING row with no ⌥N, while other live rows keep their start order
+/// and numbers (`docs/tui.md:242–253, 1936–1937`).
 #[test]
 fn a_closing_row_shows_closing_with_no_number() {
     let mut app = home();
