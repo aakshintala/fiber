@@ -771,7 +771,6 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     assert_eq!(
         support::kinds_without_attention(&lines),
         [
-            "clients",
             "repository_code_offered",
             "repository_code_resolved",
             "preamble_built",

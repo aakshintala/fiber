@@ -22,9 +22,6 @@ use support::*;
 /// among the startup events depends on when the subscribe is handled.
 fn kinds_without_clients(stream: &[Value]) -> Vec<&str> {
     kinds(stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
 }
 
 /// Exactly one `clients` event: the startup subscribe attaches once, and

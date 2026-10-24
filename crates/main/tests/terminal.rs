@@ -1545,21 +1545,43 @@ fn kinds_of_bytes(bytes: &[u8]) -> Vec<String> {
     let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
     complete
         .lines()
-        .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|line| line.get("kind").and_then(Value::as_str).map(str::to_owned))
-                .unwrap_or_else(|| format!("unparsed: {line}"))
+        .flat_map(|line| match serde_json::from_str::<Value>(line) {
+            Ok(event) if event.get("kind").and_then(Value::as_str).is_some() => {
+                support::kinds(&[event])
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            }
+            _ => vec![format!("unparsed: {line}")],
         })
         .collect()
 }
 
+#[test]
+fn log_kind_projection_keeps_complete_lines_and_unparsed_diagnostics() {
+    let events = support::expected(&[
+        "clients",
+        "fiber_started",
+        "session_status",
+        "attention",
+        "date_changed",
+        "fiber_exited",
+    ]);
+    assert_eq!(event_kinds(&events), ["fiber_started", "fiber_exited"]);
+    let mut bytes = events
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    bytes.push_str("not json\n{\"kind\":\"partial");
+    assert_eq!(
+        kinds_of_bytes(bytes.as_bytes()),
+        ["fiber_started", "fiber_exited", "unparsed: not json"]
+    );
+}
+
 /// The kinds of the session's log, in order.
 fn event_kinds(events: &[Value]) -> Vec<&str> {
-    events
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
+    support::kinds(events)
 }
 
 /// The kinds of the session every credential-resume test starts from:

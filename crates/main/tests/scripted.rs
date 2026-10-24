@@ -159,9 +159,9 @@ fn log_lines(setup: &Setup, id: &str) -> Vec<Value> {
 
 /// The kinds of the session's `events.jsonl`, in order.
 fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
-    log_lines(setup, id)
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap().to_owned())
+    support::kinds(&log_lines(setup, id))
+        .into_iter()
+        .map(str::to_owned)
         .collect()
 }
 
@@ -178,9 +178,26 @@ fn kinds_with_one_clients_line(lines: &[Value]) -> Vec<&str> {
         .count();
     assert_eq!(clients, 1, "{lines:?}");
     kinds(lines)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
+}
+
+#[test]
+fn ordered_projection_preserves_the_raw_single_attach_count() {
+    for count in 0..=2 {
+        let mut lines = support::expected(&[
+            "fiber_started",
+            "session_status",
+            "attention",
+            "date_changed",
+            "fiber_exited",
+        ]);
+        lines.extend(support::expected(&vec!["clients"; count]));
+        let result = std::panic::catch_unwind(|| kinds_with_one_clients_line(&lines));
+        if count == 1 {
+            assert_eq!(result.unwrap(), ["fiber_started", "fiber_exited"]);
+        } else {
+            assert!(result.is_err(), "accepted {count} attaches");
+        }
+    }
 }
 
 /// A two-step script answering one line of text per request.

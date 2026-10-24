@@ -181,14 +181,49 @@ fn request_of(line: &Value) -> String {
     line["payload"]["request_id"].as_str().unwrap().to_owned()
 }
 
+#[test]
+fn kind_windows_set_aside_independent_lines_without_crossing_boundaries() {
+    let mut lines = support::expected(&[
+        "before",
+        "clients",
+        "tool_call_requested",
+        "session_status",
+        "usage_recorded",
+        "attention",
+        "turn_completed",
+        "date_changed",
+        "fiber_exited",
+        "after",
+    ]);
+    assert_eq!(
+        kinds_of_the_call(&lines),
+        ["tool_call_requested", "usage_recorded", "turn_completed"]
+    );
+    assert_eq!(
+        kinds_through_exit(&lines),
+        [
+            "tool_call_requested",
+            "usage_recorded",
+            "turn_completed",
+            "fiber_exited"
+        ]
+    );
+    lines[8]["payload"] = json!({"suspended_on": "request"});
+    lines.extend(support::expected(&[
+        "clients",
+        "session_status",
+        "attention",
+        "date_changed",
+        "resumed",
+    ]));
+    assert_eq!(kinds_after_suspension(&lines), ["after", "resumed"]);
+}
+
 /// The kinds of `lines` from the first `tool_call_requested` to the first
 /// `fiber_exited` after it, both included. A session that exits suspended
 /// writes no `turn_completed` between them.
 fn kinds_through_exit(lines: &[Value]) -> Vec<&str> {
-    let kinds: Vec<&str> = lines
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect();
+    let kinds = support::kinds(lines);
     let start = kinds
         .iter()
         .position(|kind| *kind == "tool_call_requested")
@@ -204,10 +239,7 @@ fn kinds_through_exit(lines: &[Value]) -> Vec<&str> {
 /// The kinds of `lines` from the first `tool_call_requested` to the first
 /// `turn_completed` after it, both included. The log keeps no deltas.
 fn kinds_of_the_call(lines: &[Value]) -> Vec<&str> {
-    let kinds: Vec<&str> = lines
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect();
+    let kinds = support::kinds(lines);
     let start = kinds
         .iter()
         .position(|kind| *kind == "tool_call_requested")
@@ -592,10 +624,7 @@ fn kinds_after_suspension(lines: &[Value]) -> Vec<&str> {
             line["kind"] == "fiber_exited" && line["payload"]["suspended_on"].is_string()
         })
         .expect("the session exited suspended");
-    lines[start + 1..]
-        .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
+    support::kinds(&lines[start + 1..])
 }
 
 #[test]

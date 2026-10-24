@@ -212,11 +212,11 @@ fn owned_kinds(lines: &[Value]) -> Vec<String> {
 
 /// The stream's kinds in order, setting aside only the lines
 /// `docs/testing.md` ("Event streams") leaves unpositioned: `clients`,
-/// `session_status` and the hub's `attention`.
+/// `session_status`, the hub's `attention` and `date_changed`.
 fn ordered_kinds(lines: &[Value]) -> Vec<String> {
-    owned_kinds(lines)
+    support::kinds(lines)
         .into_iter()
-        .filter(|kind| kind != "clients" && kind != "session_status" && kind != "attention")
+        .map(str::to_owned)
         .collect()
 }
 
