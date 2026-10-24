@@ -889,11 +889,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"text": "a\nb\n", "next": 4, "size": 9000}}),
+            json!({"command_id": "c", "result": {"text": "a\nb\n", "lines": [0, 2], "next": 4, "size": 9000}}),
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}),
+            json!({"command_id": "c", "result": {"text": "z\n", "lines": [0], "size": 9000}}),
         ),
         (
             "command_accepted",
@@ -1682,24 +1682,28 @@ fn a_subscribe_result_names_the_last_fold_line() {
 fn an_artifact_page_result_reads_with_and_without_next() {
     assert_eq!(
         result_of(json!({"command_id": "c", "result": {
-            "text": "a\nb\n", "next": 4, "size": 9000}})),
+            "text": "a\nb\n", "lines": [0, 2], "next": 4, "size": 9000}})),
         CommandResult::ArtifactPage {
             text: "a\nb\n".into(),
+            lines: vec![0, 2],
             next: Some(4),
             size: 9000
         }
     );
-    let last = result_of(json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}));
+    let last = result_of(
+        json!({"command_id": "c", "result": {"text": "z\n", "lines": [4], "size": 9000}}),
+    );
     assert_eq!(
         last,
         CommandResult::ArtifactPage {
             text: "z\n".into(),
+            lines: vec![4],
             next: None,
             size: 9000
         }
     );
     let written = serde_json::to_value(&last).unwrap();
-    assert_eq!(written, json!({"text": "z\n", "size": 9000}));
+    assert_eq!(written, json!({"text": "z\n", "lines": [4], "size": 9000}));
     assert!(written.get("next").is_none(), "{written}");
 }
 
@@ -1937,7 +1941,7 @@ fn every_other_result_still_reads_as_its_own_variant() {
         CommandResult::OfferedFile { text: "t".into() }
     );
     assert!(matches!(
-        result_of(json!({"command_id": "c", "result": {"text": "t", "size": 1}})),
+        result_of(json!({"command_id": "c", "result": {"text": "t", "lines": [0], "size": 1}})),
         CommandResult::ArtifactPage { .. }
     ));
     assert!(matches!(

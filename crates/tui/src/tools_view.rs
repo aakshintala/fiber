@@ -409,7 +409,7 @@ impl Tools {
         };
         Frame {
             title: "Tools".to_owned(),
-            command: "/tools",
+            command: "/tools".to_owned(),
             rows,
             list,
             below,

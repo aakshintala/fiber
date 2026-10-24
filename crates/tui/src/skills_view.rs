@@ -438,7 +438,7 @@ impl Skills {
         if let Some(text) = &self.text {
             return Frame {
                 title: format!("Skill {}", text.name),
-                command: "/skills",
+                command: "/skills".to_owned(),
                 rows: text
                     .lines
                     .iter()
@@ -467,7 +467,7 @@ impl Skills {
         }
         Frame {
             title: "Skills".to_owned(),
-            command: "/skills",
+            command: "/skills".to_owned(),
             rows,
             list: self.list,
             below,

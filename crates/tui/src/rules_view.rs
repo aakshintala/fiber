@@ -219,7 +219,7 @@ impl Rules {
         };
         Frame {
             title: "Rules".to_owned(),
-            command: "/rules",
+            command: "/rules".to_owned(),
             rows: self
                 .items
                 .iter()

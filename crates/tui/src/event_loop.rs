@@ -754,6 +754,16 @@ impl<B: Backend> Loop<B> {
                 &self.clock,
             );
         }
+        // A call view's `y` copy waiting on its pages runs once they
+        // all land; a failed page aborts it with no write.
+        if let Some(text) = self.app.take_call_copy() {
+            clipboard::copy(
+                Some(&self.tty),
+                self.programs.copy.as_deref(),
+                text,
+                &self.clock,
+            );
+        }
         // The viewer opens the loop queued: one worker per view, each
         // answering once with `Input::Viewed`.
         self.drain_images();

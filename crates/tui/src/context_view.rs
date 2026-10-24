@@ -377,7 +377,7 @@ pub(crate) fn frame(
     }
     Frame {
         title: "Context".to_owned(),
-        command: "/context",
+        command: "/context".to_owned(),
         rows,
         list,
         below,

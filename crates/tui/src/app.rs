@@ -42,6 +42,9 @@ mod notices;
 mod steering;
 
 mod attention;
+mod call_view;
+mod call_view_pages;
+mod call_view_rows;
 mod chrome;
 pub(crate) mod commands;
 mod completion;
@@ -1107,6 +1110,7 @@ impl App {
         self.images_disconnected();
         self.picker_disconnected();
         self.find_lost();
+        self.call_view_lost();
         self.abandon_copy();
         self.settle();
     }
@@ -1751,7 +1755,7 @@ impl App {
         self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
-        self.session_views_line(envelope);
+        send.extend(self.session_views_line(envelope));
         send.extend(self.config_views_line(envelope));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)

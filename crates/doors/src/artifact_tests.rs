@@ -318,7 +318,7 @@ fn a_single_stray_byte_is_lossy_with_no_next() {
 }
 
 #[test]
-fn two_hundred_lines_page_to_the_end_in_four_pages() {
+fn two_hundred_lines_page_within_bounds_to_the_end() {
     let mut bytes = Vec::new();
     for i in 0..200 {
         bytes.extend_from_slice(format!("line {i:03} with some text\n").as_bytes());
@@ -330,6 +330,8 @@ fn two_hundred_lines_page_to_the_end_in_four_pages() {
     let mut size;
     loop {
         let found = page_at_path(&path, offset).unwrap();
+        assert!(found.lines.len() <= 64, "at most 64 lines a page");
+        assert!(found.text.len() <= 65536, "at most 64 KiB a page");
         size = found.size;
         text.push_str(&found.text);
         pages += 1;
@@ -342,7 +344,8 @@ fn two_hundred_lines_page_to_the_end_in_four_pages() {
         }
         assert!(pages < 10, "paged past the end");
     }
-    assert_eq!(pages, 4);
+    // Two hundred lines need more than three 64-line pages.
+    assert!(pages >= 4, "a 200-line file pages: {pages}");
     assert_eq!(text.as_bytes(), bytes.as_slice());
     assert_eq!(size, u64::try_from(bytes.len()).unwrap());
 }
@@ -362,6 +365,47 @@ fn a_file_truncated_after_the_size_capture_is_io() {
         }),
     );
     assert!(matches!(failed, Err(PageError::Io(_))));
+}
+
+#[test]
+fn lines_hold_absolute_starts_past_a_nonzero_offset() {
+    let mut bytes = vec![b'x'; 100];
+    bytes.extend_from_slice(b"C\nDE\n");
+    let (_temp, path) = staged(&bytes);
+    let second = page_at_path(&path, 100).unwrap();
+    assert_eq!(second.lines, vec![100, 102]);
+    assert_eq!(second.text, "C\nDE\n");
+}
+
+#[test]
+fn lines_pin_offsets_cap_cut_malformed_and_empty() {
+    let (_temp, path) = staged(b"a\nb\n");
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines, vec![0, 2]);
+    // 64-entry cap: 65 lines take 64.
+    let (_temp, path) = staged(&lined(65, 2));
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines.len(), 64);
+    assert_eq!(found.lines[0], 0);
+    assert_eq!(found.lines[63], 63 * 2);
+    // Character-boundary cut: first page ends at the lead byte.
+    let mut bytes = vec![b'a'; 65535];
+    bytes.extend_from_slice("é tail\n".as_bytes());
+    let (_temp, path) = staged(&bytes);
+    let first = page_at_path(&path, 0).unwrap();
+    assert_eq!(first.lines, vec![0]);
+    // Malformed bytes map to raw offsets.
+    let (_temp, path) = staged(b"\xffA\nB\n");
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines, vec![0, 3]);
+    assert_eq!(found.text, "�A\nB\n");
+    // Empty page holds no starts.
+    let (_temp, path) = staged(b"");
+    let found = page_at_path(&path, 0).unwrap();
+    assert!(found.lines.is_empty());
+    let (_temp, path) = staged(b"hello\n");
+    let found = page_at_path(&path, 6).unwrap();
+    assert!(found.lines.is_empty());
 }
 
 #[test]

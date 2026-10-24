@@ -285,8 +285,14 @@ impl App {
     }
 
     /// Enter: `on_click` on `id`; a steering row also returns focus to the
-    /// input box.
+    /// input box. Enter on a focused, already-open call opens its whole
+    /// view instead; a click on the same row keeps the inline toggle.
     fn open_focused(&mut self, id: TargetId) -> Effect {
+        if let TargetId::Line(super::Target::Call(call)) = id
+            && self.call_open(call)
+        {
+            return self.open_call_view(call);
+        }
         let effect = self.on_click(id);
         if matches!(id, TargetId::Steering(_)) {
             self.focus = None;

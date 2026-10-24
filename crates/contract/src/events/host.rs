@@ -389,6 +389,8 @@ pub enum CommandResult {
     ArtifactPage {
         /// The page's text, whole lines from the requested offset.
         text: String,
+        /// The byte offset in the file where each line of `text` starts.
+        lines: Vec<u64>,
         /// The byte offset after the page; absent at the end of the file.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next: Option<u64>,

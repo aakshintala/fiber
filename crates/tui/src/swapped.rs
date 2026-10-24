@@ -186,6 +186,19 @@ impl List {
         }
     }
 
+    /// Repositions the selected row and first shown row after a view
+    /// removes rows before them, such as when a page leaves its window.
+    pub(crate) fn rebase(&mut self, top: usize, selected: usize, rows: usize, height: usize) {
+        if rows == 0 || height == 0 {
+            return;
+        }
+        self.selected = selected.min(rows - 1);
+        self.top = top.min(self.selected);
+        if self.selected >= self.top.saturating_add(height) {
+            self.top = self.selected.saturating_add(1).saturating_sub(height);
+        }
+    }
+
     /// The selected row's index.
     pub(crate) fn selected(&self) -> usize {
         self.selected
@@ -205,7 +218,7 @@ pub(crate) struct Frame {
     /// The slash command that opened the view, or what did for a view
     /// with no slash command: always non-empty, drawn dim on the top
     /// row after the title (`docs/tui.md`, "Swapped views").
-    pub(crate) command: &'static str,
+    pub(crate) command: String,
     /// The rows, each in cells drawn left to right, some with a click
     /// target of their own, each with how it draws.
     pub(crate) rows: Vec<Vec<(String, Option<Spot>, Ink)>>,
@@ -350,7 +363,7 @@ pub(crate) fn render(frame: &Frame, area: Rect, buf: &mut Buffer, targets: &mut 
         buf,
         area,
         &frame.title,
-        frame.command,
+        &frame.command,
         TargetId::View(Spot::Close),
         targets,
     );
