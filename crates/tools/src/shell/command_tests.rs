@@ -12,8 +12,8 @@ use fakes::Deadline;
 use fakes::Recorder;
 use fakes::clock::FakeClock;
 
-use super::super::background::{Step, running_step, wait_deadline};
-use super::super::drive::{Phase, Run, exit_code_of, finish, park, pump};
+use super::super::background::{GroupMembers, PS_BOUND, Step, running_step, wait_deadline};
+use super::super::drive::{LoopEnd, Phase, Run, exit_code_of, finish, park, pump, pump_inner};
 use super::super::moved::Moved;
 use super::super::output::{
     Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
@@ -446,6 +446,7 @@ fn the_drain_polls_while_the_group_may_be_occupied() {
             stream_carry: Vec::new(),
             timeout_at: None,
             move_at: None,
+            members: None,
             pgid,
             listing: None,
             shared: drive_shared,
@@ -1038,6 +1039,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             stream_carry: Vec::new(),
             timeout_at: None,
             move_at: None,
+            members: None,
             pgid: 2,
             listing: None,
             shared,
@@ -1547,4 +1549,289 @@ fn a_resumed_command_arms_the_spill() {
     };
     let spilled = spill.close(None, "Exit code 0.");
     assert!(spilled.file.is_ok());
+}
+
+/// The reap window: the group probe can lag the reap while the group is
+/// already empty. A successful listing that finds no members finishes the
+/// call in the foreground with the shell's output and exit code, however
+/// the probe lags.
+#[test]
+fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    let dir = fakes::TempDir::new("fiber-shell-empty-listing");
+    // A `ps` that lists nothing and succeeds: the group has no members.
+    let ps = fakes::script(dir.path(), "ps", "exit 0");
+    let work = dir.path().to_path_buf();
+    let (tx, rx) = mpsc::channel();
+    // The blocking call runs on its own thread: a stuck drive fails the
+    // test at the deadline instead of hanging it.
+    thread::spawn(move || {
+        let clock = FakeClock::new();
+        let cancel = CancelToken::new();
+        let ran = super::execute_inner(
+            std::path::Path::new("/bin/sh"),
+            "true",
+            &work,
+            Duration::from_secs(60),
+            clock.as_ref(),
+            &cancel,
+            &Recorder::default(),
+            MovePolicy::Foreground,
+            None,
+            None,
+            None,
+            always_alive,
+            &ps,
+        )
+        .unwrap();
+        let _sent = tx.send(ran);
+    });
+    let ran = Deadline::after(JOB_DEADLINE)
+        .recv(&rx)
+        .expect("the foreground call ended within the deadline");
+    let super::Ran::Finished(finished) = ran else {
+        panic!("a shell with no members left finishes in the foreground");
+    };
+    assert_eq!(exit_code_of(finished.status), 0);
+}
+
+/// Drives one reaped shell with the probe answering alive, so only the
+/// member listing can move it. The shell exited with code 3; `ps` is the
+/// member-query program under test.
+fn drive_shell_exit(ps: &std::path::Path) -> (LoopEnd, Run) {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    {
+        let mut inner = lock(&shared.inner);
+        inner.reaped = true;
+        inner.status = Some(
+            Command::new("sh")
+                .args(["-c", "exit 3"])
+                .status()
+                .expect("the exit status"),
+        );
+    }
+    let clock = FakeClock::new();
+    let mut progress = Run {
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        stream_carry: Vec::new(),
+        timeout_at: None,
+        move_at: None,
+        members: None,
+        pgid: 99,
+        listing: None,
+        shared,
+        ask: None,
+        job: None,
+        feed: None,
+    };
+    let cancel = CancelToken::new();
+    let end = pump_inner(
+        &mut progress,
+        MovePolicy::Foreground,
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        always_alive,
+        ps,
+    );
+    (end, progress)
+}
+
+/// A listing that names members moves the command at once and saves the
+/// names on the run for the receipt, even when the alive probe lags.
+#[test]
+fn a_members_listing_moves_at_once_and_is_saved_for_the_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-members-save");
+    let ps = fakes::script(
+        dir.path(),
+        "ps",
+        "printf '  12  99 sleep\\n  34  99 my cmd\\n'",
+    );
+    let (end, progress) = drive_shell_exit(&ps);
+    let LoopEnd::Move(MoveReason::ShellExited { code }) = end else {
+        panic!("a shell that left members moves");
+    };
+    assert_eq!(code, 3);
+    // `docs/tools.md` promises the names, not their order: `ps` prints in
+    // its own order, so the test compares the listing as a set.
+    let Some(GroupMembers::Members(names)) = &progress.members else {
+        panic!(
+            "a shell that left members saves them, got {:?}",
+            progress.members
+        );
+    };
+    let mut got: Vec<&str> = names.split(", ").collect();
+    got.sort_unstable();
+    assert_eq!(got, ["my cmd (34)", "sleep (12)"]);
+}
+
+/// A listing that never answers moves the command and saves the failure
+/// on the run, so no real child is left untracked.
+#[test]
+fn an_unavailable_listing_moves_and_is_saved_for_the_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-unavailable-save");
+    let (end, progress) = drive_shell_exit(&dir.path().join("missing"));
+    let LoopEnd::Move(MoveReason::ShellExited { code }) = end else {
+        panic!("an unreadable listing still moves");
+    };
+    assert_eq!(code, 3);
+    assert_eq!(progress.members, Some(GroupMembers::Unavailable));
+}
+
+/// Only a shell exit lists the group: any other move returns at once
+/// without running the member query.
+#[test]
+fn only_a_shell_exit_lists_the_group_before_moving() {
+    let dir = fakes::TempDir::new("fiber-shell-no-list");
+    let probe = dir.path().join("probe");
+    let ps = fakes::script(
+        dir.path(),
+        "ps",
+        &format!("echo started > '{}'; exit 0", probe.display()),
+    );
+    let shared = Arc::new(Shared::default());
+    let clock = FakeClock::new();
+    let mut progress = Run {
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        stream_carry: Vec::new(),
+        timeout_at: None,
+        move_at: Some(clock.origin()),
+        members: None,
+        pgid: 99,
+        listing: None,
+        shared,
+        ask: None,
+        job: None,
+        feed: None,
+    };
+    let cancel = CancelToken::new();
+    let end = pump_inner(
+        &mut progress,
+        MovePolicy::Foreground,
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        |_pgid| true,
+        &ps,
+    );
+    let LoopEnd::Move(MoveReason::AfterThirtySeconds) = end else {
+        panic!("thirty seconds still moves without listing the group");
+    };
+    assert!(
+        !probe.exists(),
+        "a move for any other reason runs no listing"
+    );
+}
+
+/// A stop that becomes due while the member listing is parked wins before
+/// any handoff: the listing's answer cannot move a command its timeout or
+/// cancellation already claimed. The fixture `ps` reports its start, then
+/// holds until the test releases it; the stop lands while it is parked.
+#[test]
+fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    // `true` cancels the call while the listing waits; `false` lets its
+    // timeout lapse while the listing waits.
+    for cancelled in [true, false] {
+        let dir = fakes::TempDir::new("fiber-shell-listing-stop");
+        let ready = Ready::new(dir.path());
+        let release_path = dir.path().join("release");
+        fakes::fifo(&release_path);
+        // Open read-write so releasing never waits for the fixture to open it.
+        let mut release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&release_path)
+            .unwrap();
+        let ps = fakes::script(
+            dir.path(),
+            "ps",
+            &format!(
+                "echo $$ > '{}'\nread -r _ < '{}'\nexit 0",
+                ready.path().display(),
+                release_path.display(),
+            ),
+        );
+        let work = dir.path().to_path_buf();
+        let clock = FakeClock::new();
+        let bound = clock.origin() + PS_BOUND;
+        let cancel = CancelToken::new();
+        let (tx, rx) = mpsc::channel();
+        // The blocking call runs on its own thread: a stuck drive fails
+        // the test at the deadline instead of hanging it.
+        thread::spawn({
+            let clock = Arc::clone(&clock);
+            let cancel = cancel.clone();
+            // The timeout lapses mid-listing but before the listing's own
+            // bound, so the listing still answers successfully.
+            let timeout = match cancelled {
+                true => Duration::from_secs(3600),
+                false => Duration::from_secs(1),
+            };
+            move || {
+                let ran = super::execute_inner(
+                    std::path::Path::new("/bin/sh"),
+                    "true",
+                    &work,
+                    timeout,
+                    clock.as_ref(),
+                    &cancel,
+                    &Recorder::default(),
+                    MovePolicy::Foreground,
+                    None,
+                    None,
+                    None,
+                    always_alive,
+                    &ps,
+                )
+                .unwrap();
+                let _sent = tx.send(ran);
+            }
+        });
+        // The fixture `ps` started: the drive selected the shell-exit move
+        // and is inside the listing.
+        ready.wait(fakes::Deadline::after(JOB_DEADLINE));
+        assert!(
+            clock.await_parked(bound, fakes::Deadline::after(JOB_DEADLINE)),
+            "the listing did not park at its bound (cancelled={cancelled})"
+        );
+        // The stop becomes due before the listing is released.
+        if cancelled {
+            cancel.cancel();
+        } else {
+            clock.advance(Duration::from_millis(1500));
+        }
+        std::io::Write::write_all(&mut release, b"go\n").unwrap();
+        let ran = Deadline::after(JOB_DEADLINE)
+            .recv(&rx)
+            .expect("the foreground call ended within the deadline");
+        let super::Ran::Finished(finished) = ran else {
+            panic!(
+                "a stop during the listing still finishes in the foreground (cancelled={cancelled})"
+            );
+        };
+        assert_eq!(
+            finished.stop,
+            Some(if cancelled {
+                StopKind::Cancel
+            } else {
+                StopKind::Timeout
+            }),
+            "the stop wins over the listing (cancelled={cancelled})"
+        );
+    }
 }
