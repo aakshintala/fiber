@@ -2355,6 +2355,124 @@ fn a_row_the_head_did_not_skip_is_judged_as_before() {
 }
 
 #[test]
+fn the_summary_names_the_rows_the_head_pass_skipped() {
+    // A mutant that drops the head sentence, or judges a skipped row as
+    // before, fails the asserts below.
+    let mut full = head();
+    for id in [
+        "session_start_ms",
+        "paging_rss_kib",
+        "paging_open_ms",
+        "paging_load_ms",
+        "paging_jump_ms",
+        "paging_width_ms",
+        "paging_append_ms",
+        "paging_search_ms",
+        "paging_scale16_width_ms",
+        "paging_scale16_search_ms",
+    ] {
+        full = without_metric(&full, id);
+    }
+    let unmeasured = with_skipped(full, &["session start", "paging"]);
+    let out = judge(&unmeasured, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert!(
+        out.comment.contains(
+            "The head pass skipped session start, paging: the selection did not \
+             choose them; the budgets they feed read skipped, and the `main` backstop runs \
+             every gating row (`docs/ci.md`, \"Selection\")."
+        ),
+        "{}",
+        out.comment
+    );
+    for budget in [
+        "Session start, the internal",
+        "`paging` jig, open pass and first frame",
+    ] {
+        assert!(
+            row(&out.comment, budget).ends_with("| skipped |"),
+            "{}",
+            out.comment
+        );
+    }
+    // The 10-busy-turns row keeps its own note and adds no head sentence.
+    let out = judge(
+        &with_skipped(head(), &["10 busy turns"]),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        !out.comment.contains("The head pass skipped"),
+        "{}",
+        out.comment
+    );
+    // A head and a base that skipped the same rows name both sentences,
+    // the head's first.
+    let mut unselected = base();
+    for id in [
+        "session_start_ms",
+        "paging_rss_kib",
+        "paging_open_ms",
+        "paging_load_ms",
+        "paging_jump_ms",
+        "paging_width_ms",
+        "paging_append_ms",
+        "paging_search_ms",
+        "paging_scale16_width_ms",
+        "paging_scale16_search_ms",
+    ] {
+        unselected = without_metric(&unselected, id);
+    }
+    let out = judge(
+        &unmeasured,
+        Some(&with_skipped(unselected, &["session start", "paging"])),
+        Event::PullRequest,
+    );
+    let head_at = out
+        .comment
+        .find("The head pass skipped session start, paging:")
+        .unwrap_or_else(|| panic!("no head sentence in:\n{}", out.comment));
+    let base_at = out
+        .comment
+        .find("The base pass skipped session start, paging:")
+        .unwrap_or_else(|| panic!("no base sentence in:\n{}", out.comment));
+    assert!(head_at < base_at, "{}", out.comment);
+}
+
+#[test]
+fn the_summary_names_no_head_skip_when_none() {
+    // No sentence when `skipped` is empty or absent, ...
+    let out = judge(
+        &head(),
+        Some(&with_skipped(base(), &[])),
+        Event::PullRequest,
+    );
+    assert!(
+        !out.comment.contains("The head pass skipped"),
+        "{}",
+        out.comment
+    );
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        !out.comment.contains("The head pass skipped"),
+        "{}",
+        out.comment
+    );
+    // ... or on a push, which judges the head alone even if its file
+    // carries a skip.
+    let mut head = head();
+    for id in ["session_start_ms"] {
+        head = without_metric(&head, id);
+    }
+    let out = judge(&with_skipped(head, &["session start"]), None, Event::Push);
+    assert!(
+        !out.comment.contains("The head pass skipped"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
 fn a_skipped_base_leaves_the_head_ten_turns_skip_alone() {
     let headed = with_skipped(head(), &["10 busy turns"]);
     let unselected = with_skipped(base(), &["session start"]);

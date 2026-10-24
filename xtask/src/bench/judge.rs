@@ -647,6 +647,26 @@ pub(super) fn ten_turns_skipped(head: Option<&Results>) -> bool {
 /// "Selection").
 const HEAD_SKIP_NOTE: &str = "skipped: the selection did not run ";
 
+/// The head file's skipped timing rows, in file order: the names in
+/// `head.skipped` that name a `ROW_METRICS` row. `10 busy turns` and
+/// unknown names are not returned; `None` returns empty. `pub` for the
+/// summary, which names the skip (`docs/ci.md`, "Selection").
+pub(super) fn head_skipped_rows(head: Option<&Results>) -> Vec<&'static str> {
+    match head {
+        None => Vec::new(),
+        Some(results) => results
+            .skipped
+            .iter()
+            .filter_map(|name| {
+                ROW_METRICS
+                    .iter()
+                    .find(|(row, _)| name == row)
+                    .map(|(row, _)| *row)
+            })
+            .collect(),
+    }
+}
+
 /// The first head-skipped timing row one of whose metric ids `check`
 /// reads, or `None`. A row matches when its name is in the head file's
 /// `skipped` list and one of the check's ids is in the row's

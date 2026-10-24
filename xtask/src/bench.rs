@@ -18,8 +18,8 @@ mod judge;
 mod results;
 
 use self::judge::{
-    Base, Line, MEASURED, NOT_MEASURED, TEN_TURNS_BUDGET, TEN_TURNS_SKIP_NOTE, judge,
-    ten_turns_skipped,
+    Base, Line, MEASURED, NOT_MEASURED, TEN_TURNS_BUDGET, TEN_TURNS_SKIP_NOTE, head_skipped_rows,
+    judge, ten_turns_skipped,
 };
 #[cfg(test)]
 use self::judge::{Quantity, ceiling};
@@ -424,10 +424,20 @@ fn comment(
         out.push_str(line);
         out.push('\n');
     }
-    // The base pass runs only the timing rows the diff selects: the
-    // summary names each skipped row (`docs/ci.md`, "Selection"). The
-    // judge is unchanged: a row missing its base metric stays advisory
-    // with no ratio and no gate through the existing unavailable arm.
+    // The head and base passes run only the timing rows the selection
+    // chooses: the summary names each skipped row on both passes
+    // (`docs/ci.md`, "Selection"). A push judges the head alone and
+    // names no head skip, even if its file carries one. The judge is
+    // unchanged for the rest: a row missing its base metric stays
+    // advisory with no ratio and no gate through the existing
+    // unavailable arm.
+    let head_skips = head_skipped_rows(head);
+    if with_base && !head_skips.is_empty() {
+        out.push_str(&format!(
+            "The head pass skipped {}: the selection did not choose them; the budgets they feed read skipped, and the `main` backstop runs every gating row (`docs/ci.md`, \"Selection\").\n",
+            head_skips.join(", ")
+        ));
+    }
     if let Base::Ok(results) = base
         && !results.skipped.is_empty()
     {
