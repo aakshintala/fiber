@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use contract::Envelope;
-use contract::events::{Event, Notice, SkillListed, SkillsChanged};
+use contract::events::{CommandInfo, Event, Notice, SkillListed, SkillsChanged};
 use support::lock;
 
 use crate::Error;
@@ -29,8 +29,9 @@ use crate::skills;
 pub struct SkillSet(std::sync::Arc<Mutex<Inner>>);
 
 /// What one turn-start check found (`docs/system-prompt.md`, "Added and
-/// removed skills"): the notices the turn appends, and the
-/// `skills_changed` line, when a skill was added or removed.
+/// removed skills"): the notices the turn appends, the
+/// `skills_changed` line, when a skill was added or removed, and whether
+/// the runnable `/name` set changed.
 pub(crate) struct SkillCheck {
     /// The skill notices the turn appends: the discovery's notices in
     /// discovery order, then the `skills.disabled` failure. Each is
@@ -39,6 +40,14 @@ pub(crate) struct SkillCheck {
     /// The skills added or removed since the listing was last given, when
     /// any: each added entry, then each removed name, in name order.
     pub(crate) changed: Option<SkillsChanged>,
+    /// Whether the runnable slash-command set changed since the session's
+    /// `commands` answer was built: a skill or prompt template added,
+    /// removed or switched, with its tag. Templates count although the
+    /// listing, and so `changed`, leaves them out.
+    pub(crate) commands_changed: bool,
+    /// The inputs the check discovered with: what a `commands` refresh
+    /// recomputes from, so it never answers from older inputs.
+    pub(crate) inputs: PromptInputs,
 }
 
 /// What the set holds: the inputs the opening message reads, the
@@ -57,6 +66,11 @@ struct Inner {
     /// never touches it, so the turn after a resume still announces what
     /// changed while the session was away.
     listed: BTreeMap<String, SkillListed>,
+    /// The runnable slash-command set the session's `commands` answer was
+    /// built from, per name: whether the model may load it, so a skill
+    /// turning into a template counts too. `None` until the construction
+    /// site seeds it, or the opening message or the resume fold does.
+    commands: Option<BTreeMap<String, bool>>,
     /// The previous check's notice messages: a notice is raised again
     /// only when its message is new
     /// (`docs/system-prompt.md`, "Added and removed skills").
@@ -90,6 +104,7 @@ impl SkillSet {
             top,
             known: None,
             listed: BTreeMap::new(),
+            commands: None,
             noticed: BTreeSet::new(),
             reading: false,
             pending_notice: None,
@@ -135,6 +150,7 @@ impl SkillSet {
     ) {
         let mut inner = lock(&self.0);
         inner.inputs.skills_disabled = disabled;
+        let runnable = runnable_commands(&found, &inner.inputs.skills_disabled);
         inner.known = Some(Known {
             found,
             cache: skills::Cache::default(),
@@ -143,6 +159,11 @@ impl SkillSet {
             .iter()
             .map(|entry| (entry.name.clone(), entry.clone()))
             .collect();
+        // The construction site's seed stands: it saw the rows the
+        // session answers, which the opening may already have moved past.
+        if inner.commands.is_none() {
+            inner.commands = Some(runnable);
+        }
         inner.noticed = notices
             .iter()
             .map(|notice| notice.message.clone())
@@ -154,9 +175,34 @@ impl SkillSet {
         lock(&self.0).inputs = inputs;
     }
 
+    /// Syncs the runnable-set baseline to the rows the session's
+    /// `commands` answer holds: each skill and prompt template row, by
+    /// the tag the answer gives it. The construction site calls this with
+    /// the built rows, and a reload's install with the installed ones, so
+    /// the next check measures against what the session answers, not
+    /// what the opening later lists or a check past the install saw.
+    pub fn sync_commands(&self, rows: &[CommandInfo]) {
+        let mut baseline = BTreeMap::new();
+        for row in rows {
+            match row.tag.as_str() {
+                "skill" => {
+                    baseline.insert(row.name.clone(), true);
+                }
+                "template" => {
+                    baseline.insert(row.name.clone(), false);
+                }
+                _ => {}
+            }
+        }
+        lock(&self.0).commands = Some(baseline);
+    }
+
     /// A reload also sends descriptions that differ from the last-sent text.
+    /// It never moves the runnable-set baseline: the reload's installed
+    /// rows sync that, so a skill moving on disk past the install still
+    /// refreshes at the next turn start.
     pub(crate) fn reload_check(&self) -> SkillCheck {
-        self.check_listing(true)
+        self.check_listing(true, false)
     }
 
     /// The turn-start check (`docs/system-prompt.md`, "Added and removed
@@ -164,10 +210,10 @@ impl SkillSet {
     /// given. One `skills_changed`, written only when a skill was added
     /// or removed.
     pub(crate) fn check(&self) -> SkillCheck {
-        self.check_listing(false)
+        self.check_listing(false, true)
     }
 
-    fn check_listing(&self, descriptions: bool) -> SkillCheck {
+    fn check_listing(&self, descriptions: bool, track_commands: bool) -> SkillCheck {
         let inputs = self.inputs_now();
         let mut inner = lock(&self.0);
         let pending = inner.pending_notice.take();
@@ -242,6 +288,18 @@ impl SkillSet {
         } else {
             Some(SkillsChanged { added, removed })
         };
+        // The runnable set, templates included: what the session's
+        // `commands` answer must hold. A change here refreshes that
+        // answer although the listing above, and so `changed`, may not
+        // move at all.
+        let runnable = runnable_commands(winners.values(), &disabled);
+        let commands_changed = match &inner.commands {
+            None => false,
+            Some(baseline) => *baseline != runnable,
+        };
+        if track_commands {
+            inner.commands = Some(runnable);
+        }
         inner.listed = current;
         inner.known = Some(Known {
             found: winners.into_values().collect(),
@@ -263,7 +321,12 @@ impl SkillSet {
             .iter()
             .map(|notice| notice.message.clone())
             .collect();
-        SkillCheck { notices, changed }
+        SkillCheck {
+            notices,
+            changed,
+            commands_changed,
+            inputs,
+        }
     }
 
     /// Folds the durable `opening_message` and `skills_changed` lines into
@@ -297,7 +360,21 @@ impl SkillSet {
                 }
             }
         }
-        lock(&self.0).listed = listed;
+        // The fold holds listed skills only, each loadable as listed, so
+        // the baseline seeds exact for them; templates never appear in
+        // the fold, so one added while the session was away still counts
+        // as added at the first check.
+        let mut inner = lock(&self.0);
+        inner.listed = listed;
+        if inner.commands.is_none() {
+            inner.commands = Some(
+                inner
+                    .listed
+                    .keys()
+                    .map(|name| (name.clone(), true))
+                    .collect(),
+            );
+        }
         Ok(())
     }
 
@@ -443,12 +520,33 @@ impl SkillSet {
 
 impl crate::Loop {
     /// Answers `/name` and the `skill` tool from `shared`: `shared`
-    /// takes over this loop's one discovery, then this loop holds it.
+    /// takes over this loop's one discovery, then this loop holds it. A
+    /// runnable-set seed the construction site set stands: it saw the
+    /// rows the session answers, which the adopted discovery never
+    /// rebuilds.
     pub fn skill_set(mut self, shared: SkillSet) -> Self {
+        let seed = lock(&shared.0).commands.clone();
         shared.adopt(&self.skills);
+        if let Some(seed) = seed {
+            lock(&shared.0).commands = Some(seed);
+        }
         self.skills = shared;
         self
     }
+}
+
+/// The runnable slash-command set one discovery holds: every found skill
+/// and prompt template `disabled` does not switch off, per name, whether
+/// the model may load it. What the session's `commands` answer must list.
+fn runnable_commands<'a>(
+    found: impl IntoIterator<Item = &'a skills::Found>,
+    disabled: &[String],
+) -> BTreeMap<String, bool> {
+    found
+        .into_iter()
+        .filter(|found| !disabled.iter().any(|off| off == &found.listed.name))
+        .map(|found| (found.listed.name.clone(), found.model_invocable))
+        .collect()
 }
 
 /// Discovers once when nothing is read yet, and stores the result. The

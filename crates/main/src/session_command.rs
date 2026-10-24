@@ -574,6 +574,9 @@ pub(crate) fn run_new(
         &extensions.commands(),
     );
     mcp.notices.extend(listed.notices);
+    // The turn-start check measures the runnable set against these rows,
+    // so a skill added before the opening lists still refreshes them.
+    skill_set.sync_commands(&listed.rows);
     session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
@@ -582,6 +585,22 @@ pub(crate) fn run_new(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    // The loop's turn-start refresh reads the current extensions and
+    // replaces the session's rows: the same complete recompute the
+    // construction above builds with, after every reload too.
+    let commands_refresh = r#loop::CommandsRefresh {
+        extensions: Arc::new({
+            let current = Arc::clone(&current);
+            move || current.get().commands()
+        }),
+        replace: session.commands_replacer(),
+    };
+    // A reload's install syncs the same baseline its rows replace, so
+    // the next turn-start check measures against the installed answer.
+    let commands_sync = {
+        let skill_set = skill_set.clone();
+        Arc::new(move |rows: &[contract::events::CommandInfo]| skill_set.sync_commands(rows))
+    };
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());
     session.credentials(readers.labels, readers.admitted);
@@ -601,6 +620,7 @@ pub(crate) fn run_new(
         diag.clone(),
         shell_read_only,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
+        commands_sync,
     );
     // Every notice the startup already wrote, including the ones
     // `mcp_servers_started` writes after this read: the late preparer
@@ -727,6 +747,7 @@ pub(crate) fn run_new(
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
+                        .commands_refresh(commands_refresh)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,

@@ -319,10 +319,34 @@ impl Loop {
         if let Some(changed) = skills.changed {
             self.append_early(&Event::SkillsChanged(changed))?;
         }
+        if skills.commands_changed {
+            self.refresh_commands(&skills.inputs);
+        }
         if let Some(date) = out.date {
             self.append_early(&Event::DateChanged(date))?;
         }
         Ok(())
+    }
+
+    /// Recomputes the session's `commands` rows from the check's inputs,
+    /// the workspace, the current prompt rows and the current extension
+    /// commands, and replaces the session's stored answer with the
+    /// complete result (`docs/invocation.md`, "What each command does").
+    /// A change the check found never restores a stale or shadowed row:
+    /// every row comes from the current sources, through the same
+    /// precedence the construction sites build with. Without the wired
+    /// refresh nothing moves.
+    fn refresh_commands(&self, inputs: &prompt::PromptInputs) {
+        let Some(refresh) = self.commands_refresh.as_ref() else {
+            return;
+        };
+        let prompts = self
+            .server_prompts
+            .as_ref()
+            .map(|prompts| prompts.rows.as_slice())
+            .unwrap_or(&[]);
+        let rows = crate::commands(inputs, &self.workspace, prompts, &(refresh.extensions)()).rows;
+        (refresh.replace)(rows);
     }
 
     /// Writes `event` before its turn started, when there is no turn id yet.

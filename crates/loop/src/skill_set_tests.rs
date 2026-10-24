@@ -812,3 +812,157 @@ fn an_unreadable_skill_that_is_switched_off_is_removed() {
     assert_eq!(removed_names(&checked.changed), ["a"]);
     assert_eq!(set.listed_file("a"), None);
 }
+
+fn template(place: &Path, entry: &str, name: &str) -> PathBuf {
+    write(
+        place,
+        entry,
+        &format!("---\nname: {name}\ndescription: d\ndisable-model-invocation: true\n---\nBody.\n"),
+    )
+}
+
+fn command_row(name: &str, tag: &str) -> contract::events::CommandInfo {
+    contract::events::CommandInfo {
+        name: name.into(),
+        description: "d".into(),
+        argument_hint: None,
+        tag: tag.into(),
+        extension: false,
+    }
+}
+
+#[test]
+fn a_template_added_reports_a_changed_runnable_set_with_no_skills_changed() {
+    let tree = Tree::new();
+    let set = tree.set();
+    open(&set, &tree);
+    template(&tree.top().join(".agents/skills"), "t", "t");
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+    // Seen: the next check with nothing new reports no change.
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
+}
+
+#[test]
+fn a_template_removed_reports_a_changed_runnable_set_with_no_skills_changed() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    template(&place, "t", "t");
+    let set = tree.set();
+    open(&set, &tree);
+    std::fs::remove_dir_all(place.join("t")).unwrap();
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+}
+
+#[test]
+fn a_skill_becoming_a_template_reports_a_changed_runnable_set() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "a", "d");
+    let set = tree.set();
+    open(&set, &tree);
+    std::fs::write(
+        &path,
+        "---\nname: a\ndescription: d\ndisable-model-invocation: true\n---\nBody.\n",
+    )
+    .unwrap();
+    let checked = set.check();
+    assert_eq!(removed_names(&checked.changed), ["a"]);
+    assert!(checked.commands_changed);
+    std::fs::write(&path, "---\nname: a\ndescription: d\n---\nBody.\n").unwrap();
+    let checked = set.check();
+    assert_eq!(added_names(&checked.changed), ["a"]);
+    assert!(checked.commands_changed);
+}
+
+#[test]
+fn switching_a_template_off_and_on_reports_a_changed_runnable_set() {
+    let tree = Tree::new();
+    template(&tree.top().join(".agents/skills"), "t", "t");
+    let disabled = Arc::new(Mutex::new(Vec::new()));
+    let set = reading_set(&tree, shared_reader(disabled.clone()));
+    open(&set, &tree);
+    *disabled.lock().unwrap() = vec!["t".into()];
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+    *disabled.lock().unwrap() = Vec::new();
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
+}
+
+#[test]
+fn a_skill_added_or_removed_reports_a_changed_runnable_set() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let set = tree.set();
+    open(&set, &tree);
+    skill(&place, "a", "a", "d");
+    let checked = set.check();
+    assert_eq!(added_names(&checked.changed), ["a"]);
+    assert!(checked.commands_changed);
+    std::fs::remove_dir_all(place.join("a")).unwrap();
+    let checked = set.check();
+    assert_eq!(removed_names(&checked.changed), ["a"]);
+    assert!(checked.commands_changed);
+}
+
+#[test]
+fn a_description_edit_reports_no_changed_runnable_set() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "a", "old");
+    template(&place, "t", "t");
+    let set = tree.set();
+    open(&set, &tree);
+    std::fs::write(&path, "---\nname: a\ndescription: new\n---\nBody.\n").unwrap();
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
+}
+
+#[test]
+fn a_seed_from_the_commands_answer_baselines_the_first_check() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    skill(&place, "a", "a", "d");
+    template(&place, "t", "t");
+    let set = tree.set();
+    // The session answers what the construction site built, before the
+    // opening lists anything.
+    set.sync_commands(&[command_row("a", "skill"), command_row("t", "template")]);
+    open(&set, &tree);
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
+    std::fs::remove_dir_all(place.join("t")).unwrap();
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+}
+
+#[test]
+fn a_resume_fold_baselines_listed_skills_but_not_a_new_template() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    skill(&place, "a", "a", "d");
+    let set = tree.set();
+    set.resumed(&[line("opening_message", &opening_with(vec![listed("a")]))])
+        .unwrap();
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
+    template(&place, "t", "t");
+    let checked = set.check();
+    assert!(checked.changed.is_none());
+    assert!(checked.commands_changed);
+}

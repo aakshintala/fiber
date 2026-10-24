@@ -1,6 +1,6 @@
 //! Preparation and publication of configuration reloads (`docs/configuration.md`).
 use contract::diag::DebugLog as _;
-use contract::events::ToolSource;
+use contract::events::{CommandInfo, ToolSource};
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
@@ -34,6 +34,9 @@ pub(crate) fn preparer(
 }
 
 type Tools = Vec<(String, Arc<dyn contract::tool::Tool>)>;
+
+/// Syncs the skill set's runnable-set baseline to installed command rows.
+pub(crate) type CommandsSync = Arc<dyn Fn(&[CommandInfo]) + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct Late {
@@ -103,6 +106,10 @@ pub(crate) struct State {
     pub(crate) repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
     pub(crate) declare: doors::Declare,
     pub(crate) replace: Arc<dyn Fn(doors::Replacement) + Send + Sync>,
+    /// Syncs the skill set's runnable-set baseline to the installed
+    /// command rows: the next turn-start check measures against what the
+    /// reload installed, not what a check past the install saw.
+    pub(crate) commands_sync: CommandsSync,
     pub(crate) drive: Arc<dyn contract::extension::Drive>,
     pub(crate) model: Arc<dyn contract::model::HostModel>,
     pub(crate) delegate: Arc<dyn contract::extension::HostDelegate>,
@@ -158,6 +165,7 @@ impl State {
         diag: Arc<log::diag::Diag>,
         shell_read_only: crate::settings::ShellReadOnly,
         repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,
+        commands_sync: CommandsSync,
     ) -> (
         Self,
         r#loop::LoadApproved,
@@ -198,6 +206,7 @@ impl State {
             repository,
             declare: session.declarer(),
             replace: session.reloader(),
+            commands_sync,
             drive: session.driver(),
             model,
             delegate,
@@ -611,6 +620,10 @@ impl State {
                 Arc::new(extensions::SystemBrowser::default()),
                 shared.attended.clone(),
             );
+            // The install's rows are what the session answers now: the
+            // next turn-start check measures the runnable set against
+            // them, even when a check past the install already ran.
+            (shared.commands_sync)(&listed.rows);
             (shared.replace)(doors::Replacement {
                 commands: listed.rows,
                 skills,
