@@ -278,14 +278,19 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
         }
         false
     });
-    // The wait promises the whole frame: it skipped the unrelated frame
-    // and the partial half-frame, whose bytes did not satisfy the
-    // predicate, and returned only the full wheel-driven frame. The old
-    // wait returns the unrelated frame, whose second row is `b`.
+    // The wait promises the whole frame: it stayed pending on the
+    // unrelated frame and on the split frame's first half, and completed
+    // with the moved anchor (see #3212). The old wait returns the
+    // unrelated frame, whose second row is `b`. The partial half-frame
+    // already holds the moved anchor, so the last row pins the
+    // completion: only the full frame drew it.
     assert_eq!(
-        grid.rows.iter().take(3).cloned().collect::<Vec<_>>(),
-        wheeled,
-        "the wait skips the unrelated frame and the partial half-frame"
+        grid.rows[1], "gone",
+        "the wait completes with the moved anchor"
+    );
+    assert_eq!(
+        grid.rows[2], "b",
+        "the wait waited for the split frame's remainder"
     );
     assert!(wheel_step_done(&prev, &wheeled, true, false));
     assert!(!wheel_step_done(&prev, &wheeled, false, false));
