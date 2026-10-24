@@ -46,6 +46,14 @@ struct Live {
     reader: Option<JoinHandle<()>>,
     /// The reader's thread, to tell `reap` from the reader itself.
     reader_thread: ThreadId,
+    /// The tracked reader thread whose answers this connection's writer
+    /// writes, if it has a writer: [`Conns::cut_owed`] cuts the
+    /// connections that still owe answers.
+    owed_by: Option<ThreadId>,
+    /// The writer ended, after flushing what the cut decided: set under
+    /// the lock before the wake, so [`Conns::wait_cut`] never misses it
+    /// between the wake and the thread's exit.
+    writer_done: bool,
     writer: Option<JoinHandle<()>>,
     /// Stops the reader and shuts the socket. [`Conns::quiet_readers`]
     /// drops it to stop the reader and leave the socket open.
@@ -53,8 +61,8 @@ struct Live {
     /// Shuts the socket and stops nothing: what shuts it once the ender is
     /// gone.
     shut: Box<dyn Fn() + Send + Sync>,
-    /// Pushes into the queue the connection's writer is reading, once it
-    /// registered.
+    /// Pushes into the queue the connection's writer is reading, once its
+    /// writer spawned and registered.
     wake: Option<log::Injector>,
     /// The close grace passed: the writer answers what it holds
     /// `indeterminate` and ends.
@@ -96,15 +104,6 @@ impl Conns {
             }),
             writers: Condvar::new(),
             stop: AtomicBool::new(false),
-        }
-    }
-
-    pub(super) fn wait_writers(&self, clock: &dyn Clock, until: Instant) {
-        let mut state = lock(&self.state);
-        while should_wait(state.writers_open, clock.now(), until) {
-            // The guard is held into the condvar wait; `None` relocks.
-            state = support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)
-                .unwrap_or_else(|| lock(&self.state));
         }
     }
 
@@ -167,6 +166,8 @@ impl Conns {
             id,
             Live {
                 reader_thread: handle.thread().id(),
+                owed_by: None,
+                writer_done: false,
                 reader: Some(handle),
                 writer: None,
                 ender: Some(ender),
@@ -186,6 +187,16 @@ impl Conns {
         }
         drop(state);
         self.writers.notify_all();
+    }
+
+    /// Records the tracked reader thread whose answers connection `conn`'s
+    /// writer writes. The writer notes it when it starts, running on the
+    /// reader's own thread.
+    pub(crate) fn note_owed(&self, conn: u64, reader: ThreadId) {
+        let mut state = lock(&self.state);
+        if let Some((_, live)) = state.live.iter_mut().find(|(slot, _)| *slot == conn) {
+            live.owed_by = Some(reader);
+        }
     }
 
     /// Drops this connection's socket and joins its writer. The reader calls
@@ -247,9 +258,31 @@ impl Conns {
         }
     }
 
+    /// Waits until `until` for a connection's writer to finish, for
+    /// [`Session::close`]: a writer blocked in `write` holds the close
+    /// past the grace, and the cut past the flush margin.
+    pub(super) fn wait_writers(&self, clock: &dyn Clock, until: Instant) {
+        let mut state = lock(&self.state);
+        while should_wait(state.writers_open as usize, clock.now(), until) {
+            // The guard is held into the condvar wait; `None` relocks.
+            state = support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)
+                .unwrap_or_else(|| lock(&self.state));
+        }
+    }
+
+    /// Marks connection `conn`'s writer ended, after it flushed what the
+    /// cut decided. Runs on the writer thread before its end wake, so
+    /// [`Conns::wait_cut`] sees it under the same lock that parks it.
+    pub(crate) fn note_writer_done(&self, conn: u64) {
+        let mut state = lock(&self.state);
+        if let Some((_, live)) = state.live.iter_mut().find(|(slot, _)| *slot == conn) {
+            live.writer_done = true;
+        }
+    }
+
     /// Registers `wake`, the injector of the queue connection `conn`'s writer
     /// reads, and says whether the connection was cut. One hold of the
-    /// connection lock, which [`Conns::cut_all`] also takes to set the flag
+    /// connection lock, which [`Conns::cut_owed`] also takes to set the flag
     /// and push the control line, so a writer never waits on a queue after
     /// a cut it has not seen. A connection no longer here counts as cut.
     pub(crate) fn register_wake(&self, conn: u64, wake: log::Injector) -> bool {
@@ -263,8 +296,44 @@ impl Conns {
         }
     }
 
-    /// The grace passed: marks every live connection cut and wakes its
-    /// writer, which answers what it holds `indeterminate` and ends.
+    /// The quiesce grace passed: marks every live connection whose reader
+    /// still owes an answer cut and wakes its writer, which answers what
+    /// it holds `indeterminate` and ends. Connections with nothing owed
+    /// stay up, to stream `fiber_exited`.
+    pub(super) fn cut_owed(&self, session: &SessionId, owed: impl Fn(ThreadId) -> bool) {
+        let mut state = lock(&self.state);
+        for (_, live) in &mut state.live {
+            if !live.owed_by.is_some_and(&owed) {
+                continue;
+            }
+            live.cut = true;
+            if let Some(wake) = &live.wake {
+                wake.push_kept(crate::client::control_line(session, CUT, 0));
+            }
+        }
+    }
+
+    /// Waits, up to `until`, for every cut writer to end: each writes what
+    /// it holds, then its `indeterminate` lines, before it ends. Uncut
+    /// writers stay up and are not waited for, and a cut connection with
+    /// no writer holds nothing to flush.
+    pub(super) fn wait_cut(&self, clock: &dyn Clock, until: Instant) {
+        let mut state = lock(&self.state);
+        while clock.now() < until
+            && state
+                .live
+                .iter()
+                .any(|(_, live)| live.cut && live.writer.is_some() && !live.writer_done)
+        {
+            // The guard is held into the condvar wait; `None` relocks.
+            state = support::clock::park(clock, Some(until), None, &self.writers, state, |_| false)
+                .unwrap_or_else(|| lock(&self.state));
+        }
+    }
+
+    /// The grace passed for [`Session::close`]: marks every live
+    /// connection cut and wakes its writer, which answers what it holds
+    /// `indeterminate` and ends.
     pub(super) fn cut_all(&self, session: &SessionId) {
         let mut state = lock(&self.state);
         for (_, live) in &mut state.live {
@@ -384,20 +453,16 @@ impl State {
     }
 }
 
-/// True while `close` must keep waiting for writers: one is still open
-/// and the grace has not been reached. A `match` on the count, not a
+/// True while `close` or `quiesce` must keep waiting: something is still
+/// owed and the grace has not been reached. A `match` on the count, not a
 /// comparison, so no operator here widens into a wait that parks forever:
-/// the `0` arm returns at once without reading the clock, and the open arm
+/// the `0` arm returns at once without reading the clock, and the owed arm
 /// holds while now is before the deadline. An equal instant is the deadline
 /// itself. Waiting on through it would spin: the clock does not park for a
 /// time that has already arrived. The boundary table in `session_tests`
 /// pins every corner.
-pub(super) fn should_wait(
-    writers_open: u32,
-    now: std::time::Instant,
-    until: std::time::Instant,
-) -> bool {
-    match writers_open {
+pub(super) fn should_wait(owed: usize, now: std::time::Instant, until: std::time::Instant) -> bool {
+    match owed {
         0 => false,
         _ => now < until,
     }

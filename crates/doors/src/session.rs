@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use crate::client;
 use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
+
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
@@ -180,6 +181,10 @@ pub(crate) struct Gate {
     /// A setter that must stop at `close`'s start reads this, not the
     /// connections' stopped state, which is marked after the wait.
     pub(crate) sealed: AtomicBool,
+    /// Whether the shutdown waits ran: [`Session::quiesce`] waits before
+    /// `fiber_exited` is written, so [`Session::close`] waits when
+    /// `quiesce` did not.
+    answered: AtomicBool,
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
@@ -625,7 +630,10 @@ impl Session {
 
     /// Makes `fiber_exited` the last line this process writes: no later
     /// `clients` line is emitted, no new driver shell runs, and every
-    /// running one is cancelled and waited for. Called just before
+    /// running one is cancelled and waited for. Every line a reader read is
+    /// answered before it returns, so a log ending in `fiber_exited`
+    /// means the session never read the command
+    /// (`docs/invocation.md`, "Lifecycle"). Called just before
     /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
     pub fn quiesce(&self) {
         // No session message enters once the session quiets.
@@ -637,25 +645,50 @@ impl Session {
         }
         self.gate.cancel_shells();
         self.gate.wait_shells();
+        self.settle_answers();
+    }
+
+    /// Stops the readers and answers everything they read: the readers
+    /// stop reading another line (a reader finishes and answers the line
+    /// it is dispatching, and a line already in its buffer is still
+    /// dispatched), then waits up to [`conns::GRACE`] for the answers owed
+    /// and cuts what is still unanswered, answering each `indeterminate`.
+    /// At the cut each writer that still owes answers is cut, and
+    /// [`conns::CUT_FLUSH`] more lets it write its lines; a connection
+    /// with nothing owed stays up, to stream `fiber_exited`. Every line a
+    /// reader read gets exactly one answer on its connection: its own, or
+    /// `indeterminate` when the grace passes first. Runs before
+    /// `fiber_exited` is written.
+    fn settle_answers(&self) {
+        if self.gate.answered.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        self.gate.conns.mark_stopped();
+        self.gate.conns.quiet_readers();
+        let clock = self.gate.clock.as_ref();
+        let until = clock.now() + GRACE;
+        #[cfg(test)]
+        self.gate.note(tests::Probe::FirstShellWaitDone);
+        self.gate.accepted.wait_owed(clock, until);
+        self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
+            self.gate.accepted.unanswered(reader) > 0
+        });
+        self.gate.conns.wait_cut(clock, until + CUT_FLUSH);
     }
 
     /// Ends the door side, in this order. It cancels every driver shell and
     /// waits for each, since shutting its socket does not stop the tool; the
     /// shell's thread is not joined, and its answer is queued before it
-    /// ends. It marks the gate stopped, then stops every reader from reading
-    /// another line (a reader finishes and answers the line it is
-    /// dispatching, and a line already in its buffer is still dispatched),
-    /// and unlinks the socket. It ends every watcher's stream with
-    /// `log.end_watchers()`, which keeps the lock, then drops `log`. Every
-    /// line a reader read gets exactly one answer on its connection: its
-    /// own, or `indeterminate` when [`conns::GRACE`] passes first. At the
-    /// grace each writer that still waits is cut, and [`conns::CUT_FLUSH`]
-    /// more lets it write its lines before the sockets are shut. The
-    /// readers are joined only up to the grace: a reader still inside a
-    /// command then is detached, since its line was answered, and process
-    /// exit ends it. One `timeout` line in the session's diagnostic log
-    /// (`docs/state.md`, "What each part holds") names each connection the
-    /// close stopped waiting for. The accept thread is detached, never
+    /// ends. Unless [`Session::quiesce`] already waited before `fiber_exited`
+    /// was written, it waits for the writers, cuts what still waits at the
+    /// grace, and waits the flush margin, then unlinks the socket. It ends
+    /// every watcher's stream with `log.end_watchers()`, which keeps the
+    /// lock, then drops `log`. The readers are joined only up to the
+    /// grace: a reader still inside a command then is detached, since its
+    /// line was answered, and process exit ends it. One `timeout` line in
+    /// the session's diagnostic log (`docs/state.md`, "What each part
+    /// holds") names each connection the close stopped waiting for. The
+    /// accept thread is detached, never
     /// joined and never woken: a wake would take a blocking
     /// `UnixStream::connect`, which on Linux blocks forever when a
     /// replacement listener's backlog is full, and when the path is gone,
@@ -697,9 +730,14 @@ impl Session {
         drop(log);
         let clock = self.gate.clock.as_ref();
         let until = clock.now() + GRACE;
-        self.gate.conns.wait_writers(clock, until);
-        self.gate.conns.cut_all(&self.gate.session_id);
-        self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
+        // Skipped when `quiesce` already waited before `fiber_exited` was
+        // written: the answers are owed no more, and the writers stream the
+        // exit instead of ending here.
+        if !self.gate.answered.swap(true, Ordering::Relaxed) {
+            self.gate.conns.wait_writers(clock, until);
+            self.gate.conns.cut_all(&self.gate.session_id);
+            self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
+        }
         let detached = self.gate.conns.join_clients(clock, until);
         for _ in 0..detached {
             self.stopped_waiting();
@@ -920,6 +958,7 @@ impl Wake for InboxWake {
 impl Wake for Gate {
     fn wake(&self) {
         self.conns.notify();
+        self.accepted.notify();
         // A clock move wakes the loop the way an accepted cancel does.
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
@@ -991,6 +1030,7 @@ fn open_in(
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
         sealed: AtomicBool::new(false),
+        answered: AtomicBool::new(false),
         #[cfg(test)]
         probe: Mutex::new(None),
         clients: ClientCounts::new(),

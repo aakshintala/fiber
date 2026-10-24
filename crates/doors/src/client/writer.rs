@@ -50,6 +50,10 @@ pub(crate) fn spawn_writer(
     // `spawn_writer` runs on the reader thread: from here on the lines it
     // reads are recorded, and the writer answers each one.
     let reader = thread::current().id();
+    gate.conns.note_owed(id, reader);
+    // The writer's queue is reachable from the start, so a cut wakes it
+    // while it still reads the log, not only past its end.
+    let _ = gate.conns.register_wake(id, watcher.injector());
     gate.accepted.track(reader);
     let flight = Flight {
         gate: Arc::clone(&gate),
@@ -65,6 +69,7 @@ pub(crate) fn spawn_writer(
         .spawn(move || {
             let _end = WriterEnd {
                 gate: ended,
+                conn: id,
                 reader,
             };
             // The handle is stored before this write can block, so close joins it.
@@ -115,12 +120,14 @@ pub(crate) fn spawn_writer(
 /// answers them any more.
 struct WriterEnd {
     gate: Arc<Gate>,
+    conn: u64,
     reader: ThreadId,
 }
 
 impl Drop for WriterEnd {
     fn drop(&mut self) {
         self.gate.accepted.untrack(self.reader);
+        self.gate.conns.note_writer_done(self.conn);
         self.gate.conns.end_writer();
     }
 }
@@ -159,6 +166,16 @@ pub(crate) fn write_loop(
     };
     let mut stop_seen = false;
     loop {
+        // Test-only pause point: the writer saw STOP while the session is
+        // stopping and waits here instead of ending, so a test that
+        // observes it knows the silence that follows is the wait, not a
+        // thread that never ran (`docs/testing.md`, "Waits and timeouts").
+        #[cfg(test)]
+        if stop_seen && let Some(flight) = flight {
+            flight
+                .gate
+                .note(crate::session::tests::Probe::WriterParkedAtStop);
+        }
         let line = match writing.watcher.recv() {
             Ok(Some(line)) => line,
             Ok(None) => {
@@ -169,9 +186,17 @@ pub(crate) fn write_loop(
             }
             Err(_) => return Ended::Failed,
         };
-        // A cut pushed while the writer still reads the log: the writer sees
-        // it by the flag when it reaches the end.
+        // A cut pushed while the writer still reads the log: the writer
+        // sees it by the flag when it reaches the end, unless it still
+        // owes an answer. Then the grace already decided, so it answers
+        // now: `Session::quiesce` cuts while the log is open, and waiting
+        // for the end would leave the answer unwritten at `fiber_exited`.
         if line.kind == CUT {
+            if let Some(flight) = flight
+                && flight.gate.accepted.unanswered(flight.reader) > 0
+            {
+                return write_cut(&mut writing, stream.as_mut(), flight);
+            }
             continue;
         }
         if line.kind == STOP {
@@ -317,6 +342,11 @@ pub(super) fn write_counted(
         if flight.gate.accepted.answered(flight.reader, id, code) == Answered::Skip {
             return Ok(());
         }
+        // Marked answered only once written: a waiter for owed answers
+        // knows the acknowledgement is on the connection, not just decided.
+        write_line(stream, line)?;
+        flight.gate.accepted.resolve(flight.reader, id, code);
+        return Ok(());
     }
     write_line(stream, line)
 }

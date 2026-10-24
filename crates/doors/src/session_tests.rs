@@ -140,8 +140,12 @@ pub(super) fn shutdown_skipped() -> bool {
 /// A point a test observes through [`Gate::probe`]..
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Probe {
-    /// `close`'s first wait for the driver shells has returned.
+    /// The first wait for the driver shells has returned: the session
+    /// enters its answer phase next.
     FirstShellWaitDone,
+    /// A writer saw STOP while the session is stopping and waits instead
+    /// of ending.
+    WriterParkedAtStop,
     /// `close` has queued its `STOP` for the printer.
     PrinterStopQueued,
     /// A wait for the driver shells is about to block on one still running.
@@ -239,15 +243,6 @@ fn recv(client: &Client) -> serde_json::Value {
 
 fn descriptors() -> usize {
     fs::read_dir("/dev/fd").unwrap().count()
-}
-
-fn wait_idle(gate: &Gate) {
-    assert!(
-        gate.conns.wait_while(DEADLINE, |state| {
-            state.live_len() != 0 || state.writers_open() > 0
-        }),
-        "a disconnected client left a socket or a thread held"
-    );
 }
 
 /// Waits until no connection is live, no writer is open and the process
@@ -798,7 +793,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
 }
 
 #[test]
-fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
+fn should_wait_returns_at_once_with_nothing_owed_and_at_the_grace() {
     let clock = FakeClock::new();
     let now = clock.now();
     let until = now + super::GRACE;
@@ -806,18 +801,18 @@ fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
         .checked_sub(Duration::from_millis(1))
         .expect("the grace exceeds a millisecond");
     let after = until + Duration::from_millis(1);
-    // No writer: the fast-fail path, on both sides of the deadline.
+    // Nothing owed: the fast-fail path, on both sides of the deadline.
     assert!(!super::conns::should_wait(0, before, until));
     assert!(!super::conns::should_wait(0, until, until));
     assert!(!super::conns::should_wait(0, after, until));
-    // An open writer waits only before the deadline; the deadline itself
+    // An owed answer waits only before the deadline; the deadline itself
     // is already past the grace.
     assert!(super::conns::should_wait(1, before, until));
     assert!(!super::conns::should_wait(1, until, until));
     assert!(!super::conns::should_wait(1, after, until));
-    // The count's width changes nothing: open is open.
-    assert!(super::conns::should_wait(u32::MAX, before, until));
-    assert!(!super::conns::should_wait(u32::MAX, until, until));
+    // The count's width changes nothing: owed is owed.
+    assert!(super::conns::should_wait(usize::MAX, before, until));
+    assert!(!super::conns::should_wait(usize::MAX, until, until));
 }
 
 #[test]
@@ -2294,7 +2289,8 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         | Probe::SubscribeAcknowledged
         | Probe::PrinterStopQueued
         | Probe::MessageLocked
-        | Probe::CloseLocked => {}
+        | Probe::CloseLocked
+        | Probe::WriterParkedAtStop => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -2357,7 +2353,6 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
 fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
-    let gate = Arc::clone(&opened.session.gate);
     // The watcher blocks without a deadline, so its lines cross a channel
     // and the reads below carry the deadline.
     let mut watcher = opened.log.watch();
@@ -2402,11 +2397,18 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     );
     opened.session.quiesce();
     drop(connected);
-    wait_idle(&gate);
-    // A client attaching after quiesce writes none either.
+    // A client attaching after quiesce is rejected: its line is never
+    // read, so it gets end of file with no answer and no `clients` line.
     let late = Client::connect(&socket).unwrap();
     late.send(&subscribe_line("c_late", "full")).unwrap();
-    let _ack = recv(&late);
+    assert!(
+        late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "no answer is written for a line never read"
+    );
+    assert!(
+        late.recv(Deadline::after(DEADLINE)).is_none(),
+        "a subscribe after quiesce ends the connection"
+    );
     opened.log.append(&notice(), None, None).unwrap();
     let _lines = fakes::within("the notice", Deadline::after(DEADLINE), move || {
         let wait = Deadline::after(DEADLINE);
@@ -4014,7 +4016,8 @@ fn message_and_close_race_in_both_lock_orders() {
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
-            | Probe::SubscribeAcknowledged => {}
+            | Probe::SubscribeAcknowledged
+            | Probe::WriterParkedAtStop => {}
         }));
         let socket = opened.socket.clone();
         opened
@@ -4100,7 +4103,8 @@ fn message_and_close_race_in_both_lock_orders() {
             | Probe::PrinterStopQueued
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
-            | Probe::SubscribeAcknowledged => {}
+            | Probe::SubscribeAcknowledged
+            | Probe::WriterParkedAtStop => {}
         }));
         let socket = opened.socket.clone();
         opened
@@ -4976,6 +4980,60 @@ fn await_log_end(watcher: log::Watcher) {
 }
 
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the quiesce waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
+#[test]
+fn a_command_held_past_the_quiesce_grace_is_answered_indeterminate_once() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let clock = Arc::clone(&opened.clock);
+    let (hold, entered) = Dispatch::new();
+    wire_quota(&opened.session, &hold);
+    let client = subscribed_client(&opened);
+    client
+        .send(r#"{"id":"c_q","command":"quota","args":{"fetch":true}}"#)
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&entered)
+        .expect("the reader is inside quota");
+    let start = clock.now();
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let quiescer = thread::spawn(move || {
+        session.quiesce();
+        if let Ok(()) = done_tx.send(()) {}
+        session
+    });
+    clock.advance_when_parked(
+        Some(start + super::GRACE),
+        Some(quiescer.thread().id()),
+        super::GRACE,
+        &Deadline::after(DEADLINE),
+    );
+    // The grace passes with the command still running: one indeterminate
+    // answer on the connection, before quiesce returns. Skip the `clients`
+    // line the subscribe drew first.
+    let answer = loop {
+        let line = recv(&client);
+        if matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        ) {
+            break line;
+        }
+    };
+    assert_eq!(answer["kind"], "command_rejected", "{answer:?}");
+    assert_eq!(answer["payload"]["command_id"], "c_q", "{answer:?}");
+    assert_eq!(answer["payload"]["code"], "indeterminate", "{answer:?}");
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("quiesce returns once the cut is flushed");
+    // The command ends after the cut: its own answer reaches nobody.
+    hold.release();
+    let session = quiescer.join().expect("the quiesce thread returns");
+    close_within(session, opened.log);
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_reader_mid_dispatch_at_close_is_answered_before_end_of_file() {
     reset();
@@ -5000,6 +5058,66 @@ fn a_reader_mid_dispatch_at_close_is_answered_before_end_of_file() {
     let acks = acks_for(&lines, "c_q");
     assert_eq!(acks.len(), 1, "one answer before end of file: {lines:?}");
     assert_eq!(acks[0]["kind"], "command_accepted", "{lines:?}");
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "Lifecycle": after a clean exit (the log ends in `fiber_exited`) the session never read the command.
+#[test]
+fn a_reader_mid_dispatch_at_quiesce_is_answered_before_quiesce_returns() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let (hold, entered) = Dispatch::new();
+    wire_quota(&opened.session, &hold);
+    let client = subscribed_client(&opened);
+    client
+        .send(r#"{"id":"c_q","command":"quota","args":{"fetch":true}}"#)
+        .unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&entered)
+        .expect("the reader is inside quota");
+    // Quiesce parks waiting for the owed answer: the first shells wait is
+    // done, but quiesce itself cannot return while the answer is owed.
+    let (parked_tx, parked) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::FirstShellWaitDone
+            && let Ok(()) = parked_tx.send(())
+        {}
+    }));
+    let (done_tx, done) = mpsc::channel();
+    let session = opened.session;
+    let quiesced = thread::spawn(move || {
+        session.quiesce();
+        if let Ok(()) = done_tx.send(()) {}
+        session
+    });
+    Deadline::after(DEADLINE)
+        .recv(&parked)
+        .expect("quiesce enters its answer phase");
+    assert!(
+        done.try_recv().is_err(),
+        "quiesce returns before the held answer is written"
+    );
+    hold.release();
+    // The acknowledgement is written before it is marked answered, so when
+    // quiesce returns the answer is already on the connection: skip the
+    // `clients` line the subscribe drew first.
+    let answer = loop {
+        let line = recv(&client);
+        if matches!(
+            line["kind"].as_str(),
+            Some("command_accepted" | "command_rejected")
+        ) {
+            break line;
+        }
+    };
+    assert_eq!(answer["kind"], "command_accepted", "{answer:?}");
+    assert_eq!(answer["payload"]["command_id"], "c_q", "{answer:?}");
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("quiesce returns once the answer is written");
+    let session = quiesced.join().expect("the quiesce thread returns");
+    close_within(session, opened.log);
 }
 
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
@@ -5518,6 +5636,7 @@ fn accepted_answers_one_occurrence_and_cuts_the_rest_in_read_order() {
         accepted.reserve(&CommandId(id.into()));
     }
     assert_eq!(accepted.answered(me, "c_b", None), Answered::Write);
+    accepted.resolve(me, "c_b", None);
     assert_eq!(accepted.unanswered(me), 3, "one occurrence of c_b left");
     assert_eq!(
         accepted.answered(me, "c_zzz", None),
@@ -5552,6 +5671,7 @@ fn a_malformed_rejection_leaves_an_in_flight_id_unanswered() {
         accepted.answered(me, "c_x", Some("duplicate_command")),
         Answered::Write
     );
+    accepted.resolve(me, "c_x", Some("duplicate_command"));
     assert_eq!(accepted.unanswered(me), 0, "any other rejection answers it");
 }
 
@@ -5581,6 +5701,7 @@ impl Flying {
             .expect("the gate is running");
         let reader = thread::current().id();
         gate.accepted.track(reader);
+        gate.conns.note_owed(conn, reader);
         queued(&opened, &injector, &gate);
         let out = support::Shared::new();
         let (_switches, switch_rx) = mpsc::channel();
@@ -5605,11 +5726,9 @@ impl Flying {
         }
     }
 
-    /// The writer is still running after a short wait.
-    fn still_running(&self) -> bool {
-        Deadline::after(Duration::from_millis(200))
-            .recv(&self.ended)
-            .is_err()
+    /// The writer has not ended: nothing could have ended it, so no wait.
+    fn not_ended(&self) -> bool {
+        self.ended.try_recv().is_err()
     }
 
     fn wait_ended(&self) {
@@ -5641,6 +5760,14 @@ impl Flying {
         self.gate.conns.finish(self.conn);
         close_within(self.opened.session, self.opened.log);
     }
+}
+
+/// Cuts every live connection whose reader still owes an answer: the
+/// test's cut, mirroring what the session cuts when its grace passes.
+fn cut_owed(gate: &super::Gate) {
+    gate.conns.cut_owed(&gate.session_id, |reader| {
+        gate.accepted.unanswered(reader) > 0
+    });
 }
 
 fn read_ids(out: &support::Shared) -> Vec<(String, String)> {
@@ -5687,7 +5814,7 @@ fn a_cut_writes_indeterminate_for_what_is_unanswered_and_ends() {
         gate.accepted.reserve(&CommandId("c_2".into()));
     });
     flying.opened.log.end_watchers();
-    flying.gate.conns.cut_all(&flying.gate.session_id);
+    cut_owed(&flying.gate);
     flying.wait_ended();
     let lines = flying.out.lines();
     assert_eq!(read_ids(&flying.out).len(), 2, "{lines:?}");
@@ -5723,7 +5850,7 @@ fn an_own_answer_queued_ahead_of_cut_is_written_and_not_cut() {
             }),
         );
         injector.push_kept(answer);
-        gate.conns.cut_all(&gate.session_id);
+        cut_owed(gate);
         injector.push_kept(crate::client::control_line(&gate.session_id, super::CUT, 0));
     });
     flying.opened.log.end_watchers();
@@ -5750,9 +5877,19 @@ fn a_stop_before_the_end_ends_the_writer_unless_the_session_is_stopping() {
     flying.finish();
 
     let flying = Flying::start(|_, _, gate| gate.conns.mark_stopped());
+    let gate = Arc::clone(&flying.gate);
+    let (parked_tx, parked) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::WriterParkedAtStop
+            && let Ok(()) = parked_tx.send(())
+        {}
+    }));
     flying.stop();
+    Deadline::after(DEADLINE)
+        .recv(&parked)
+        .expect("the writer parks at STOP while the session is stopping");
     assert!(
-        flying.still_running(),
+        flying.not_ended(),
         "once the session is stopping, STOP is recorded and the writer goes on to the end"
     );
     flying.opened.log.end_watchers();

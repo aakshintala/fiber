@@ -88,6 +88,11 @@ fn a_command_read_before_the_session_ends_is_answered_before_end_of_file() {
     closer.send(r#"{"id":"c_sub2","command":"subscribe","args":{"level":"full"}}"#);
     recv_answer(&closer, "c_sub2", "the closing client's subscribe");
     closer.send(r#"{"id":"c_close","command":"close"}"#);
+    // The loop accepts the close before it quiesces: releasing now lets
+    // the held import finish inside the quiesce grace, so its own answer
+    // is written before `fiber_exited`.
+    recv_answer(&closer, "c_close", "the closing command");
+    release(writer);
     until(&closer, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
@@ -95,7 +100,6 @@ fn a_command_read_before_the_session_ends_is_answered_before_end_of_file() {
         lock.lock().unwrap();
         lock.unlock().unwrap();
     });
-    release(writer);
 
     let seen = support::until_close(&held);
     let answers: Vec<&Value> = seen

@@ -4949,10 +4949,11 @@ fn message_after_the_stopper_is_rejected_closing() {
 }
 
 #[test]
-fn message_after_quiesce_is_rejected_closing() {
+fn message_after_quiesce_is_never_read() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
     let session = &opened.session;
+    let (tx, rx) = mpsc::channel();
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
@@ -4960,16 +4961,33 @@ fn message_after_quiesce_is_rejected_closing() {
             subscribe(&client, "c_sub", "full");
             session.quiesce();
             send(&client, &message_line("c_m1", SENDER, "Too late."));
-            let rejected = response(&client, "c_m1");
-            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            // The readers stopped at quiesce, so the line is never read:
+            // no answer is written for it and the inbox stays empty.
+            assert!(
+                client.recv(Deadline::after(Duration::ZERO)).is_none(),
+                "no answer is written for a line never read"
+            );
             assert!(
                 inbox.try_recv().is_err(),
-                "the refused message reached no inbox"
+                "the unread message reached no inbox"
             );
+            tx.send(client).unwrap();
             Ok(())
         })
         .unwrap();
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client outlives the run");
     opened.close();
+    // End of file carries no answer for the unread line.
+    let mut lines = Vec::new();
+    while let Some(line) = client.recv(Deadline::after(DEADLINE)) {
+        lines.push(line);
+    }
+    assert!(
+        lines.iter().all(|line| command_id(line) != Some("c_m1")),
+        "no answer is written for a line never read: {lines:?}"
+    );
 }
 
 #[test]

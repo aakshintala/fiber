@@ -485,6 +485,7 @@ fn recv_after_end_returns_a_kept_line_pushed_after_the_end() {
 
 #[test]
 fn recv_after_end_waits_while_nothing_is_queued() {
+    parked_after_end::clear();
     let (_sessions, mut watcher) = ended_watcher();
     let injector = watcher.injector();
     let (tx, rx) = mpsc::channel();
@@ -493,10 +494,9 @@ fn recv_after_end_waits_while_nothing_is_queued() {
             if let Ok(()) = tx.send(watcher.recv_after_end().kind) {}
         },
     );
+    parked_after_end::wait();
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&rx)
-            .is_err(),
+        rx.try_recv().is_err(),
         "nothing queued: the call waits instead of returning the end"
     );
     injector.push_kept(kept_line("late"));
