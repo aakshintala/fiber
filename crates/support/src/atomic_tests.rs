@@ -165,6 +165,68 @@ fn exhausted_temporary_names_report_already_exists_with_destination_intact() {
 }
 
 #[test]
+fn unsynced_display_shows_the_inner_message() {
+    let marker = Unsynced(io::Error::other("sync broke"));
+    assert_eq!(format!("{marker}"), "sync broke");
+    assert_eq!(marker.to_string(), "sync broke");
+}
+
+#[test]
+fn unsynced_source_returns_the_inner_error() {
+    use std::error::Error as _;
+    let marker = Unsynced(io::Error::other("sync broke"));
+    let source = marker.source().expect("Unsynced carries its sync failure");
+    assert_eq!(source.to_string(), "sync broke");
+    assert!(source.downcast_ref::<Unsynced>().is_none());
+}
+
+#[test]
+fn fail_nth_before_rename_fails_only_the_second_call() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-fail-nth-before");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    fail_nth(2, Stage::BeforeRename);
+    write_atomic(&file, b"new-one", 0o600).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new-one");
+    let error = write_atomic(&file, b"new-two", 0o600).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert!(
+        error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<Unsynced>())
+            .is_none(),
+        "a pre-rename failure carries no Unsynced marker: {error}"
+    );
+    assert_eq!(fs::read(&file).unwrap(), b"new-one");
+    assert!(temps(dir.path()).is_empty());
+    write_atomic(&file, b"new-three", 0o600).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new-three");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
+fn fail_nth_after_rename_fails_only_the_second_call() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-fail-nth-after");
+    let file = dir.path().join("value");
+    fs::write(&file, b"old").unwrap();
+    fail_nth(2, Stage::AfterRename);
+    write_atomic(&file, b"new-one", 0o600).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new-one");
+    let error = write_atomic(&file, b"new-two", 0o600).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    let marker = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<Unsynced>())
+        .expect("a post-rename failure carries the Unsynced marker");
+    assert_eq!(marker.0.to_string(), "injected");
+    assert_eq!(fs::read(&file).unwrap(), b"new-two");
+    assert!(temps(dir.path()).is_empty());
+    write_atomic(&file, b"new-three", 0o600).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), b"new-three");
+    assert!(temps(dir.path()).is_empty());
+}
+
+#[test]
 fn failure_leaves_no_temp_beside_the_target() {
     let dir = fakes::TempDir::new("fiber-support-atomic-cleanup");
     let file = dir.path().join("value");
