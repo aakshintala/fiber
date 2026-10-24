@@ -2,7 +2,7 @@
 //! step boundary, or resuming a finished one as a new run of the same job
 //! (`docs/delegates.md`, "Talking to a delegate"). The receipt says which.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
 use serde_json::{Map, Value, json};
-use support::clock::Parker;
+use support::{clock::Parker, lock};
 
 use super::run::{Launch, Watch, mint_command_id};
 use crate::error::JobsError;
@@ -107,10 +107,6 @@ pub(crate) enum Attempt {
     /// Steer the live run another message started: the commit still
     /// refuses a run that ended since, so a stale pair is safe.
     Found(SessionId, u64),
-}
-
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Tool for DelegateMessage {

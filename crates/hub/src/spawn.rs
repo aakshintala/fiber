@@ -235,9 +235,7 @@ fn spawn(id: &SessionId, mut command: Command) -> std::io::Result<Box<dyn Starte
     // reaped here.
     let child = command.spawn()?;
     #[cfg(test)]
-    let reading = DRAIN_READING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    let reading = support::lock(&DRAIN_READING)
         .take_if(|(wanted, _)| *wanted == *id)
         .map(|(_, sender)| sender);
     let shared: Arc<(Mutex<State>, Condvar)> = Arc::new((

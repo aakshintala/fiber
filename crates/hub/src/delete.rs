@@ -12,12 +12,10 @@
 //! once removal began finds no log to open, so nothing writes into a
 //! directory being removed.
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
-use std::sync::PoisonError;
-
 use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
@@ -34,10 +32,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     let cascade = parsed.cascade;
     let expect = parsed.expect;
     // No resume starts a process for a session while it is deleted.
-    let _gate = hub
-        .resume_gate
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _gate = support::lock(&hub.resume_gate);
     let Some(dir) = session_dir(hub, &session) else {
         return Err(not_found(&session));
     };

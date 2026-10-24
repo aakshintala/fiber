@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use contract::JobId;
@@ -29,7 +29,7 @@ pub(crate) mod runs;
 
 use park::{Parked, park_until};
 use runs::{Answer, Pending, RunEnd};
-use support::clock::Parker;
+use support::{clock::Parker, lock};
 
 /// A job's end not yet reported, held by the closure in its [`End`] or,
 /// for a delegate, by the runner until it reports. Reporting consumes
@@ -943,10 +943,6 @@ impl contract::jobs::Jobs for Registry {
     fn install_usage_tap(&self, tap: Option<contract::jobs::UsageTap>) {
         lock(&self.inner).usage_tap = tap;
     }
-}
-
-fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// How long [`contract::jobs::Jobs::write`] waits on the session clock for

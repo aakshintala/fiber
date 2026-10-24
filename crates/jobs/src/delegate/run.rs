@@ -9,7 +9,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,8 +23,8 @@ use rustix::process::Signal;
 use super::group;
 use super::outcome::{Termination, outcome};
 use crate::registry::Unreported;
-use support::clock::Parker;
 use support::group::{GROUP_POLL, Listing};
+use support::{clock::Parker, lock};
 
 /// Builds the child's command from its launch. The runner sets the stdio,
 /// the process group and the lifeline around it.
@@ -197,10 +197,6 @@ impl Shared {
     fn kill_at(&self) -> Option<Instant> {
         lock(&self.state).kill_at
     }
-}
-
-fn lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// `bound` past now on the clock. The bound is seconds, so the addition

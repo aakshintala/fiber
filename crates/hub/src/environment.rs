@@ -5,13 +5,13 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::MutexGuard;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use contract::clock::Clock;
 use contract::events::{Variables, VariablesSource};
 use log::diag::{Diag, Severity};
 use serde_json::{Map, Value};
+use support::lock;
 
 use crate::connection::Hub;
 
@@ -387,12 +387,6 @@ pub(crate) fn refresh(
     }
     hub.environments.refresh(&*hub.clock, &hub.diag);
     Ok(None)
-}
-
-/// Locks, never poisoned: no thread holding this lock panics while
-/// holding it.
-fn lock<'a, T>(state: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// `vars` with exactly one `FIBER_HOME`, equal to the hub's home:
