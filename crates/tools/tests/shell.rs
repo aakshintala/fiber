@@ -31,14 +31,12 @@ use fakes::{CancelToken, Recorder, Watchdog, group_alive, kill_group, kill_pid, 
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
-const DEADLINE: Duration = Duration::from_secs(5);
-
 /// The bound on a child's startup-marker ready lines. How long a child takes to start
 /// follows the machine's load, not the test: at a load of 40 to 100 on 11
 /// cores 5 s was not enough. 20 s is the per-wait bound `crates/main/tests`
 /// use. A later startup marker (for example the second line proving `sleep`
 /// exec'd before the exit) keeps `CHILD_START`; other later lines come from
-/// the running command and keep `DEADLINE`.
+/// the running command and keep `fakes::MUST_SUCCEED_WITHIN`.
 const CHILD_START: Duration = Duration::from_secs(20);
 
 /// One bound for a whole `print_steps` sequence.
@@ -84,12 +82,10 @@ fn run_on(
     let recorder = Arc::clone(recorder);
     fakes::within(
         &format!("the shell command {}", arguments["command"]),
-        Deadline::after(DEADLINE),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || shell.run(&arguments, &CancelToken::new(), recorder.as_ref()),
     )
 }
-
-const LIFELINE: Duration = Duration::from_secs(2);
 
 /// A FIFO the command's processes hold open: end-of-file on the read end
 /// means no process holds a write end any more.
@@ -151,10 +147,11 @@ impl Lifeline {
                 Ok(()) | Err(_) => {}
             }
         });
-        match Deadline::after(LIFELINE).recv(&rx) {
+        match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&rx) {
             Ok(()) => {}
             Err(_) => panic!(
-                "waited {LIFELINE:?} for a holder of {}",
+                "waited {:?} for a holder of {}",
+                fakes::MUST_SUCCEED_WITHIN,
                 self.path.display()
             ),
         }
@@ -167,9 +164,9 @@ struct Holders(mpsc::Receiver<()>);
 impl Holders {
     #[track_caller]
     fn gone(self, what: &str) {
-        match Deadline::after(LIFELINE).recv(&self.0) {
+        match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&self.0) {
             Ok(()) => {}
-            Err(_) => panic!("waited {LIFELINE:?} for {what} to exit"),
+            Err(_) => panic!("waited {:?} for {what} to exit", fakes::MUST_SUCCEED_WITHIN),
         }
     }
 }
@@ -203,9 +200,12 @@ fn start(dir: PathBuf, command: String, timeout_ms: Option<u64>, cancel: CancelT
 
 #[track_caller]
 fn join(running: Running) -> contract::tool::Output {
-    match Deadline::after(DEADLINE).recv(&running.output) {
+    match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
         Ok(output) => output,
-        Err(_) => panic!("waited {DEADLINE:?} for the command to finish"),
+        Err(_) => panic!(
+            "waited {:?} for the command to finish",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
     }
 }
 
@@ -376,9 +376,12 @@ fn bash_env_is_not_read() {
         .unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match Deadline::after(DEADLINE).recv(&finished) {
+    let output = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(output) => output.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the BASH_ENV probe"),
+        Err(_) => panic!(
+            "waited {:?} for the BASH_ENV probe",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
     };
     assert!(
         output.status.success(),
@@ -414,9 +417,12 @@ fn exported_functions_are_not_carried() {
         .unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match Deadline::after(DEADLINE).recv(&finished) {
+    let output = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&finished) {
         Ok(output) => output.unwrap(),
-        Err(_) => panic!("waited {DEADLINE:?} for the BASH_FUNC probe"),
+        Err(_) => panic!(
+            "waited {:?} for the BASH_FUNC probe",
+            fakes::MUST_SUCCEED_WITHIN
+        ),
     };
     assert!(
         output.status.success(),
@@ -440,11 +446,11 @@ fn the_call_waits_until_the_group_is_empty() {
     let running = start(dir.path().to_path_buf(), command, None, CancelToken::new());
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _child = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _child = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(600),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park while the group still had a member"
     );
@@ -456,7 +462,7 @@ fn the_call_waits_until_the_group_is_empty() {
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Exit code 0."));
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -472,12 +478,12 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(group_alive(pgid));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(1),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at the timeout"
     );
@@ -486,14 +492,14 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
         Some(running.start + Duration::from_secs(1)),
         None,
         Duration::from_secs(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(text(&output).contains("Timed out after 1000 ms and stopped."));
     assert!(output.process.unwrap().timed_out);
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -509,11 +515,11 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_millis(600_000),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at the default timeout"
     );
@@ -522,7 +528,7 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -550,12 +556,12 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
         Some(running.start + Duration::from_secs(1)),
         None,
         Duration::from_secs(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     cancel.cancel();
     let output = join(running);
@@ -564,7 +570,7 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
     assert!(text(&output).contains("Timed out after 1000 ms and stopped."));
     assert!(!text(&output).contains("Cancelled"));
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -580,13 +586,13 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     cancel.cancel();
     let grace = running.start + Duration::from_millis(800);
     assert!(
         running
             .clock
-            .await_parked(grace, fakes::Deadline::after(DEADLINE)),
+            .await_parked(grace, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the run did not park for the grace period"
     );
     assert!(group_alive(pgid), "killed before the grace elapsed");
@@ -594,13 +600,13 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
         Some(grace),
         None,
         Duration::from_millis(800),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -617,12 +623,12 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let pids = ready.wait(fakes::Deadline::after(DEADLINE));
+    let pids = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let holders = life.watch();
     cancel.cancel();
     assert!(running.clock.await_parked(
         running.start + Duration::from_millis(800),
-        fakes::Deadline::after(DEADLINE)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     for pid in &pids {
         assert!(pid_alive(*pid), "{pid} died before the grace");
@@ -631,13 +637,13 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
         Some(running.start + Duration::from_millis(800)),
         None,
         Duration::from_millis(800),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
     holders.gone("the shell and its descendant");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -653,13 +659,13 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let holder = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let holder = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
     let _guard = KillPid(holder);
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(2),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at the drain bound"
     );
@@ -667,7 +673,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         Some(running.start + Duration::from_secs(2)),
         None,
         Duration::from_secs(2),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = join(running);
     assert!(output.error.is_none(), "{}", text(&output));
@@ -679,7 +685,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
     );
     kill_pid(holder, "KILL").unwrap();
     holders.gone("the pipe holder");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -696,14 +702,14 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let escapee = ready.wait(fakes::Deadline::after(DEADLINE))[0];
+    let escapee = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
     let _guard = KillPid(escapee);
     cancel.cancel();
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(2),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at the drain bound"
     );
@@ -711,7 +717,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
         Some(running.start + Duration::from_secs(2)),
         None,
         Duration::from_secs(2),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let output = join(running);
     assert_eq!(code(&output), Some(ErrorCode::Indeterminate));
@@ -724,7 +730,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     assert!(!group_alive(pgid));
     kill_pid(escapee, "KILL").unwrap();
     holders.gone("the escapee");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -752,7 +758,7 @@ fn two_calls_at_once_do_not_share_a_command() {
             ))
             .unwrap();
     });
-    let wait = Deadline::after(DEADLINE);
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let texts = [
         text(&wait.recv(&rx).unwrap()),
         text(&wait.recv(&rx).unwrap()),
@@ -844,8 +850,9 @@ fn output_streams_before_the_call_returns() {
             .unwrap();
     });
     assert!(
-        recorder.wait_for_text("line\n", fakes::Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the line to stream"
+        recorder.wait_for_text("line\n", fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "waited {:?} for the line to stream",
+        fakes::MUST_SUCCEED_WITHIN
     );
     // The command is still blocked reading the pipe, so the line streamed
     // before the call returned.
@@ -856,7 +863,7 @@ fn output_streams_before_the_call_returns() {
     // Opening the pipe blocks until the command opens its end, so the
     // write runs on its own thread and the wait below carries the deadline.
     thread::spawn(move || std::fs::write(&fifo, "go\n"));
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&rx)
         .expect("the call to finish");
     assert_eq!(text(&output), "line\ngot:go\nExit code 0.\n");
@@ -897,19 +904,21 @@ fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
     );
     let running = streamed(dir.path().to_path_buf(), command, Some(1000));
     assert!(
-        running
-            .recorder
-            .wait_for_text("partial\n", fakes::Deadline::after(DEADLINE)),
-        "waited {DEADLINE:?} for the partial line to stream"
+        running.recorder.wait_for_text(
+            "partial\n",
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
+        "waited {:?} for the partial line to stream",
+        fakes::MUST_SUCCEED_WITHIN
     );
     let due = running.start + Duration::from_secs(1);
     running.clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_secs(1),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the command to finish");
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
@@ -1015,8 +1024,8 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1041,7 +1050,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
     assert!(!streamed.contains('b'), "{streamed}");
     release_block(ready.path());
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(
@@ -1051,7 +1060,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
     assert!(ended.output_tail.is_none());
     assert_eq!(job_output(dir.path(), &job), "a\nb\n");
     assert_eq!(running.recorder.text(), streamed);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1069,8 +1078,8 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1082,11 +1091,11 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         release_block(&block);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("waited for the command's read of the block fifo");
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     // The move races the command's first line, so "a" is either in the copy
@@ -1101,7 +1110,7 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         deltas.deltas()
     );
     assert_eq!(job_output(dir.path(), &job), "a\nb\n");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1119,12 +1128,12 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let move_at = running.start + Duration::from_secs(30);
     assert!(
         running
             .clock
-            .await_parked(move_at, fakes::Deadline::after(DEADLINE)),
+            .await_parked(move_at, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the run did not park at 30 seconds"
     );
     assert!(
@@ -1136,9 +1145,9 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
         Some(move_at),
         None,
         Duration::from_secs(30),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the 30-second receipt");
     let job = started(&output);
@@ -1156,21 +1165,22 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
     assert!(group_alive(pgid), "the move stopped the command");
     let timeout_at = running.start + Duration::from_millis(600_000);
     assert!(
-        running
-            .clock
-            .await_parked(timeout_at, fakes::Deadline::after(DEADLINE)),
+        running.clock.await_parked(
+            timeout_at,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the job did not keep the timeout from the command's start"
     );
     let streamed = running.recorder.text();
     assert!(!streamed.contains("AFTER"), "{streamed}");
     release_block(ready.path());
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(job_output(dir.path(), &job), "BEFORE\nAFTER\n");
     assert_eq!(running.recorder.text(), streamed);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1188,16 +1198,16 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(30),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at 30 seconds"
     );
     assert_eq!(jobs.background(), 1);
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1214,18 +1224,18 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_millis(600_000),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the job did not keep the timeout from the command's start"
     );
     release_block(ready.path());
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     assert_eq!(job_output(dir.path(), &job), "BEFORE\nAFTER\n");
     assert_eq!(jobs.started().len(), 1, "the command moved twice");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1240,7 +1250,7 @@ fn a_finished_call_is_not_registered_as_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the result");
     assert!(output.jobs.is_empty());
@@ -1263,14 +1273,14 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
         Some(running.start + Duration::from_secs(30)),
         None,
         Duration::from_secs(30),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     assert!(
@@ -1281,9 +1291,9 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
     assert_eq!(jobs.background(), 0);
     assert_eq!(jobs.started().len(), 1);
     release_block(ready.path());
-    jobs.ended(fakes::Deadline::after(DEADLINE))
+    jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1301,15 +1311,15 @@ fn a_run_in_background_call_is_not_registered_as_foreground() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     assert_eq!(jobs.background(), 0);
     release_block(ready.path());
-    jobs.ended(fakes::Deadline::after(DEADLINE))
+    jobs.ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1327,11 +1337,11 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(30),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at the timeout"
     );
@@ -1340,9 +1350,9 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         Some(running.start + Duration::from_secs(30)),
         None,
         Duration::from_secs(30),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the timeout");
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
@@ -1351,7 +1361,7 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     assert!(output.jobs.is_empty());
     assert!(jobs.started().is_empty());
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1374,7 +1384,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let _started = ready.wait(fakes::Deadline::after(CHILD_START));
     let watchdog = Watchdog::group(pgid);
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("waited for the shell-exited receipt after sleep exec'd");
     let body = text(&output);
@@ -1387,14 +1397,19 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     let timeout_at = running.start + Duration::from_millis(600_000);
     let mark = running
         .clock
-        .mark_parked(timeout_at, fakes::Deadline::after(DEADLINE))
+        .mark_parked(
+            timeout_at,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        )
         .expect("the moved job did not park at its timeout");
     // A later park at the timeout means another group check found sleep
     // alive and the job waits on.
     assert!(
-        running
-            .clock
-            .await_parked_since(&mark, Some(timeout_at), fakes::Deadline::after(DEADLINE)),
+        running.clock.await_parked_since(
+            &mark,
+            Some(timeout_at),
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the job did not wait again while sleep was in the group"
     );
     assert!(
@@ -1403,7 +1418,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     );
     assert!(kill_group(pgid, "KILL").unwrap());
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish once the group was empty");
     assert_eq!(ended.status, Outcome::Failed);
     assert_eq!(
@@ -1414,7 +1429,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
         ended.process.as_ref().and_then(|process| process.exit_code),
         Some(3)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1432,15 +1447,15 @@ fn a_moved_job_times_out_from_the_commands_start() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let due = running.start + Duration::from_secs(5);
     assert!(
         running
             .clock
-            .await_parked(due, fakes::Deadline::after(DEADLINE)),
+            .await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the job did not park at its timeout"
     );
     assert!(group_alive(pgid), "stopped before the deadline");
@@ -1448,10 +1463,10 @@ fn a_moved_job_times_out_from_the_commands_start() {
         Some(due),
         None,
         Duration::from_secs(5),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to time out");
     assert_eq!(ended.status, Outcome::Failed);
     assert_eq!(
@@ -1462,7 +1477,7 @@ fn a_moved_job_times_out_from_the_commands_start() {
     let tail = ended.output_tail.unwrap();
     assert!(tail.contains("partial"), "{tail}");
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A call's cancel that keeps every waker subscribed to it, to show which
@@ -1513,8 +1528,8 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1525,9 +1540,10 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     );
     let timeout_at = running.start + Duration::from_millis(600_000);
     assert!(
-        running
-            .clock
-            .await_parked(timeout_at, fakes::Deadline::after(DEADLINE)),
+        running.clock.await_parked(
+            timeout_at,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the job did not park"
     );
     cancel.cancel();
@@ -1537,12 +1553,14 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         Some(timeout_at),
         None,
         Duration::ZERO,
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert!(
-        running
-            .clock
-            .await_parked_since(&mark, Some(timeout_at), fakes::Deadline::after(DEADLINE)),
+        running.clock.await_parked_since(
+            &mark,
+            Some(timeout_at),
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the job did not wait again after the turn cancel"
     );
     assert!(
@@ -1557,13 +1575,13 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     );
     jobs.stop(&job.job_id);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the stop to finish the job");
     assert_eq!(ended.status, Outcome::Cancelled);
     assert!(ended.error.is_none());
     assert!(ended.output_tail.is_none());
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1581,11 +1599,11 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_secs(30),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the run did not park at 30 seconds"
     );
@@ -1593,13 +1611,13 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_millis(600_000),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the command did not fall back to the foreground"
     );
     assert_eq!(jobs.background(), 0, "a fallen-back call stayed registered");
     release_block(ready.path());
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the result");
     assert!(
@@ -1607,7 +1625,7 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
         "{}",
         text(&output)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1625,11 +1643,11 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_millis(600_000),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the command did not stay in the foreground"
     );
@@ -1640,7 +1658,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     assert!(group_alive(pgid));
     assert!(running.jobs.started().is_empty());
     release_block(ready.path());
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the foreground result");
     let body = text(&output);
@@ -1659,7 +1677,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
             .and_then(|process| process.exit_code),
         Some(0)
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 // `tty`: the command runs in a pseudo-terminal and moves to the background
@@ -1748,11 +1766,11 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
         running.clock.await_parked(
             running.start + Duration::from_millis(250),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the call did not park for the first output"
     );
@@ -1762,12 +1780,14 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         release_block(&block);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("waited for the command's read of the block fifo");
     assert!(
-        jobs.deltas()
-            .wait_for_text("yes:/dev/", fakes::Deadline::after(DEADLINE)),
+        jobs.deltas().wait_for_text(
+            "yes:/dev/",
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the output did not arrive: {:?}",
         jobs.deltas().text()
     );
@@ -1775,9 +1795,9 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         Some(running.start + Duration::from_millis(250)),
         Some(running.call),
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1798,8 +1818,10 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
     // later delta once the clock has passed the pacing interval, and the
     // reader writes the file before it hands bytes to a delta.
     assert!(
-        jobs.deltas()
-            .wait_for_text(":controlling\r\n", fakes::Deadline::after(DEADLINE)),
+        jobs.deltas().wait_for_text(
+            ":controlling\r\n",
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "{:?}",
         jobs.deltas().text()
     );
@@ -1811,10 +1833,10 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
     assert!(group_alive(pgid));
     jobs.stop(&job.job_id);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the stop to end the job");
     assert_eq!(ended.status, Outcome::Cancelled);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1829,7 +1851,7 @@ fn a_command_that_ends_at_once_on_a_terminal_still_returns_its_output() {
     );
     // Moved or finished, the output is in the result: the call raced the
     // command's exit.
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the result");
     assert!(text(&output).contains("quick"), "{}", text(&output));
@@ -1853,7 +1875,7 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
     assert!(
         running
             .clock
-            .await_parked(due, fakes::Deadline::after(DEADLINE)),
+            .await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the call did not park for the first output"
     );
     assert!(
@@ -1864,9 +1886,9 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         Some(due),
         Some(running.call),
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1877,10 +1899,10 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
     );
     jobs.stop(&job.job_id);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the stop to end the job");
     assert_eq!(ended.status, Outcome::Cancelled);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1901,9 +1923,9 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
         Some(due),
         Some(running.call),
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -1920,12 +1942,12 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
             .is_ok()
     );
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     let file = job_output(dir.path(), &job);
     assert!(file.contains("got:hi"), "{file:?}");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -1952,10 +1974,10 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(running.clock.await_parked(
         running.start + Duration::from_millis(250),
-        fakes::Deadline::after(DEADLINE)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     let block = ready.path().to_path_buf();
     let (released, release) = mpsc::channel();
@@ -1963,22 +1985,22 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         release_block(&block);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("waited for the command's read of the block fifo");
     running.clock.advance_when_parked(
         Some(running.start + Duration::from_millis(250)),
         Some(running.call),
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let _receipt = Deadline::after(DEADLINE)
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     // The send carried the only byte, so the loop is out of output.
     assert!(
         jobs.deltas()
-            .wait_for_text("S", fakes::Deadline::after(DEADLINE)),
+            .wait_for_text("S", fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the byte never went out in a job_delta: {:?}",
         jobs.deltas().text()
     );
@@ -1988,10 +2010,10 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         Some(timeout_at),
         None,
         Duration::from_millis(4_750),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the job to time out");
     assert_eq!(ended.status, Outcome::Failed);
     assert_eq!(
@@ -2000,7 +2022,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     );
     assert!(ended.process.as_ref().unwrap().timed_out);
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2024,14 +2046,14 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
         Some(running.start + Duration::from_millis(250)),
         Some(running.call),
         Duration::from_millis(250),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    let output = Deadline::after(DEADLINE)
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -2055,23 +2077,23 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
     assert!(
         clock.await_parked(
             clock.origin() + Duration::from_millis(10),
-            fakes::Deadline::after(DEADLINE)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the write did not wait for room"
     );
     assert!(matches!(written.try_recv(), Err(mpsc::TryRecvError::Empty)));
     cancel.cancel();
-    let count = Deadline::after(DEADLINE)
+    let count = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&written)
         .expect("the cancelled write to return")
         .unwrap();
     assert!(count < length, "the whole input fit: {count}");
     jobs.stop(&job.job_id);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the stop to end the job");
     assert_eq!(ended.status, Outcome::Cancelled);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2152,7 +2174,7 @@ fn open_feed(ready: &Path) -> std::fs::File {
     thread::spawn(move || {
         let _sent = opened.send(std::fs::OpenOptions::new().write(true).open(feed).unwrap());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&open)
         .expect("waited for the command's read of the feed fifo")
 }
@@ -2172,13 +2194,20 @@ fn print_steps(
     fakes::within("monitor steps", Deadline::after(STEPS), move || {
         let mut feed = feed;
         for (step, line) in steps {
-            clock.advance_when_parked(Some(deadline), None, step, &Deadline::after(DEADLINE));
+            clock.advance_when_parked(
+                Some(deadline),
+                None,
+                step,
+                &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            );
             // One write: `writeln!` can split the newline into its own write, and
             // a delta of the line alone would hold the newline past the step.
             feed.write_all(format!("{line}\n").as_bytes()).unwrap();
             assert!(
-                jobs.deltas()
-                    .wait_for_text(&format!("{line}\n"), fakes::Deadline::after(DEADLINE)),
+                jobs.deltas().wait_for_text(
+                    &format!("{line}\n"),
+                    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+                ),
                 "the monitor did not take {line}"
             );
         }
@@ -2204,8 +2233,8 @@ fn a_monitor_moves_at_once_with_its_receipt() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     assert!(output.error.is_none(), "{}", text(&output));
@@ -2223,14 +2252,14 @@ fn a_monitor_moves_at_once_with_its_receipt() {
     // The default deadline: 5 minutes from the command's start.
     assert!(running.clock.await_parked(
         running.start + Duration::from_millis(300_000),
-        fakes::Deadline::after(DEADLINE)
+        fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     jobs.stop(&job.job_id);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the stop to end the monitor");
     assert_eq!(ended.status, Outcome::Cancelled);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2250,8 +2279,8 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     assert!(output.error.is_none(), "{}", text(&output));
@@ -2276,11 +2305,11 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         release_block(&path);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("the release");
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
     let texts: Vec<String> = jobs
@@ -2291,7 +2320,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         .collect();
     assert_eq!(texts, ["out"]);
     assert!(errors.is_dir());
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2331,8 +2360,8 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let output = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let job = started(&output);
@@ -2342,11 +2371,11 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         release_block(&path);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("the release");
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
     let delivered: Vec<String> = jobs
@@ -2365,7 +2394,7 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         std::fs::read_to_string(errors_file(dir.path(), &job)).unwrap(),
         "err\nerr2\n"
     );
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2384,8 +2413,8 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _receipt = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let path = ready.path().to_path_buf();
@@ -2394,11 +2423,11 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
         release_block(&path);
         let _sent = released.send(());
     });
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&release)
         .expect("the release");
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed);
     let texts: Vec<String> = jobs
@@ -2424,7 +2453,7 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
         })
         .collect();
     assert_eq!(kinds, ["line", "line", "end"]);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2442,8 +2471,8 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _receipt = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
@@ -2455,7 +2484,7 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
     let feed = print_steps(&running, deadline, feed, steps);
     drop(feed);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed);
     let lines = jobs.lines().lines();
@@ -2471,7 +2500,7 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
         .collect();
     assert_eq!(kinds.iter().filter(|end| **end).count(), 1);
     assert_eq!(kinds.last(), Some(&true), "the end came last");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2487,8 +2516,8 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _receipt = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
@@ -2511,7 +2540,7 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
         vec![(Duration::from_millis(500), "line74".to_owned())],
     );
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the flood to stop the monitor");
     assert_eq!(ended.status, Outcome::Failed);
     let error = ended.error.unwrap();
@@ -2528,7 +2557,7 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
     assert_eq!(last.lines, "");
     assert!(last.suppressed.is_some_and(|count| count > 0), "{last:?}");
     drop(feed);
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2544,8 +2573,8 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _receipt = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
@@ -2564,10 +2593,10 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
     );
     drop(feed);
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
@@ -2583,25 +2612,25 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     );
     let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
-    let _own = ready.wait(fakes::Deadline::after(DEADLINE));
-    let _receipt = Deadline::after(DEADLINE)
+    let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&running.output)
         .expect("the receipt");
     let due = running.start + Duration::from_secs(5);
     assert!(
         running
             .clock
-            .await_parked(due, fakes::Deadline::after(DEADLINE))
+            .await_parked(due, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
     );
     assert!(group_alive(pgid), "stopped before the deadline");
     running.clock.advance_when_parked(
         Some(due),
         None,
         Duration::from_secs(5),
-        &Deadline::after(DEADLINE),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     let ended = jobs
-        .ended(fakes::Deadline::after(DEADLINE))
+        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
         .expect("the deadline to end the monitor");
     assert_eq!(ended.status, Outcome::Failed);
     let error = ended.error.unwrap();
@@ -2619,7 +2648,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
         .collect();
     assert_eq!(texts, ["partial"]);
     assert!(!group_alive(pgid));
-    watchdog.stand_down(fakes::Deadline::after(DEADLINE));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// One shell call with `artifacts`, on its own thread under the deadline.

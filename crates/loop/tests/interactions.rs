@@ -14,8 +14,6 @@
 
 mod support;
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,13 +30,13 @@ use contract::hook::{
     CheckOutcome, Hooks,
 };
 use contract::inbox::{Ack, Delivery};
-use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
+use contract::jobs::Jobs;
 use contract::provider::{Provider, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, True};
 use contract::tool::{Answered, Ask, Asking, Cancel, Check, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{Scripted, ScriptedProvider, StubJobs};
 use r#loop::{Error, HandoffSettings, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
 
@@ -905,52 +903,12 @@ fn until_passing_declines_the_request() {
     until_passes(session, &answers, at);
 }
 
-/// Jobs a test turns on and off: one job runs while `running` is set.
-#[derive(Default)]
-struct Toggle {
-    running: AtomicBool,
-}
-
-impl Jobs for Toggle {
-    fn open(&self, _opening: Opening) -> Result<Opened, OpenError> {
-        Err(OpenError {
-            path: PathBuf::from("jobs"),
-            source: std::io::Error::other("no jobs here"),
-        })
-    }
-
-    fn stop(&self, _job_id: &JobId) -> bool {
-        false
-    }
-
-    fn stop_delegates(&self) -> usize {
-        0
-    }
-
-    fn background(&self) -> usize {
-        0
-    }
-
-    fn foreground(&self, _call: Foreground) {}
-
-    fn running(&self) -> Vec<JobId> {
-        if self.running.load(Ordering::SeqCst) {
-            vec![JobId("j_1".into())]
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn deliver_to(&self, _inbox: mpsc::Sender<Delivery>) {}
-}
-
 #[test]
 fn until_passing_declines_the_request_while_a_job_runs() {
     let (make, at_slot) = until_later();
     let (tool, answers) = Asks::new(vec![make]);
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
-    let jobs = Arc::new(Toggle::default());
-    jobs.running.store(true, Ordering::SeqCst);
+    let jobs = Arc::new(StubJobs::new([JobId("j_1".into())]));
     let looped = session.looped.take().unwrap();
     session.looped = Some(looped.jobs(jobs as Arc<dyn Jobs>));
     let at = session.clock.now() + Duration::from_secs(10);

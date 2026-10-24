@@ -1093,6 +1093,7 @@ fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
         figure("tokens in / out", "10 / 3"),
         figure("cache hits", "40%"),
         figure("cost", "unknown"),
+        figure("cost on subscription", "$0.00"),
         figure("turns", "1"),
     ]);
     rows
@@ -1161,7 +1162,9 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     run.wait_screen("the finished turn", |grid| {
         grid.contents.contains("completed")
     });
-    run.wait_screen("the spend row", |grid| grid.contents.contains("cache hits"));
+    run.wait_screen("the final usage rows", |grid| {
+        grid.contents.contains("10 / 3") && grid.contents.contains("40%")
+    });
     // The card draws top-down, its bottom edge lands last, and the `cost`
     // row lands later still (`crates/tui/src/view/panel.rs`, `session_rows`):
     // wait for the edge at the panel columns and the whole-word `cost` label

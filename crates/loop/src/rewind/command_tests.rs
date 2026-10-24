@@ -320,6 +320,7 @@ mod closed_starts {
     use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
     use contract::{CommandId, ErrorCode, JobId, Seq, SessionId};
     use fakes::Deadline;
+    use fakes::StubJobs;
     use fakes::clock::FakeClock;
 
     use crate::Loop;
@@ -328,7 +329,7 @@ mod closed_starts {
     const DEADLINE: Duration = Duration::from_secs(10);
 
     struct Listed {
-        ids: Mutex<Vec<JobId>>,
+        running: StubJobs,
         order: Mutex<Vec<String>>,
         gate: Mutex<()>,
         closed: Mutex<bool>,
@@ -340,7 +341,7 @@ mod closed_starts {
     impl Listed {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                ids: Mutex::new(Vec::new()),
+                running: StubJobs::default(),
                 order: Mutex::new(Vec::new()),
                 gate: Mutex::new(()),
                 closed: Mutex::new(false),
@@ -368,7 +369,7 @@ mod closed_starts {
             }
             let job = JobId(id.into());
             self.bound.lock().unwrap().push(job.clone());
-            self.ids.lock().unwrap().push(job.clone());
+            self.running.update_running(|ids| ids.push(job.clone()));
             *self.launched.lock().unwrap() += 1;
             Ok(job)
         }
@@ -398,7 +399,7 @@ mod closed_starts {
 
         fn running(&self) -> Vec<JobId> {
             self.order.lock().unwrap().push("running".into());
-            self.ids.lock().unwrap().clone()
+            Jobs::running(&self.running)
         }
 
         fn deliver_to(&self, _: Sender<Delivery>) {}
