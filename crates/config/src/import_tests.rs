@@ -21,6 +21,7 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 
 use super::*;
+use crate::write::atomic::{reset_write_count, write_count};
 
 /// One Fiber home beside one source home.
 struct Fixture {
@@ -81,12 +82,15 @@ fn six_hundred_skill_dirs_import_the_first_512_and_report_more_than_512() {
             b"---\nname: x\ndescription: y.\n---\n\nBody.\n",
         );
     }
-    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
-    assert_eq!(report.imported.skills.len(), 512);
+    reset_write_count();
+    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    assert_eq!(planned.skills.len(), 512);
+    let report = planned.report();
     assert_eq!(
         reasons(&report),
         vec![("skills", "more than 512 entries, keeping the first 512",)],
     );
+    assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
 
 #[test]
@@ -98,9 +102,12 @@ fn five_hundred_twelve_skill_dirs_report_nothing() {
             b"---\nname: x\ndescription: y.\n---\n\nBody.\n",
         );
     }
-    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
-    assert_eq!(report.imported.skills.len(), 512);
+    reset_write_count();
+    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    assert_eq!(planned.skills.len(), 512);
+    let report = planned.report();
     assert!(report.left_behind.is_empty(), "{report:?}");
+    assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
 
 #[test]
@@ -109,12 +116,15 @@ fn a_commands_dir_past_512_reports_under_its_own_name() {
     for index in 0..513 {
         fixture.write_source(&format!("commands/do-{index:03}.md"), b"Do it.\n");
     }
-    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
-    assert_eq!(report.imported.commands.len(), 512);
+    reset_write_count();
+    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    assert_eq!(planned.commands.len(), 512);
+    let report = planned.report();
     assert!(
         reasons(&report).contains(&("commands", "more than 512 entries, keeping the first 512",)),
         "{report:?}",
     );
+    assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
 
 #[test]
@@ -123,7 +133,9 @@ fn a_source_home_past_512_reports_under_the_source_name() {
     for index in 0..513 {
         fixture.write_source(&format!("junk-{index:03}.txt"), b"junk\n");
     }
-    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    reset_write_count();
+    let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    let report = planned.report();
     // The 512 kept entries each land unmapped, and the 513th reports the
     // cutoff under the source's own name.
     assert_eq!(report.left_behind.len(), 513);
@@ -131,6 +143,29 @@ fn a_source_home_past_512_reports_under_the_source_name() {
         reasons(&report).contains(&(".claude", "more than 512 entries, keeping the first 512",)),
         "{report:?}",
     );
+    assert_eq!(write_count(), 0, "enumeration must write nothing");
+}
+
+#[test]
+fn a_three_skill_import_writes_each_item_plus_the_receipt() {
+    let fixture = Fixture::new();
+    for name in ["alpha", "beta", "gamma"] {
+        fixture.write_source(
+            &format!("skills/{name}/SKILL.md"),
+            b"---\nname: x\ndescription: y.\n---\n\nBody.\n",
+        );
+    }
+    reset_write_count();
+    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    assert_eq!(
+        report.imported.skills,
+        vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+    );
+    assert!(report.left_behind.is_empty(), "{report:?}");
+    // Three item writes plus the receipt: no servers, no collisions, so
+    // `write_servers` writes nothing. A dropped receipt or a doubled item
+    // write breaks this count.
+    assert_eq!(write_count(), 4);
 }
 
 #[test]
