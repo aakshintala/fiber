@@ -445,17 +445,18 @@ impl App {
         }
     }
 
-    /// Closes the call view, leaving the call open behind it, with the
-    /// call's more row still focused: it stays drawn with its target,
-    /// so a render keeps the focus and Enter opens the view again.
+    /// Closes the view, focusing its more row or, for short calls, the call row.
     pub(in crate::app) fn close_call_view(&mut self) {
-        let call = self.call_view_mut().map(|view| view.call);
+        let call = self
+            .call_view_mut()
+            .map(|view| (view.call, view.plain.len() > opened::OPENED_LINES));
         self.close_session_view();
-        if let Some(call) = call {
-            // The headline row draws whenever the inline call is open,
-            // with or without a more row, so Esc keeps a drawn focus for
-            // short calls too; Enter on it reopens the view.
-            self.focus = Some(TargetId::Line(Target::Call(call)));
+        if let Some((call, more)) = call {
+            self.focus = Some(TargetId::Line(if more {
+                Target::CallView(call)
+            } else {
+                Target::Call(call)
+            }));
         }
         self.settle();
     }
