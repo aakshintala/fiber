@@ -2460,10 +2460,7 @@ fn the_summary_names_no_head_skip_when_none() {
     );
     // ... or on a push, which judges the head alone even if its file
     // carries a skip.
-    let mut head = head();
-    for id in ["session_start_ms"] {
-        head = without_metric(&head, id);
-    }
+    let head = without_metric(&head(), "session_start_ms");
     let out = judge(&with_skipped(head, &["session start"]), None, Event::Push);
     assert!(
         !out.comment.contains("The head pass skipped"),
