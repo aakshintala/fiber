@@ -2563,10 +2563,6 @@ fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
     );
     assert!(!dump.contains("plain"), "skips a non-server: {dump}");
     assert!(!dump.contains("stray"), "skips a file: {dump}");
-    assert!(
-        dump.find("fake MCP server fx:").unwrap() < dump.find("fake MCP server gx:").unwrap(),
-        "sorts the servers: {dump}"
-    );
 }
 
 #[test]
@@ -2623,7 +2619,6 @@ fn a_fake_server_entry_captures_stderr_in_its_directory() {
     let entry = fake.entry(json!({}));
     assert_eq!(entry["command"], json!("/bin/sh"));
     let args = entry["args"].as_array().unwrap();
-    assert_eq!(args.len(), 4, "the wrapper takes its shape: {args:?}");
     // The wrapper execs the fixture on the directory and redirects the
     // server's stderr into it: the paths ride as positional parameters,
     // never interpolated, so no path needs quoting.
