@@ -275,7 +275,9 @@ fn measure_all_hands_each_workload_its_counts_and_records_them() {
         .flat_map(|(workload, repeats, runs)| {
             let (calls, each) = if workload.name == "sessions list" {
                 (*runs, 1)
-            } else if workload.name == "terminal attach" {
+            } else if workload.name == "terminal attach" || workload.name == "terminal wheel" {
+                // Each attach fixture and each wheel session runs `runs`
+                // samples: one call per sample on each side.
                 (2 * *runs, 1)
             } else if workload.name == "busy turn" {
                 (1, *runs)
@@ -355,9 +357,10 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
 #[test]
 fn sampled_rows_alternate_head_and_base_by_sample() {
     // A repeated row alternates per run, and a sampled row per sample, so
-    // listing's 3 samples and attach's 2 fixtures of 5 interleave. A
-    // mutant running a sampled row's head block then its base block, or
-    // interleaving another row, fails the log below.
+    // listing's 3 samples, attach's 2 fixtures of 5 and wheel's 2
+    // sessions of 3 interleave. A mutant running a sampled row's head
+    // block then its base block, or interleaving another row, fails the
+    // log below.
     let head = args("--fiber f --out o --runs 5 --timing-runs 3 --only timing").unwrap();
     let base = args("--fiber b --out ob --runs 5 --timing-runs 3 --only timing").unwrap();
     let (forward, back) = (Side::Head, Side::Base);
@@ -381,17 +384,18 @@ fn sampled_rows_alternate_head_and_base_by_sample() {
         (forward, "session_list", 3),
         (back, "session_list", 3),
     ];
-    // Each sampled row is one call per sample: listing's 3 and attach's
-    // 2 fixtures of 5. Wheel keeps its head block then its base block
-    // until its sessions prepare before timing.
-    for (name, total) in [("sessions list", 3), ("terminal attach", 10)] {
+    // Each sampled row is one call per sample: listing's 3, attach's 2
+    // fixtures of 5, wheel's 2 sessions of 3.
+    for (name, total) in [
+        ("sessions list", 3),
+        ("terminal attach", 10),
+        ("terminal wheel", 6),
+    ] {
         for s in 1..=total {
             expected.push((forward, name, s));
             expected.push((back, name, s));
         }
     }
-    expected.push((forward, "terminal wheel", 1));
-    expected.push((back, "terminal wheel", 1));
     assert_eq!(order(head, Some(base)), expected);
 }
 
@@ -707,13 +711,15 @@ fn a_base_row_the_head_did_not_select_does_not_run() {
     let parsed = args("--fiber f --out o --only wheel --base-fiber b --base-out ob").unwrap();
     let (head_args, base_args) = sides(&parsed);
     assert!(base_args.is_some());
-    assert_eq!(
-        order(head_args, base_args),
-        [
-            (Side::Head, "terminal wheel", 1),
-            (Side::Base, "terminal wheel", 1),
-        ]
-    );
+    // The wheel row alternates its 2 sessions of 5 samples head and
+    // base; a mutant running the head block then the base block fails
+    // this.
+    let mut expected = Vec::new();
+    for s in 1..=10 {
+        expected.push((Side::Head, "terminal wheel", s));
+        expected.push((Side::Base, "terminal wheel", s));
+    }
+    assert_eq!(order(head_args, base_args), expected);
 }
 
 #[test]

@@ -372,11 +372,10 @@ fn sides(args: &Args) -> (Args, Option<Args>) {
 /// sample per call, so the scheduler alternates the sides per sample.
 /// Every other row times one run per call.
 fn is_sampled(workload: &idle::Workload) -> bool {
-    // Wheel joins the sampled rows once its sessions prepare before
-    // timing; until then it keeps its head block then its base block.
     listing::SAMPLED
         .iter()
         .chain(attach::SAMPLED.iter())
+        .chain(wheel::SAMPLED.iter())
         .any(|sampled| sampled.name == workload.name)
 }
 
@@ -392,6 +391,12 @@ fn sample_total(workload: &idle::Workload, runs: u32) -> u32 {
         .any(|sampled| sampled.name == workload.name)
     {
         return runs.saturating_mul(attach::FIXTURE_COUNT);
+    }
+    if wheel::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        return runs.saturating_mul(wheel::SESSION_COUNT);
     }
     runs
 }
@@ -691,11 +696,11 @@ struct SampledRow {
     per_group: u32,
 }
 
-/// A sampled row's prepared fixtures, by workload. Wheel joins once its
-/// sessions prepare before timing.
+/// A sampled row's prepared fixtures, by workload.
 enum SampledState {
     Listing(Box<listing::ListingPrepared>),
     Attach(attach::AttachPrepared),
+    Wheel(Box<wheel::WheelPrepared>),
 }
 
 /// Prepares the side's sampled rows before any timed sample, in
@@ -729,8 +734,15 @@ fn prepare_sampled(
             listing::prepare_listing(&ctx, &mut setup_notes)
                 .map(Box::new)
                 .map(SampledState::Listing)
-        } else {
+        } else if attach::SAMPLED
+            .iter()
+            .any(|sampled| sampled.name == workload.name)
+        {
             attach::prepare_attach(&ctx, &mut setup_notes).map(SampledState::Attach)
+        } else {
+            wheel::prepare_wheel(&ctx)
+                .map(Box::new)
+                .map(SampledState::Wheel)
         };
         sampled.insert(
             (side, workload.name),
@@ -777,7 +789,7 @@ fn sample_prepared(
     let total = row.total;
     let group = usize::try_from(s.saturating_sub(1) / row.per_group)
         .map_err(|err| format!("counting sample groups: {err}"))?;
-    let result = match &row.state {
+    let result = match &mut row.state {
         Err(err) => Err(err.clone()),
         Ok(SampledState::Listing(prepared)) => {
             let ctx = idle::Ctx {
@@ -804,6 +816,7 @@ fn sample_prepared(
             };
             attach::sample_attach(prepared, group, &ctx, notes)
         }
+        Ok(SampledState::Wheel(prepared)) => wheel::sample_wheel(prepared, group, parts.clock),
     };
     match result {
         // The row stays up for its remaining samples.
@@ -818,6 +831,10 @@ fn sample_prepared(
                     state: Ok(SampledState::Attach(prepared)),
                     ..
                 }) => attach::finish_attach(prepared, parts.clock, notes, true),
+                Some(SampledRow {
+                    state: Ok(SampledState::Wheel(prepared)),
+                    ..
+                }) => wheel::finish_wheel(*prepared, parts.clock, notes, true),
                 _ => Ok(()),
             };
             finished.map(|()| one)
@@ -832,6 +849,10 @@ fn sample_prepared(
                     Ok(SampledState::Attach(prepared)) => {
                         let _finished =
                             attach::finish_attach(prepared, parts.clock, &mut dropped, false);
+                    }
+                    Ok(SampledState::Wheel(prepared)) => {
+                        let _finished =
+                            wheel::finish_wheel(*prepared, parts.clock, &mut dropped, false);
                     }
                     Err(_) => {}
                 }
