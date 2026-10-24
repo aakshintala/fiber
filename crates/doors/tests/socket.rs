@@ -552,13 +552,14 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
-            // Four-page walk: texts concatenate to the file and line
-            // starts concatenate to the file's line starts.
+            // Bounded walk: every page stays within the documented
+            // bounds, texts concatenate to the file and line starts
+            // concatenate to the file's line starts.
             let mut offset = 0u64;
             let mut text = String::new();
             let mut starts: Vec<u64> = Vec::new();
             let mut pages = 0;
-            let mut size = 0u64;
+            let mut size: Option<u64> = None;
             loop {
                 let id = format!("c_walk{pages}");
                 send(
@@ -570,7 +571,6 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 let page = response(&client, &id);
                 assert_eq!(kind(&page), "command_accepted", "{page}");
                 let result = &page["payload"]["result"];
-                size = result["size"].as_u64().unwrap();
                 let chunk = result["text"].as_str().unwrap();
                 let lines: Vec<u64> = result["lines"]
                     .as_array()
@@ -578,7 +578,14 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                     .iter()
                     .map(|v| v.as_u64().unwrap())
                     .collect();
+                assert!(lines.len() <= 64, "at most 64 lines a page: {page}");
+                assert!(chunk.len() <= 65536, "at most 64 KiB a page: {page}");
                 assert_eq!(lines.len(), chunk.split_inclusive('\n').count());
+                let page_size = result["size"].as_u64().unwrap();
+                match size {
+                    None => size = Some(page_size),
+                    Some(seen) => assert_eq!(seen, page_size, "size stays put: {page}"),
+                }
                 text.push_str(chunk);
                 starts.extend(lines);
                 pages += 1;
@@ -588,9 +595,11 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 }
                 assert!(pages < 10, "paged past the end of the file");
             }
-            assert_eq!(pages, 4);
+            // A 200-line file needs more than one 64-line page; any
+            // paging of it walks the same concatenation.
+            assert!(pages >= 2, "a 200-line file pages: {pages}");
             assert_eq!(text, big);
-            assert_eq!(size, u64::try_from(big.len()).unwrap());
+            assert_eq!(size, Some(u64::try_from(big.len()).unwrap()));
             let mut expected = Vec::new();
             let mut at = 0u64;
             for line in big.split_inclusive('\n') {
@@ -598,21 +607,31 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 at += u64::try_from(line.len()).unwrap();
             }
             assert_eq!(starts, expected);
-            // Cut pages: first page holds `[0]`, the boundary offset is
-            // the second page's first start.
+            // Cut pages: the long line cuts within the byte bound and
+            // continues whole on the next page, whose first start is
+            // the boundary offset; the pages concatenate to the file.
             send(&client, r#"{"id":"c_cut0","command":"artifact_page","args":{"path":"artifacts/a_lines_cut.txt","offset":0}}"#);
             let cut0 = response(&client, "c_cut0");
-            assert_eq!(
-                cut0["payload"]["result"]["lines"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|v| v.as_u64().unwrap())
-                    .collect::<Vec<_>>(),
-                vec![0]
+            let cut0_text = cut0["payload"]["result"]["text"].as_str().unwrap();
+            let cut0_lines: Vec<u64> = cut0["payload"]["result"]["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap())
+                .collect();
+            assert_eq!(cut0_lines.len(), cut0_text.split_inclusive('\n').count());
+            assert!(
+                cut0_text.len() <= 65536,
+                "the cut stays within 64 KiB: {}",
+                cut0_text.len()
             );
-            let edge = cut0["payload"]["result"]["next"].as_u64().unwrap();
-            assert_eq!(edge, 65535);
+            let edge = cut0["payload"]["result"]["next"]
+                .as_u64()
+                .expect("the long line continues on a next page");
+            assert!(
+                edge <= 65536,
+                "the boundary stays within 64 KiB: {edge}"
+            );
             send(
                 &client,
                 &format!(
@@ -620,12 +639,23 @@ fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
                 ),
             );
             let cut1 = response(&client, "c_cut1");
+            let cut1_text = cut1["payload"]["result"]["text"].as_str().unwrap();
+            let cut1_lines = cut1["payload"]["result"]["lines"].as_array().unwrap();
             assert_eq!(
-                cut1["payload"]["result"]["lines"].as_array().unwrap()[0]
-                    .as_u64()
-                    .unwrap(),
-                edge
+                cut1_lines[0].as_u64().unwrap(),
+                edge,
+                "the next page resumes at the cut"
             );
+            assert!(
+                cut1_text.starts_with('é'),
+                "the cut kept the character whole: {cut1_text:?}"
+            );
+            assert!(
+                cut1["payload"]["result"].get("next").is_none(),
+                "the file ends on the second page: {cut1}"
+            );
+            let cut = String::from_utf8(cut).unwrap();
+            assert_eq!(format!("{cut0_text}{cut1_text}"), cut);
             Ok(())
         })
         .unwrap();

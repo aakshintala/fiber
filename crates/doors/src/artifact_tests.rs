@@ -318,7 +318,7 @@ fn a_single_stray_byte_is_lossy_with_no_next() {
 }
 
 #[test]
-fn two_hundred_lines_page_to_the_end_in_four_pages() {
+fn two_hundred_lines_page_within_bounds_to_the_end() {
     let mut bytes = Vec::new();
     for i in 0..200 {
         bytes.extend_from_slice(format!("line {i:03} with some text\n").as_bytes());
@@ -330,6 +330,8 @@ fn two_hundred_lines_page_to_the_end_in_four_pages() {
     let mut size;
     loop {
         let found = page_at_path(&path, offset).unwrap();
+        assert!(found.lines.len() <= 64, "at most 64 lines a page");
+        assert!(found.text.len() <= 65536, "at most 64 KiB a page");
         size = found.size;
         text.push_str(&found.text);
         pages += 1;
@@ -342,7 +344,8 @@ fn two_hundred_lines_page_to_the_end_in_four_pages() {
         }
         assert!(pages < 10, "paged past the end");
     }
-    assert_eq!(pages, 4);
+    // Two hundred lines need more than three 64-line pages.
+    assert!(pages >= 4, "a 200-line file pages: {pages}");
     assert_eq!(text.as_bytes(), bytes.as_slice());
     assert_eq!(size, u64::try_from(bytes.len()).unwrap());
 }

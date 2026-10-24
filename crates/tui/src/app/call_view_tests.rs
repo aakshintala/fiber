@@ -229,6 +229,30 @@ fn enter_on_an_opened_call_opens_its_view_and_esc_returns_focus() {
 }
 
 #[test]
+fn esc_keeps_the_call_row_focused_so_enter_reopens() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.call_view_open());
+    // The open ledger group draws the headline row, so the frame keeps
+    // the Esc focus; a collapsed group would clear it. The six kept
+    // lines fit the inline cap, so no more row draws: the headline is
+    // the only drawn row that survives.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buffer = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buffer, None);
+    app.drawn(&targets);
+    assert_eq!(app.focused(), Some(TargetId::Line(Target::Call(id))));
+    // Enter on the focused, still-open call opens its view again from
+    // offset zero.
+    let request = page_request(app.on_key(Key::Enter, now()));
+    assert!(app.call_view_open());
+    assert_eq!(request["args"]["offset"], json!(0));
+}
+
+#[test]
 fn enter_on_a_closed_call_toggles_it_open_instead() {
     let mut app = attached(80, 24);
     turn_started(&mut app);
@@ -320,6 +344,9 @@ fn open_paged(app: &mut App, kept: Value, action: &str) -> (usize, Value) {
         Some(kept),
     );
     let id = crate::turn::target_id(action);
+    // The wired path opens the ledger group before the call, or the
+    // conversation renders the collapsed group row and no call row draws.
+    app.open(Target::Group(id));
     open_inline(app, id);
     let request = page_request(app.open_call_view(id));
     (id, request)
@@ -346,20 +373,67 @@ fn answer_page(app: &mut App, request: &Value, text: &str, offset: u64) -> Vec<V
         .collect()
 }
 
+/// The next offset paging `text` announces after `offset`: `None`
+/// at the end of the file.
+fn page_next(text: &str, offset: u64) -> Option<u64> {
+    let start = usize::try_from(offset).expect("test offsets fit");
+    let mut edge = offset;
+    for line in text[start..].split_inclusive('\n').take(64) {
+        edge += line.len() as u64;
+    }
+    (edge < text.len() as u64).then_some(edge)
+}
+
+/// The requested offsets paging `text`: every follow-up asks for the
+/// announced next.
+fn requested_offsets(text: &str, offsets: &[u64]) {
+    for pair in offsets.windows(2) {
+        assert_eq!(
+            Some(pair[1]),
+            page_next(text, pair[0]),
+            "each page asks for the announced next: {offsets:?}"
+        );
+    }
+}
+
+/// The requested offsets paging `text` from 0: the first request
+/// starts at 0 and every follow-up asks for the announced next.
+fn requested_offsets_from_zero(text: &str, offsets: &[u64]) {
+    assert_eq!(offsets.first(), Some(&0), "{offsets:?}");
+    requested_offsets(text, offsets);
+}
+
 /// Pages the view to the end of `text`, answering every request in
 /// order, and returns the requested offsets.
 fn page_to_end(app: &mut App, first: Value, text: &str) -> Vec<u64> {
     let mut offsets = vec![first["args"]["offset"].as_u64().unwrap()];
     let mut request = first;
     for _ in 0..10 {
-        let sends = answer_page(app, &request, text, offsets.last().copied().unwrap());
+        let at = offsets.last().copied().unwrap();
+        let sends = answer_page(app, &request, text, at);
         if sends.is_empty() {
             break;
         }
-        assert_eq!(sends.len(), 1, "{sends:?}");
-        offsets.push(sends[0]["args"]["offset"].as_u64().unwrap());
-        request = sends[0].clone();
+        // One request on the wire: the follow-up asks for the page's
+        // announced next offset, whatever else the pump sends.
+        let next = page_next(text, at).expect("a mid-file page names next");
+        let follow = sends
+            .iter()
+            .find(|line| line["args"]["offset"] == json!(next))
+            .unwrap_or_else(|| panic!("the follow-up asks for {next}: {sends:?}"))
+            .clone();
+        offsets.push(follow["args"]["offset"].as_u64().unwrap());
+        request = follow;
     }
+    requested_offsets(text, &offsets);
+    offsets
+}
+
+/// Pages the view to the end of `text` from a fresh open, answering
+/// every request in order: the first request starts at 0.
+fn page_to_end_from_zero(app: &mut App, first: Value, text: &str) -> Vec<u64> {
+    let offsets = page_to_end(app, first, text);
+    requested_offsets_from_zero(text, &offsets);
     offsets
 }
 
@@ -369,8 +443,9 @@ fn pages_land_in_order_and_evict_then_refetch_by_offset() {
     let text = lined_file();
     let size = text.len() as u64;
     let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
-    let offsets = page_to_end(&mut app, first, &text);
-    assert_eq!(offsets, vec![0, 320, 640], "{offsets:?}");
+    let offsets = page_to_end_from_zero(&mut app, first, &text);
+    // A 150-line file needs more than two 64-line pages.
+    assert!(offsets.len() >= 3, "{offsets:?}");
     // Following pulled to the bottom: the window holds the last pages,
     // and the first paged out.
     let rows = frame_text(&app);
@@ -392,7 +467,10 @@ fn pages_land_in_order_and_evict_then_refetch_by_offset() {
     }
     assert_eq!(refetched, Some(0), "the dropped first page refetches");
     let view = app.call_view().expect("the view stays open");
-    assert!(view.segs.contains_key(&0), "extents survive paging out");
+    assert!(
+        view.pager.segs.contains_key(&0),
+        "extents survive paging out"
+    );
     let _ = size;
 }
 
@@ -402,7 +480,7 @@ fn following_many_pages_keeps_the_tail_visible_after_page_out() {
     let text = (0..500).map(|i| format!("L{i:03}\n")).collect::<String>();
     let size = text.len() as u64;
     let (_id, first) = open_paged(&mut app, json!([[0, 5], [size - 5, size]]), ACTION);
-    let offsets = page_to_end(&mut app, first, &text);
+    let offsets = page_to_end_from_zero(&mut app, first, &text);
     assert!(offsets.len() > 3, "the test crosses the held-page window");
     let view = app.call_view().expect("the view stays open");
     let rows = view.rows();
@@ -429,8 +507,13 @@ fn a_failed_page_keeps_held_pages_and_retries_on_scroll() {
     let text = lined_file();
     let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
     let sends = answer_page(&mut app, &first, &text, 0);
-    assert_eq!(sends.len(), 1);
-    let second = sends[0].clone();
+    // The follow-up asks for the first page's announced next offset.
+    let next = page_next(&text, 0).expect("the first page names next");
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(next))
+        .unwrap_or_else(|| panic!("the follow-up asks for {next}: {sends:?}"))
+        .clone();
     // The second page fails: the view stays open with the first page
     // and a notice naming the error code.
     assert!(app.on_line(rejected(&second, "io_failed")).is_empty());
@@ -458,9 +541,16 @@ fn a_failed_page_keeps_held_pages_and_retries_on_scroll() {
         }
     }
     let retried = retried.expect("the missing page re-requests on scroll");
-    // Landing it fills the gap and clears the notice.
+    // Landing it fills the gap and clears the notice; the pump follows
+    // the page's announced next offset.
     let sends = answer_page(&mut app, &retried, &text, 320);
-    assert_eq!(sends.len(), 1);
+    let next = page_next(&text, 320).expect("a mid-file page names next");
+    assert!(
+        sends
+            .iter()
+            .any(|line| line["args"]["offset"] == json!(next)),
+        "the follow-up asks for {next}: {sends:?}"
+    );
     let frame = app.call_view().map(|view| view.frame()).expect("open");
     assert!(frame.below.is_empty(), "{frame:?}");
     let rows = frame_text(&app);
@@ -607,9 +697,14 @@ fn a_continuation_start_is_no_boundary() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(sends.len(), 1);
+    // The follow-up asks for the head page's announced next offset.
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(100))
+        .expect("the follow-up asks for 100: {sends:?}")
+        .clone();
     assert!(
-        app.on_line(accepted(&sends[0], "C\nDE\n", vec![100, 102], None, size))
+        app.on_line(accepted(&second, "C\nDE\n", vec![100, 102], None, size))
             .is_empty()
     );
     let rows = body_rows(&app);
@@ -647,10 +742,15 @@ fn a_marker_skips_a_byte_cap_continuation_start() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(sends.len(), 1);
+    // The follow-up asks for the head page's announced next offset.
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(65536))
+        .expect("the follow-up asks for 65536: {sends:?}")
+        .clone();
     assert!(
         app.on_line(accepted(
-            &sends[0],
+            &second,
             "yyy\nzzz\n",
             vec![65536, 70001],
             None,
@@ -734,15 +834,58 @@ fn y_fetches_unloaded_pages_then_copies_whole() {
         if sends.is_empty() {
             break;
         }
-        // One request on the wire: exactly one follow-up fetch.
-        assert_eq!(sends.len(), 1, "{sends:?}");
-        request = sends[0].clone();
+        // One request on the wire: the follow-up asks for the page's
+        // announced next offset, whatever else the pump sends.
+        let next = page_next(&text, offset).expect("a mid-file page names next");
+        request = sends
+            .iter()
+            .find(|line| line["args"]["offset"] == json!(next))
+            .unwrap_or_else(|| panic!("the follow-up asks for {next}: {sends:?}"))
+            .clone();
     }
     assert_eq!(app.take_call_copy(), Some(text.clone()));
     assert!(app.copied());
-    // The copy unpins its pages: none stay pinned.
+    // The copy reapplies the bounded window: the head page evicts.
     let view = app.call_view().expect("the view stays open");
-    assert!(view.pinned.is_empty(), "pins release after the copy");
+    assert!(
+        !view.pager.pages.contains_key(&0),
+        "the window drops the head page"
+    );
+    assert!(
+        view.pager.pages.len() <= 3,
+        "the window bounds the held pages"
+    );
+}
+
+#[test]
+fn a_running_copy_holds_pages_past_the_window() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    // Page to the end, so the head page evicts out of the window.
+    page_to_end_from_zero(&mut app, first, &text);
+    assert!(!app.call_view().expect("open").pager.pages.contains_key(&0));
+    // Pressing `y` with the head page missing starts the copy and
+    // fetches it without copying yet.
+    let sends = sent(app.on_key(Key::Char('y'), now()));
+    let head = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(0))
+        .expect("the copy refetches the head page: {sends:?}")
+        .clone();
+    // Answering lands the head page with nothing left to fetch.
+    assert!(answer_page(&mut app, &head, &text, 0).is_empty());
+    // The landed head page stays while the copy runs, though the
+    // window shows the tail: nothing evicts mid-copy.
+    let view = app.call_view().expect("the view stays open");
+    assert_eq!(view.pager.pages.len(), 3, "the copy holds every page");
+    // The copy lands whole, then the bounded window applies again.
+    assert_eq!(app.take_call_copy(), Some(text.clone()));
+    let view = app.call_view().expect("the view stays open");
+    assert!(
+        !view.pager.pages.contains_key(&0),
+        "the window drops the head page"
+    );
 }
 
 #[test]
@@ -753,11 +896,15 @@ fn y_while_a_page_is_in_flight_waits_for_the_rest_in_order() {
     // The first page is on the wire when `y` is pressed: the copy waits
     // for it plus the rest, in order.
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
-    let offsets = page_to_end(&mut app, first, &text);
-    assert_eq!(offsets, vec![0, 320, 640], "{offsets:?}");
+    let offsets = page_to_end_from_zero(&mut app, first, &text);
+    // A 150-line file needs more than two 64-line pages.
+    assert!(offsets.len() >= 3, "{offsets:?}");
     assert_eq!(app.take_call_copy(), Some(text.clone()));
     let view = app.call_view().expect("the view stays open");
-    assert!(view.pinned.is_empty(), "pins release after the copy");
+    assert!(
+        !view.pager.pages.contains_key(&0),
+        "the window drops the head page"
+    );
 }
 
 #[test]
@@ -766,17 +913,23 @@ fn a_failed_copy_writes_nothing_and_retries_after_scroll() {
     let text = lined_file();
     let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
     let sends = answer_page(&mut app, &first, &text, 0);
-    let second = sends[0].clone();
+    // The second page is the first page's announced next offset.
+    let next = page_next(&text, 0).expect("the first page names next");
+    let second = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(next))
+        .unwrap_or_else(|| panic!("the follow-up asks for {next}: {sends:?}"))
+        .clone();
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     // The second page fails mid-copy: no partial text writes, the
     // clipboard keeps its value, and the error-code notice shows.
     assert!(app.on_line(rejected(&second, "io_failed")).is_empty());
     assert_eq!(app.take_call_copy(), None);
     assert!(!app.copied());
-    assert!(
-        app.call_view().expect("open").pinned.is_empty(),
-        "pins release on abort"
-    );
+    // The abort reapplies the bounded window: the held page stays,
+    // since the window shows it.
+    let view = app.call_view().expect("open");
+    assert!(view.pager.pages.contains_key(&0), "the held page stays");
     let frame = app.call_view().map(|view| view.frame()).expect("open");
     assert!(
         frame.below.iter().any(|line| line.contains("io_failed")),
@@ -801,9 +954,12 @@ fn a_failed_copy_writes_nothing_and_retries_after_scroll() {
     // Following paged the first page out again, so `y` refetches it and
     // then copies the whole text.
     let sends = sent(app.on_key(Key::Char('y'), now()));
-    assert_eq!(sends.len(), 1, "{sends:?}");
-    assert_eq!(sends[0]["args"]["offset"], json!(0));
-    assert!(answer_page(&mut app, &sends[0], &text, 0).is_empty());
+    let head = sends
+        .iter()
+        .find(|line| line["args"]["offset"] == json!(0))
+        .expect("the copy refetches the head page: {sends:?}")
+        .clone();
+    assert!(answer_page(&mut app, &head, &text, 0).is_empty());
     assert_eq!(app.take_call_copy(), Some(text.clone()));
     assert!(app.copied());
 }
@@ -1008,6 +1164,24 @@ fn a_result_with_no_artifact_shows_its_rows_with_no_fetch() {
             .any(|row| row.contains("end of the model's view")),
         "{rows:?}"
     );
+}
+
+#[test]
+fn y_copies_raw_output_with_no_framing_for_a_result_with_no_artifact() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_whole(&mut app, ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    // The draw keeps the shell's command and closing rows, but `y`
+    // copies the output as the tool returned it.
+    let rows = frame_text(&app);
+    assert!(rows.iter().any(|row| row.contains("$ ")), "{rows:?}");
+    assert_eq!(
+        app.on_key(Key::Char('y'), now()),
+        Effect::Copy("one\ntwo".to_owned())
+    );
+    assert!(app.copied());
 }
 
 #[test]

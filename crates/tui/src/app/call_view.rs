@@ -6,77 +6,35 @@
 //! The view never holds the whole file for drawing: it keeps at most
 //! three pages around the visible page (the visible page plus one on
 //! each side) and refetches a dropped page by its byte `offset` when
-//! scrolled back to. The `y` copy pins the pages it needs independently
-//! of the draw window and releases them after. A failed page leaves the
-//! view open with the held pages and a notice; scrolling to it asks
-//! again. Markers sit at the first line boundary at or past each `kept`
-//! edge, never splitting a line.
+//! scrolled back to. A running `y` copy holds every fetched page; when
+//! it lands whole or aborts, the bounded window applies again. A failed
+//! page keeps the held pages with a notice; scrolling to it asks again,
+//! and each marker starts a line at or past its `kept` edge.
+//!
+//! The state lives here; `call_view_pages` owns the fetched pages and
+//! fetch queue, and `call_view_rows` builds the drawn rows from them.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 
 use serde_json::json;
 
+use super::call_view_pages::{Page, Pager, Seg};
+use super::call_view_rows::{
+    Row, RowsInput, Source, build_frame, build_rows, highlight_rows, row_text, shown_height, window,
+};
 use super::{App, Effect, Target, mint, session_command};
-use crate::diff::gutter_prefix;
 use crate::keys::Key;
 use crate::mouse::TargetId;
-use crate::swapped::{Frame, Ink, List, Spot};
-use crate::theme::Role;
+use crate::swapped::{Frame, List, Spot};
 use crate::turn::opened::{self, CallSnapshot};
 use contract::SessionId;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 
-/// The marker where the model's view stops.
-const END_MARK: &str = "── end of the model's view ──";
-/// The marker where the model's view resumes.
-const RESUME_MARK: &str = "── the model's view resumes ──";
-
-/// One held artifact page: its text, whole lines from its offset.
-#[derive(Debug)]
-struct Page {
-    text: String,
-}
-
-/// What a fetched page's extent stays as after its text pages out: the
-/// byte offset after it, absent at the end of the file; each line's
-/// absolute starting byte, so markers place without the text; and
-/// whether its last byte is a newline, which decides whether the next
-/// page's first start is a line boundary or a continued fragment.
-#[derive(Debug)]
-struct Seg {
-    lines: Vec<u64>,
-    next: Option<u64>,
-    ends_newline: bool,
-}
-
-/// A `y` copy waiting on its pages: the full text needs every offset
-/// the segments chain, in file order. Pages stay pinned until the copy
-/// lands whole or aborts, then unpin.
+/// A `y` copy waiting on its pages, in file order: while it runs the
+/// draw window holds every fetched page; when it lands whole or
+/// aborts, the bounded window applies again.
 #[derive(Debug)]
 struct CopyReq;
-
-/// Where one drawn body row comes from: a prefix or closing row by its
-/// index, an output line by its page and line, or a marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Source {
-    Prefix(usize),
-    Page {
-        offset: u64,
-        index: usize,
-    },
-    Closing(usize),
-    Marker {
-        offset: u64,
-        index: usize,
-        resume: bool,
-    },
-}
-
-/// One drawn body row: its cells and where it comes from.
-struct Row {
-    cells: Vec<(String, Ink)>,
-    source: Source,
-}
 
 /// A call's swapped view: the call's identity and snapshot, its held
 /// pages, and its scroll, copy and search state.
@@ -96,40 +54,27 @@ pub(crate) struct CallView {
     numbering: Option<u64>,
     /// The whole call's uncapped rows, drawn when no artifact pages it.
     plain: Vec<opened::Body>,
+    /// The call's output text, as the tool returned it: what `y`
+    /// copies for a result with no artifact.
+    copy_text: String,
     /// Whether the result carries an artifact to page.
     artifact: Option<String>,
     /// The model's-view edges, when the result carries them.
     kept: Option<Vec<[u64; 2]>>,
     /// The session the view opened on: answers from another go nowhere.
     session: SessionId,
-    /// Held pages by byte offset.
-    pages: BTreeMap<u64, Page>,
-    /// Every fetched offset's extent, kept after its text pages out.
-    segs: BTreeMap<u64, Seg>,
-    /// The next offset the forward fill asks for, from 0 following
-    /// `next`; `None` once a page answers at the end of the file.
-    fill_next: Option<u64>,
-    /// The request on the wire, by its id and offset: one at a time.
-    request: Option<(String, u64)>,
-    /// Offsets to ask for next, in order, without duplicates.
-    queued: VecDeque<u64>,
-    /// Offsets whose fetch failed: scrolling one into the window asks
-    /// again.
-    missing: BTreeSet<u64>,
+    /// The fetched pages and fetch queue.
+    pager: Pager,
     /// The failure notice, naming the error code.
     notice: Option<String>,
-    /// The largest file size any page reported.
-    size: u64,
     /// The scrolled-to row and the first row shown.
     list: List,
     /// Whether new pages pull the view to the bottom, as the
     /// conversation follows new output until the person scrolls up.
     follow: bool,
-    /// A `y` copy waiting on its pages, if one runs.
+    /// A `y` copy waiting on its pages, if one runs: while it is
+    /// present the draw window evicts nothing.
     copy: Option<CopyReq>,
-    /// Offsets the running copy pins against the draw window's
-    /// eviction.
-    pinned: BTreeSet<u64>,
     /// The query the matches below were built for.
     query: String,
     /// The body rows holding the query, in order.
@@ -144,11 +89,7 @@ impl CallView {
     /// a result with no artifact, and the paging inputs from its
     /// result. A call with no result yet shows its empty rows.
     fn open(call: CallSnapshot, session: SessionId) -> Self {
-        let fill_next = if call.artifact.is_some() {
-            Some(0)
-        } else {
-            None
-        };
+        let pager = Pager::new(call.artifact.is_some());
         Self {
             call: call.id,
             title: call.title,
@@ -157,21 +98,15 @@ impl CallView {
             closing: call.closing,
             numbering: call.numbering,
             plain: call.plain,
+            copy_text: call.copy,
             artifact: call.artifact,
             kept: call.kept,
             session,
-            pages: BTreeMap::new(),
-            segs: BTreeMap::new(),
-            fill_next,
-            request: None,
-            queued: VecDeque::new(),
-            missing: BTreeSet::new(),
+            pager,
             notice: None,
-            size: 0,
             list: List::default(),
             follow: true,
             copy: None,
-            pinned: BTreeSet::new(),
             query: String::new(),
             matches: Vec::new(),
             current: None,
@@ -184,186 +119,29 @@ impl CallView {
     }
 }
 
-/// One text line of a held page: `text` split on newlines holds no
-/// trailing empty, so each line pairs with one `lines` entry.
-fn page_lines(text: &str) -> Vec<&str> {
-    let mut lines: Vec<&str> = text.split('\n').collect();
-    if lines.last() == Some(&"") {
-        lines.pop();
-    }
-    lines
-}
-
 impl CallView {
+    /// What [`build_rows`](super::call_view_rows::build_rows) draws:
+    /// the snapshot rows, the paging inputs, and the held pages.
+    fn rows_input(&self) -> RowsInput<'_> {
+        RowsInput {
+            prefix: &self.prefix,
+            plain: &self.plain,
+            closing: &self.closing,
+            numbering: self.numbering,
+            paged: self.paged(),
+            kept: self.kept.as_ref(),
+            size: self.pager.size,
+            complete: self.pager.complete(),
+            pages: &self.pager.pages,
+            segs: &self.pager.segs,
+        }
+    }
+
     /// The view's body rows: prefix rows, held output lines with marker
     /// rows at their anchors, then closing rows. Rows from a result
     /// with no artifact are its uncapped rows whole.
     fn rows(&self) -> Vec<Row> {
-        if !self.paged() {
-            return self.plain_rows();
-        }
-        let mut out = Vec::new();
-        for (index, body) in self.prefix.iter().enumerate() {
-            out.push(Row {
-                cells: body_cells(body, 0),
-                source: Source::Prefix(index),
-            });
-        }
-        let mut anchors = self.markers();
-        anchors.sort_by_key(|(at, _)| *at);
-        for offset in self.pages.keys().copied().collect::<Vec<_>>() {
-            let Some(page) = self.pages.get(&offset) else {
-                continue;
-            };
-            let lines = page_lines(&page.text);
-            for (index, text) in lines.iter().enumerate() {
-                while anchors
-                    .first()
-                    .is_some_and(|(at, _)| *at == (offset, index))
-                {
-                    let (at, marker) = anchors.remove(0);
-                    out.push(marker_row(at.0, at.1, marker));
-                }
-                let number = self.numbering.map(|start| {
-                    start
-                        .saturating_add(self.line_before(offset))
-                        .saturating_add(index as u64)
-                });
-                out.push(Row {
-                    cells: output_cells(text, number),
-                    source: Source::Page { offset, index },
-                });
-            }
-            let extent = self.segs.get(&offset).map_or(0, |seg| seg.lines.len());
-            while anchors
-                .first()
-                .is_some_and(|(at, _)| *at == (offset, extent))
-            {
-                let (at, resume) = anchors.remove(0);
-                out.push(marker_row(at.0, at.1, resume));
-            }
-        }
-        for (index, body) in self.closing.iter().enumerate() {
-            out.push(Row {
-                cells: body_cells(body, self.gutter()),
-                source: Source::Closing(index),
-            });
-        }
-        out
-    }
-
-    /// The uncapped rows for a result with no artifact, with their
-    /// gutter fitted to the largest number drawn.
-    fn plain_rows(&self) -> Vec<Row> {
-        let gutter = self
-            .plain
-            .iter()
-            .fold(0usize, |gutter, body| gutter.max(gutter_width(body)));
-        self.plain
-            .iter()
-            .enumerate()
-            .map(|(index, body)| Row {
-                cells: body_cells(body, gutter),
-                source: Source::Prefix(index),
-            })
-            .collect()
-    }
-
-    /// The gutter width the output numbers need: digits of the largest
-    /// drawn number, or of the start alone while nothing is held.
-    fn gutter(&self) -> usize {
-        let Some(start) = self.numbering else {
-            return 0;
-        };
-        let mut width = digits(start);
-        for offset in self.pages.keys().copied().collect::<Vec<_>>() {
-            let lines = self.segs.get(&offset).map_or(0, |seg| seg.lines.len());
-            let last = start
-                .saturating_add(self.line_before(offset))
-                .saturating_add(lines.saturating_sub(1) as u64);
-            width = width.max(digits(last));
-        }
-        width
-    }
-
-    /// How many output lines the fetched pages before `offset` hold:
-    /// every segment's line count, which is its starts' count.
-    fn line_before(&self, offset: u64) -> u64 {
-        self.segs
-            .range(..offset)
-            .map(|(_, seg)| seg.lines.len() as u64)
-            .sum()
-    }
-
-    /// The marker anchors the held pages can draw: for each `kept` edge
-    /// the first absolute logical line start at or past it, as a page
-    /// offset and line index, or the end of the final held fragment at
-    /// the end of the file, each with whether the model's view resumes
-    /// there. A page's first start equal to its offset is no boundary
-    /// when the previous page ends without a newline, so it is skipped;
-    /// an edge with no later start stays pending until the pages around
-    /// it, or the end of the file, arrive. No markers when the result
-    /// carries no `kept`.
-    fn markers(&self) -> Vec<((u64, usize), bool)> {
-        let Some(kept) = self.kept.as_ref() else {
-            return Vec::new();
-        };
-        let mut edges: Vec<(u64, bool)> = Vec::new();
-        for range in kept {
-            let [start, end] = *range;
-            if start > 0 {
-                edges.push((start, true));
-            }
-            if end < self.size {
-                edges.push((end, false));
-            }
-        }
-        edges.sort();
-        edges
-            .into_iter()
-            .filter_map(|(edge, resume)| self.marker_for(edge).map(|at| (at, resume)))
-            .collect()
-    }
-
-    /// The anchor for the `kept` edge: the first logical line start at
-    /// or past it that a held page draws, or the end of the final held
-    /// fragment when the file ends with no later start. `None` while
-    /// the edge's pages are still missing or paged out.
-    fn marker_for(&self, edge: u64) -> Option<(u64, usize)> {
-        let mut first = true;
-        let mut ends_newline = true;
-        for (offset, seg) in &self.segs {
-            for (index, start) in seg.lines.iter().enumerate() {
-                let continuation = index == 0 && !first && !ends_newline;
-                if !continuation && *start >= edge && self.pages.contains_key(offset) {
-                    return Some((*offset, index));
-                }
-                first = false;
-            }
-            ends_newline = seg.ends_newline;
-        }
-        if self.complete() {
-            let (offset, seg) = self.segs.last_key_value()?;
-            if self.pages.contains_key(offset) {
-                return Some((*offset, seg.lines.len()));
-            }
-        }
-        None
-    }
-
-    /// Whether the segments chain from 0 to the end of the file with no
-    /// gap: the forward fill reached a page with no `next`.
-    fn complete(&self) -> bool {
-        let mut at = 0u64;
-        loop {
-            let Some(seg) = self.segs.get(&at) else {
-                return false;
-            };
-            match seg.next {
-                Some(next) => at = next,
-                None => return true,
-            }
-        }
+        build_rows(&self.rows_input())
     }
 
     /// The view's frame: the capitalised kind bold and its target dim
@@ -372,180 +150,22 @@ impl CallView {
     /// failed to load.
     pub(in crate::app) fn frame(&self) -> Frame {
         let mut rows = self.rows();
-        self.highlight(&mut rows);
-        Frame {
-            title: self.title.clone(),
-            command: self.command.clone(),
-            rows: rows
-                .into_iter()
-                .map(|row| {
-                    row.cells
-                        .into_iter()
-                        .map(|(text, ink)| (text, None, ink))
-                        .collect()
-                })
-                .collect(),
-            list: self.list,
-            below: self.notice.iter().cloned().collect(),
-            field: None,
-            footer: "y copies the whole call".to_owned(),
-        }
+        highlight_rows(&mut rows, &self.query, self.current, &self.matches);
+        build_frame(
+            &self.title,
+            &self.command,
+            rows,
+            self.list,
+            self.notice.iter().cloned().collect(),
+        )
     }
-
-    /// Restyles matched body rows with the query's hits: every hit on
-    /// the match tint, the current match brighter. Only body text ever
-    /// matches: markers draw from chrome and never match, as the top
-    /// row and footer never do.
-    fn highlight(&self, rows: &mut [Row]) {
-        if self.query.is_empty() {
-            return;
-        }
-        let current_row = self.current.and_then(|at| self.matches.get(at).copied());
-        for (index, row) in rows.iter_mut().enumerate() {
-            if !matches!(
-                row.source,
-                Source::Prefix(_) | Source::Page { .. } | Source::Closing(_)
-            ) {
-                continue;
-            }
-            let text: String = row.cells.iter().map(|(text, _)| text.as_str()).collect();
-            let hits = crate::logical::matches(&text, &self.query);
-            if hits.is_empty() {
-                continue;
-            }
-            let current = Some(index) == current_row;
-            row.cells = highlight_cells(&row.cells, &text, &hits, current);
-        }
-    }
-}
-
-/// A body row's cells with the gutter its numbers need.
-fn body_cells(body: &opened::Body, gutter: usize) -> Vec<(String, Ink)> {
-    let mut cells = body.cells();
-    if body.gutter
-        && let Some(prefix) = gutter_prefix(body.number, gutter)
-    {
-        cells.insert(0, (prefix, Ink::Muted));
-    }
-    cells
-}
-
-/// An output line's cells: its number's dim gutter when numbered, else
-/// its text plain.
-fn output_cells(text: &str, number: Option<u64>) -> Vec<(String, Ink)> {
-    match number {
-        Some(number) => {
-            let width = digits(number);
-            let prefix = gutter_prefix(Some(number), width).unwrap_or_default();
-            vec![(prefix, Ink::Muted), (text.to_owned(), Ink::Plain)]
-        }
-        None => vec![(text.to_owned(), Ink::Plain)],
-    }
-}
-
-/// A marker's row: its text dim across the whole row.
-fn marker_row(offset: u64, index: usize, resume: bool) -> Row {
-    Row {
-        cells: vec![(
-            if resume {
-                RESUME_MARK.to_owned()
-            } else {
-                END_MARK.to_owned()
-            },
-            Ink::Muted,
-        )],
-        source: Source::Marker {
-            offset,
-            index,
-            resume,
-        },
-    }
-}
-
-/// The digits `number` draws in.
-fn digits(number: u64) -> usize {
-    number.to_string().len().max(1)
-}
-
-/// The gutter width one numbered body needs.
-fn gutter_width(body: &opened::Body) -> usize {
-    if body.gutter {
-        digits(body.number.unwrap_or(0))
-    } else {
-        0
-    }
-}
-
-/// The cells' text restyled around the query's char-range hits: hit
-/// cells on the match tint, or the current tint for the current match,
-/// every other cell keeping its ink. A hit spanning cells marks each
-/// part; ranges that end at a cell's start belong to the next cell.
-fn highlight_cells(
-    cells: &[(String, Ink)],
-    text: &str,
-    hits: &[std::ops::Range<usize>],
-    current: bool,
-) -> Vec<(String, Ink)> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut starts = Vec::with_capacity(chars.len() + 1);
-    let mut byte = 0usize;
-    for ch in &chars {
-        starts.push(byte);
-        byte += ch.len_utf8();
-    }
-    starts.push(byte);
-    let byte_of = |char_index: usize| starts.get(char_index).copied().unwrap_or(text.len());
-    let ranges: Vec<(usize, usize)> = hits
-        .iter()
-        .map(|hit| (byte_of(hit.start), byte_of(hit.end)))
-        .collect();
-    let mark = if current {
-        Ink::Marked(Role::MatchCurrent)
-    } else {
-        Ink::Marked(Role::Match)
-    };
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    for cell in cells {
-        let end = offset + cell.0.len();
-        // Hit parts inside this cell, clipped to it, in order.
-        let mut at = offset;
-        for (from, to) in ranges.iter().copied() {
-            if to <= offset || from >= end {
-                continue;
-            }
-            let from = from.max(at);
-            let to = to.min(end);
-            if from < to {
-                if at < from {
-                    out.push((cell.0[at - offset..from - offset].to_owned(), cell.1));
-                }
-                out.push((cell.0[from - offset..to - offset].to_owned(), mark));
-                at = to;
-            }
-        }
-        if at < end {
-            out.push((cell.0[at - offset..].to_owned(), cell.1));
-        }
-        offset = end;
-    }
-    out.into_iter()
-        .filter(|(text, _)| !text.is_empty())
-        .collect()
 }
 
 impl CallView {
     /// Asks for `offset` next, unless its page is held, already queued,
     /// or on the wire.
     fn queue(&mut self, offset: u64) {
-        if self.pages.contains_key(&offset)
-            || self.missing.contains(&offset)
-            || self.queued.contains(&offset)
-            || self.request.as_ref().is_some_and(|(_, at)| *at == offset)
-        {
-            return;
-        }
-        self.queued.push_back(offset);
+        self.pager.queue(offset);
     }
 
     /// Queues what the draw window wants: the visible pages, one page
@@ -564,21 +184,17 @@ impl CallView {
             }
         }
         for offset in wanted.clone() {
-            if let Some(previous) = self.segs.range(..offset).next_back().map(|(at, _)| *at) {
-                wanted.insert(previous);
-            }
-            if let Some(next) = self.segs.get(&offset).and_then(|seg| seg.next) {
-                wanted.insert(next);
-            }
+            let (previous, next) = self.pager.neighbors(offset);
+            wanted.extend(previous.into_iter().chain(next));
         }
         if self.follow
-            && let Some(next) = self.fill_next
+            && let Some(next) = self.pager.fill_next
         {
             wanted.insert(next);
         }
         if self.copy.is_some() {
-            wanted.extend(self.chain_prefix());
-            if let Some(next) = self.fill_next {
+            wanted.extend(self.pager.chain_prefix());
+            if let Some(next) = self.pager.fill_next {
                 wanted.insert(next);
             }
         }
@@ -596,14 +212,18 @@ impl CallView {
     }
 
     /// Drops held pages past the window around the visible rows: the
-    /// visible pages plus one on each side stay, pinned pages stay,
-    /// everything else pages out and refetches by byte offset when
-    /// scrolled back to. Segments stay, so markers and the fill chain
-    /// never lose their extents.
+    /// visible pages plus one on each side stay, everything else
+    /// pages out and refetches by byte offset when scrolled back to.
+    /// Segments stay, so markers and the fill chain never lose their
+    /// extents. While a `y` copy runs nothing evicts, so the copy's
+    /// pages stay whatever the window shows.
     fn evict(&mut self, rows: &[Row], top: usize, shown: usize) {
+        if self.copy.is_some() {
+            return;
+        }
         let top_source = rows.get(top).map(|row| row.source);
         let selected_source = rows.get(self.list.selected()).map(|row| row.source);
-        let order: Vec<u64> = self.segs.keys().copied().collect();
+        let order: Vec<u64> = self.pager.segs.keys().copied().collect();
         if order.is_empty() {
             return;
         }
@@ -628,8 +248,7 @@ impl CallView {
             .filter(|(index, _)| *index >= low && *index <= high)
             .map(|(_, offset)| offset)
             .collect();
-        self.pages
-            .retain(|offset, _| keep.contains(offset) || self.pinned.contains(offset));
+        self.pager.pages.retain(|offset, _| keep.contains(offset));
         let rows = self.rows();
         let position = |source: Option<Source>| {
             source.and_then(|source| rows.iter().position(|row| row.source == source))
@@ -644,9 +263,8 @@ impl CallView {
     }
 
     /// Lands a fetched page: holds its text, records its extent, pulls
-    /// a following view to the bottom, and drops pages past the window.
-    /// A page the running copy needs stays pinned until the copy lands
-    /// whole or aborts.
+    /// a following view to the bottom, and drops pages past the window
+    /// unless a copy runs, which holds them all.
     fn land(
         &mut self,
         offset: u64,
@@ -657,8 +275,8 @@ impl CallView {
         height: usize,
     ) {
         let ends_newline = text.ends_with('\n');
-        self.size = self.size.max(size);
-        self.segs.insert(
+        self.pager.size = self.pager.size.max(size);
+        self.pager.segs.insert(
             offset,
             Seg {
                 lines,
@@ -666,13 +284,10 @@ impl CallView {
                 ends_newline,
             },
         );
-        self.pages.insert(offset, Page { text });
-        self.missing.remove(&offset);
-        if offset == self.fill_next.unwrap_or(u64::MAX) {
-            self.fill_next = next;
-        }
-        if self.copy.is_some() {
-            self.pinned.insert(offset);
+        self.pager.pages.insert(offset, Page { text });
+        self.pager.missing.remove(&offset);
+        if offset == self.pager.fill_next.unwrap_or(u64::MAX) {
+            self.pager.fill_next = next;
         }
         self.notice = None;
         if self.follow {
@@ -692,12 +307,13 @@ impl CallView {
     /// Fails a fetch: the offset stays missing until scrolled to, the
     /// view keeps the pages it holds with a notice naming the error
     /// code, and a running copy aborts without writing partial text.
-    fn fail(&mut self, offset: u64, code: &str) {
-        self.missing.insert(offset);
-        if self.copy.take().is_some() {
-            self.pinned.clear();
-        }
+    /// True when a running copy aborted, so the caller reapplies the
+    /// bounded window it had held open.
+    fn fail(&mut self, offset: u64, code: &str) -> bool {
+        self.pager.missing.insert(offset);
+        let aborted = self.copy.take().is_some();
         self.notice = Some(self.failure_notice(offset, code));
+        aborted
     }
 
     /// The failure notice: the offset that failed and the error code.
@@ -705,43 +321,12 @@ impl CallView {
         format!("The call's output page at byte {offset} could not load: {code}.")
     }
 
-    /// The fetched offsets from 0 while they chain with no gap: the
-    /// pages the full text holds so far.
-    fn chain_prefix(&self) -> Vec<u64> {
-        let mut out = Vec::new();
-        let mut at = 0u64;
-        while let Some(seg) = self.segs.get(&at) {
-            out.push(at);
-            let Some(next) = seg.next else {
-                break;
-            };
-            at = next;
-        }
-        out
-    }
-
-    /// The whole call's text for a result with no artifact: its uncapped
-    /// rows joined, with no gutter or line numbers.
+    /// The whole call's text for a result with no artifact: the
+    /// output as the tool returned it, with no gutter, line numbers,
+    /// headline, shell command or closing row.
     fn plain_text(&self) -> String {
-        self.plain
-            .iter()
-            .map(|body| body.text())
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.copy_text.clone()
     }
-}
-
-/// The rows one frame draws in `height`: the top row, the notice rows
-/// and the footer leave this many body rows.
-fn shown_height(height: usize, below: usize) -> usize {
-    height.saturating_sub(2 + below).max(1)
-}
-
-/// The visible body rows: the first row shown and how many show in
-/// `height` less the top row, the notice rows and the footer.
-fn window(rows: &[Row], list: &List, below: usize, height: usize) -> (usize, usize) {
-    let top = list.top().min(rows.len().saturating_sub(1));
-    (top, shown_height(height, below))
 }
 
 impl App {
@@ -861,11 +446,15 @@ impl App {
     }
 
     /// Closes the call view, leaving the call open behind it, with the
-    /// call's row still focused.
+    /// call's more row still focused: it stays drawn with its target,
+    /// so a render keeps the focus and Enter opens the view again.
     pub(in crate::app) fn close_call_view(&mut self) {
         let call = self.call_view_mut().map(|view| view.call);
         self.close_session_view();
         if let Some(call) = call {
+            // The headline row draws whenever the inline call is open,
+            // with or without a more row, so Esc keeps a drawn focus for
+            // short calls too; Enter on it reopens the view.
             self.focus = Some(TargetId::Line(Target::Call(call)));
         }
         self.settle();
@@ -905,7 +494,7 @@ impl App {
             // does scrolling down to the end it stalls.
             for row in rows.iter().skip(top).take(shown) {
                 if let Source::Page { offset, .. } = row.source
-                    && view.missing.remove(&offset)
+                    && view.pager.missing.remove(&offset)
                 {
                     view.queue(offset);
                 }
@@ -913,8 +502,8 @@ impl App {
             let at_bottom = !rows.is_empty() && view.list.selected() + 1 >= rows.len();
             if !up
                 && at_bottom
-                && let Some(next) = view.fill_next
-                && view.missing.remove(&next)
+                && let Some(next) = view.pager.fill_next
+                && view.pager.missing.remove(&next)
             {
                 view.queue(next);
             }
@@ -942,14 +531,14 @@ impl App {
         let session = self.session().cloned()?;
         let line = {
             let view = self.call_view_mut()?;
-            if view.request.is_some() {
+            if view.pager.request.is_some() {
                 return None;
             }
             view.queue_wanted(height);
-            let offset = view.queued.pop_front()?;
+            let offset = view.pager.queued.pop_front()?;
             let path = view.artifact.clone()?;
             let id = mint();
-            view.request = Some((id.clone(), offset));
+            view.pager.request = Some((id.clone(), offset));
             session_command(
                 &id,
                 "artifact_page",
@@ -971,13 +560,13 @@ impl App {
         let Some(view) = self.call_view_mut() else {
             return Vec::new();
         };
-        let Some((request, offset)) = view.request.clone() else {
+        let Some((request, offset)) = view.pager.request.clone() else {
             return Vec::new();
         };
         if request != id || Some(&view.session) != session.as_ref() {
             return Vec::new();
         }
-        view.request = None;
+        view.pager.request = None;
         let Some(CommandResult::ArtifactPage {
             text,
             lines,
@@ -985,7 +574,10 @@ impl App {
             size,
         }) = accepted.result.clone()
         else {
-            view.fail(offset, "unexpected answer");
+            let aborted = view.fail(offset, "unexpected answer");
+            if aborted {
+                self.resume_call_window();
+            }
             return Vec::new();
         };
         view.land(offset, text, lines, next, size, height);
@@ -1008,26 +600,47 @@ impl App {
         let Some(view) = self.call_view_mut() else {
             return;
         };
-        let Some((request, offset)) = view.request.clone() else {
+        let Some((request, offset)) = view.pager.request.clone() else {
             return;
         };
         if request != id.0 {
             return;
         }
-        view.request = None;
-        view.fail(offset, &code);
+        view.pager.request = None;
+        let aborted = view.fail(offset, &code);
+        if aborted {
+            self.resume_call_window();
+        }
         self.settle();
+    }
+
+    /// Reapplies the bounded draw window once a copy ends: pages a
+    /// running copy held evict again. A no-op while a copy still runs.
+    fn resume_call_window(&mut self) {
+        let height = self.conversation_height();
+        let Some(view) = self.call_view_mut() else {
+            return;
+        };
+        if view.copy.is_some() {
+            return;
+        }
+        let rows = view.rows();
+        let (top, shown) = window(&rows, &view.list, view.below_len(), height);
+        view.evict(&rows, top, shown);
     }
 
     /// The link went down: the request on the wire is gone, so a
     /// scroll asks again, and a running copy ends with the pages it
     /// holds and no clipboard write.
     pub(in crate::app) fn call_view_lost(&mut self) {
-        if let Some(view) = self.call_view_mut() {
-            view.request = None;
-            if view.copy.take().is_some() {
-                view.pinned.clear();
-            }
+        let aborted = if let Some(view) = self.call_view_mut() {
+            view.pager.request = None;
+            view.copy.take().is_some()
+        } else {
+            return;
+        };
+        if aborted {
+            self.resume_call_window();
         }
     }
 
@@ -1050,14 +663,11 @@ impl App {
             }
             // A needed page that failed to load leaves the standing
             // error-code notice; scrolling it back in retries, and then
-            // `y` copies whole.
-            if !view.missing.is_empty() {
+            // `y` copies whole. The running copy holds the window
+            // open, so every fetched page stays until it lands whole
+            // or aborts.
+            if !view.pager.missing.is_empty() {
                 return Effect::None;
-            }
-            for offset in view.chain_prefix() {
-                if view.pages.contains_key(&offset) {
-                    view.pinned.insert(offset);
-                }
             }
             view.copy = Some(CopyReq);
         }
@@ -1070,29 +680,32 @@ impl App {
 
     /// The text of a `y` copy whose every page is held: the pages in
     /// file order, exactly as returned, with no gutter or line numbers.
-    /// Unpins its pages either way. `None` while pages are missing or
-    /// no copy runs.
+    /// Reapplies the bounded window either way. `None` while pages are
+    /// missing or no copy runs.
     pub(crate) fn take_call_copy(&mut self) -> Option<String> {
         let text = {
             let view = self.call_view_mut()?;
-            if view.copy.is_none() || !view.complete() {
+            if view.copy.is_none() || !view.pager.complete() {
                 return None;
             }
-            let chain = view.chain_prefix();
-            if !chain.iter().all(|offset| view.pages.contains_key(offset)) {
+            let chain = view.pager.chain_prefix();
+            if !chain
+                .iter()
+                .all(|offset| view.pager.pages.contains_key(offset))
+            {
                 return None;
             }
             chain
                 .iter()
-                .filter_map(|offset| view.pages.get(offset))
+                .filter_map(|offset| view.pager.pages.get(offset))
                 .map(|page| page.text.as_str())
                 .collect::<String>()
         };
         if let Some(view) = self.call_view_mut() {
             view.copy = None;
-            view.pinned.clear();
         }
         self.copied = true;
+        self.resume_call_window();
         Some(text)
     }
 
@@ -1179,11 +792,6 @@ impl App {
             _ => None,
         }
     }
-}
-
-/// One row's whole text, cells joined.
-fn row_text(cells: &[(String, Ink)]) -> String {
-    cells.iter().map(|(text, _)| text.as_str()).collect()
 }
 
 #[cfg(test)]

@@ -43,6 +43,8 @@ mod steering;
 
 mod attention;
 mod call_view;
+mod call_view_pages;
+mod call_view_rows;
 mod chrome;
 pub(crate) mod commands;
 mod completion;

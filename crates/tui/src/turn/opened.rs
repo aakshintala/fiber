@@ -175,6 +175,10 @@ pub(crate) struct CallSnapshot {
     pub(crate) command: String,
     /// The whole call's uncapped rows, drawn when no artifact pages it.
     pub(crate) plain: Vec<Body>,
+    /// The call's output text, as the tool returned it: what `y` copies
+    /// for a result with no artifact, with no gutter, line numbers,
+    /// headline, shell command or closing row.
+    pub(crate) copy: String,
     /// The headline and shell command rows, drawn around paged output.
     pub(crate) prefix: Vec<Body>,
     /// The shell or search closing row, drawn after paged output.
@@ -201,6 +205,23 @@ pub(crate) fn snapshot<'a>(
     if let Some(first) = title.get_mut(..1) {
         first.make_ascii_uppercase();
     }
+    let parsed: Option<Value> = parsed_details(call);
+    let copy = match parsed_view(call, &parsed) {
+        View::Diff(diff) => diff.to_owned(),
+        View::Read { text, .. } => text.to_owned(),
+        View::Matches { groups, .. } => {
+            let mut bodies = Vec::new();
+            push_matches(groups, &mut bodies);
+            bodies
+                .iter()
+                .map(|body| body.text())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        View::Shell { output, .. } => output.to_owned(),
+        View::Written(text) => text.to_owned(),
+        View::Plain(text) => text.to_owned(),
+    };
     Some(CallSnapshot {
         id: call.id,
         open: call.open,
@@ -210,6 +231,7 @@ pub(crate) fn snapshot<'a>(
         prefix: prefix(call),
         closing: closing(call),
         numbering: numbering(call),
+        copy,
         artifact: call
             .result
             .as_deref()

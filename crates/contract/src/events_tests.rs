@@ -889,11 +889,11 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"text": "a\nb\n", "next": 4, "size": 9000}}),
+            json!({"command_id": "c", "result": {"text": "a\nb\n", "lines": [0, 2], "next": 4, "size": 9000}}),
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"text": "z\n", "size": 9000}}),
+            json!({"command_id": "c", "result": {"text": "z\n", "lines": [0], "size": 9000}}),
         ),
         (
             "command_accepted",
@@ -1941,7 +1941,7 @@ fn every_other_result_still_reads_as_its_own_variant() {
         CommandResult::OfferedFile { text: "t".into() }
     );
     assert!(matches!(
-        result_of(json!({"command_id": "c", "result": {"text": "t", "size": 1}})),
+        result_of(json!({"command_id": "c", "result": {"text": "t", "lines": [0], "size": 1}})),
         CommandResult::ArtifactPage { .. }
     ));
     assert!(matches!(
