@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -1208,7 +1209,7 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
 #[test]
 fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
     use extension_harness::{send as session_send, until_session as session_until};
-    use support::{Diag, session_dir};
+    use support::{Deadline, Diag, assert_timeout_dump, session_dir};
 
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -1230,25 +1231,31 @@ fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
         &client,
         r#"{"id":"c_p1","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    // The held model never answers, so the impossible kind never arrives:
-    // the wait expires holding the lines it received.
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the impossible kind never arrives: the wait
+    // then expires on a zero bound instead of spending what remains of
+    // the test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = session_until(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_p1"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        session_until(&client, "the turn that never completes", |line| {
-            line["kind"] == "no_such_kind"
-        });
+        for _ in 0..1000 {
+            match client.next("the turn that never completes", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the socket closed while waiting for the turn that never completes; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered the turn that never completes; got {got:?}");
     }))
     .unwrap_err();
     let message = expired
         .downcast_ref::<String>()
         .cloned()
         .unwrap_or_default();
-    let head = message.split("fiber stderr:").next().unwrap_or_default();
-    assert!(head.contains("command_accepted"), "{message}");
-    assert!(message.contains("fiber stderr:"), "{message}");
-    let tail_header = "session log tail (events.jsonl, last 20 lines):";
-    assert!(message.contains(tail_header), "{message}");
-    let tail = message.split(tail_header).nth(1).unwrap_or_default();
-    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+    assert_timeout_dump(&message);
     // The success-path deadline is spent proving the dump: free the held
     // turn, then kill and reap the session on the cleanup bound.
     server.release();

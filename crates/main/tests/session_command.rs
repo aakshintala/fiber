@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -431,6 +432,13 @@ impl Socket {
 
     fn set_diag(&mut self, diag: support::Diag) {
         self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     #[track_caller]
@@ -2207,7 +2215,7 @@ fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
     running.set_diag(setup.session_dir(&id));
-    let client = running.connect(&setup.socket(&id));
+    let mut client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
     send(
         &client,
@@ -2219,23 +2227,31 @@ fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
         &client,
         r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
     );
-    // The held model never answers, so the socket never closes: the close
-    // wait expires holding the lines it received.
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the socket never closes: the close wait then
+    // expires on a zero bound instead of spending what remains of the
+    // test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = until_session(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_prompt"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
     let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        until_session_close(&client);
+        for _ in 0..1000 {
+            match client.next("the session to close the socket", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the session closed the socket while waiting for the timeout; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered while waiting for the timeout; got {got:?}");
     }))
     .unwrap_err();
     let message = expired
         .downcast_ref::<String>()
         .cloned()
         .unwrap_or_default();
-    let head = message.split("fiber stderr:").next().unwrap_or_default();
-    assert!(head.contains("command_accepted"), "{message}");
-    assert!(message.contains("fiber stderr:"), "{message}");
-    let tail_header = "session log tail (events.jsonl, last 20 lines):";
-    assert!(message.contains(tail_header), "{message}");
-    let tail = message.split(tail_header).nth(1).unwrap_or_default();
-    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+    support::assert_timeout_dump(&message);
     // The success-path deadline is spent proving the dump: free the held
     // turn, then kill and reap the session on the cleanup bound.
     server.release();

@@ -319,6 +319,13 @@ impl Socket {
         self.diag = Some(diag);
     }
 
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
+    }
+
     #[track_caller]
     fn send(&self, line: &str) {
         let mut bytes = line.as_bytes().to_vec();
@@ -333,7 +340,7 @@ impl Socket {
         }
     }
 
-    fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+    pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
         match crate::support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
             Ok(None) => None,
             Ok(Some(buf)) => {

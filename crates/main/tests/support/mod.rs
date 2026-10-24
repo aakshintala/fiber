@@ -681,6 +681,20 @@ pub(crate) fn session_log_tail(dir: &Path) -> String {
     lines[start..].join("\n")
 }
 
+/// Asserts a session-socket timeout dump: the received lines before the
+/// stderr section, the stderr snapshot section, then the session-log tail
+/// holding a `session_started` line. The three acceptance tests share it.
+#[track_caller]
+pub(crate) fn assert_timeout_dump(message: &str) {
+    let head = message.split("fiber stderr:").next().unwrap_or_default();
+    assert!(head.contains("command_accepted"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    let tail_header = "session log tail (events.jsonl, last 20 lines):";
+    assert!(message.contains(tail_header), "{message}");
+    let tail = message.split(tail_header).nth(1).unwrap_or_default();
+    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+}
+
 /// The timeout message: the old first line naming `what` and `got`, then
 /// the stderr snapshot (or the still-running marker when nothing was
 /// captured yet), then the session-log tail.
@@ -702,18 +716,23 @@ pub(crate) fn timeout_message(what: &str, got: &[Value], stderr: &str, log_tail:
 /// Reads `pipe` to its end, appending every chunk to `snapshot` as it
 /// arrives while returning the full text: the timeout dump sees stderr
 /// written before the timeout, and the caller still gets the whole stream
-/// once at EOF. An unreadable or empty stream snapshots as empty.
+/// once at EOF. A multibyte character split across two reads is kept whole:
+/// trailing bytes that do not yet decode wait for the next read, so neither
+/// the text nor the snapshot ever holds a replacement character for one.
+/// An unreadable or empty stream snapshots as empty.
 pub(crate) fn drain_stderr_to_snapshot(
     pipe: &mut impl io::Read,
     snapshot: &Arc<Mutex<String>>,
 ) -> String {
     let mut text = String::new();
     let mut chunk = [0_u8; 4096];
+    let mut pending: Vec<u8> = Vec::new();
     loop {
         match pipe.read(&mut chunk) {
             Ok(0) => break,
             Ok(read) => {
-                let piece = String::from_utf8_lossy(&chunk[..read]);
+                pending.extend_from_slice(&chunk[..read]);
+                let piece = take_decoded_prefix(&mut pending);
                 text.push_str(&piece);
                 match snapshot.lock() {
                     Ok(mut guard) => guard.push_str(&piece),
@@ -723,7 +742,49 @@ pub(crate) fn drain_stderr_to_snapshot(
             Err(_) => break,
         }
     }
+    if !pending.is_empty() {
+        let piece = String::from_utf8_lossy(&pending);
+        text.push_str(&piece);
+        match snapshot.lock() {
+            Ok(mut guard) => guard.push_str(&piece),
+            Err(poisoned) => poisoned.into_inner().push_str(&piece),
+        }
+    }
     text
+}
+
+/// Moves every complete character out of `pending`, leaving only trailing
+/// bytes that may complete a character once more arrive: the valid prefix,
+/// with each invalid byte replaced. A trailing fragment with no error
+/// length is an incomplete character, so it stays for the next read.
+fn take_decoded_prefix(pending: &mut Vec<u8>) -> String {
+    let mut piece = String::new();
+    loop {
+        match str::from_utf8(pending) {
+            Ok(valid) => {
+                piece.push_str(valid);
+                pending.clear();
+                return piece;
+            }
+            Err(error) => {
+                let up_to = error.valid_up_to();
+                if up_to > 0 {
+                    // `valid_up_to` is always a character boundary.
+                    let valid = str::from_utf8(&pending[..up_to]).unwrap_or_default();
+                    piece.push_str(valid);
+                    pending.drain(..up_to);
+                    continue;
+                }
+                match error.error_len() {
+                    Some(len) => {
+                        piece.push('\u{FFFD}');
+                        pending.drain(..len);
+                    }
+                    None => return piece,
+                }
+            }
+        }
+    }
 }
 
 impl Socket {
@@ -968,6 +1029,13 @@ impl Socket {
     /// branch keeps the old message, so other `Socket` users are unaffected.
     pub(crate) fn set_diag(&mut self, diag: Diag) {
         self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     /// Reads the socket on a thread from now on, so a client the test holds
@@ -1569,29 +1637,32 @@ fn timeout_message_marks_empty_stderr_as_still_running() {
 
 #[test]
 fn session_log_tail_keeps_only_complete_lines() {
+    // No asserted count cites a `docs/<area>.md` line promising it
+    // (`docs/code-quality.md`, "What a reviewer checks"): the tail's width
+    // is the helper's own bound, so this test pins presence and recency,
+    // not the bound. A short log comes back whole.
     let dir = fakes::TempDir::new("diag-tail");
     assert_eq!(session_log_tail(&dir.path().join("missing")), "");
     let file = dir.path().join("s_2");
     fs::create_dir_all(&file).unwrap();
     fs::write(file.join("events.jsonl"), "{\"kind\":\"partial\"}").unwrap();
     assert_eq!(session_log_tail(&file), "");
-    let nineteen: String = (0..19).map(|n| format!("{{\"n\":{n}}}\n")).collect();
-    fs::write(file.join("events.jsonl"), &nineteen).unwrap();
-    assert_eq!(session_log_tail(&file).lines().count(), 19);
-    let twenty: String = (0..20).map(|n| format!("{{\"n\":{n}}}\n")).collect();
-    fs::write(file.join("events.jsonl"), &twenty).unwrap();
-    assert_eq!(session_log_tail(&file).lines().count(), 20);
-    let mut twenty_one: String = (0..21).map(|n| format!("{{\"n\":{n}}}\n")).collect();
-    fs::write(file.join("events.jsonl"), &twenty_one).unwrap();
+    let short: String = (0..5).map(|n| format!("{{\"n\":{n}}}\n")).collect();
+    fs::write(file.join("events.jsonl"), &short).unwrap();
+    assert_eq!(session_log_tail(&file), short.trim_end());
+    // A long log keeps its last line and drops an early one; a trailing
+    // fragment without its newline is still being written, so it is dropped.
+    let long: String = (0..40).map(|n| format!("{{\"n\":{n}}}\n")).collect();
+    fs::write(file.join("events.jsonl"), &long).unwrap();
     let tail = session_log_tail(&file);
-    assert_eq!(tail.lines().count(), 20);
-    assert!(tail.contains("{\"n\":20}"));
-    assert!(!tail.contains("{\"n\":0}"));
-    twenty_one.push_str("{\"n\":21");
-    fs::write(file.join("events.jsonl"), &twenty_one).unwrap();
+    assert!(tail.contains("{\"n\":39}"), "{tail}");
+    assert!(!tail.contains("{\"n\":0}"), "{tail}");
+    let mut cut = long.clone();
+    cut.push_str("{\"n\":40");
+    fs::write(file.join("events.jsonl"), &cut).unwrap();
     let tail = session_log_tail(&file);
-    assert_eq!(tail.lines().count(), 20);
-    assert!(!tail.contains("{\"n\":21"), "{tail}");
+    assert!(!tail.contains("{\"n\":40"), "{tail}");
+    assert!(tail.contains("{\"n\":39}"), "{tail}");
 }
 
 #[test]
@@ -1605,4 +1676,42 @@ fn stderr_drain_keeps_a_live_snapshot_of_the_full_text() {
     let blank = Arc::new(Mutex::new(String::new()));
     assert_eq!(drain_stderr_to_snapshot(&mut empty, &blank), "");
     assert_eq!(*blank.lock().unwrap(), "");
+}
+
+/// A reader that dribbles out at most `max` bytes per read, so a multibyte
+/// character lands split across reads.
+struct Dribble<'a> {
+    rest: &'a [u8],
+    max: usize,
+}
+
+impl io::Read for Dribble<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.rest.is_empty() {
+            return Ok(0);
+        }
+        let take = self.rest.len().min(buf.len()).min(self.max);
+        buf[..take].copy_from_slice(&self.rest[..take]);
+        self.rest = &self.rest[take..];
+        Ok(take)
+    }
+}
+
+#[test]
+fn stderr_drain_keeps_a_character_split_across_reads() {
+    // One byte per read splits `é` and `ö` across reads: decoding each read
+    // alone would leave a replacement character per half.
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let mut pipe = Dribble {
+        rest: "héllo wörld\n".as_bytes(),
+        max: 1,
+    };
+    let text = drain_stderr_to_snapshot(&mut pipe, &snapshot);
+    assert_eq!(text, "héllo wörld\n");
+    assert_eq!(*snapshot.lock().unwrap(), "héllo wörld\n");
+    assert!(
+        !snapshot.lock().unwrap().contains('\u{FFFD}'),
+        "{}",
+        snapshot.lock().unwrap()
+    );
 }
