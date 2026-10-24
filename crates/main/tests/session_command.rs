@@ -459,10 +459,6 @@ fn until_session_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
-/// The ordered event kinds, omitting `clients`, which can race with loop writes.
-fn kinds_except_clients(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
-}
 /// The socket's event kinds for one prompt and `close`: the subscribe, the
 /// prompt's turn, and the close. The prompt-over-the-socket, skill and
 /// same-id tests run exactly this shape, so they share it.
@@ -706,6 +702,19 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     let mut stream = vec![sub];
     stream.extend(attached);
     stream.extend(tail);
+    // One `clients` line for this full connection attaching
+    // (`docs/events.md`, `clients`); the count is fixed, so it is pinned
+    // against the raw lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "the client attached once: {stream:?}"
+    );
+    // The ordered turn: subscribe, then the held prompt's turn, then the
+    // close (`docs/loop.md`, "Starting a turn", "Ending a turn").
     assert_eq!(
         kinds(&stream),
         [
@@ -1711,7 +1720,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -1737,7 +1746,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -2169,8 +2178,11 @@ fn stdout_projection_also_sets_aside_job_deltas() {
         "date_changed",
         "fiber_exited",
     ]);
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
     assert_eq!(
-        kinds_except_clients(&lines),
+        kinds(&lines),
         ["fiber_started", "job_delta", "fiber_exited"]
     );
     assert_eq!(stdout_kinds(&lines), ["fiber_started", "fiber_exited"]);
@@ -3286,7 +3298,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -3312,7 +3324,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -3510,7 +3522,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "session_started",
             "fiber_started",

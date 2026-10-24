@@ -232,6 +232,9 @@ fn ordered_projections_set_aside_exactly_the_independent_kinds() {
         "job_delta",
         "unknown_future_kind",
     ];
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
     assert_eq!(support::kinds(&lines), expected);
 }
 
@@ -6638,7 +6641,9 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             "the wake carries the whole question line: {body}"
         );
     }
-    // The spawn and resume are reviewed; the person's form is not.
+    // The spawn and resume are reviewed; the person's form is not
+    // (`docs/delegates.md`, "Permissions": `delegate_spawn`,
+    // `delegate_fork` and `delegate_message` are always reviewed).
     // Session request counts depend on which step takes the job notice.
     let requests = parent.requests();
     assert_eq!(requests.len() - session_bodies(&requests).len(), 2);

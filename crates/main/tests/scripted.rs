@@ -172,6 +172,8 @@ fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
 /// machine the ephemeral `clients` line can fall after the loop's first
 /// lines: only its presence is pinned, not its position.
 fn kinds_with_one_clients_line(lines: &[Value]) -> Vec<&str> {
+    // One `clients` line per attach is fixed (`docs/testing.md`, "Event
+    // streams"), so the count is pinned against the raw lines.
     let clients = lines
         .iter()
         .filter(|line| line["kind"] == "clients")

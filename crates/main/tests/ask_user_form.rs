@@ -195,6 +195,8 @@ fn kind_windows_set_aside_independent_lines_without_crossing_boundaries() {
         "fiber_exited",
         "after",
     ]);
+    // Window contents are pinned, not independent-member positions:
+    // the set-aside list is fixed (`docs/testing.md`, "Event streams").
     assert_eq!(
         kinds_of_the_call(&lines),
         ["tool_call_requested", "usage_recorded", "turn_completed"]
