@@ -291,6 +291,10 @@ impl Jobs for StubJobs {
         })
     }
 
+    // Exempt: returning false unconditionally is behavior-identical to the
+    // body above it, which ignores the id and returns false; no test can
+    // pin a difference (`docs/testing/mutants.md`, "Proving a test bites").
+    #[cfg_attr(false, mutants::skip)]
     fn stop(&self, job_id: &JobId) -> bool {
         let _ = job_id;
         false
@@ -300,6 +304,10 @@ impl Jobs for StubJobs {
         0
     }
 
+    // Exempt: ignoring the call is behavior-identical to the no-op body
+    // above it; no test can pin a difference (`docs/testing/mutants.md`,
+    // "Proving a test bites").
+    #[cfg_attr(false, mutants::skip)]
     fn foreground(&self, call: Foreground) {
         let _ = call;
     }
@@ -313,6 +321,11 @@ impl Jobs for StubJobs {
         0
     }
 
+    // Exempt: dropping the by-value inbox without delivering is
+    // behavior-identical to the body above it, which drops it either way;
+    // no test can pin a difference (`docs/testing/mutants.md`,
+    // "Proving a test bites").
+    #[cfg_attr(false, mutants::skip)]
     fn deliver_to(&self, inbox: Sender<Delivery>) {
         let _ = inbox;
     }

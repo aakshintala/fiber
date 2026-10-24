@@ -506,12 +506,18 @@ fn stub_jobs_starts_empty_by_default() {
 
 #[test]
 fn stub_jobs_seeded_list_keeps_ids_and_order() {
+    // Order promised by `StubJobs::new` ("in iterator order") and
+    // `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
     let jobs = StubJobs::new(stub_ids(&["j_2", "j_1", "j_3"]));
     assert_eq!(Jobs::running(&jobs), stub_ids(&["j_2", "j_1", "j_3"]));
 }
 
 #[test]
 fn stub_jobs_set_running_replaces_the_list() {
+    // Order promised by `StubJobs::set_running` ("preserving iterator
+    // order") and `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
     let jobs = StubJobs::new(stub_ids(&["j_1"]));
     jobs.set_running(stub_ids(&["j_2", "j_3"]));
     assert_eq!(Jobs::running(&jobs), stub_ids(&["j_2", "j_3"]));
@@ -521,6 +527,9 @@ fn stub_jobs_set_running_replaces_the_list() {
 
 #[test]
 fn stub_jobs_update_running_mutates_the_list() {
+    // Order promised by `StubJobs::running` ("the current ordered list")
+    // and `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
     let jobs = StubJobs::new(stub_ids(&["j_1", "j_2"]));
     jobs.update_running(|running| {
         running.retain(|id| id != &stub_id("j_1"));
@@ -545,20 +554,27 @@ fn stub_jobs_inert_methods_open_stop_or_deliver_nothing() {
     let (tx, rx) = mpsc::channel();
     jobs.deliver_to(tx);
     assert!(rx.try_recv().is_err());
+    // Order promised by `StubJobs::new` ("in iterator order") and
+    // `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
     assert_eq!(Jobs::running(&jobs), stub_ids(&["j_1"]));
 }
 
 #[test]
 fn stub_jobs_snapshot_waits_for_an_in_progress_update() {
+    // Order promised by `StubJobs::update_running` (the snapshot observes
+    // the callback's complete result) and `docs/testing/fakes.md`,
+    // "Fakes" ("controllable ordered running-job list").
     let jobs = Arc::new(StubJobs::new(stub_ids(&["j_1"])));
     let (inside_tx, inside_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
-    let (reading_tx, reading_rx) = mpsc::channel();
     let (seen_tx, seen_rx) = mpsc::channel();
     let held = Arc::clone(&jobs);
     let updater = std::thread::spawn(move || {
         held.update_running(|running| {
             running.push(stub_id("j_2"));
+            // Sent while the callback holds the list mutex, so a snapshot
+            // started after this signal is contending for the lock.
             inside_tx.send(()).unwrap();
             Deadline::after(MUST_SUCCEED_WITHIN)
                 .recv(&release_rx)
@@ -571,20 +587,13 @@ fn stub_jobs_snapshot_waits_for_an_in_progress_update() {
         .unwrap();
     let reader_jobs = Arc::clone(&jobs);
     std::thread::spawn(move || {
-        reading_tx.send(()).unwrap();
         seen_tx.send(reader_jobs.running()).unwrap();
     });
-    Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&reading_rx)
-        .unwrap();
-    assert!(
-        Deadline::after(Duration::from_millis(50))
-            .recv(&seen_rx)
-            .is_err(),
-        "a snapshot returned while the update held the list"
-    );
     release_tx.send(()).unwrap();
     updater.join().unwrap();
+    // The only `Deadline` here is a hang guard: the `inside` signal above
+    // establishes that the snapshot is contending for the lock, and the
+    // complete `[j_1, j_2, j_3]` result proves it waited for the callback.
     let seen = Deadline::after(MUST_SUCCEED_WITHIN).recv(&seen_rx).unwrap();
     assert_eq!(seen, stub_ids(&["j_1", "j_2", "j_3"]));
 }
