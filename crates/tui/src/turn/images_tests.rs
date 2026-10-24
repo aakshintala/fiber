@@ -34,6 +34,7 @@ fn noted(paths: &[&str]) -> Layout {
         layout.note(&crate::image::Part {
             session: session(),
             path: (*path).to_owned(),
+            mime_type: "image/png".to_owned(),
             width: 1280,
             height: 800,
         });
@@ -118,6 +119,7 @@ fn call_rows_sit_at_the_ledger_indent() {
         &[crate::image::Part {
             session: session(),
             path: "artifacts/a.png".to_owned(),
+            mime_type: "image/png".to_owned(),
             width: 1280,
             height: 800,
         }],
@@ -151,6 +153,7 @@ fn steer_rows_draw_each_line_with_no_indent() {
         &[crate::image::Part {
             session: session(),
             path: "artifacts/s.png".to_owned(),
+            mime_type: "image/png".to_owned(),
             width: 640,
             height: 480,
         }],

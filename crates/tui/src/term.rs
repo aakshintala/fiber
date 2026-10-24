@@ -84,14 +84,18 @@ pub(crate) fn size(tty: &File) -> io::Result<(u16, u16)> {
     Ok((size.ws_col.max(1), size.ws_row.max(1)))
 }
 
+/// The size of `tty` in pixels, or zero when the terminal reports none:
+/// [`cell`] falls back then (`docs/tui.md`, "Images").
+pub(crate) fn pixels(tty: &File) -> (u16, u16) {
+    termios::tcgetwinsize(tty)
+        .map(|size| (size.ws_xpixel, size.ws_ypixel))
+        .unwrap_or((0, 0))
+}
+
 /// One cell's size in pixels from the tty's pixel size over its cell
 /// counts, for the placeholder grid (`docs/tui.md`, "Images"). Zero
 /// pixels or a zero count reads the (10, 20) fallback, so the grid math
 /// never divides by zero.
-#[allow(
-    dead_code,
-    reason = "no production caller until the image sizing wires it"
-)]
 pub(crate) fn cell(pixel: (u16, u16), count: (u16, u16)) -> (u16, u16) {
     let (wide, high) = pixel;
     let (cols, rows) = count;

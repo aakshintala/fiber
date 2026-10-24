@@ -57,6 +57,23 @@ impl Pages {
     pub(crate) fn column_width(&self) -> u16 {
         self.width
     }
+
+    /// How the images size: the one line, or the inline grid with its
+    /// cell size (`docs/tui.md`, "Images").
+    pub(crate) fn image_sizing(&self) -> image::Sizing {
+        self.images.sizing
+    }
+
+    /// Sets the image sizing, recounting when it changes, so paging
+    /// counts the inline rows from the logged size without decoding any
+    /// image (`docs/tui.md`, "Images").
+    pub(crate) fn set_image_sizing(&mut self, sizing: image::Sizing) {
+        if self.images.sizing == sizing {
+            return;
+        }
+        self.images.sizing = sizing;
+        self.recount();
+    }
 }
 
 #[cfg(test)]

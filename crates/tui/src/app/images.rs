@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, mint};
+use super::{App, Effect, Target, mint};
 use crate::image;
 
 /// One `read_file` out for a viewer open: what its answer needs to
@@ -20,6 +20,33 @@ struct Fetch {
     path: String,
 }
 
+/// Whether an inline image's bytes are asked for, shown, or failed:
+/// a shown or failed image is not asked for again in its session
+/// generation (`docs/tui.md`, "Images").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code, reason = "answers mark Shown and Failed")]
+enum DisplayState {
+    Asked,
+    Shown,
+    Failed,
+}
+
+/// A display fetch for an inline image, by its `(session, path)`: the
+/// `read_file` command out, the placeholder id its answer draws under,
+/// and the session generation that asked, so a late answer draws
+/// nowhere stale.
+#[allow(dead_code, reason = "answers dispatch on the command and id")]
+struct Display {
+    /// The `read_file` command's id: the answer's dispatch key.
+    command: String,
+    /// The placeholder id the answer transmits under.
+    id: u32,
+    /// The session generation that asked.
+    generation: u64,
+    /// Whether its bytes are asked for, shown, or failed.
+    state: DisplayState,
+}
+
 /// What the app holds per session for its images: the viewer fetches
 /// out, the views queued for the loop, and the session generation,
 /// so a late viewer completion after a session change is dropped.
@@ -30,6 +57,8 @@ pub(crate) struct Images {
     /// too large or refused. They stay their line, with the notice said
     /// once, and are not asked for again in that segment.
     refused: BTreeSet<(String, String)>,
+    /// The inline images' display fetches, by `(session, path)`.
+    display: BTreeMap<(String, String), Display>,
     out: image::Out,
     generation: u64,
 }
@@ -164,8 +193,57 @@ impl App {
     pub(in crate::app) fn forget_images(&mut self) {
         self.images.fetches.clear();
         self.images.refused.clear();
+        self.images.display.clear();
         self.images.out = image::Out::default();
         self.images.generation = self.images.generation.saturating_add(1);
+    }
+
+    /// Queues the display `read_file` commands for the inline images
+    /// the frame drew, once each: the second draw of a redrawn frame
+    /// finds them asked and queues nothing more (`docs/tui.md`,
+    /// "Images"). The one-line form needs no bytes and asks nothing.
+    pub(crate) fn images_drawn(&mut self, targets: &[crate::mouse::Target]) {
+        let crate::image::Sizing::Inline { .. } = self.screen.pages().image_sizing() else {
+            return;
+        };
+        // With no session, or the link down, the loop sends nothing:
+        // queueing now would mark the image asked while its command is
+        // dropped, so a later draw queues once the link is up.
+        if self.session().is_none() || !self.outbox.is_up() {
+            return;
+        }
+        for target in targets {
+            let crate::mouse::TargetId::Line(Target::Image(id)) = target.id else {
+                continue;
+            };
+            let Some(part) = self.screen.pages().image(id) else {
+                continue;
+            };
+            if part.mime_type != "image/png" {
+                continue;
+            }
+            let key = (part.session.0.clone(), part.path.clone());
+            if self.images.display.contains_key(&key) {
+                continue;
+            }
+            let command_id = mint();
+            let line = json!({
+                "id": command_id,
+                "command": "read_file",
+                "args": {"session": part.session.0, "path": part.path},
+            })
+            .to_string();
+            self.images.display.insert(
+                key,
+                Display {
+                    command: command_id.clone(),
+                    id,
+                    generation: self.images.generation,
+                    state: DisplayState::Asked,
+                },
+            );
+            self.images.out.display.push(line);
+        }
     }
 
     /// Drops the viewer fetches with the connection: they are asked

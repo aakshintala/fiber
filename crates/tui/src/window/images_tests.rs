@@ -177,3 +177,26 @@ fn one_path_noted_under_two_sessions_draws_two_ids() {
         Some(two)
     );
 }
+
+#[test]
+fn set_image_sizing_recounts_only_on_change() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    pages.apply(&started(&["artifacts/a.png"]));
+    let recounts = pages.recounts;
+    // The same sizing recounts nothing.
+    pages.set_image_sizing(Sizing::Text);
+    assert_eq!(pages.recounts, recounts);
+    // Inline sizing recounts the resident page.
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    assert!(pages.recounts > recounts, "the sizing change recounts");
+    let recounts = pages.recounts;
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    assert_eq!(pages.recounts, recounts);
+    // A new cell size recounts again.
+    pages.set_image_sizing(Sizing::Inline { cell: (8, 16) });
+    assert!(pages.recounts > recounts, "the new cell recounts");
+    let recounts = pages.recounts;
+    pages.set_image_sizing(Sizing::Text);
+    assert!(pages.recounts > recounts, "sizing back recounts");
+}

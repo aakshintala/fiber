@@ -37,6 +37,7 @@ fn part_from_content_keeps_path_and_size() {
         Some(super::Part {
             session: session(),
             path: "artifacts/i_a.png".to_owned(),
+            mime_type: "image/png".to_owned(),
             width: 1280,
             height: 800,
         })
@@ -87,6 +88,7 @@ fn drawn(label: &str, columns: u16) -> Vec<(String, Option<Target>)> {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 1280,
         height: 800,
     };
@@ -173,6 +175,7 @@ fn lines_at_indented(columns: u16, indent: u16) -> Vec<Line<'static>> {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 1280,
         height: 800,
     };
@@ -214,6 +217,7 @@ fn a_right_aligned_line_stays_right_aligned() {
     let part = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 10,
         height: 20,
     };
@@ -231,6 +235,7 @@ fn a_line_names_its_own_paths_id() {
     let first = super::Part {
         session: session(),
         path: "artifacts/a.png".to_owned(),
+        mime_type: "image/png".to_owned(),
         width: 10,
         height: 20,
     };
@@ -260,4 +265,114 @@ fn one_path_in_two_segments_draws_two_ids() {
     assert_eq!(layout.id(&session(), "artifacts/a.png"), Some(one));
     assert_eq!(layout.id(&other(), "artifacts/a.png"), Some(two));
     assert_eq!(layout.note(&first), one, "refolding keeps the id");
+}
+
+/// A part with `width` by `height` logged pixels.
+fn sized(width: u32, height: u32) -> super::Part {
+    super::Part::from_content(&session(), &image("artifacts/a.png", width, height))
+        .expect("the image is kept")
+}
+
+#[test]
+fn part_keeps_its_mime_type() {
+    assert_eq!(sized(10, 20).mime_type, "image/png");
+    let jpeg = ContentPart::Image {
+        path: "artifacts/a.jpg".to_owned(),
+        mime_type: "image/jpeg".to_owned(),
+        width: 10,
+        height: 20,
+    };
+    assert_eq!(
+        super::Part::from_content(&session(), &jpeg)
+            .expect("the jpeg is kept")
+            .mime_type,
+        "image/jpeg"
+    );
+}
+
+#[test]
+fn the_registry_never_hands_out_31() {
+    let mut layout = Layout::default();
+    let mut ids = Vec::new();
+    for at in 0..35 {
+        let part =
+            super::Part::from_content(&session(), &image(&format!("artifacts/i_{at}.png"), 10, 20))
+                .expect("the image is kept");
+        ids.push(layout.note(&part));
+    }
+    // Id 31 is the graphics probe's: the 31st image takes 32, and every
+    // id stays unique.
+    assert!(
+        !ids.contains(&31),
+        "the probe's id is never an image: {ids:?}"
+    );
+    assert_eq!(ids[30], 32);
+    assert_eq!(ids[31], 33);
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 35);
+}
+
+#[test]
+fn grid_keeps_a_small_image_at_its_natural_cells() {
+    // A small image draws as it is: no upscale past its natural cells.
+    assert_eq!(super::grid(&sized(20, 40), 60, (10, 20)), (2, 2));
+    assert_eq!(super::grid(&sized(25, 45), 60, (10, 20)), (2, 2));
+    assert_eq!(super::grid(&sized(1, 1), 60, (10, 20)), (1, 1));
+}
+
+#[test]
+fn grid_caps_at_forty_percent_and_twelve_rows() {
+    // 1280 by 800 at 80 columns: the width binds at 32 columns, and the
+    // height follows at 10 rows.
+    assert_eq!(super::grid(&sized(1280, 800), 80, (10, 20)), (32, 10));
+    // A tall image binds the rows instead: 1 column by 12 rows.
+    assert_eq!(super::grid(&sized(100, 2000), 80, (10, 20)), (1, 12));
+    // A wide image binds the columns, holding at least one row.
+    assert_eq!(super::grid(&sized(4000, 100), 80, (10, 20)), (32, 1));
+}
+
+#[test]
+fn grid_binds_on_the_narrower_box() {
+    // At equality the width binds: 32 columns by 12 rows.
+    assert_eq!(super::grid(&sized(1280, 960), 80, (10, 20)), (32, 12));
+    // A pixel wider binds the width with fewer rows.
+    assert_eq!(super::grid(&sized(1281, 960), 80, (10, 20)), (32, 11));
+    // A pixel narrower binds the height with fewer columns.
+    assert_eq!(super::grid(&sized(1279, 960), 80, (10, 20)), (31, 12));
+}
+
+#[test]
+fn grid_clamps_to_297_placeholders() {
+    // 1920 by 1080 at 84 columns: 40% is 33 columns, the height follows
+    // at 9 rows, 33 by 9 placeholders.
+    let (cols, rows) = super::grid(&sized(1920, 1080), 84, (10, 20));
+    assert_eq!((cols, rows), (33, 9));
+    assert_eq!(u32::from(cols) * u32::from(rows), 297);
+}
+
+#[test]
+fn grid_stays_inside_the_diacritic_table() {
+    // Past 160 columns 40% tops 64: the diacritic table's edge.
+    assert_eq!(super::grid(&sized(2000, 100), 160, (10, 20)), (64, 1));
+    assert_eq!(super::grid(&sized(2000, 100), 159, (10, 20)), (63, 1));
+}
+
+#[test]
+fn grid_draws_nothing_without_size_columns_or_cells() {
+    for (width, height, columns, cell) in [
+        (0, 800, 80, (10, 20)),
+        (1280, 0, 80, (10, 20)),
+        (0, 0, 80, (10, 20)),
+        (1280, 800, 0, (10, 20)),
+        (1280, 800, 80, (0, 20)),
+        (1280, 800, 80, (10, 0)),
+    ] {
+        assert_eq!(
+            super::grid(&sized(width, height), columns, cell),
+            (0, 0),
+            "{width} by {height} at {columns} with {cell:?}"
+        );
+    }
 }

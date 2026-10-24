@@ -9,7 +9,7 @@ use super::super::{App, Effect};
 use crate::app::Target;
 use crate::keys::Key;
 use crate::link::Line;
-use crate::mouse::TargetId;
+use crate::mouse::{self, TargetId};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
@@ -51,6 +51,39 @@ fn started_with_image(app: &mut App, path: &str) {
         .cloned()
         .unwrap_or_default(),
     }));
+}
+
+/// An app with inline images on: home carries the flag and graphics
+/// were detected, so the images size to the placeholder grid.
+fn inline_app() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 24);
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.set_graphics();
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app
+}
+
+/// The drawn targets naming image `id`: what `drawn` queues from.
+fn drawn(id: u32) -> Vec<mouse::Target> {
+    vec![mouse::Target {
+        id: TargetId::Line(Target::Image(id)),
+        rect: ratatui::layout::Rect::new(0, 0, 60, 12),
+    }]
 }
 
 /// The command lines `effect` sends, panicking for any other effect.
@@ -422,4 +455,134 @@ fn a_refusal_in_one_segment_still_asks_in_the_other() {
         value.get("args"),
         Some(&json!({"session": SESSION, "path": "artifacts/shot.png"}))
     );
+}
+
+#[test]
+fn graphics_and_the_flag_size_images_inline() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Inline { cell: (10, 20) }
+    );
+}
+
+#[test]
+fn without_graphics_images_stay_their_one_line() {
+    // The flag is on, but the probe never answered.
+    let mut app = app();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    started_with_image(&mut app, "artifacts/shot.png");
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Text
+    );
+}
+
+#[test]
+fn without_the_flag_images_stay_their_one_line() {
+    // Graphics were detected, but the flag is off: the default launch
+    // carries it false.
+    let mut app = app();
+    app.set_graphics();
+    started_with_image(&mut app, "artifacts/shot.png");
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Text
+    );
+}
+
+#[test]
+fn flat_stays_text() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    app.attached_screen_mut().pages_mut().set_flat(true);
+    app.refresh_image_sizing();
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Text
+    );
+}
+
+#[test]
+fn a_repeated_draw_asks_once() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let targets = drawn(1);
+    // `Screen::draw_with` may draw twice: the hook still asks once.
+    app.images_drawn(&targets);
+    app.images_drawn(&targets);
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    assert_eq!(value.get("command"), Some(&json!("read_file")));
+    assert_eq!(
+        value.get("args"),
+        Some(&json!({"session": SESSION, "path": "artifacts/shot.png"}))
+    );
+    // An unknown id draws nothing to ask for.
+    app.images_drawn(&drawn(7));
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
+fn a_draw_with_the_link_down_asks_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 24);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    started_with_image(&mut app, "artifacts/shot.png");
+    // Inline sizing holds, but the link is down: the loop would drop
+    // the command, so the draw queues nothing.
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Inline { cell: (10, 20) }
+    );
+    app.images_drawn(&drawn(1));
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
+fn a_non_png_draw_asks_for_no_bytes() {
+    let mut app = inline_app();
+    app.on_line(Line::Session(contract::Envelope {
+        kind: "turn_started".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [
+                {"type": "image", "path": "artifacts/shot.jpg",
+                    "mime_type": "image/jpeg",
+                    "width": 1280, "height": 800},
+            ],
+        }]})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }));
+    app.images_drawn(&drawn(1));
+    assert!(app.take_image_out().display.is_empty());
 }

@@ -235,6 +235,10 @@ pub(crate) struct App {
     /// answer, which never delays the first frame (`docs/tui.md`,
     /// "Images").
     graphics: bool,
+    /// One cell's size in pixels, for the placeholder grid: the tty's
+    /// pixel size over its cell counts, the fallback while unknown
+    /// (`docs/tui.md`, "Images").
+    cell: (u16, u16),
     /// Approval requests from every session.
     queue: Queue,
     /// The attached session's offer of its repository's code.
@@ -342,6 +346,7 @@ impl App {
             armed_at: None,
             kitty: false,
             graphics: false,
+            cell: (10, 20),
             queue: Queue::default(),
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
@@ -1199,6 +1204,56 @@ impl App {
     /// graphics protocol (`docs/tui.md`, "Images").
     pub(crate) fn set_graphics(&mut self) {
         self.graphics = true;
+        self.refresh_image_sizing();
+    }
+
+    /// Sets one cell's size in pixels, for the placeholder grid, and
+    /// resizes the inline images to it.
+    pub(crate) fn set_cell(&mut self, cell: (u16, u16)) {
+        self.cell = cell;
+        self.refresh_image_sizing();
+    }
+
+    /// Whether images draw inline on the attached screen: the flag is
+    /// on, graphics were detected, and the window is not flat
+    /// (`docs/tui.md`, "Images", "Screen readers").
+    fn inline_images(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| home.launch.inline_images)
+            && self.graphics
+    }
+
+    /// Resizes the attached and shown screens' images between the
+    /// one-line form and the inline grid, recounting where the sizing
+    /// changed. The attached screen is the stashed one while a
+    /// transcript is swapped in; the shown one sizes too, for the
+    /// settle back.
+    fn refresh_image_sizing(&mut self) {
+        let inline = self.inline_images();
+        let cell = self.cell;
+        let sizing_of = |flat: bool| {
+            if inline && !flat {
+                crate::image::Sizing::Inline { cell }
+            } else {
+                crate::image::Sizing::Text
+            }
+        };
+        let attached_flat = self.attached_screen().pages().ext.flat;
+        let attached = sizing_of(attached_flat);
+        self.attached_screen_mut()
+            .pages_mut()
+            .set_image_sizing(attached);
+        if self
+            .items
+            .open
+            .as_ref()
+            .is_some_and(|open| open.stashed.is_some())
+        {
+            let shown_flat = self.screen.pages().ext.flat;
+            let shown = sizing_of(shown_flat);
+            self.screen.pages_mut().set_image_sizing(shown);
+        }
     }
 
     /// The draft in the input box.

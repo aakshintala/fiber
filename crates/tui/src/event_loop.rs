@@ -160,6 +160,9 @@ pub(crate) fn run_with(
     if pick_at_start {
         app.start_model_pick();
     }
+    // One cell's pixels, for the placeholder grid, from the tty the
+    // first frame already sized (`docs/tui.md`, "Images").
+    app.set_cell(term::cell(term::pixels(&tty), (width, height)));
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let open = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
@@ -685,6 +688,8 @@ impl<B: Backend> Loop<B> {
             }
             Input::Resize => {
                 if let Ok((width, height)) = term::size(&self.tty) {
+                    self.app
+                        .set_cell(term::cell(term::pixels(&self.tty), (width, height)));
                     self.app.set_size(width, height);
                     if self.screen.resize(width, height).is_err() {
                         return Some(1);
