@@ -382,9 +382,14 @@ impl App {
                 }
                 let status = row.status.as_ref();
                 let stop = row.left.is_none() && row.state != State::Unreadable;
+                // A closing row keeps no ⌥N on home, even before the
+                // rail sheds its card.
+                let number = (!row.status.as_ref().is_some_and(|status| status.closing))
+                    .then(|| self.rail_state().number(row.key))
+                    .flatten();
                 list.push(ListLine::Live {
                     key: row.key,
-                    number: self.rail_state().number(row.key),
+                    number,
                     glyph: self.motion.glyph(row).to_owned(),
                     name: crate::home::title(row),
                     word: crate::view::rail::word(row),

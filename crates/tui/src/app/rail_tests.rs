@@ -238,6 +238,18 @@ fn an_exited_row_gives_up_its_number() {
 }
 
 #[test]
+fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
+    let mut app = with(&[A, B]);
+    app.on_line(live(A, json!({"closing": true})));
+    assert!(
+        app.rail_cards()
+            .is_some_and(|(cards, _)| { cards.iter().all(|card| card.id.0 != A) }),
+        "a closing row is no card"
+    );
+    assert_eq!(number(&app, B), Some(2));
+}
+
+#[test]
 fn a_crashed_row_keeps_its_number() {
     let mut app = with(&[A, B]);
     app.on_line(left(A, "crashed"));

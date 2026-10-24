@@ -707,11 +707,15 @@ impl Sessions {
     }
 
     /// The feed rows the rail draws as cards: live and crashed, not
-    /// exited, in feed order (`docs/tui.md`, "The rail").
+    /// exited and never closing, in feed order (`docs/tui.md`, "The
+    /// rail"). A closing row has no card and no ⌥N until it exits.
     pub(crate) fn cards(&self) -> Vec<&Row> {
         self.feed
             .iter()
-            .filter(|row| row.left != Some(Left::Exited))
+            .filter(|row| {
+                row.left != Some(Left::Exited)
+                    && !row.status.as_ref().is_some_and(|status| status.closing)
+            })
             .collect()
     }
 
