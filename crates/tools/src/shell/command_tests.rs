@@ -1749,14 +1749,21 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
     for cancelled in [true, false] {
         let dir = fakes::TempDir::new("fiber-shell-listing-stop");
         let ready = Ready::new(dir.path());
-        let release = dir.path().join("release");
+        let release_path = dir.path().join("release");
+        fakes::fifo(&release_path);
+        // Open read-write so releasing never waits for the fixture to open it.
+        let mut release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&release_path)
+            .unwrap();
         let ps = fakes::script(
             dir.path(),
             "ps",
             &format!(
-                "echo $$ > '{}'\ni=0\nwhile test ! -e '{}' && test \"$i\" -lt 80; do i=$((i + 1)); sleep 0.05; done\nexit 0",
+                "echo $$ > '{}'\nread -r _ < '{}'\nexit 0",
                 ready.path().display(),
-                release.display(),
+                release_path.display(),
             ),
         );
         let work = dir.path().to_path_buf();
@@ -1808,7 +1815,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
         } else {
             clock.advance(Duration::from_millis(1500));
         }
-        std::fs::write(&release, b"go\n").unwrap();
+        std::io::Write::write_all(&mut release, b"go\n").unwrap();
         let ran = Deadline::after(JOB_DEADLINE)
             .recv(&rx)
             .expect("the foreground call ended within the deadline");
