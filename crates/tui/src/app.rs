@@ -16,6 +16,7 @@ use contract::events::{
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
+use ratatui::layout::Rect;
 use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, Queue};
@@ -23,7 +24,7 @@ use crate::ext::{Handle, Renderer};
 use crate::home::Level;
 use crate::import_report::ImportReport;
 use crate::input::Draft;
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::shell;
 use crate::window::{Applied, Pages};
@@ -86,6 +87,7 @@ use screen::Screen;
 pub(crate) use config_views::ConfigView;
 pub(crate) use find::{FindBar, Snippet};
 pub(crate) use outbox::{Kind, Link, Phase, history_args, mint, session_command};
+pub(crate) use select::SurfaceId;
 pub(crate) use session_views::SessionView;
 pub(crate) use top::Surface;
 
@@ -559,7 +561,24 @@ impl App {
                 self.toggle_ledgers();
                 Effect::None
             }
-            Key::End | Key::CtrlC => {
+            // End moves to the line's end in the input editor, where
+            // typing would reach it, then jumps to the conversation's
+            // end as before (`docs/tui.md`, "Selection and copy"). Every
+            // other context keeps its dispatch: the arm below only adds
+            // the line edit.
+            Key::End => {
+                if matches!(
+                    self.key_context(),
+                    crate::keyset::Context::Input
+                        | crate::keyset::Context::Steering
+                        | crate::keyset::Context::Conversation
+                ) {
+                    crate::input::route(Edit::LineEnd, &mut self.draft, &mut self.queue);
+                }
+                self.screen.follow();
+                Effect::None
+            }
+            Key::CtrlC => {
                 self.screen.follow();
                 Effect::None
             }
@@ -1216,6 +1235,18 @@ impl App {
     /// The draft in the input box.
     pub(crate) fn input(&self) -> &Draft {
         &self.draft
+    }
+
+    /// Notes the input box's shown text slab and its first draft row,
+    /// from the frame that drew it: the press and drag map their cells
+    /// through it.
+    pub(crate) fn note_input_area(&self, area: Rect, top: usize) {
+        self.select.note_input(area, top);
+    }
+
+    /// Drops the input box's note, before the next frame notes its own.
+    pub(crate) fn clear_input_note(&self) {
+        self.select.clear_input_note();
     }
 
     /// The session's name, if it has one.

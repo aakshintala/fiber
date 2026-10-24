@@ -8,7 +8,7 @@ use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::super::App;
+use super::super::{App, SurfaceId};
 use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::layout::Edge;
@@ -502,14 +502,21 @@ fn a_press_on_an_edge_selects_nothing() {
     let inside = (area.x.saturating_add(5), area.bottom().saturating_sub(1));
     app.on_select(&press(inside.0, inside.1), &targets);
     app.on_select(&drag(inside.0.saturating_add(5), inside.1), &targets);
-    assert!(!app.selection_cells(area).is_empty());
+    assert!(
+        !app.selection_cells(SurfaceId::Conversation, area)
+            .is_empty()
+    );
     app.on_select(&release(), &targets);
     // The same reports on each edge select nothing and copy nothing.
     for col in [29, 158] {
         let (_, targets) = draw(&app);
         app.on_select(&press(col, 20), &targets);
         app.on_select(&drag(col.saturating_add(1), 20), &targets);
-        assert!(app.selection_cells(area).is_empty(), "column {col}");
+        assert!(
+            app.selection_cells(SurfaceId::Conversation, area)
+                .is_empty(),
+            "column {col}"
+        );
         app.on_select(&release(), &targets);
         assert!(app.take_copy().is_none(), "column {col}");
     }

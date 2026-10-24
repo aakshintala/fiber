@@ -103,6 +103,7 @@ pub(super) fn draw(
         // The row always sits inside the area: the caret's row shows.
         buf.set_stringn(x, y, "█", 1, style(Role::Muted));
     }
+    draw_selection(app, area, below, &rows, top, buf);
     token_targets(app, area, below, (top, rows.len()), targets);
     box_top
 }
@@ -279,6 +280,40 @@ pub(super) fn cursor_row(app: &App, width: u16, room: usize) -> (u16, u16) {
         to_u16(rows.len().saturating_sub(row).saturating_add(edges)),
         col.saturating_add(indent),
     )
+}
+
+/// Paints the draft's selection over the box's shown rows: the same
+/// `selection` tint every surface uses (`docs/tui.md`, "Selection and
+/// copy"). Draft row `top` is the first shown; the shown rows end on the
+/// row above `below`. Notes the shown text slab for the press and drag
+/// mapping, so a click outside the box never claims it.
+fn draw_selection(
+    app: &App,
+    area: Rect,
+    below: u16,
+    rows: &[String],
+    top: usize,
+    buf: &mut Buffer,
+) {
+    let text = text_area(area);
+    let shown = to_u16(rows.len());
+    let first = below.saturating_sub(shown).max(area.y);
+    let height = area.bottom().saturating_sub(first).min(shown);
+    if !rows.is_empty() && height > 0 {
+        app.note_input_area(Rect::new(text.x, first, text.width, height), top);
+    }
+    // The selection's rects read draft rows from the column's first row:
+    // the shown slab clips them, so scrolled rows paint nothing.
+    let base = below.saturating_sub(shown).saturating_sub(to_u16(top));
+    let full = Rect::new(text.x, base, text.width, to_u16(top) + shown);
+    let slab = Rect::new(text.x, first, text.width, height);
+    let tint = super::marks::selection_style();
+    for rect in app.selection_cells(crate::app::SurfaceId::Input, full) {
+        let clipped = rect.intersection(slab);
+        if !clipped.is_empty() {
+            buf.set_style(clipped, tint);
+        }
+    }
 }
 
 /// Pushes a target over the cells of each paste token's label the input

@@ -812,3 +812,146 @@ fn debug_prints_a_draft_and_its_pieces_redacted() {
     assert_eq!(format!("{draft:?}"), "Draft(redacted)");
     assert_eq!(format!("{:?}", Piece::Char('s')), "Piece(redacted)");
 }
+
+#[test]
+fn typing_replaces_the_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(1);
+    draft.select_to(4);
+    assert_eq!(draft.selected(), Some((1, 4)));
+    draft.insert('X');
+    assert_eq!(draft.expand(), "aXef");
+    assert_eq!(draft.selected(), None);
+    assert_eq!(shown(&draft), "aX|ef");
+}
+
+#[test]
+fn typing_replaces_a_reversed_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(4);
+    draft.select_to(1);
+    draft.insert('X');
+    assert_eq!(draft.expand(), "aXef");
+    assert_eq!(shown(&draft), "aX|ef");
+}
+
+#[test]
+fn paste_replaces_the_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(0);
+    draft.select_to(6);
+    draft.paste("hi");
+    assert_eq!(draft.expand(), "hi");
+    assert_eq!(draft.selected(), None);
+}
+
+#[test]
+fn backspace_removes_the_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(1);
+    draft.select_to(4);
+    draft.backspace();
+    assert_eq!(draft.expand(), "aef");
+    assert_eq!(shown(&draft), "a|ef");
+    assert_eq!(draft.selected(), None);
+}
+
+#[test]
+fn delete_removes_the_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(2);
+    draft.select_to(5);
+    draft.delete();
+    assert_eq!(draft.expand(), "abf");
+    assert_eq!(shown(&draft), "ab|f");
+    assert_eq!(draft.selected(), None);
+}
+
+#[test]
+fn left_collapses_the_selection_to_its_start() {
+    let mut draft = typed("abcdef");
+    draft.select_at(4);
+    draft.select_to(1);
+    draft.left();
+    assert_eq!(draft.selected(), None);
+    assert_eq!(shown(&draft), "a|bcdef");
+}
+
+#[test]
+fn right_collapses_the_selection_to_its_end() {
+    let mut draft = typed("abcdef");
+    draft.select_at(1);
+    draft.select_to(4);
+    draft.right();
+    assert_eq!(draft.selected(), None);
+    assert_eq!(shown(&draft), "abcd|ef");
+}
+
+#[test]
+fn line_start_collapses_the_selection_to_its_start() {
+    let mut draft = typed("ab\ncdef");
+    draft.select_at(5);
+    draft.select_to(3);
+    draft.edit(Edit::LineStart);
+    assert_eq!(draft.selected(), None);
+    assert_eq!(draft.position(), 3);
+}
+
+#[test]
+fn line_end_collapses_the_selection_to_its_end() {
+    let mut draft = typed("ab\ncdef");
+    draft.select_at(3);
+    draft.select_to(5);
+    draft.edit(Edit::LineEnd);
+    assert_eq!(draft.selected(), None);
+    assert_eq!(draft.position(), 5);
+}
+
+#[test]
+fn up_and_down_clear_the_selection_then_move() {
+    let mut draft = typed("ab\ncdef");
+    draft.select_at(4);
+    draft.select_to(6);
+    assert!(draft.up(80));
+    assert_eq!(draft.selected(), None);
+    let mut draft = typed("ab\ncdef");
+    draft.select_at(0);
+    draft.select_to(2);
+    assert!(draft.down(80));
+    assert_eq!(draft.selected(), None);
+}
+
+#[test]
+fn click_places_the_cursor_and_clears_the_selection() {
+    let mut draft = typed("abcdef");
+    draft.select_at(1);
+    draft.select_to(4);
+    // A click anchors where it lands with no drag: the old selection is
+    // gone and the cursor sits on the clicked piece.
+    draft.select_at(5);
+    assert_eq!(draft.selected(), None);
+    assert_eq!(shown(&draft), "abcde|f");
+}
+
+#[test]
+fn press_without_drag_selects_nothing() {
+    let mut draft = typed("abc");
+    draft.select_at(1);
+    assert_eq!(draft.selected(), None);
+    assert_eq!(draft.selected_text(), None);
+}
+
+#[test]
+fn selected_text_reads_chars_paste_labels_and_image_labels() {
+    let mut draft = typed("ab\ncd");
+    draft.paste(&lines(11));
+    let label = format!("[Pasted text #1 · {} lines]", 11);
+    let end = draft.position();
+    draft.select_at(0);
+    draft.select_to(end);
+    assert_eq!(
+        draft.selected_text().as_deref(),
+        Some(format!("ab\ncd{label}").as_str())
+    );
+    assert!(!draft.selected_text().unwrap().contains("l1\nl2"));
+}

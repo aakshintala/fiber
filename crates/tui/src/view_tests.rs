@@ -3865,3 +3865,176 @@ fn the_pinned_turn_keeps_its_stop_below_the_top_row() {
         stop.rect
     );
 }
+
+/// An unshifted Home or End stroke.
+fn home_end(code: crate::stroke::Code) -> crate::stroke::Stroke {
+    crate::stroke::Stroke {
+        code,
+        mods: crate::stroke::Mods::NONE,
+    }
+}
+
+/// Presses and releases with no movement through the full mouse path,
+/// returning the release's effect: a click's effect wins, and a press
+/// with no drag selects nothing.
+fn click_at(app: &mut App, width: u16, height: u16, col: u16, row: u16) -> crate::app::Effect {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    let _ = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            col,
+            row,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    )
+}
+
+/// Drags from `from` to `to` through the full mouse path, returning the
+/// release's effect: the selection's copy, and no click.
+fn drag_at(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    from: (u16, u16),
+    to: (u16, u16),
+) -> crate::app::Effect {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let area = Rect::new(0, 0, width, height);
+    let mut report = |kind: MouseKind, (col, row): (u16, u16)| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), from);
+    let _ = report(MouseKind::Drag(Button::Left), to);
+    report(MouseKind::Release, to)
+}
+
+/// The screen cell where `needle` first shows on a `width` by `height`
+/// screen.
+fn cell_at(app: &mut App, width: u16, height: u16, needle: &str) -> (u16, u16) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    render(app, area, &mut buf, None);
+    for y in 0..height {
+        let row: String = (0..width)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect();
+        if let Some(byte) = row.find(needle) {
+            let col = row.get(..byte).map_or(0, |before| before.chars().count());
+            return (u16::try_from(col).expect("a column"), y);
+        }
+    }
+    panic!("{needle:?} is not on screen");
+}
+
+#[test]
+fn home_and_end_collapse_the_input_selection() {
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    app.on_press(
+        home_end(crate::stroke::Code::Home),
+        fakes::clock::FakeClock::new().now(),
+    );
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 0);
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    app.on_press(
+        home_end(crate::stroke::Code::End),
+        fakes::clock::FakeClock::new().now(),
+    );
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 4);
+}
+
+#[test]
+fn left_after_an_input_drag_clears_at_the_start() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    app.on_edit(Edit::Left);
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 0);
+    let _ = now;
+}
+
+#[test]
+fn a_click_in_the_input_box_places_the_cursor() {
+    let mut app = asked();
+    type_draft(&mut app, "zzqx");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "zzqx");
+    select(&mut app, WIDTH, HEIGHT, at, (at.0 + 4, at.1));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    // A press-and-release with no movement is a click: the selection
+    // clears and the cursor lands on the clicked piece.
+    let _ = click_at(&mut app, WIDTH, HEIGHT, at.0 + 1, at.1);
+    assert_eq!(app.input().selected(), None);
+    assert_eq!(app.input().position(), 1);
+}
+
+#[test]
+fn a_click_without_movement_still_activates_its_target() {
+    use crate::mouse::TargetId;
+    let mut app = badged();
+    let (_, targets) = pointed(&mut app, 40, 12, None);
+    let badge = targets
+        .iter()
+        .find(|target| matches!(target.id, TargetId::Badge))
+        .expect("the badge draws a target");
+    let (col, row) = (badge.rect.x, badge.rect.y);
+    let _ = click_at(&mut app, 40, 12, col, row);
+    assert!(app.panel().is_some(), "the click opens the approval panel");
+    assert!(
+        app.selection_cells(crate::app::SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
+    assert!(app.input().selected().is_none());
+}
+
+#[test]
+fn a_drag_from_a_link_selects_and_clicks_nothing() {
+    use crate::app::Effect;
+    let mut app = replying(WIDTH, HEIGHT, "see [hi](http://example.com/x) now");
+    let at = cell_at(&mut app, WIDTH, HEIGHT, "hi");
+    // A click without movement follows the link: it copies the URL.
+    let clicked = click_at(&mut app, WIDTH, HEIGHT, at.0, at.1);
+    assert_eq!(clicked, Effect::Copy("http://example.com/x".to_owned()));
+    // A drag from the same link selects instead: the copy holds the
+    // selected text, never the link's URL, and the click never fires.
+    let effect = drag_at(&mut app, WIDTH, HEIGHT, at, (at.0 + 1, at.1));
+    assert!(
+        matches!(&effect, Effect::Copy(text) if text.contains("hi") && !text.contains("example.com")),
+        "{effect:?}"
+    );
+}

@@ -15,8 +15,37 @@ use crate::mouse::{self, TargetId};
 /// What a copy waiting on dropped pages says when they cannot load.
 const COPY_FAILED: &str = "Could not copy: history could not be loaded.";
 
-/// A cell of the conversation: its conversation row and its column in the
-/// conversation area. Ordered by row, then column, as text reads.
+/// Which text surface a selection lives on: the press claims one, and
+/// the drag stays inside it (`docs/tui.md`, "Selection and copy").
+#[allow(
+    dead_code,
+    reason = "Task 4 claims every other surface; only two press arms exist yet"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceId {
+    /// The conversation's rows.
+    Conversation,
+    /// The input box's draft, in piece indices.
+    Input,
+    /// The notice rows above the working line.
+    Notices,
+    /// A panel card.
+    Panel,
+    /// The rail's text.
+    Rail,
+    /// The approval panel and question forms.
+    Request,
+    /// A swapped view: a picker, `/settings`, the login view, results.
+    Swapped,
+    /// A framed overlay: the notice overlay, the quit question.
+    Overlay,
+    /// The home screen's text.
+    Home,
+}
+
+/// A cell of a surface: its surface-local row and its column in the
+/// surface's area. Ordered by row, then column, as text reads. On the
+/// input box the row is a draft piece index and the column is unused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Point {
     pub(crate) row: usize,
@@ -35,7 +64,10 @@ pub(in crate::app) struct PendingCopy {
 /// The drag and a copy waiting on dropped pages.
 #[derive(Debug, Default)]
 pub(in crate::app) struct Selection {
-    /// Where the left press that began the drag went down.
+    /// The surface the press claimed; the drag stays inside it.
+    surface: Option<SurfaceId>,
+    /// Where the left press that began the drag went down, in the
+    /// surface's local cells.
     anchor: Option<Point>,
     /// Where the drag is, once it moved off the press's cell.
     head: Option<Point>,
@@ -43,11 +75,16 @@ pub(in crate::app) struct Selection {
     /// `anchor` is set.
     held: bool,
     pending: Option<PendingCopy>,
+    /// The input box's shown text slab and its first draft row, noted
+    /// while the last frame drew it: the press and drag map their cells
+    /// through it. `None` while the box draws nothing.
+    input_note: std::cell::RefCell<Option<(Rect, usize)>>,
 }
 
 impl Selection {
-    /// A left press at `point` anchors a new selection.
-    fn press(&mut self, point: Point) {
+    /// A left press at `point` claims `surface` for a new selection.
+    fn press(&mut self, surface: SurfaceId, point: Point) {
+        self.surface = Some(surface);
         self.anchor = Some(point);
         self.head = None;
         self.held = true;
@@ -79,9 +116,37 @@ impl Selection {
 
     /// Drops the drag; a pending copy stays.
     fn clear(&mut self) {
+        self.surface = None;
         self.anchor = None;
         self.head = None;
         self.held = false;
+    }
+
+    /// The claimed surface, while a press anchors one.
+    pub(in crate::app) fn surface(&self) -> Option<SurfaceId> {
+        self.surface
+    }
+
+    /// Whether the press's button is still held: a press with no drag
+    /// yet, which Esc clears before anything else.
+    fn held(&self) -> bool {
+        self.held
+    }
+
+    /// Notes the input box's shown text slab and its first draft row,
+    /// from the frame that drew it.
+    pub(crate) fn note_input(&self, area: Rect, top: usize) {
+        *self.input_note.borrow_mut() = Some((area, top));
+    }
+
+    /// Drops the input box's note, before the next frame notes its own.
+    pub(crate) fn clear_input_note(&self) {
+        *self.input_note.borrow_mut() = None;
+    }
+
+    /// The input box's shown text slab and its first draft row.
+    fn input_note(&self) -> Option<(Rect, usize)> {
+        *self.input_note.borrow()
     }
 
     /// The selection's ends in reading order, while one shows.
@@ -111,41 +176,42 @@ enum Under {
 }
 
 impl App {
-    /// A mouse report against the last frame's targets: a left press in
-    /// the conversation's text anchors a selection, a drag extends it, and
-    /// the release copies it. Any left press clears the selection shown.
+    /// A mouse report against the last frame's targets: a left press
+    /// claims the surface under it for a selection, a drag extends the
+    /// selection inside that surface, and the release copies it. Any left
+    /// press clears the selection shown. A press with no drag selects
+    /// nothing, so the click path still fires.
     pub(crate) fn on_select(&mut self, mouse: &Mouse, targets: &[mouse::Target]) -> Effect {
         match mouse.kind {
             MouseKind::Press(Button::Left) => {
                 self.clear_selection();
-                // A press on a link still starts a selection: the release
-                // copies the text, and a click without a drag follows the
-                // link (`docs/tui.md`, "Selection and copy", "Links").
-                let target_ok = mouse::under(targets, mouse.col, mouse.row).is_none_or(|target| {
-                    matches!(target.id, TargetId::Line(_) | TargetId::Link { .. })
-                });
-                if let Some(point) = self.point_at(mouse.col, mouse.row)
-                    && self.session().is_some()
-                    && self.home_screen().is_none()
-                    && !self.conversation_covered()
-                    && target_ok
-                {
-                    self.select.press(point);
+                if let Some((surface, point)) = self.press_at(mouse.col, mouse.row, targets) {
+                    self.select.press(surface, point);
+                    if surface == SurfaceId::Input {
+                        self.draft.select_at(point.row);
+                    }
                     self.notices.hold();
                 }
                 Effect::None
             }
             MouseKind::Drag(Button::Left) => {
-                if let Some(point) = self.clamped(mouse.col, mouse.row) {
+                let surface = self.select.surface();
+                if let Some(point) =
+                    surface.and_then(|surface| self.clamp_surface(surface, mouse.col, mouse.row))
+                {
                     self.select.drag(point);
+                    if surface == Some(SurfaceId::Input) {
+                        self.draft.select_to(point.row);
+                    }
                 }
                 Effect::None
             }
             MouseKind::Release => {
                 self.notices.release();
-                match self.select.release() {
-                    Some((from, to)) => self.copy_selection(from, to),
-                    None => Effect::None,
+                match (self.select.surface(), self.select.release()) {
+                    (Some(SurfaceId::Input), Some(_)) => self.copy_input(),
+                    (_, Some((from, to))) => self.copy_selection(from, to),
+                    (_, None) => Effect::None,
                 }
             }
             MouseKind::Press(_)
@@ -153,6 +219,89 @@ impl App {
             | MouseKind::Motion
             | MouseKind::WheelUp
             | MouseKind::WheelDown => Effect::None,
+        }
+    }
+
+    /// The surface a left press at `col`, `row` claims, with its local
+    /// cell: the input box first, else the conversation's text. `None`
+    /// where no selectable surface shows.
+    fn press_at(
+        &self,
+        col: u16,
+        row: u16,
+        targets: &[mouse::Target],
+    ) -> Option<(SurfaceId, Point)> {
+        if let Some(point) = self.input_at(col, row) {
+            return Some((SurfaceId::Input, point));
+        }
+        // A press on a link still starts a selection: the release
+        // copies the text, and a click without a drag follows the
+        // link (`docs/tui.md`, "Selection and copy", "Links").
+        let target_ok = mouse::under(targets, col, row)
+            .is_none_or(|target| matches!(target.id, TargetId::Line(_) | TargetId::Link { .. }));
+        if let Some(point) = self.point_at(col, row)
+            && self.session().is_some()
+            && self.home_screen().is_none()
+            && !self.conversation_covered()
+            && target_ok
+        {
+            return Some((SurfaceId::Conversation, point));
+        }
+        None
+    }
+
+    /// The draft piece under cell `col`, `row`: inside the input box's
+    /// noted slab, on a draft row the frame showed.
+    fn input_at(&self, col: u16, row: u16) -> Option<Point> {
+        let (area, top) = self.select.input_note()?;
+        if !area.contains(ratatui::layout::Position::new(col, row)) {
+            return None;
+        }
+        let at = usize::from(row.saturating_sub(area.y));
+        let piece = self.draft.position_at(
+            area.width,
+            top.saturating_add(at),
+            col.saturating_sub(area.x),
+        )?;
+        Some(Point { row: piece, col: 0 })
+    }
+
+    /// The nearest cell of `surface` to `col`, `row`: a drag outside the
+    /// surface clamps to its edge cell and never spills into a neighbour.
+    fn clamp_surface(&self, surface: SurfaceId, col: u16, row: u16) -> Option<Point> {
+        match surface {
+            SurfaceId::Conversation => self.clamped(col, row),
+            SurfaceId::Input => {
+                let (area, top) = self.select.input_note()?;
+                let clamped_col = col.clamp(area.x, area.right().saturating_sub(1));
+                let clamped_row = row.clamp(area.y, area.bottom().saturating_sub(1));
+                let at = usize::from(clamped_row.saturating_sub(area.y));
+                let piece = self.draft.position_at(
+                    area.width,
+                    top.saturating_add(at),
+                    clamped_col.saturating_sub(area.x),
+                )?;
+                Some(Point { row: piece, col: 0 })
+            }
+            SurfaceId::Notices
+            | SurfaceId::Panel
+            | SurfaceId::Rail
+            | SurfaceId::Request
+            | SurfaceId::Swapped
+            | SurfaceId::Overlay
+            | SurfaceId::Home => None,
+        }
+    }
+
+    /// The input box selection's copy: the visible text of the draft's
+    /// selected pieces, pasted tokens and images as their labels.
+    fn copy_input(&mut self) -> Effect {
+        match self.draft.selected_text() {
+            Some(text) => {
+                self.copied = true;
+                Effect::Copy(text)
+            }
+            None => Effect::None,
         }
     }
 
@@ -231,11 +380,39 @@ impl App {
             || self.item_view().is_some_and(|view| !view.has_transcript)
     }
 
-    /// The cells the selection highlights in `area`, one rect per row, in
-    /// reading order: from its start cell to the row's end, whole rows
-    /// between, the last row's start to its end cell. Never the "↓ New
-    /// messages below" row.
-    pub(crate) fn selection_cells(&self, area: Rect) -> Vec<Rect> {
+    /// The cells the selection highlights on `surface` in `area`, one
+    /// rect per row, in reading order. On the conversation: from its
+    /// start cell to the row's end, whole rows between, the last row's
+    /// start to its end cell, never the "↓ New messages below" row. On
+    /// the input box: the draft's selected rects, `area` the text column
+    /// with the first draft row on its first row. Empty for any other
+    /// surface than the claimed one, so overlapping coordinates never
+    /// alias.
+    pub(crate) fn selection_cells(&self, surface: SurfaceId, area: Rect) -> Vec<Rect> {
+        if self.select.surface() != Some(surface) {
+            return Vec::new();
+        }
+        if surface == SurfaceId::Input {
+            return self
+                .draft
+                .selected_rects(area.width)
+                .into_iter()
+                .map(|(row, start, end)| {
+                    let y = area
+                        .y
+                        .saturating_add(u16::try_from(row).unwrap_or(u16::MAX));
+                    Rect::new(
+                        area.x.saturating_add(start),
+                        y,
+                        end.saturating_sub(start),
+                        1,
+                    )
+                })
+                .collect();
+        }
+        if surface != SurfaceId::Conversation {
+            return Vec::new();
+        }
         let Some((from, to)) = self.select.span() else {
             return Vec::new();
         };
@@ -270,18 +447,30 @@ impl App {
     }
 
     /// Esc clears a selection shown, before anything it would interrupt.
+    /// A press held with no drag yet clears the anchor the same way,
+    /// balancing the hold the press took, and Esc still runs: a press
+    /// alone never arms an interrupt guard
+    /// (`docs/tui.md`, "Selection and copy").
     pub(in crate::app) fn select_key(&mut self, key: &Key) -> Option<Effect> {
-        if *key != Key::Esc || self.select.span().is_none() {
+        if *key != Key::Esc {
             return None;
         }
-        self.clear_selection();
-        Some(Effect::None)
+        if self.select.span().is_some() {
+            self.clear_selection();
+            return Some(Effect::None);
+        }
+        if self.select.held() {
+            self.clear_selection();
+        }
+        None
     }
 
     /// Clears the selection and drops a copy waiting on dropped pages,
-    /// unpinning them; notices a drag held show.
+    /// unpinning them; notices a drag held show. The input box's editor
+    /// selection goes with it.
     pub(in crate::app) fn clear_selection(&mut self) {
         self.select.clear();
+        self.draft.clear_selection();
         self.notices.release();
         self.drop_pending_copy();
     }
