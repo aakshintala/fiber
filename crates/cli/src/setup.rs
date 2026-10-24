@@ -624,7 +624,7 @@ fn step_hub(
     let manager = crate::hub_service::manager();
     match crate::hub_status::installed(manager, home, &|key| std::env::var_os(key)) {
         Ok(true) => {
-            let name = crate::hub_unit::name(home).map_err(CliError::Forwarded)?;
+            let name = crate::hub_unit::name(home)?;
             writeln!(err, "The hub login service {name} is installed.")
                 .map_err(CliError::StandardError)?;
         }

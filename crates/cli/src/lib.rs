@@ -50,6 +50,10 @@ mod extension_test;
 )]
 mod feedback;
 mod hub_env;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_list;
 #[allow(
     clippy::result_large_err,
@@ -66,12 +70,20 @@ mod hub_refresh;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod hub_service;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_status;
 #[allow(
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod hub_token;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_unit;
 #[allow(
     clippy::result_large_err,

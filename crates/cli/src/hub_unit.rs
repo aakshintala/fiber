@@ -7,10 +7,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
-use contract::shapes::Failure;
-
-use crate::{failed, usage};
+use crate::CliError;
 
 /// The longest service name, in bytes. A home whose name is longer is
 /// refused; the socket path limit keeps a real home far below it.
@@ -58,7 +55,7 @@ impl Service {
         home: &Path,
         exe: &Path,
         var: &dyn Fn(&str) -> Option<OsString>,
-    ) -> Result<Self, Failure> {
+    ) -> Result<Self, CliError> {
         let name = name(home)?;
         let unit = unit_path(manager, &name, var)?;
         Ok(Self {
@@ -72,7 +69,7 @@ impl Service {
 
     /// The unit file's text, carrying `port` on its first comment line so a
     /// port change is a change of the file.
-    pub(crate) fn render(&self, port: Option<u16>) -> Result<String, Failure> {
+    pub(crate) fn render(&self, port: Option<u16>) -> Result<String, CliError> {
         let exe = plain(&self.exe)?;
         let home = plain(&self.home)?;
         let port = port.map_or_else(|| "none".to_owned(), |port| port.to_string());
@@ -129,7 +126,7 @@ impl Service {
 /// `-`, each byte in `[A-Za-z0-9.]` is kept, and every other byte becomes
 /// `_` and two lowercase hex digits. `-` comes only from `/` and `_` always
 /// starts a three-byte escape, so two homes never share a name.
-pub(crate) fn name(home: &Path) -> Result<String, Failure> {
+pub(crate) fn name(home: &Path) -> Result<String, CliError> {
     let bytes = home.as_os_str().as_bytes();
     let bytes = bytes.strip_prefix(b"/").unwrap_or(bytes);
     let mut name = String::from("fiber-hub-");
@@ -141,11 +138,7 @@ pub(crate) fn name(home: &Path) -> Result<String, Failure> {
         }
     }
     if name.len() > NAME_MAX {
-        return Err(usage(format!(
-            "Fiber home's path is too long to name the hub's login service ({} bytes, at most \
-             {NAME_MAX}); set FIBER_HOME to a shorter path.",
-            name.len()
-        )));
+        return Err(CliError::HubUnitNameTooLong { bytes: name.len() });
     }
     Ok(name)
 }
@@ -158,12 +151,12 @@ pub(crate) fn unit_path(
     manager: Manager,
     name: &str,
     var: &dyn Fn(&str) -> Option<OsString>,
-) -> Result<PathBuf, Failure> {
+) -> Result<PathBuf, CliError> {
     let home = || {
         var("HOME")
             .map(PathBuf::from)
             .filter(|home| home.is_absolute())
-            .ok_or_else(|| usage("HOME must be an absolute path to find the hub's login service."))
+            .ok_or(CliError::HubHomeUnavailable)
     };
     Ok(match manager {
         Manager::Launchd { .. } => home()?
@@ -181,17 +174,11 @@ pub(crate) fn unit_path(
 
 /// The path as UTF-8 with no control character, which neither unit format
 /// can carry safely.
-fn plain(path: &Path) -> Result<&str, Failure> {
+fn plain(path: &Path) -> Result<&str, CliError> {
     path.to_str()
         .filter(|text| !text.chars().any(char::is_control))
-        .ok_or_else(|| {
-            failed(
-                ErrorCode::IoFailed,
-                format!(
-                    "{path:?} is not UTF-8 or holds a control character, so the hub's login \
-                     service cannot name it."
-                ),
-            )
+        .ok_or_else(|| CliError::HubUnitPathUnrepresentable {
+            path: path.to_path_buf(),
         })
 }
 
