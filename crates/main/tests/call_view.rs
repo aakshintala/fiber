@@ -282,11 +282,24 @@ fn temp_id(setup: &Setup) -> String {
 }
 
 /// The grid's text with the temporary directory redacted, plus every
-/// string in `extra` (a test server's URL, whose port varies).
+/// string in `extra` (a test server's URL, whose port varies). Normalize
+/// the truncated workspace path too: its visible prefix depends on whether
+/// the runner's temp directory is `/tmp` or a longer path.
 fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
     let mut ids = vec![temp_id(setup)];
     ids.extend(extra.iter().cloned());
-    grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &ids)
+    let text = grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &ids);
+    text.lines()
+        .map(|row| {
+            let Some(path) = row.find("tmp/[session]/w") else {
+                return row.to_owned();
+            };
+            let path_end = path + "tmp/[session]/w".len();
+            let path_start = row[..path].rfind(' ').map_or(0, |space| space + 1);
+            format!("{}[workspace]/w{}", &row[..path_start], &row[path_end..])
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The tail the view paged to, the footer and the top row, with the

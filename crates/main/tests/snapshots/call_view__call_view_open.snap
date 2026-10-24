@@ -1,10 +1,10 @@
 ---
 source: crates/main/tests/call_view.rs
-expression: "grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &[temp_id])"
+expression: "snapshot_text(&setup, &grid, &[])"
 ---
   Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TAIL" }'               Esc returns
  462                                                                                                                           ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- 463                                                                                                                             ….cache/tmp/[session]/w auto
+ 463                                                                                                                             [workspace]/w auto
  ── the model's view resumes ──
  464                                                                                                                             scripted/s.json
  465                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
