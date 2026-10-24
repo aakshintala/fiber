@@ -4186,8 +4186,8 @@ fn read_command(mut theirs: &UnixStream) -> serde_json::Value {
 
 /// Handles stashed terminal bytes the way the loop does short of the
 /// frame: parsed with the real parser, each event applied to the app,
-/// and a prompt the app sends dropped on the hung-up stream, as
-/// `Loop::handle_events` does with no connection.
+/// and a prompt the app sends dropped on the hung-up stream, as the
+/// loop's event handling does with no connection.
 fn press(lp: &mut super::super::Loop<ratatui::backend::TestBackend>, bytes: &[u8]) {
     use crate::app::Effect;
     use crate::keys::{Event, Parser};
