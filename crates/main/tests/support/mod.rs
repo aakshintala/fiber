@@ -630,6 +630,9 @@ pub(crate) struct Socket {
     pub(crate) read: Mutex<BufReader<UnixStream>>,
     /// Lines [`recv_answer`] read past, returned by [`Socket::next`] first.
     kept: Mutex<std::collections::VecDeque<Value>>,
+    /// Set by [`Socket::pumped`]: the lines a reader thread took off the
+    /// socket, `None` once the far end closed it.
+    pump: Option<Mutex<mpsc::Receiver<Option<Value>>>>,
     deadline: Deadline,
 }
 
@@ -667,6 +670,15 @@ impl Socket {
     pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
         if let Some(line) = self.kept.lock().unwrap().pop_front() {
             return Some(line);
+        }
+        if let Some(pump) = &self.pump {
+            return match self.deadline.recv(&pump.lock().unwrap()) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited until the deadline for {what}; got {got:?}")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            };
         }
         match read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
             Ok(None) => None,
@@ -853,8 +865,39 @@ impl Socket {
             write: Mutex::new(stream),
             read: Mutex::new(BufReader::new(read)),
             kept: Mutex::default(),
+            pump: None,
             deadline,
         }
+    }
+
+    /// Reads the socket on a thread from now on, so a client the test holds
+    /// open and does not read never fills its socket buffer and wedges the
+    /// hub's relay (macOS buffers 8 KiB per Unix socket, Linux ~212 KiB).
+    /// [`Socket::next`] takes the lines from the thread, still bounded by
+    /// the deadline. Call it before the first line is read.
+    pub(crate) fn pumped(mut self) -> Self {
+        let stream = self.write.lock().unwrap().try_clone().unwrap();
+        let (lines, pump) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stream);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                let line = match reader.read_line(&mut buf) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => {
+                        let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
+                        Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+                    }
+                };
+                let closed = line.is_none();
+                if lines.send(line).is_err() || closed {
+                    return;
+                }
+            }
+        });
+        self.pump = Some(Mutex::new(pump));
+        self
     }
 }
 

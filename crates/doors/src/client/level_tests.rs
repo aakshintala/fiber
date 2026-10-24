@@ -162,8 +162,13 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     thread::spawn({
         let held = Arc::clone(&held);
         move || {
-            let ended =
-                crate::client::write_loop(watcher, Box::new(HeldWrite { held }), false, switches);
+            let ended = crate::client::write_loop(
+                watcher,
+                Box::new(HeldWrite { held }),
+                false,
+                switches,
+                None,
+            );
             if let Ok(()) = done_tx.send(ended) {}
         }
     });
@@ -239,6 +244,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     .unwrap();
     held.release();
     drop(log);
+    outbox.stop(&id);
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer ends once the log is dropped"
@@ -321,7 +327,7 @@ fn a_line_at_the_cutoff_is_skipped_never_written() {
     })
     .unwrap();
     let mut buf = Vec::new();
-    let drained = apply(&mut writing, &rx, &mut buf);
+    let drained = apply(&mut writing, &rx, &mut buf, None);
     assert!(
         drained.is_err(),
         "the bound line is skipped, so the drain meets the ended watcher"
@@ -400,7 +406,7 @@ fn a_deferred_response_is_written_after_the_drain_before_the_snapshots() {
         written: None,
     };
     let mut buf = Vec::new();
-    apply(&mut writing, &rx, &mut buf).unwrap();
+    apply(&mut writing, &rx, &mut buf, None).unwrap();
     let lines = envelopes(&String::from_utf8(buf).unwrap());
     let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
     assert_eq!(
@@ -447,8 +453,13 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
     thread::spawn({
         let held = Arc::clone(&held);
         move || {
-            let ended =
-                crate::client::write_loop(watcher, Box::new(HeldWrite { held }), false, switches);
+            let ended = crate::client::write_loop(
+                watcher,
+                Box::new(HeldWrite { held }),
+                false,
+                switches,
+                None,
+            );
             if let Ok(()) = done_tx.send(ended) {}
         }
     });
@@ -529,6 +540,7 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
         "the deferred acceptance answers the label-bearing change"
     );
     drop(log);
+    outbox.stop(&id);
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer ends once the log is dropped"
@@ -548,8 +560,13 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
     thread::spawn({
         let held = Arc::clone(&held);
         move || {
-            let ended =
-                crate::client::write_loop(watcher, Box::new(HeldWrite { held }), true, switches);
+            let ended = crate::client::write_loop(
+                watcher,
+                Box::new(HeldWrite { held }),
+                true,
+                switches,
+                None,
+            );
             if let Ok(()) = done_tx.send(ended) {}
         }
     });
@@ -604,6 +621,7 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
         "the deferred acceptance answers the label-bearing change"
     );
     drop(log);
+    outbox.stop(&id);
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer ends once the log is dropped"
@@ -637,10 +655,148 @@ fn a_cancelled_response_ends_the_switch_as_an_error() {
     };
     let mut buf = Vec::new();
     assert!(
-        apply(&mut writing, &rx, &mut buf).is_err(),
+        apply(&mut writing, &rx, &mut buf, None).is_err(),
         "a cancelled wait ends the writer instead of hanging its join"
     );
     let lines = envelopes(&String::from_utf8(buf).unwrap());
     assert_eq!(lines.len(), 1, "the drain is written; nothing after it");
     assert_eq!(lines[0].kind, "step_started");
+}
+
+/// A writer whose bytes the test reads back.
+struct SharedOut(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedOut {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        lock(&self.0).extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+#[test]
+fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
+    use contract::events::{CommandRejected, Event};
+
+    let opened = support::Opened::open(Vec::new());
+    let gate = Arc::clone(opened.session.gate_for_test());
+    let watcher = opened.log.watch_all();
+    let injector = watcher.injector();
+    let conn = gate
+        .conns
+        .push_reader(thread::spawn(|| {}), Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    let reader = thread::current().id();
+    gate.accepted.track(reader);
+    gate.conns.note_owed(conn, reader);
+    // The flight's probe is the only signal the writer reached past the
+    // end: the writer notes it before every `recv_after_end`, so a line
+    // pushed after this wait arrives past the end, never before it
+    // (`docs/testing.md`, "Waits and timeouts").
+    let (past_tx, past_end) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == crate::session::tests::Probe::WriterPastEnd
+            && let Ok(()) = past_tx.send(())
+        {}
+    }));
+    let flight = crate::client::Flight {
+        gate: Arc::clone(&gate),
+        conn,
+        reader,
+    };
+    let (_switch_tx, switches) = mpsc::channel();
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let out = Arc::clone(&out);
+        move || {
+            let ended = crate::client::write_loop(
+                watcher,
+                Box::new(SharedOut(out)),
+                false,
+                switches,
+                Some(&flight),
+            );
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    opened.log.end_watchers();
+    Deadline::after(DEADLINE)
+        .recv(&past_end)
+        .expect("the writer reads past the log's end");
+    let answer = crate::session::envelope(
+        &gate.session_id,
+        opened.clock.as_ref(),
+        &Event::CommandRejected(CommandRejected {
+            command_id: Some(CommandId("c_held".into())),
+            code: contract::ErrorCode::Closing,
+            message: crate::client::ENDED.into(),
+        }),
+    );
+    injector.push_kept(answer);
+    injector.push_kept(control_line(&gate.session_id, crate::client::STOP, 0));
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "the writer returns once STOP follows the answer"
+    );
+    drop(_switch_tx);
+    let lines = envelopes(&String::from_utf8(lock(&out).clone()).unwrap());
+    assert_eq!(
+        lines.len(),
+        1,
+        "the kept answer pushed after the end is written before stop; got {lines:?}"
+    );
+    assert_eq!(lines[0].kind, "command_rejected");
+    gate.conns.finish(conn);
+    support::close_within(opened.session, opened.log);
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
+#[test]
+fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
+    let (_temp, log, id, clock) = open_log();
+    let watcher = log.watch_all();
+    let old = watcher.injector();
+    let (switch_tx, switches) = mpsc::channel();
+    let out = Arc::new(Mutex::new(Vec::new()));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let out = Arc::clone(&out);
+        move || {
+            let ended =
+                crate::client::write_loop(watcher, Box::new(SharedOut(out)), false, switches, None);
+            if let Ok(()) = done_tx.send(ended) {}
+        }
+    });
+    log.end_watchers();
+    // A level change that raced the close: its watcher is registered after
+    // the end, so it starts ended; its prelude and its queue are written.
+    let fresh = log.watch();
+    let fresh_injector = fresh.injector();
+    switch_tx
+        .send(Switch {
+            watcher: fresh,
+            summary: false,
+            cutoff: 0,
+            prelude: vec![settled_acceptance(&id, &clock, "c_up")],
+            response: None,
+        })
+        .unwrap();
+    old.push_kept(control_line(&id, LEVEL, 0));
+    fresh_injector.push_kept(settled_acceptance(&id, &clock, "c_after"));
+    fresh_injector.push_kept(control_line(&id, crate::client::STOP, 0));
+    assert!(
+        Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
+        "the writer follows the switch and ends at STOP on the new queue"
+    );
+    let lines = envelopes(&String::from_utf8(lock(&out).clone()).unwrap());
+    let ids: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.payload.get("command_id").and_then(|id| id.as_str()))
+        .collect();
+    assert_eq!(ids, ["c_up", "c_after"], "{lines:?}");
 }

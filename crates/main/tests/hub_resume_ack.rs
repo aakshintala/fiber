@@ -43,8 +43,10 @@ fn pipelined_subscribe_is_kept_across_resume() {
 
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
-    let workspace = setup.workspace().to_string_lossy().into_owned();
-    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    // The session's own workspace: `fiber ask` ran in the setup's root, not
+    // in `setup.workspace()`, and the guard matches processes by it.
+    let workspace = lines[0]["payload"]["workspace"].as_str().unwrap();
+    let guard = SessionGuard::arm(setup.deadline, workspace);
     // Piped as the terminal opens a row: `subscribe` with its commands.
     // Distinct ids, so an acknowledgement names its own command.
     client.send(&format!(
@@ -82,9 +84,15 @@ fn pipelined_subscribe_is_kept_across_resume() {
     client.send(&format!(
         "{{\"id\":\"c_next\",\"session_id\":\"{id}\",\"command\":\"tools\"}}"
     ));
-    let ack = support::recv_reply(&client, "the acknowledgement after resume");
+    let ack = support::recv_answer(&client, "c_next", "the acknowledgement after resume");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_next");
+    // The run that command resumed outlives the hub unless it is closed.
+    client.send(&format!(
+        "{{\"id\":\"c_end\",\"session_id\":\"{id}\",\"command\":\"close\"}}"
+    ));
+    let end = support::recv_answer(&client, "c_end", "the acknowledgement of the final close");
+    assert_eq!(end["kind"], "command_accepted", "{end}");
     drop(client);
     hub.lock()
         .unwrap()
