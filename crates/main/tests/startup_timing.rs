@@ -189,8 +189,8 @@ use std::thread;
 
 use fakes::Watchdog;
 use support::{
-    Deadline, KillGroup, Socket, complete_lines, expired, group_alive, kinds, session_dir,
-    spawn_watched, until, until_close,
+    Deadline, KillGroup, Socket, complete_lines, expired, kinds, session_dir, spawn_watched, until,
+    until_close,
 };
 
 /// Installs a provider `fake` with `m` and `n` on `openai-responses` at
@@ -349,7 +349,7 @@ impl Running {
             }
         };
         assert!(
-            !group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);

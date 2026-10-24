@@ -748,7 +748,8 @@ impl Store {
         // with the file already in place; rewriting the same bytes is
         // idempotent, so a retry is safe.
         let target = dir.join(hash);
-        config::write_atomic(&target, body.as_bytes(), 0o666)?;
+        support::write_atomic(&target, body.as_bytes(), 0o666)
+            .map_err(|error| config::atomic_error(&target, error))?;
         if item.kind == OfferedKind::McpServer {
             if decision == "approve" {
                 // The machine approval above is already in place, written
@@ -758,7 +759,8 @@ impl Store {
                 let servers = config::project_servers_dir(home, project);
                 fs::create_dir_all(&servers).map_err(io_error(&servers))?;
                 let record = servers.join(hash);
-                config::write_atomic(&record, body.as_bytes(), 0o666)?;
+                support::write_atomic(&record, body.as_bytes(), 0o666)
+                    .map_err(|error| config::atomic_error(&record, error))?;
             } else {
                 // A never writes no project record: it removes one an
                 // earlier approval left, when present.

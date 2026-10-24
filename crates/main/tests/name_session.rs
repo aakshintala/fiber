@@ -23,8 +23,8 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Running, Setup, Socket, answered, expired, function_call, group_alive, hello,
-    is_status, read_kinds, run_to_exit, stream, until,
+    Deadline, Running, Setup, Socket, answered, expired, function_call, hello, is_status,
+    read_kinds, run_to_exit, stream, until,
 };
 
 /// A finished `function_call` for `name_session` with `arguments`.
@@ -573,7 +573,7 @@ fn finish(running: Running) {
     };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     drop(stdout);

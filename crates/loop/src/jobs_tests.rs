@@ -5660,16 +5660,6 @@ fn a_socket_at_the_output_path_is_replaced_without_blocking() {
     );
 }
 
-/// `path` as a FIFO, as a swapped-in job output.
-#[cfg(unix)]
-fn mkfifo(path: &std::path::Path) {
-    let status = std::process::Command::new("mkfifo")
-        .arg(path)
-        .status()
-        .expect("mkfifo runs");
-    assert!(status.success(), "mkfifo {path:?} exited {status}");
-}
-
 #[test]
 #[cfg(unix)]
 fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
@@ -5679,16 +5669,30 @@ fn a_fifo_at_the_output_path_does_not_block_and_is_replaced() {
         .hooked(Arc::clone(&hooks));
     write_started_at(&mut world, JOB, Some("shell"), OUT);
     std::fs::create_dir_all(world.dir.join("artifacts")).unwrap();
-    mkfifo(&world.dir.join(OUT));
+    fakes::fifo(world.dir.join(OUT));
     // The non-blocking open refuses to wait for a writer: the turn ends
     // at the deadline below instead of hanging on the FIFO.
     world.send(held(JOB));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let calls = hooks.calls();
+    // `after_tool` runs on every job delivery, and once more on the job's
+    // whole output file when the job ends (`docs/extensions.md`, "Hooks"):
+    // this job has one `completion` delivery plus the `output_file` pass.
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].delivery, Some(JobDelivery::OutputFile));
-    assert_eq!(calls[0].content, "");
-    assert_eq!(calls[1].delivery, Some(JobDelivery::Completion));
+    // No doc promises the two passes' relative order, so this test asserts
+    // them as a set; the order is pinned by
+    // `the_output_pass_runs_before_the_completion_hook_and_the_file_is_already_replaced`.
+    let output = calls
+        .iter()
+        .find(|call| call.delivery == Some(JobDelivery::OutputFile))
+        .expect("the output_file pass ran");
+    assert_eq!(output.content, "");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.delivery == Some(JobDelivery::Completion)),
+        "the completion delivery ran"
+    );
     assert!(
         std::fs::symlink_metadata(world.dir.join(OUT))
             .unwrap()

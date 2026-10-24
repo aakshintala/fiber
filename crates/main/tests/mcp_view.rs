@@ -27,9 +27,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{
-    KillGroup, Socket, first_line, group_alive, spawn_watched, until, until_close, write_json,
-};
+use support::{KillGroup, Socket, first_line, spawn_watched, until, until_close, write_json};
 
 /// A driven session: the child, its socket client and the test setup.
 /// The child's stderr streams over a channel: the login writes its
@@ -179,7 +177,7 @@ impl Driver {
         }
         let stderr = self.overheard.join("\n");
         assert!(status.success(), "{stderr}");
-        assert!(!group_alive(self.setup.deadline, group));
+        assert!(!fakes::group_alive(group));
         std::mem::forget(self.guard);
         self.watchdog
             .stand_down(self.setup.deadline.cleanup_phase());

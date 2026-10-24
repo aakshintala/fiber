@@ -35,6 +35,7 @@ pub(super) fn classify(
     let (subject, prefix) = subject_and_prefix(&script);
     match outcome(&script, workdir, configured) {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
+        Outcome::Network(paths) => network(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
     }
 }
@@ -47,6 +48,22 @@ fn reads(paths: Vec<String>, subject: Option<String>, prefix: Option<String>) ->
         subject,
         prefix,
     )
+}
+
+/// A call that reached the network: a `gh` stage read a remote, so the
+/// call declares `Network` with the default host beside the paths it
+/// read, in the shape `web_fetch` declares it.
+fn network(paths: Vec<String>, subject: Option<String>, prefix: Option<String>) -> Effects {
+    Effects {
+        hosts: Some(vec!["https://api.github.com/".to_owned()]),
+        ..declared(
+            Effect::Network,
+            true,
+            if paths.is_empty() { None } else { Some(paths) },
+            subject,
+            prefix,
+        )
+    }
 }
 
 /// Declares `executes`, not reversible, with no paths.
@@ -114,6 +131,7 @@ fn plain_word(raw: &str) -> bool {
 pub(super) enum Outcome {
     Executes,
     Reads(Vec<String>),
+    Network(Vec<String>),
 }
 
 fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
@@ -123,6 +141,7 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
     let mut cwd = Cwd::new(start);
     let mut saw_cd = false;
     let mut saw_executes = false;
+    let mut saw_network = false;
     let mut lost = false;
     let mut paths = Vec::new();
     for element in &script.elements {
@@ -155,16 +174,19 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
             // proven only when at least one earlier stage ran and every
             // one printed statically-known words; any other producer
             // leaves stdin unproven and its `xargs` reader reviewed.
-            match stage_outcome(
+            let verdict = stage_outcome(
                 stage,
                 &dirs,
                 configured,
                 saw_cd,
                 &stdin_words,
                 stdin_known && stdin_static,
-            ) {
+            );
+            let network = matches!(verdict, Outcome::Network(_));
+            match verdict {
                 Outcome::Executes => saw_executes = true,
-                Outcome::Reads(more) => {
+                Outcome::Reads(more) | Outcome::Network(more) => {
+                    saw_network = saw_network || network;
                     stdin_known = true;
                     stdin_static = stdin_static && static_words(stage, &mut stdin_words);
                     paths.extend(more);
@@ -175,6 +197,8 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
     }
     if saw_executes {
         Outcome::Executes
+    } else if saw_network {
+        Outcome::Network(paths)
     } else {
         Outcome::Reads(paths)
     }
@@ -246,26 +270,91 @@ fn stage_outcome(
         return Outcome::Executes;
     }
     // An exact form reads with no paths: `git status`, `git stash list`
-    // or `git branch --show-current`, whatever wrapper leads it.
-    if EXACT.iter().any(|row| cooked_equals(words, row)) {
-        return with_inputs(Outcome::Reads(Vec::new()), simple, dirs);
-    }
-    // `sed` has its own print-only grammar, not a table row.
-    if words.first().is_some_and(|word| word.cooked == "sed") {
+    // or `git branch --show-current`, whatever wrapper leads it, where
+    // the repository guards pass.
+    let verdict = if EXACT.iter().any(|row| cooked_equals(words, row)) {
+        Outcome::Reads(Vec::new())
+    } else if words.first().is_some_and(|word| word.cooked == "sed") {
+        // `sed` has its own print-only grammar, not a table row.
         let files = words.iter().skip(1).map(|word| word.cooked.as_str());
         let Some(files) = super::sed::files(files) else {
             return Outcome::Executes;
         };
-        return with_inputs(path_tail(&files, dirs), simple, dirs);
-    }
-    let verdict = match entry::find(words, configured) {
-        Found::Builtin(entry) => builtin_outcome(words, entry, dirs),
-        Found::Configured(flags, consumed) => {
-            entry::configured_outcome(flags, rest_after(words, consumed), dirs)
+        path_tail(&files, dirs)
+    } else {
+        match entry::find(words, configured) {
+            Found::Builtin(entry) => builtin_outcome(words, entry, dirs),
+            Found::Configured(flags, consumed) => {
+                entry::configured_outcome(flags, rest_after(words, consumed), dirs)
+            }
+            Found::None => Outcome::Executes,
         }
-        Found::None => Outcome::Executes,
     };
-    with_inputs(verdict, simple, dirs)
+    networked(
+        with_inputs(git_guarded(verdict, words, dirs), simple, dirs),
+        words,
+    )
+}
+
+/// A `gh` read hits the API: it declares `Network` with the default host
+/// beside the paths it read. A `--repo`/`-R` value naming a host reaches
+/// past that endpoint, so the call is reviewed instead. Any other verdict
+/// passes through.
+fn networked(verdict: Outcome, words: &[Word]) -> Outcome {
+    let Outcome::Reads(paths) = verdict else {
+        return verdict;
+    };
+    if !is_gh(words) {
+        return Outcome::Reads(paths);
+    }
+    if repo_selects_host(words) {
+        return Outcome::Executes;
+    }
+    Outcome::Network(paths)
+}
+
+/// Whether a `--repo`/`-R` value in a `gh` call names a host:
+/// `HOST/OWNER/REPO` reaches past the default endpoint, so the call is
+/// reviewed. A bare `OWNER/REPO`, or a value with no slash, cannot name
+/// one. A `--repo` word consumed as another flag's value keeps its
+/// own meaning, but such a call is reviewed too: it stays fail-closed.
+fn repo_selects_host(words: &[Word]) -> bool {
+    words
+        .iter()
+        .any(|word| word.cooked.strip_prefix("--repo=").is_some_and(has_host))
+        || words.windows(2).any(|pair| {
+            let [flag, value] = pair else {
+                return false;
+            };
+            (flag.cooked == "--repo" || flag.cooked == "-R") && has_host(&value.cooked)
+        })
+}
+
+/// Whether a `--repo`/`-R` value holds a host part: more than
+/// `OWNER/REPO` can name.
+fn has_host(value: &str) -> bool {
+    value.split('/').count() > 2
+}
+
+/// A git read runs only where the repository guards pass in every
+/// directory the stage may run in: a bare repository, or a `.git` file
+/// whose target Fiber cannot verify, makes the call `executes`. Any
+/// other command, and a git call the lookup refused, passes through.
+fn git_guarded(verdict: Outcome, words: &[Word], dirs: &[String]) -> Outcome {
+    let Outcome::Reads(_) = verdict else {
+        return verdict;
+    };
+    if !is_git(words) {
+        return verdict;
+    }
+    if dirs
+        .iter()
+        .all(|dir| super::git::repository_ok(Path::new(dir)))
+    {
+        verdict
+    } else {
+        Outcome::Executes
+    }
 }
 
 /// An `xargs` stage: the target must name one of the six read-only
@@ -403,6 +492,13 @@ fn resolve_canonical(path: &Path) -> Option<PathBuf> {
 /// Whether a stage runs `cd`: its first word is exactly `cd`.
 fn is_cd(simple: &Simple) -> bool {
     simple.words.first().is_some_and(|word| word.cooked == "cd")
+}
+
+/// Whether a stage's words run `gh`: the first word's basename is `gh`.
+fn is_gh(words: &[Word]) -> bool {
+    words
+        .first()
+        .is_some_and(|word| word.cooked.rsplit('/').next() == Some("gh"))
 }
 
 /// Whether a stage's words run `git`: the first word's basename is `git`.

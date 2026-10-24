@@ -92,7 +92,7 @@ pub use switches::{SwitchLayer, ToolOwner, ToolSwitch, switch_skill, switch_tool
 pub use themes::{theme_names, theme_text};
 pub use write::{
     FileOutcome, FileSaved, Layer, ListChange, ListEdit, NotesSaved, NotesWrite, Scope,
-    clear_global_if_equals, edit_list, get_global, insert_entry, remove_entry,
+    atomic_error, clear_global_if_equals, edit_list, get_global, insert_entry, remove_entry,
     remove_extension_settings, replace_global, save_reviewer_notes, set, set_global_if_unset,
     set_repo_extension_setting, settings_file, update_global_entries, version, write_atomic,
 };
