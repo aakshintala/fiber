@@ -82,8 +82,6 @@ mod skills;
 mod slash;
 mod status;
 mod step;
-#[cfg(test)]
-mod supervised_tests;
 mod suspend;
 mod switch;
 #[cfg(test)]

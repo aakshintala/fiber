@@ -162,6 +162,10 @@ pub struct Start {
     /// The session whose worktree this session continues: its id. Set from `--continues`, beside `--rewound-from`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continues: Option<SessionId>,
+    /// With true, a program drives the session (`docs/permissions.md`,
+    /// "Supervised sessions").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervised: Option<bool>,
     /// The session's first prompt, sent after the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<SentPart>>,

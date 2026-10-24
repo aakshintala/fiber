@@ -456,6 +456,19 @@ fn a_delegate_names_its_parent_and_another_session_does_not() {
 }
 
 #[test]
+fn a_supervised_session_started_marks_the_status_and_another_does_not() {
+    let mut w = world();
+    let mut payload = started();
+    payload["supervised"] = json!(true);
+    w.feed("session_started", None, &payload);
+    assert!(w.status().supervised);
+    // A resumed fold reads the same first line, so it keeps the flag.
+    let mut plain = world();
+    plain.start();
+    assert!(!plain.status().supervised);
+}
+
+#[test]
 fn the_workspace_is_the_one_session_started_records() {
     let mut w = world();
     let mut payload = started();

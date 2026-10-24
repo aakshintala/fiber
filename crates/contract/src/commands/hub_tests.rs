@@ -34,6 +34,7 @@ fn samples() -> Vec<Value> {
             "content": [{"type": "text", "text": "t"}]}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w"}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w", "continues": "s_2"}}),
+        json!({"id": "c", "command": "start", "args": {"workspace": "/w", "supervised": true}}),
         json!({"id": "c", "command": "delete", "args": {"session": "s_1"}}),
         json!({"id": "c", "command": "delete",
             "args": {"session": "s_1", "cascade": true, "expect": ["s_2"]}}),
@@ -209,4 +210,57 @@ fn configure_debug_never_shows_arguments() {
     let debug = format!("{configure:?}");
     assert!(!debug.contains("sk-test"), "the key is never in Debug");
     assert!(debug.contains("store_key"), "the operation stays");
+}
+
+#[test]
+fn start_reads_supervised_and_refuses_a_misshaped_one() {
+    for (args, expected) in [
+        (r#"{"workspace":"/w"}"#, Ok(None)),
+        (r#"{"workspace":"/w","supervised":true}"#, Ok(Some(true))),
+        (r#"{"workspace":"/w","supervised":false}"#, Ok(Some(false))),
+        (r#"{"workspace":"/w","supervised":"yes"}"#, Err(())),
+        (r#"{"workspace":"/w","supervised":1}"#, Err(())),
+        (
+            r#"{"workspace":"/w","supervised":true,"future":1}"#,
+            Err(()),
+        ),
+    ] {
+        let sample = json!({
+            "id": "c",
+            "command": "start",
+            "args": serde_json::from_str::<Value>(args).unwrap(),
+        });
+        let read = serde_json::from_value::<HubCommandLine>(sample.clone());
+        match expected {
+            Ok(supervised) => {
+                let HubCommand::Start(start) =
+                    read.unwrap_or_else(|e| panic!("{sample}: {e}")).command
+                else {
+                    panic!("{sample} reads as start");
+                };
+                assert_eq!(start.supervised, supervised, "{sample}");
+            }
+            Err(()) => assert!(read.is_err(), "{sample}"),
+        }
+    }
+}
+
+#[test]
+fn start_without_supervised_writes_no_supervised() {
+    let line = HubCommandLine {
+        id: CommandId("c".into()),
+        command: HubCommand::Start(Start {
+            workspace: "/w".into(),
+            model: None,
+            overrides: None,
+            worktree: None,
+            continues: None,
+            supervised: None,
+            content: None,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&line).unwrap(),
+        json!({"id": "c", "command": "start", "args": {"workspace": "/w"}}),
+    );
 }

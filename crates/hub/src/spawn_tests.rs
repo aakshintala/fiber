@@ -898,3 +898,32 @@ fn session_command_passes_continues_only_when_set() {
             .any(|arg| arg.starts_with("--continues"))
     );
 }
+
+#[test]
+fn start_command_passes_supervised_only_when_set() {
+    let id = SessionId("s_0123456789abcdef".to_owned());
+    let with = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        None,
+        true,
+        false,
+    );
+    assert!(args_of(&with).contains(&"--supervised".to_owned()));
+    let without = start_command(
+        Path::new("/bin/fiber"),
+        &id,
+        Path::new("/w"),
+        None,
+        &[],
+        false,
+        None,
+        false,
+        false,
+    );
+    assert!(!args_of(&without).contains(&"--supervised".to_owned()));
+}
