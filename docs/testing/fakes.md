@@ -87,9 +87,9 @@ is a real child session process, because it is Fiber. The fakes are:
   exports it, and each test binary that measures installs it as its own
   global allocator and holds nothing else
 - hooks on the scripted provider that observe a call without replacing it:
-  a before-call hook sees each request before the script pop and an
-  after-reply hook sees each end before it is returned, each firing on
-  every call or on one numbered call
+  requests are recorded in call order; a before-call hook sees each request
+  before the script pop and an after-reply hook sees each end before it is
+  returned, in call order, each firing on every call or on one numbered call
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,

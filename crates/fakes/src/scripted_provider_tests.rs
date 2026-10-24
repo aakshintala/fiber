@@ -225,6 +225,7 @@ fn a_before_call_hook_observes_each_request_before_the_script_pop() {
         .into_iter()
         .map(|r| r.system_prompt)
         .collect();
+    // Requests are recorded in call order (docs/testing/fakes.md, "Fakes").
     assert_eq!(prompts, ["r0", "r1"]);
 }
 
@@ -269,7 +270,8 @@ fn an_after_reply_hook_observes_each_end_and_returns_it_unchanged() {
             .unwrap();
         assert_eq!(got, reply(expected));
     }
-    // The hook sees each end, once per call (docs/testing/fakes.md, "Fakes").
+    // The hook sees each end in call order, once per call
+    // (docs/testing/fakes.md, "Fakes").
     assert_eq!(ends.lock().unwrap().len(), 2);
     assert_eq!(
         ends.lock().unwrap()[0],
