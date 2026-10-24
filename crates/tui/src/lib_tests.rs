@@ -808,6 +808,7 @@ fn failed_reader_start_returns_io_failed() {
                         |builder, body| builder.spawn(body),
                     )
                 },
+                |builder, body| builder.spawn(body),
             );
             done.send(result).unwrap_or(());
         })
@@ -823,6 +824,50 @@ fn failed_reader_start_returns_io_failed() {
         error.to_string()
     );
     // The title was written before the reader failed to start.
+    Deadline::after(DEADLINE)
+        .recv(&title)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the title: {err}"));
+    // The failure return restores the terminal: the slave is cooked again.
+    assert!(is_cooked(
+        &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
+    ));
+}
+
+#[test]
+fn failed_tick_start_returns_io_failed() {
+    let pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The watcher drains what the first frame writes, so no write blocks.
+    let title = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("lib-run".to_owned())
+        .spawn(move || {
+            let result = super::run_with(
+                slave,
+                launch(),
+                Box::new(|| Err(io::Error::other("refused"))),
+                Box::new(|_| {}),
+                fakes::clock::FakeClock::new(),
+                super::Reader::spawn,
+                |_, _| Err(io::Error::other("no thread")),
+            );
+            done.send(result).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    let error = result.unwrap_err();
+    assert_eq!(error.code(), contract::ErrorCode::IoFailed);
+    assert_eq!(
+        error.to_string(),
+        "terminal: could not start the terminal's timer: no thread"
+    );
+    // The title was written before the timer failed to start.
     Deadline::after(DEADLINE)
         .recv(&title)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the title: {err}"));
@@ -2874,7 +2919,14 @@ fn a_signal_ends_a_history_wait_at_once() {
         .name("lib-signal-wait".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp.hub.answer(&rx, "a_1", &mut lp.app, &lp.tick);
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                lp.tick.armed(),
+            );
             done.send((result, lp.hub.stashed().len())).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));

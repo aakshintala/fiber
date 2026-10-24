@@ -295,7 +295,8 @@ fn dropping_a_tick_thread_ends_its_thread() {
     let shared: Arc<dyn Clock> = clock.clone();
     let (tx, rx) = mpsc::channel();
     let mut tick = TickThread::idle();
-    tick.start(shared, tx);
+    tick.start(shared, tx)
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     drop(tick);
     // The thread's return drops its only sender, closing the channel: a
     // timeout instead would pass a thread that never ends.
@@ -330,7 +331,9 @@ fn a_started_thread_sends_what_its_ticker_arms() {
         .expect("a deadline past the origin");
     let (tx, rx) = mpsc::channel();
     let mut thread = TickThread::idle();
-    thread.start(shared, tx);
+    thread
+        .start(shared, tx)
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     thread.arm(Some(at));
     clock.advance_when_parked(Some(at), None, TICK, &Deadline::after(DEADLINE));
     assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
@@ -343,4 +346,35 @@ fn a_started_thread_sends_what_its_ticker_arms() {
 fn stopping_without_a_thread_returns() {
     let mut tick = TickThread::idle();
     tick.stop();
+}
+
+/// A spawn that always fails, so no thread starts.
+fn failing_spawn(
+    _: std::thread::Builder,
+    _: Box<dyn FnOnce() + Send + 'static>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    Err(std::io::Error::other("no thread"))
+}
+
+/// A failed spawn reports its own error and starts no thread: arms
+/// only record, and stopping is a no-op.
+#[test]
+fn spawn_failure_returns_the_spawn_error_and_starts_no_thread() {
+    let clock = FakeClock::new();
+    let shared: Arc<dyn Clock> = clock.clone();
+    let (tx, rx) = mpsc::channel();
+    let mut thread = TickThread::idle();
+    let Err(error) = thread.start_with(shared, tx, failing_spawn) else {
+        panic!("the failed spawn");
+    };
+    // The original error, with nothing added.
+    assert_eq!(error.to_string(), "no thread");
+    assert!(thread.thread.is_none());
+    // No thread runs to send: the failed spawn drops the sender with
+    // its body, closing the channel with nothing in it.
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
+    thread.stop();
 }

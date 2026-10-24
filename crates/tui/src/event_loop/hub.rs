@@ -10,7 +10,9 @@ use std::ops::RangeInclusive;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
 use contract::{Envelope, Seq, SessionId};
 
 use super::batch::{HUB_BATCH, batch, batchable, ready};
@@ -23,6 +25,11 @@ use crate::tick::TickThread;
 /// The most lines one `history` answer holds (`docs/invocation.md`,
 /// "Driver commands").
 pub(super) const HISTORY_LINES: u64 = 256;
+
+/// How long a `history` wait holds for its answer on the injected clock
+/// before ending as a lost connection, and the hub stream's write
+/// timeout: one bound for both.
+pub(super) const HISTORY_WAIT: Duration = Duration::from_secs(10);
 
 /// What a lost connection fails a fetch with.
 pub(super) const LOST: &str = "connection lost";
@@ -55,6 +62,12 @@ impl IntoIterator for Batch {
     fn into_iter(self) -> Self::IntoIter {
         Some(self.first).into_iter().chain(self.rest)
     }
+}
+
+/// What wakes a history wait: the earlier of the frame's deadline and
+/// the wait's own. A frame with nothing moving leaves the wait's.
+fn earlier(frame_deadline: Option<Instant>, wait_deadline: Instant) -> Option<Instant> {
+    Some(frame_deadline.map_or(wait_deadline, |at| at.min(wait_deadline)))
 }
 
 /// The hub stream, the held inputs and the hub thread's permit, with the
@@ -185,13 +198,39 @@ impl Connection {
         })
     }
 
-    /// Stores the connected stream.
+    /// Stores the connected stream, with the history wait's bound as its
+    /// write timeout: an expired write fails like a failed one, and
+    /// `send` hangs up. A setup that fails leaves no stream: the
+    /// `Connected` handler reads that as a failed connection.
     pub(super) fn store(&mut self, stream: UnixStream) {
+        self.store_with(stream, |end| end.set_write_timeout(Some(HISTORY_WAIT)));
+    }
+
+    /// Stores the connected stream with `set` as its write-timeout
+    /// setup. A setup that fails shuts the stream down both ways and
+    /// closes it without adopting it, so the reader sees the end and
+    /// the loop retries like any other lost connection. True when the
+    /// stream is adopted. Tests fail `set`.
+    pub(super) fn store_with(
+        &mut self,
+        stream: UnixStream,
+        set: impl FnOnce(&UnixStream) -> std::io::Result<()>,
+    ) -> bool {
+        if set(&stream).is_err() {
+            stream.shutdown(std::net::Shutdown::Both).unwrap_or(());
+            drop(stream);
+            return false;
+        }
         self.hub = Some(stream);
+        true
     }
 
     /// Reads `range` with `history`, in commands of at most
     /// [`HISTORY_LINES`] lines, each answered before the next is sent.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fetch carries the range, the app, the tick, the clock and the frame's deadline"
+    )]
     pub(super) fn fetch(
         &mut self,
         rx: &Receiver<Input>,
@@ -199,6 +238,8 @@ impl Connection {
         range: &RangeInclusive<Seq>,
         app: &mut App,
         tick: &TickThread,
+        clock: &dyn Clock,
+        frame_deadline: Option<Instant>,
     ) -> Result<Vec<Envelope>, String> {
         let mut lines = Vec::new();
         let mut from = range.start().0;
@@ -222,7 +263,7 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            let answer = match self.answer(rx, &id, app, tick)? {
+            let answer = match self.answer(rx, &id, app, tick, clock, frame_deadline)? {
                 Answer::Lines(lines) => lines,
                 Answer::Reopened => return Ok(Vec::new()),
             };
@@ -247,6 +288,8 @@ impl Connection {
         session: &SessionId,
         app: &mut App,
         tick: &TickThread,
+        clock: &dyn Clock,
+        frame_deadline: Option<Instant>,
     ) -> Result<(), String> {
         while let Some(args) = app.tail_next() {
             let id = mint();
@@ -259,7 +302,7 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            match self.answer(rx, &id, app, tick) {
+            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
                 Ok(Answer::Lines(lines)) => app.tail_lines(lines),
                 Ok(Answer::Reopened) => {
                     app.tail_ended(None);
@@ -278,20 +321,43 @@ impl Connection {
     /// Waits for the answer to command `id`, holding every other input for
     /// after the frame. A lost connection ends the wait; a signal is held
     /// for after the frame and ends the wait as lost, so the loop quits
-    /// with the signal's number next.
+    /// with the signal's number next. The wait rides the working line's
+    /// ticker: the earlier of the frame's deadline and the wait's own
+    /// wakes it, so a silent hub ends the wait once the injected clock
+    /// passes [`HISTORY_WAIT`].
     pub(super) fn answer(
         &mut self,
         rx: &Receiver<Input>,
         id: &str,
         app: &mut App,
         tick: &TickThread,
+        clock: &dyn Clock,
+        frame_deadline: Option<Instant>,
     ) -> Result<Answer, String> {
+        let start = clock.now();
+        // An unrepresentable deadline fails closed: the wait ends at
+        // once, as past its bound.
+        let wait_deadline = start.checked_add(HISTORY_WAIT).unwrap_or(start);
+        tick.arm(earlier(frame_deadline, wait_deadline));
         loop {
             let Ok(input) = rx.recv() else {
                 self.lost(app);
                 return Err(LOST.to_owned());
             };
             self.credits.received(&input);
+            // The deadline wins: at or past it the wait ends as a lost
+            // connection, and the input waits for after, a matching
+            // answer included. A tick only woke the wait: it is acked,
+            // not stashed.
+            if clock.now() >= wait_deadline {
+                if matches!(input, Input::Tick) {
+                    tick.ack();
+                } else {
+                    self.push_stash(input);
+                }
+                self.lost(app);
+                return Err(LOST.to_owned());
+            }
             match input {
                 Input::Hub(Line::Session(line)) if link::answers(&line, id) => {
                     return link::history_answer(&line).map(Answer::Lines);
@@ -310,8 +376,12 @@ impl Connection {
                 }
                 // A tick while a frame waits for history is acked and
                 // dropped, not stashed: the frame asks again after it
-                // draws.
-                Input::Tick => tick.ack(),
+                // draws. The wait's own deadline wakes what is left of
+                // the wait; the frame re-arms its own after it draws.
+                Input::Tick => {
+                    tick.ack();
+                    tick.arm(Some(wait_deadline));
+                }
                 Input::Disconnected => {
                     self.on_disconnected(app);
                     return Err(LOST.to_owned());

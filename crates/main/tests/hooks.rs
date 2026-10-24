@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
@@ -1203,6 +1204,80 @@ fn a_refused_steer_is_accepted_then_noticed_while_a_refused_prompt_is_rejected()
     drop(client);
     let (status, _out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    use extension_harness::{send as session_send, until_session as session_until};
+    use support::{Deadline, Diag, assert_timeout_dump, session_dir};
+
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let mut client = running.connect(&setup.socket(&id));
+    client.set_diag(Diag::new(
+        running.stderr_snapshot.clone(),
+        session_dir(&setup, &id),
+    ));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_p1","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the impossible kind never arrives: the wait
+    // then expires on a zero bound instead of spending what remains of
+    // the test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = session_until(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_p1"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..1000 {
+            match client.next("the turn that never completes", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the socket closed while waiting for the turn that never completes; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered the turn that never completes; got {got:?}");
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert_timeout_dump(&message);
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    drop(client);
+    let group = running.group;
+    let cleanup = running.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let mut child = running.child;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    match cleanup.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    running.watchdog.stand_down(cleanup);
+    std::mem::forget(running.guard);
 }
 
 #[test]

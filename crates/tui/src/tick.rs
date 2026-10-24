@@ -5,9 +5,10 @@
 //! timer. At most one tick is ever in the channel: each send waits for
 //! the loop's ack.
 
+use std::io;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
-use std::thread::JoinHandle;
+use std::thread;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
@@ -156,9 +157,9 @@ impl Ticker {
         }
     }
 
-    /// The armed deadline, if any.
-    #[cfg(test)]
-    fn armed(&self) -> Option<std::time::Instant> {
+    /// The armed deadline, if any: what the loop armed without a thread,
+    /// or the frame's current deadline while one runs.
+    pub(crate) fn armed(&self) -> Option<std::time::Instant> {
         self.lock().at
     }
 
@@ -171,7 +172,7 @@ impl Ticker {
 /// The loop's timer: a ticker and the thread sending its ticks.
 pub(crate) struct TickThread {
     ticker: Arc<Ticker>,
-    thread: Option<JoinHandle<()>>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl TickThread {
@@ -186,16 +187,36 @@ impl TickThread {
 
     /// Starts the thread sending this ticker's ticks to `tx`, on `clock`.
     /// Subscribes first, so an idle ticker wakes on the clock only once
-    /// started. A spawn that fails leaves no thread: arms only record.
-    pub(crate) fn start(&mut self, clock: Arc<dyn Clock>, tx: Sender<Input>) {
+    /// started. A spawn that fails leaves no thread and reports its
+    /// error: arms only record.
+    #[allow(
+        dead_code,
+        reason = "production starts the ticker through run_with's spawn seam; tests use the fixed spawn"
+    )]
+    pub(crate) fn start(&mut self, clock: Arc<dyn Clock>, tx: Sender<Input>) -> io::Result<()> {
+        self.start_with(clock, tx, |builder, body| builder.spawn(body))
+    }
+
+    /// Starts as [`start`] does, with `spawn` standing in for the thread
+    /// builder's spawn, so tests fail it.
+    pub(crate) fn start_with(
+        &mut self,
+        clock: Arc<dyn Clock>,
+        tx: Sender<Input>,
+        spawn: impl FnOnce(
+            thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<thread::JoinHandle<()>>,
+    ) -> io::Result<()> {
         let waker: Weak<Ticker> = Arc::downgrade(&self.ticker);
         clock.subscribe(waker);
         let ticker = Arc::clone(&self.ticker);
-        if let Ok(thread) =
-            crate::sources::builder("tui-tick").spawn(move || ticker.run(clock.as_ref(), &tx))
-        {
-            self.thread = Some(thread);
-        }
+        let thread = spawn(
+            crate::sources::builder("tui-tick"),
+            Box::new(move || ticker.run(clock.as_ref(), &tx)),
+        )?;
+        self.thread = Some(thread);
+        Ok(())
     }
 
     /// Arms the next frame's deadline; `None` disarms.
@@ -217,11 +238,17 @@ impl TickThread {
         }
     }
 
-    /// The armed deadline, or the last arm while idle: what the loop
-    /// armed without a thread.
-    #[cfg(test)]
+    /// The armed deadline, or the last arm while idle: the frame's
+    /// current deadline, what a history wait arms the earlier of.
     pub(crate) fn armed(&self) -> Option<std::time::Instant> {
         self.ticker.armed()
+    }
+
+    /// The ticker, for the test watching a wait arm its deadline on an
+    /// idle thread: the recorded arm proves the wait started.
+    #[cfg(test)]
+    pub(crate) fn ticker(&self) -> Arc<Ticker> {
+        Arc::clone(&self.ticker)
     }
 }
 
