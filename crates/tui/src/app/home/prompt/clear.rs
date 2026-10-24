@@ -10,8 +10,9 @@ use contract::SessionId;
 
 impl App {
     /// Opens the clear question for `id`, named `name` and waiting on
-    /// `waiting`: Enter clears anyway, Esc stays. It sends nothing, so
-    /// the draft stays for the retry.
+    /// `waiting`: Enter clears anyway, Esc stays. It sends nothing, and
+    /// the consumed command leaves the draft, so typing `/clear` again
+    /// dispatches fresh instead of appending to a stale row.
     pub(crate) fn open_clear(&mut self, id: SessionId, name: String, waiting: String) -> Effect {
         if let Some(home) = self.home.as_mut() {
             home.questions.prompt = Some(Prompt::Clear {
@@ -21,6 +22,7 @@ impl App {
                 now: false,
             });
         }
+        self.draft.clear();
         Effect::None
     }
 

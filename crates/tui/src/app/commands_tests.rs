@@ -2065,7 +2065,9 @@ fn clear_overlay_esc_stays() {
         app.session().map(|session| session.0.as_str()),
         Some(SESSION)
     );
-    assert_eq!(app.draft(), "/clear");
+    // The consumed command left the draft with the overlay, so typing
+    // `/clear` again dispatches fresh.
+    assert_eq!(app.draft(), "");
 }
 
 #[test]
