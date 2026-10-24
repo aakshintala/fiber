@@ -147,6 +147,28 @@ fn a_source_home_past_512_reports_under_the_source_name() {
 }
 
 #[test]
+fn a_three_skill_import_writes_each_item_plus_the_receipt() {
+    let fixture = Fixture::new();
+    for name in ["alpha", "beta", "gamma"] {
+        fixture.write_source(
+            &format!("skills/{name}/SKILL.md"),
+            b"---\nname: x\ndescription: y.\n---\n\nBody.\n",
+        );
+    }
+    reset_write_count();
+    let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    assert_eq!(
+        report.imported.skills,
+        vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+    );
+    assert!(report.left_behind.is_empty(), "{report:?}");
+    // Three item writes plus the receipt: no servers, no collisions, so
+    // `write_servers` writes nothing. A dropped receipt or a doubled item
+    // write breaks this count.
+    assert_eq!(write_count(), 4);
+}
+
+#[test]
 fn a_two_mebibyte_skill_md_joins_left_behind_unread() {
     let fixture = Fixture::new();
     fixture.write_source("skills/review/SKILL.md", &skill_body(2 * 1024 * 1024));
