@@ -844,35 +844,6 @@ impl Provider for Seam {
     }
 }
 
-/// A provider that answers from a scripted provider and fires the
-/// session's cancel once the `fire_at`-th call's reply is in hand. The
-/// fire happens on the loop's own thread, synchronously inside `run`, so
-/// the cancel lands after the reply but before `turn_completed`.
-struct FireCancel {
-    inner: Arc<ScriptedProvider>,
-    cancel: Arc<TurnCancel>,
-    fire_at: usize,
-    calls: AtomicUsize,
-}
-
-impl Provider for FireCancel {
-    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        fakes::wire_tools(tools)
-    }
-
-    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        let call = self.inner.call(request);
-        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fire_at {
-            Box::new(FireAfterReply {
-                inner: call,
-                cancel: Arc::clone(&self.cancel),
-            })
-        } else {
-            call
-        }
-    }
-}
-
 /// A provider that advances the clock by `by` while its first call runs,
 /// then answers from its scripted provider, ignoring cancel: the advance
 /// lands during the failing call, before any backoff wait starts.
@@ -899,6 +870,17 @@ impl Provider for AdvanceClock {
     }
 }
 
+/// Fails when a thread already waits on the clock: a raw advance with a
+/// parked thread would wake it early, so the advance must run before any
+/// wait (ruling 6179406086).
+pub(crate) fn assert_no_parked(clock: &FakeClock) {
+    assert!(
+        clock.parked().is_empty(),
+        "Shape 3 advance with a parked thread: {:?}",
+        clock.parked()
+    );
+}
+
 /// The call that advances the clock while it runs.
 struct AdvanceCall {
     inner: Box<dyn ModelCall>,
@@ -910,7 +892,7 @@ struct AdvanceCall {
 impl ModelCall for AdvanceCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         if self.first {
-            // No code under test waits on the clock here: the advance runs on the loop thread inside the first model call, before any wait, and the step is stamped before it (ruling 6179406086).
+            assert_no_parked(&self.clock);
             self.clock.advance(self.by);
         }
         self.inner.run(sink)
@@ -918,48 +900,6 @@ impl ModelCall for AdvanceCall {
 
     fn cancel(&self) {
         self.inner.cancel();
-    }
-}
-
-/// The call that fires the cancel once its reply is in hand.
-struct FireAfterReply {
-    inner: Box<dyn ModelCall>,
-    cancel: Arc<TurnCancel>,
-}
-
-impl ModelCall for FireAfterReply {
-    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let ended = self.inner.run(sink);
-        self.cancel.cancel();
-        ended
-    }
-
-    fn cancel(&self) {
-        self.inner.cancel();
-    }
-}
-
-/// A provider that cancels the session's turn when its `at`-th call (1-based)
-/// is made, then answers from its scripted provider: the call ends
-/// `cancelled` at once, deterministically, on the loop's own thread.
-struct CancelAtCall {
-    inner: Arc<ScriptedProvider>,
-    cancel: Arc<TurnCancel>,
-    at: usize,
-    calls: AtomicUsize,
-}
-
-impl Provider for CancelAtCall {
-    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        fakes::wire_tools(tools)
-    }
-
-    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        let call = self.inner.call(request);
-        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.at {
-            self.cancel.cancel();
-        }
-        call
     }
 }
 
@@ -1210,15 +1150,13 @@ impl Session {
     pub(crate) fn cancelling_after_reply(script: Vec<Scripted>, fire_at: usize) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         let cancel = Arc::new(TurnCancel::default());
-        let hook = Arc::new(FireCancel {
-            inner: Arc::clone(&scripted),
-            cancel: Arc::clone(&cancel),
-            fire_at,
-            calls: AtomicUsize::new(0),
+        let fired = Arc::clone(&cancel);
+        scripted.on_after_reply_at(fire_at, move |_| {
+            fired.cancel();
         });
         Self::assemble(
             SessionId("s_test".into()),
-            hook,
+            Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             Vec::new(),
             unpriced(),
@@ -1238,15 +1176,13 @@ impl Session {
     ) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         let cancel = Arc::new(TurnCancel::default());
-        let hook = Arc::new(CancelAtCall {
-            inner: Arc::clone(&scripted),
-            cancel: Arc::clone(&cancel),
-            at,
-            calls: AtomicUsize::new(0),
+        let fired = Arc::clone(&cancel);
+        scripted.on_before_call_at(at, move |_| {
+            fired.cancel();
         });
         Self::assemble(
             SessionId("s_test".into()),
-            hook,
+            Arc::clone(&scripted) as Arc<dyn Provider>,
             Vec::new(),
             tools,
             unpriced(),

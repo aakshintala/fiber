@@ -269,6 +269,13 @@ pub(crate) fn shows(screen: &Grid, needle: &str) -> bool {
     screen.rows.iter().any(|row| row.contains(needle))
 }
 
+/// Whether any grid row's trimmed text equals `expected`: a whole-row
+/// match, so a row with any additional text does not match. Trim is the
+/// only normalization.
+pub(crate) fn shows_row(screen: &Grid, expected: &str) -> bool {
+    screen.rows.iter().any(|row| row.trim() == expected)
+}
+
 /// Clicks the `✕` on the grid's `cache_rebuild` notice row: an SGR press
 /// then its release on the same cell. The notice fades only after ten
 /// seconds of real time, so a journey dismisses it instead.

@@ -1369,4 +1369,38 @@ mod tests {
             "a wait with no lead opens with its own text: {plain:?}"
         );
     }
+
+    /// `shows_row` matches a whole trimmed row only: padding around the
+    /// reply text still matches, while a row with any additional text,
+    /// such as the working status line, does not. A substring check
+    /// would match the bare stem and the status line alike, so each
+    /// negative case below fails it.
+    #[test]
+    fn shows_row_matches_a_whole_trimmed_row_only() {
+        use super::super::journey::shows_row;
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        parser.process("   Working   \r\nWorking 3s · Esc to interrupt\r\n".as_bytes());
+        let grid = Grid::of(&parser);
+        assert!(shows_row(&grid, "Working"), "the padded reply row matches");
+        assert!(
+            !shows_row(&grid, "Work"),
+            "a stem of the reply row does not match"
+        );
+        assert!(
+            !shows_row(&grid, "Working!"),
+            "a longer stem of the reply row does not match"
+        );
+        assert!(
+            !shows_row(&grid, "Working 3s"),
+            "a stem of the status line does not match"
+        );
+        let mut bare = vt100::Parser::new(24, 80, 0);
+        bare.process("Working 3s · Esc to interrupt\r\n".as_bytes());
+        let bare = Grid::of(&bare);
+        assert!(
+            !shows_row(&bare, "Working"),
+            "the working status line alone does not satisfy the reply wait"
+        );
+        assert!(!shows_row(&grid, "idle"), "absent text does not match");
+    }
 }

@@ -37,7 +37,7 @@ const TAIL_BYTES: usize = 2_048;
 
 /// `ps` lists the group within this, or the receipt names no one. Picked,
 /// not measured.
-const PS_BOUND: Duration = Duration::from_secs(2);
+pub(super) const PS_BOUND: Duration = Duration::from_secs(2);
 
 /// How often `ps`'s exit is checked once its output closed. Picked, not
 /// measured.
@@ -260,9 +260,16 @@ fn hand_off(
     cancel: &dyn Cancel,
     start: Option<(&Timing, Instant)>,
 ) -> Output {
-    let pgid = moved.pgid();
     let shared = moved.shared();
     let reason = moved.reason.clone();
+    // The drive already listed the group before the move and saved the
+    // outcome on the run, so the receipt reuses it instead of running
+    // `ps` a second time. Only a shell exit with members carries one.
+    // Read before the job's thread takes the move.
+    let members: Option<String> = match moved.progress.members.as_ref() {
+        Some(GroupMembers::Members(names)) => Some(names.clone()),
+        Some(GroupMembers::Empty) | Some(GroupMembers::Unavailable) | None => None,
+    };
     // A spill in progress goes to the job's output file; the line names
     // any raw file left behind, for the receipt.
     let spill_line = moved.attach_output(opened.file, &opened.path);
@@ -291,8 +298,8 @@ fn hand_off(
         Feed::new(job_id.clone(), lines, stop_of(&job_cancel), clock.now())
     });
     let job_clock = Arc::clone(&clock);
-    // The job's thread starts before the receipt lists the group, so its
-    // timeout and stop hold while `ps` runs.
+    // The job's thread starts before the receipt is built, so its timeout
+    // and stop hold while the receipt names the saved members.
     thread::spawn(move || {
         let finished = moved.drive_job(job_clock.as_ref(), &job_cancel, stream, feed);
         (end.0)(to_completed(job_id, &path, finished, limit));
@@ -314,12 +321,6 @@ fn hand_off(
         tty::wait_first_output(&shared, clock.as_ref(), cancel);
         tty::output_so_far(&opened.path)
     });
-    let members = match reason {
-        MoveReason::ShellExited { .. } => group_members(Path::new("ps"), pgid, clock.as_ref()),
-        MoveReason::AfterThirtySeconds
-        | MoveReason::StartedInBackground
-        | MoveReason::BackgroundCommand => None,
-    };
     match first {
         Some(first) => with_spill_line(
             terminal_receipt(
@@ -458,10 +459,32 @@ fn shell_sentence(code: i32, members: Option<&str>) -> String {
     }
 }
 
-/// The group's members as `name (pid)`, listed by `program` (`ps`). `None`
-/// when it lists none, fails, or has not finished within [`PS_BOUND`] on
-/// `clock`; then only that `ps` is killed.
-fn group_members(program: &Path, pgid: u32, clock: &dyn Clock) -> Option<String> {
+/// What a member listing found. A successful listing with no rows is
+/// `Empty`; a listing that failed or never answered is `Unavailable`,
+/// which is not proof the group is empty.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum GroupMembers {
+    /// Member names for the receipt, as `name (pid)`.
+    Members(String),
+    /// A successful listing with no rows: the group is empty.
+    Empty,
+    /// The listing failed or never answered within [`PS_BOUND`].
+    Unavailable,
+}
+
+/// The group's members as `name (pid)`, listed by `program` (`ps`).
+/// `Empty` when it lists none; `Unavailable` when the listing fails or
+/// has not finished within [`PS_BOUND`] on `clock`; then only that `ps`
+/// is killed.
+pub(super) fn group_members(program: &Path, pgid: u32, clock: &dyn Clock) -> GroupMembers {
+    match listed(program, pgid, clock) {
+        Some(rows) if rows.is_empty() => GroupMembers::Empty,
+        Some(rows) => GroupMembers::Members(format_rows(&rows)),
+        None => GroupMembers::Unavailable,
+    }
+}
+
+fn listed(program: &Path, pgid: u32, clock: &dyn Clock) -> Option<Vec<(u32, String)>> {
     let mut child = Command::new(program)
         .args(["-A", "-o", "pid=,pgid=,comm="])
         .stdin(Stdio::null())
@@ -481,8 +504,7 @@ fn group_members(program: &Path, pgid: u32, clock: &dyn Clock) -> Option<String>
         let _sent = tx.send(Some(bytes));
     });
     let stdout = until_exited(&mut child, &rx, clock, clock.now().checked_add(PS_BOUND))?;
-    let rows = parse_ps(&String::from_utf8_lossy(&stdout), pgid);
-    (!rows.is_empty()).then(|| format_rows(&rows))
+    Some(parse_ps(&String::from_utf8_lossy(&stdout), pgid))
 }
 
 /// `Some(bytes)` is `ps`'s whole output; `None` says the clock moved.
