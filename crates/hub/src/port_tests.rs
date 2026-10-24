@@ -686,8 +686,7 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
     let drain = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut ack: Option<Value> = None;
     let mut closed = false;
-    let mut ended = false;
-    for _ in 0..3 {
+    loop {
         match client.next_before(drain, "the stop acknowledgement, the close or the end") {
             Item::Text(bytes) => {
                 // Every driver command is answered exactly once
@@ -708,12 +707,8 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
                 assert!(reason.is_empty(), "the close carries no reason");
                 closed = true;
             }
-            // The close shuts the connection, so the stream ends with it
-            // (`docs/invocation.md`, "The terminal and the hub"): received,
-            // not counted, since no doc promises an EOF count.
-            Item::Eof => {
-                ended = true;
-            }
+            // Read until the stream ends; no EOF count is promised.
+            Item::Eof => break,
             other @ (Item::Response(_) | Item::Pong(_)) => {
                 panic!("the stop sends no greeting or pong, got {other:?}")
             }
@@ -727,7 +722,6 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
         "a bare stop carries no result: {ack}"
     );
     assert!(closed, "the connection closes");
-    assert!(ended, "the stream ends");
     assert_eq!(
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
