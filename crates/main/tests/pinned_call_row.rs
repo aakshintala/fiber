@@ -208,6 +208,12 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
     // equality below.
     let prev = vec!["gone".to_string(), "b".to_string(), "c".to_string()];
     let unrelated = vec!["new".to_string(), "b".to_string(), "c".to_string()];
+    // The wheel-driven frame arrives in two writes, the way a terminal
+    // frame can publish in parts: the first part moves the `gone` anchor
+    // but leaves its last row undrawn, and the remainder draws it. The
+    // wait promises the anchor's movement, not the whole frame (see
+    // #3212).
+    let partial = vec!["new".to_string(), "gone".to_string(), String::new()];
     let wheeled = vec!["new".to_string(), "gone".to_string(), "b".to_string()];
     assert_ne!(unrelated, prev, "the old wait passes with no step written");
     let (main, terminal) = {
@@ -230,17 +236,23 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
             .write_all(format!("\x1b[H\x1b[J{}", rows.join("\r\n")).as_bytes())
             .unwrap();
     }
+    /// Writes raw bytes to the slave: one part of a split frame.
+    fn hold_raw(terminal: &std::cell::RefCell<fs::File>, bytes: &str) {
+        use std::io::Write as _;
+        terminal.borrow_mut().write_all(bytes.as_bytes()).unwrap();
+    }
     hold(&terminal, &prev);
     run.wait_screen("the held previous frame", |next| {
         next.rows.iter().take(3).cloned().collect::<Vec<_>>() == prev
     });
-    // Each check short of the goal stages the next held frame, and only
-    // then: the unrelated frame first, and the wheel-driven one only
-    // after a check has seen the unrelated frame. Batching cannot skip
-    // the unrelated frame, since its bytes do not exist until that
-    // check runs. A single step: the wait itself must skip the
-    // unrelated frame and take the wheel-driven one, with no later
-    // step to rescue an early return.
+    // Each check short of the goal stages the next held bytes, and only
+    // then: the unrelated frame after a check has seen the previous
+    // frame, the first part of the wheel-driven frame only after a check
+    // has seen the unrelated frame, and its remainder only after a check
+    // has seen the partial grid. Batching cannot skip a frame, since its
+    // bytes do not exist until that check runs. A single step: the wait
+    // itself must skip the unrelated frame and take the wheel-driven
+    // one, with no later step to rescue an early return.
     let fed = std::cell::Cell::new(0u8);
     let grid = wheel(&mut run, "one step up", true, 1, |next: &Grid| {
         let top: Vec<_> = next.rows.iter().take(3).cloned().collect();
@@ -253,18 +265,31 @@ fn wheel_step_wait_stays_pending_on_an_unrelated_frame() {
                 fed.set(1);
             }
             1 if top == unrelated => {
-                hold(&terminal, &wheeled);
+                hold_raw(&terminal, "\x1b[H\x1b[Jnew\r\ngone\r\n");
                 fed.set(2);
+            }
+            2 if top == partial => {
+                hold_raw(&terminal, "\x1b[3;1Hb");
+                fed.set(3);
             }
             _ => {}
         }
         false
     });
+    // The wait promises the wheel-driven anchor movement, not the whole
+    // frame: it returns the first published grid where an anchor moved,
+    // which is the partial one here. The unrelated frame never released
+    // it, which the inequality above still guards: the old wait returns
+    // the unrelated frame, whose second row is `b`.
     assert_eq!(
-        grid.rows.iter().take(3).cloned().collect::<Vec<_>>(),
-        wheeled,
-        "the wait skips the unrelated frame and returns the wheel-driven one"
+        grid.rows.iter().take(2).cloned().collect::<Vec<_>>(),
+        vec!["new".to_string(), "gone".to_string()],
+        "the wait skips the unrelated frame and returns the wheel-driven movement"
     );
+    // The staged remainder still arrives after the step returns.
+    run.wait_screen("the full wheel-driven frame", |next| {
+        next.rows.iter().take(3).cloned().collect::<Vec<_>>() == wheeled
+    });
     assert!(wheel_step_done(&prev, &wheeled, true, false));
     assert!(!wheel_step_done(&prev, &wheeled, false, false));
     assert!(wheel_step_done(&prev, &unrelated, true, true));
