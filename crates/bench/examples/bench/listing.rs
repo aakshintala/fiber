@@ -266,8 +266,7 @@ fn sessions_list(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
         }
         Ok(samples)
     })();
-    // The row's hub and home go away even when a sample errs, as the old
-    // `in_home` run removed them before.
+    // The row's hub and home go away even when a sample errs.
     let finished = finish_listing(prepared, ctx.clock);
     match measured {
         Ok(samples) => finished.map(|()| samples),

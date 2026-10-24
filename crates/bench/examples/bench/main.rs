@@ -366,16 +366,43 @@ fn sides(args: &Args) -> (Args, Option<Args>) {
     }
 }
 
+/// Which sampled family a workload belongs to, when it belongs to one:
+/// the single place that classifies a workload name, so the scheduler,
+/// the call count and the prepare step cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SampledKind {
+    Listing,
+    Attach,
+    Wheel,
+}
+
+fn sampled_kind(workload: &idle::Workload) -> Option<SampledKind> {
+    if listing::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Listing)
+    } else if attach::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Attach)
+    } else if wheel::SAMPLED
+        .iter()
+        .any(|sampled| sampled.name == workload.name)
+    {
+        Some(SampledKind::Wheel)
+    } else {
+        None
+    }
+}
+
 /// Whether the row takes every sample in its own timed call: listing,
 /// attach and wheel prepare their fixtures once per side, then time one
 /// sample per call, so the scheduler alternates the sides per sample.
 /// Every other row times one run per call.
 fn is_sampled(workload: &idle::Workload) -> bool {
-    listing::SAMPLED
-        .iter()
-        .chain(attach::SAMPLED.iter())
-        .chain(wheel::SAMPLED.iter())
-        .any(|sampled| sampled.name == workload.name)
+    sampled_kind(workload).is_some()
 }
 
 /// How many timed calls one side makes of a sampled row with `runs`
@@ -385,19 +412,11 @@ fn is_sampled(workload: &idle::Workload) -> bool {
 fn sample_total(workload: &idle::Workload, runs: u32) -> u32 {
     // The scheduler calls this only for sampled rows; any other row
     // keeps its run count.
-    if attach::SAMPLED
-        .iter()
-        .any(|sampled| sampled.name == workload.name)
-    {
-        return runs.saturating_mul(attach::FIXTURE_COUNT);
+    match sampled_kind(workload) {
+        Some(SampledKind::Attach) => runs.saturating_mul(attach::FIXTURE_COUNT),
+        Some(SampledKind::Wheel) => runs.saturating_mul(wheel::SESSION_COUNT),
+        _ => runs,
     }
-    if wheel::SAMPLED
-        .iter()
-        .any(|sampled| sampled.name == workload.name)
-    {
-        return runs.saturating_mul(wheel::SESSION_COUNT);
-    }
-    runs
 }
 
 /// Runs each selected workload with its repeats and run count, head and
@@ -726,22 +745,16 @@ fn prepare_sampled(
             paging: args.paging.as_deref(),
         };
         let mut setup_notes = Vec::new();
-        let state = if listing::SAMPLED
-            .iter()
-            .any(|sampled| sampled.name == workload.name)
-        {
-            listing::prepare_listing(&ctx, &mut setup_notes)
+        let state = match sampled_kind(workload) {
+            Some(SampledKind::Listing) => listing::prepare_listing(&ctx, &mut setup_notes)
                 .map(Box::new)
-                .map(SampledState::Listing)
-        } else if attach::SAMPLED
-            .iter()
-            .any(|sampled| sampled.name == workload.name)
-        {
-            attach::prepare_attach(&ctx, &mut setup_notes).map(SampledState::Attach)
-        } else {
-            wheel::prepare_wheel(&ctx)
+                .map(SampledState::Listing),
+            Some(SampledKind::Attach) => {
+                attach::prepare_attach(&ctx, &mut setup_notes).map(SampledState::Attach)
+            }
+            _ => wheel::prepare_wheel(&ctx)
                 .map(Box::new)
-                .map(SampledState::Wheel)
+                .map(SampledState::Wheel),
         };
         sampled.insert(
             (side, workload.name),

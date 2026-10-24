@@ -16,8 +16,9 @@ use super::{
 
 #[test]
 fn the_session_count_is_the_session_plan_length() {
-    // The scheduler alternates the wheel row by sample over this many
-    // sessions: a plan that gains or loses one fails here.
+    // The scheduler alternates the wheel row by sample
+    // (`docs/performance.md`, "Measuring") over this many sessions: a
+    // plan that gains or loses one fails here.
     assert_eq!(usize::try_from(SESSION_COUNT), Ok(SESSIONS.len()));
 }
 use crate::pty::Frame;

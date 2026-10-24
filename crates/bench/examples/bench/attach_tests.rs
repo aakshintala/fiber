@@ -11,8 +11,9 @@ use super::{
 
 #[test]
 fn the_fixture_count_is_the_plan_length() {
-    // The scheduler alternates the attach row by sample over this many
-    // fixtures: a plan that gains or loses one fails here.
+    // The scheduler alternates the attach row by sample
+    // (`docs/performance.md`, "Measuring") over this many fixtures: a
+    // plan that gains or loses one fails here.
     assert_eq!(usize::try_from(FIXTURE_COUNT), Ok(PLANS.len()));
 }
 

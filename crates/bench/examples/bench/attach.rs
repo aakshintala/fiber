@@ -736,37 +736,6 @@ pub(crate) fn finish_attach(
     result
 }
 
-/// Times one prepared fixture `runs` times: the single-call run keeps
-/// its old shape, fixture by fixture, on top of the shared prepare and
-/// finish.
-fn sample_fixture(
-    prepared: &AttachFixture,
-    ctx: &Ctx<'_>,
-    runs: u32,
-    notes: &mut Vec<String>,
-) -> Result<Samples, String> {
-    let fixture_ctx = Ctx {
-        home: &prepared.home,
-        clock: ctx.clock,
-        idle: ctx.idle,
-        path: ctx.path.clone(),
-        runs: 1,
-        paging: ctx.paging,
-    };
-    let mut samples = Samples::new();
-    for _ in 0..runs {
-        samples.extend(sample(
-            &fixture_ctx,
-            &prepared.home,
-            prepared.label,
-            &prepared.fixture,
-            &prepared.id,
-            notes,
-        )?);
-    }
-    Ok(samples)
-}
-
 /// Measures one turn's log and each further turn's, in a home of its own:
 /// two probe sessions by the binary under test, `(first, extra)`.
 fn probe_turn_bytes(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<(u64, u64), String> {
@@ -791,14 +760,23 @@ fn terminal_attach(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, St
     let prepared = prepare_attach(ctx, notes)?;
     let measured = (|| {
         let mut samples = Samples::new();
-        for fixture in &prepared.fixtures {
-            samples.extend(sample_fixture(fixture, ctx, ctx.runs, notes)?);
+        for (index, fixture) in prepared.fixtures.iter().enumerate() {
+            let fixture_ctx = Ctx {
+                home: &fixture.home,
+                clock: ctx.clock,
+                idle: ctx.idle,
+                path: ctx.path.clone(),
+                runs: 1,
+                paging: ctx.paging,
+            };
+            for _ in 0..ctx.runs {
+                samples.extend(sample_attach(&prepared, index, &fixture_ctx, notes)?);
+            }
         }
         Ok(samples)
     })();
-    // Both fixtures go away even when a sample errs, as the old
-    // `in_home` runs removed them before; a failed sample skips the
-    // tail checks it never reached.
+    // Both fixtures go away even when a sample errs; a failed sample
+    // skips the tail checks it never reached.
     let tail = measured.is_ok();
     let finished = finish_attach(prepared, ctx.clock, notes, tail);
     match measured {

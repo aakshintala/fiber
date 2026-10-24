@@ -358,11 +358,11 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
 
 #[test]
 fn sampled_rows_alternate_head_and_base_by_sample() {
-    // A repeated row alternates per run, and a sampled row per sample, so
-    // listing's 3 samples, attach's 2 fixtures of 5 and wheel's 2
-    // sessions of 3 interleave. A mutant running a sampled row's head
-    // block then its base block, or interleaving another row, fails the
-    // log below.
+    // A repeated row alternates per run, and a sampled row per sample
+    // (`docs/performance.md`, "Measuring"), so listing's 3 samples,
+    // attach's 2 fixtures of 5 and wheel's 2 sessions of 3 interleave.
+    // A mutant running a sampled row's head block then its base block,
+    // or interleaving another row, fails the log below.
     let head = args("--fiber f --out o --runs 5 --timing-runs 3 --only timing").unwrap();
     let base = args("--fiber b --out ob --runs 5 --timing-runs 3 --only timing").unwrap();
     let (forward, back) = (Side::Head, Side::Base);
@@ -401,13 +401,14 @@ fn sampled_rows_alternate_head_and_base_by_sample() {
     assert_eq!(order(head, Some(base)), expected);
 }
 
-/// The acceptance for alternate-by-sample scheduling: with a scripted
-/// clock, one stalled call delays only the samples after it, so each
-/// index's head and base samples stay within one sample cost of each
-/// other. The closure records what `order` records, plus each call's
-/// scripted time; no real clock sleeps. A mutant running a side's block
-/// in one go shifts the whole base block past the stalled head block,
-/// failing the skew bound below.
+/// The acceptance for alternate-by-sample scheduling
+/// (`docs/performance.md`, "Measuring"): with a scripted clock, one
+/// stalled call delays only the samples after it, so each index's head
+/// and base samples stay within one sample cost of each other. The
+/// closure records what `order` records, plus each call's scripted
+/// time; no real clock sleeps. A mutant running a side's block in one
+/// go shifts the whole base block past the stalled head block, failing
+/// the skew bound below.
 #[test]
 fn a_stall_shifts_one_sample_not_a_side() {
     const STEP: Duration = Duration::from_millis(1);
@@ -805,8 +806,8 @@ fn a_base_row_the_head_did_not_select_does_not_run() {
     let (head_args, base_args) = sides(&parsed);
     assert!(base_args.is_some());
     // The wheel row alternates its 2 sessions of 5 samples head and
-    // base; a mutant running the head block then the base block fails
-    // this.
+    // base (`docs/performance.md`, "Measuring"); a mutant running the
+    // head block then the base block fails this.
     let mut expected = Vec::new();
     for s in 1..=10 {
         expected.push((Side::Head, "terminal wheel", s));
@@ -837,8 +838,9 @@ fn attach_keeps_its_full_count_on_both_sides() {
             Ok(Vec::new())
         },
     );
-    // Each side times one attach per call: 2 fixtures of 5, alternating
-    // head and base, each call carrying a single sample.
+    // Each side times one attach per call (`docs/performance.md`,
+    // "Measuring"): 2 fixtures of 5, alternating head and base, each
+    // call carrying a single sample.
     let attach: Vec<(Side, &str, u32, u32)> = log
         .iter()
         .filter(|(_, name, _, _)| *name == "terminal attach")
