@@ -17,7 +17,7 @@ use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, Weak, atomic, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1622,4 +1622,148 @@ fn a_non_would_block_write_error_surfaces_at_once() {
         "no retry follows a fatal write error: {:?}",
         err.out
     );
+}
+
+#[test]
+fn a_blocked_write_completes_whole_once_the_pipe_drains() {
+    // The pipe starts full, so the first write refuses and the helper
+    // parks; the test drains the pipe in the fake-clock hook before time
+    // moves, and the whole text lands in order with no cancellation.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-write-drain".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send(outcome).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the write worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        drain_pipe(&mut read);
+    });
+    let outcome = within.recv_or_fail(&done, "the drained write completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the write");
+    assert_eq!(clock.now(), until, "one slice moves the clock");
+    // The worker wrote after the drain: the pipe holds exactly the text.
+    let mut got = vec![0u8; text.len()];
+    read.read_exact(&mut got).unwrap();
+    assert_eq!(got.as_slice(), text, "every byte lands in order");
+    worker.join().unwrap();
+}
+
+/// An `err` writer that captures the blocking list, then fills the pipe on
+/// the first guarded prompt write and reports WouldBlock: the prompt must
+/// cancel within the poll budget with the pipe still full.
+struct CaptureThenFill {
+    file: fs::File,
+    filled: bool,
+    out: Vec<u8>,
+}
+
+impl Write for CaptureThenFill {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        if !self.filled && text.contains("Reviewer, by number or name: ") {
+            self.filled = true;
+            fill_pipe(&mut self.file);
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_blocked_prompt_write_returns_cancelled_within_the_poll_budget() {
+    // The pipe fills exactly as the guarded prompt write begins, so the
+    // helper parks with nowhere to write; setting the latch in the
+    // fake-clock hook cancels within PROMPT_POLL, even with the prompt
+    // unwritten and the pipe still full.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (_read, write) = nonblocking_pipe();
+    let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let term = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let stopped = Arc::new(atomic::AtomicBool::new(false));
+    let worker_stopped = Arc::clone(&stopped);
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-prompt-cancel".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut input = Script {
+                steps: [Step::Line("2\n")].into_iter().collect(),
+            };
+            let mut err = CaptureThenFill {
+                file,
+                filled: false,
+                out: Vec::new(),
+            };
+            let halt = move || worker_stopped.load(atomic::Ordering::SeqCst);
+            let pick = prompt_choice(
+                "acme",
+                &listed(),
+                &mut input,
+                &mut err,
+                &halt,
+                true,
+                &worker_clock,
+                term.as_fd(),
+            );
+            done_tx.send((pick, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the prompt worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        stopped.store(true, atomic::Ordering::SeqCst);
+    });
+    let (pick, out) = within.recv_or_fail(&done, "the blocked prompt answers cancellation");
+    assert_eq!(pick.unwrap(), Pick::Cancelled);
+    assert!(
+        clock.now().duration_since(start) <= super::PROMPT_POLL,
+        "cancellation lands within the poll budget"
+    );
+    let captured = String::from_utf8(out).unwrap();
+    assert!(
+        captured.contains("Reviewer for acme:"),
+        "the blocking list got through: {captured}"
+    );
+    // Nobody drained: the pipe the prompt blocked on is still full.
+    let mut waiting = [rustix::event::PollFd::new(
+        &write,
+        rustix::event::PollFlags::OUT,
+    )];
+    rustix::event::poll(
+        &mut waiting,
+        Some(&rustix::event::Timespec::try_from(Duration::ZERO).unwrap()),
+    )
+    .unwrap();
+    assert!(
+        waiting
+            .first()
+            .is_some_and(|polled| polled.revents().is_empty()),
+        "the pipe stays full"
+    );
+    worker.join().unwrap();
 }
