@@ -12,7 +12,7 @@ use contract::jobs::{Jobs, OpenError, Opening, Stop};
 use contract::shapes::Process;
 use contract::{ErrorCode, JobId};
 
-use super::FakeJobs;
+use super::{FakeJobs, StubJobs};
 use crate::MUST_SUCCEED_WITHIN;
 use crate::deadline::Deadline;
 
@@ -488,4 +488,112 @@ fn installing_a_usage_tap_marks_the_fake_tapped_until_cleared() {
     assert!(jobs.has_usage_tap());
     jobs.install_usage_tap(None);
     assert!(!jobs.has_usage_tap());
+}
+
+fn stub_id(id: &str) -> JobId {
+    JobId(id.into())
+}
+
+fn stub_ids(ids: &[&str]) -> Vec<JobId> {
+    ids.iter().map(|id| stub_id(id)).collect()
+}
+
+#[test]
+fn stub_jobs_starts_empty_by_default() {
+    let jobs = StubJobs::default();
+    assert!(Jobs::running(&jobs).is_empty());
+}
+
+#[test]
+fn stub_jobs_seeded_list_keeps_ids_and_order() {
+    // Order promised by `StubJobs::new` ("in iterator order") and
+    // `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
+    let jobs = StubJobs::new(stub_ids(&["j_2", "j_1", "j_3"]));
+    assert_eq!(Jobs::running(&jobs), stub_ids(&["j_2", "j_1", "j_3"]));
+}
+
+#[test]
+fn stub_jobs_set_running_replaces_the_list() {
+    // Order promised by `StubJobs::set_running` ("preserving iterator
+    // order") and `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
+    let jobs = StubJobs::new(stub_ids(&["j_1"]));
+    jobs.set_running(stub_ids(&["j_2", "j_3"]));
+    assert_eq!(Jobs::running(&jobs), stub_ids(&["j_2", "j_3"]));
+    jobs.set_running(Vec::new());
+    assert!(Jobs::running(&jobs).is_empty());
+}
+
+#[test]
+fn stub_jobs_update_running_mutates_the_list() {
+    // Order promised by `StubJobs::running` ("the current ordered list")
+    // and `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
+    let jobs = StubJobs::new(stub_ids(&["j_1", "j_2"]));
+    jobs.update_running(|running| {
+        running.retain(|id| id != &stub_id("j_1"));
+        running.push(stub_id("j_3"));
+    });
+    assert_eq!(Jobs::running(&jobs), stub_ids(&["j_2", "j_3"]));
+}
+
+#[test]
+fn stub_jobs_inert_methods_open_stop_or_deliver_nothing() {
+    let jobs = StubJobs::new(stub_ids(&["j_1"]));
+    let Err(error) = jobs.open(opening("echo hi", Stop(Box::new(|| {})))) else {
+        panic!("a stub job opened");
+    };
+    assert_eq!(error.path, std::path::PathBuf::from("unused"));
+    assert_eq!(error.source.to_string(), "a stub job is not opened");
+    assert!(!jobs.stop(&stub_id("j_1")));
+    assert_eq!(jobs.background(), 0);
+    assert_eq!(jobs.stop_delegates(), 0);
+    let moved: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
+    jobs.foreground(contract::jobs::Foreground(Arc::downgrade(&moved)));
+    let (tx, rx) = mpsc::channel();
+    jobs.deliver_to(tx);
+    assert!(rx.try_recv().is_err());
+    // Order promised by `StubJobs::new` ("in iterator order") and
+    // `docs/testing/fakes.md`, "Fakes" ("controllable ordered
+    // running-job list").
+    assert_eq!(Jobs::running(&jobs), stub_ids(&["j_1"]));
+}
+
+#[test]
+fn stub_jobs_snapshot_waits_for_an_in_progress_update() {
+    // Order promised by `StubJobs::update_running` (the snapshot observes
+    // the callback's complete result) and `docs/testing/fakes.md`,
+    // "Fakes" ("controllable ordered running-job list").
+    let jobs = Arc::new(StubJobs::new(stub_ids(&["j_1"])));
+    let (inside_tx, inside_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let held = Arc::clone(&jobs);
+    let updater = std::thread::spawn(move || {
+        held.update_running(|running| {
+            running.push(stub_id("j_2"));
+            // Sent while the callback holds the list mutex, so a snapshot
+            // started after this signal is contending for the lock.
+            inside_tx.send(()).unwrap();
+            Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv(&release_rx)
+                .unwrap();
+            running.push(stub_id("j_3"));
+        });
+    });
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&inside_rx)
+        .unwrap();
+    let reader_jobs = Arc::clone(&jobs);
+    std::thread::spawn(move || {
+        seen_tx.send(reader_jobs.running()).unwrap();
+    });
+    release_tx.send(()).unwrap();
+    updater.join().unwrap();
+    // The only `Deadline` here is a hang guard: the `inside` signal above
+    // establishes that the snapshot is contending for the lock, and the
+    // complete `[j_1, j_2, j_3]` result proves it waited for the callback.
+    let seen = Deadline::after(MUST_SUCCEED_WITHIN).recv(&seen_rx).unwrap();
+    assert_eq!(seen, stub_ids(&["j_1", "j_2", "j_3"]));
 }

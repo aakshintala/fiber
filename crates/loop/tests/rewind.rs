@@ -32,7 +32,7 @@ use contract::shapes::{ContentPart, Failure, Origin, Point, Sender, Worktree};
 use contract::tool::Tool;
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
 use fakes::Deadline;
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{Scripted, ScriptedProvider, StubJobs};
 use log::Log;
 use r#loop::{Continuation, Loop, Model, Permissions, PromptInputs, Rewound, rewind_note};
 use serde_json::{Map, Value, json};
@@ -2365,42 +2365,6 @@ fn a_summary_after_an_idle_switch_uses_the_new_model_and_preamble() {
     assert_eq!(built.payload["model"], "fake/switched");
 }
 
-/// Jobs that list `running` as running and end nothing: what a `rewind`
-/// refusal reads.
-struct StillRunning(Vec<JobId>);
-
-impl contract::jobs::Jobs for StillRunning {
-    fn open(
-        &self,
-        _: contract::jobs::Opening,
-    ) -> Result<contract::jobs::Opened, contract::jobs::OpenError> {
-        Err(contract::jobs::OpenError {
-            path: "unused".into(),
-            source: std::io::Error::other("a listed job is not opened"),
-        })
-    }
-
-    fn stop(&self, _: &JobId) -> bool {
-        false
-    }
-
-    fn stop_delegates(&self) -> usize {
-        0
-    }
-
-    fn background(&self) -> usize {
-        0
-    }
-
-    fn foreground(&self, _: contract::jobs::Foreground) {}
-
-    fn running(&self) -> Vec<JobId> {
-        self.0.clone()
-    }
-
-    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
-}
-
 #[test]
 fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let mut session = run_a();
@@ -3198,7 +3162,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
         }),
         None,
     );
-    let looped = looped.jobs(Arc::new(StillRunning(vec![JobId("j_1".into())])));
+    let looped = looped.jobs(Arc::new(StubJobs::new([JobId("j_1".into())])));
     let before = log::read(&dir).unwrap().len();
     let (rw, answered) = rewind(args(Some(A_ID), None, true));
     drop(drive_closed(looped, tx, vec![rw]));
