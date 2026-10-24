@@ -214,6 +214,7 @@ fn resume_b(
             forked_from: from,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

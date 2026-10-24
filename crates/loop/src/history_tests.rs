@@ -65,6 +65,23 @@ fn started(workspace: &str, from: Option<(&str, u64)>) -> Event {
         }),
         rewind: None,
         worktree: None,
+        supervised: false,
+    })
+}
+
+fn supervised_started(workspace: &str) -> Event {
+    Event::SessionStarted(SessionStarted {
+        workspace: workspace.to_owned(),
+        variables: Variables {
+            path: "/usr/bin".to_owned(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+        supervised: true,
     })
 }
 
@@ -247,6 +264,25 @@ fn a_two_segment_chain_folds_the_parent_to_the_point_and_the_child_after() {
     assert!(folded.thinking.is_none());
     // The handoff before the point puts the window in the parent segment.
     assert_eq!(folded.window, (0, 3));
+}
+
+#[test]
+fn the_fold_restores_supervised_from_the_first_line_and_defaults_it() {
+    let (_home, sessions) = sessions("supervised");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &supervised_started("/w"))],
+    );
+    let folded = resumed(&sessions.join(A)).unwrap();
+    assert!(folded.supervised);
+    write_log(
+        &sessions,
+        B,
+        &[envelope(B, 0, None, None, &started("/w", None))],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    assert!(!folded.supervised);
 }
 
 fn delegate_started(job: &str, session: &str) -> Event {

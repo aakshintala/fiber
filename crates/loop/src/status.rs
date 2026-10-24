@@ -68,6 +68,7 @@ pub(crate) struct Fold {
     workspace: String,
     project: String,
     parent: Option<SessionId>,
+    supervised: bool,
     model: String,
     thinking: Option<String>,
     window: Option<u64>,
@@ -127,6 +128,7 @@ impl Fold {
             project,
             workspace,
             parent: None,
+            supervised: false,
             model,
             thinking: None,
             window,
@@ -148,6 +150,7 @@ impl Fold {
                 workspace: String::new(),
                 project: String::new(),
                 parent: None,
+                supervised: false,
                 model: String::new(),
                 thinking: None,
                 state: SessionState::Idle,
@@ -264,6 +267,7 @@ impl Fold {
                 self.started = line.ts;
                 self.workspace.clone_from(&started.workspace);
                 self.parent = started.parent.as_ref().map(|p| p.session_id.clone());
+                self.supervised = started.supervised;
             }
             Event::SessionNamed(named) => self.name.clone_from(&named.name),
             Event::PreambleBuilt(built) => {
@@ -549,6 +553,7 @@ impl Fold {
             workspace: self.workspace.clone(),
             project: self.project.clone(),
             parent: self.parent.clone(),
+            supervised: self.supervised,
             model: self.model.clone(),
             thinking: self.thinking.clone(),
             state: self.state(),
