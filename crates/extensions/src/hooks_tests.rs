@@ -3605,6 +3605,39 @@ fn a_watcher_entry_missing_timeout_names_the_entry_and_field() {
     );
 }
 
+/// The person's `hook_timeout_ms` override reaches watcher entries the
+/// first-party script registers, as it does hook entries, while another
+/// extension's override changes nothing (`docs/configuration.md`,
+/// `extensions."<name>".hook_timeout_ms`).
+#[test]
+fn hook_timeout_ms_overrides_a_declared_watcher_timeout() {
+    let home = Home::new();
+    install_hooks(&home, include_str!("../../../extensions/hooks/init.lua"));
+    let entries = r#"{"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"},"note":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#;
+    let setting = hooks_override(entries);
+    let hooks = config::full_name("hooks");
+    let own = format!("extensions.\"{hooks}\".hook_timeout_ms=5");
+    let session = home.load(&[setting.as_str(), own.as_str()]);
+    assert_eq!(
+        session.lua[0].hooks().unwrap().by_point["after_tool"][0].timeout,
+        Duration::from_millis(5)
+    );
+    assert_eq!(
+        session.lua[0].watchers().unwrap().watchers[0].timeout,
+        Duration::from_millis(5)
+    );
+    let other = "extensions.\"fiber.test/b\".hook_timeout_ms=5";
+    let plain = home.load(&[setting.as_str(), other]);
+    assert_eq!(
+        plain.lua[0].hooks().unwrap().by_point["after_tool"][0].timeout,
+        Duration::from_millis(1000)
+    );
+    assert_eq!(
+        plain.lua[0].watchers().unwrap().watchers[0].timeout,
+        Duration::from_millis(1000)
+    );
+}
+
 #[test]
 fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     let home = Home::new();

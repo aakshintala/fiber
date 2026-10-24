@@ -68,13 +68,18 @@ impl CallbackTimeouts {
         }
     }
 
-    /// Every hook runs under `timeout` instead of the one it declared.
+    /// Every hook and watcher runs under `timeout` instead of the one it
+    /// declared (`docs/configuration.md`,
+    /// `extensions."<name>".hook_timeout_ms`).
     pub(super) fn override_hooks(&mut self, timeout: Option<Duration>) {
         let Some(timeout) = timeout else {
             return;
         };
         for hook in self.hooks.by_point.values_mut().flatten() {
             hook.timeout = timeout;
+        }
+        for watcher in &mut self.watchers.watchers {
+            watcher.timeout = timeout;
         }
     }
 }
@@ -215,7 +220,64 @@ fn is_known_kind(kind: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_watch_problem;
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    use super::{
+        CallbackTimeouts, DeclaredHook, DeclaredHooks, DeclaredWatcher, DeclaredWatchers,
+        HookPhase, is_watch_problem,
+    };
+
+    /// The configured timeout replaces hook and watcher timeouts alike,
+    /// and no timeout leaves both declared values alone.
+    /// Dropping the watcher loop would leave the watcher at its declared
+    /// timeout; dropping the `None` early return would zero both.
+    #[test]
+    fn override_hooks_replaces_hook_and_watcher_timeouts() {
+        fn declared() -> CallbackTimeouts {
+            CallbackTimeouts {
+                hooks: DeclaredHooks {
+                    by_point: BTreeMap::from([(
+                        "after_tool".to_owned(),
+                        vec![DeclaredHook {
+                            phase: HookPhase::Transform,
+                            blocking: false,
+                            timeout: Duration::from_millis(1000),
+                        }],
+                    )]),
+                    problems: Vec::new(),
+                },
+                watchers: DeclaredWatchers {
+                    watchers: vec![DeclaredWatcher {
+                        kinds: vec!["turn_completed".to_owned()],
+                        timeout: Duration::from_millis(2000),
+                    }],
+                    problems: Vec::new(),
+                },
+                ..Default::default()
+            }
+        }
+        let mut timeouts = declared();
+        timeouts.override_hooks(Some(Duration::from_millis(5)));
+        assert_eq!(
+            timeouts.hooks.by_point["after_tool"][0].timeout,
+            Duration::from_millis(5)
+        );
+        assert_eq!(
+            timeouts.watchers.watchers[0].timeout,
+            Duration::from_millis(5)
+        );
+        let mut timeouts = declared();
+        timeouts.override_hooks(None);
+        assert_eq!(
+            timeouts.hooks.by_point["after_tool"][0].timeout,
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            timeouts.watchers.watchers[0].timeout,
+            Duration::from_millis(2000)
+        );
+    }
 
     /// The conjunction boundary: each half alone is not a watch problem.
     /// Flipping `&&` to `||` would admit either half alone.
