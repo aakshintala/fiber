@@ -533,6 +533,106 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
 }
 
 #[test]
+fn artifact_page_lines_concatenate_and_mark_cut_boundaries() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let mut big = String::new();
+    for i in 0..200 {
+        big.push_str(&format!("line {i:03} with some text\n"));
+    }
+    opened
+        .log
+        .write_artifact("a_lines.txt", big.as_bytes())
+        .unwrap();
+    let mut cut = vec![b'a'; 65535];
+    cut.extend_from_slice("é tail\n".as_bytes());
+    opened.log.write_artifact("a_lines_cut.txt", &cut).unwrap();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            // Four-page walk: texts concatenate to the file and line
+            // starts concatenate to the file's line starts.
+            let mut offset = 0u64;
+            let mut text = String::new();
+            let mut starts: Vec<u64> = Vec::new();
+            let mut pages = 0;
+            let mut size = 0u64;
+            loop {
+                let id = format!("c_walk{pages}");
+                send(
+                    &client,
+                    &format!(
+                        r#"{{"id":"{id}","command":"artifact_page","args":{{"path":"artifacts/a_lines.txt","offset":{offset}}}}}"#
+                    ),
+                );
+                let page = response(&client, &id);
+                assert_eq!(kind(&page), "command_accepted", "{page}");
+                let result = &page["payload"]["result"];
+                size = result["size"].as_u64().unwrap();
+                let chunk = result["text"].as_str().unwrap();
+                let lines: Vec<u64> = result["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap())
+                    .collect();
+                assert_eq!(lines.len(), chunk.split_inclusive('\n').count());
+                text.push_str(chunk);
+                starts.extend(lines);
+                pages += 1;
+                match result.get("next") {
+                    Some(next) => offset = next.as_u64().unwrap(),
+                    None => break,
+                }
+                assert!(pages < 10, "paged past the end of the file");
+            }
+            assert_eq!(pages, 4);
+            assert_eq!(text, big);
+            assert_eq!(size, u64::try_from(big.len()).unwrap());
+            let mut expected = Vec::new();
+            let mut at = 0u64;
+            for line in big.split_inclusive('\n') {
+                expected.push(at);
+                at += u64::try_from(line.len()).unwrap();
+            }
+            assert_eq!(starts, expected);
+            // Cut pages: first page holds `[0]`, the boundary offset is
+            // the second page's first start.
+            send(&client, r#"{"id":"c_cut0","command":"artifact_page","args":{"path":"artifacts/a_lines_cut.txt","offset":0}}"#);
+            let cut0 = response(&client, "c_cut0");
+            assert_eq!(
+                cut0["payload"]["result"]["lines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_u64().unwrap())
+                    .collect::<Vec<_>>(),
+                vec![0]
+            );
+            let edge = cut0["payload"]["result"]["next"].as_u64().unwrap();
+            assert_eq!(edge, 65535);
+            send(
+                &client,
+                &format!(
+                    r#"{{"id":"c_cut1","command":"artifact_page","args":{{"path":"artifacts/a_lines_cut.txt","offset":{edge}}}}}"#
+                ),
+            );
+            let cut1 = response(&client, "c_cut1");
+            assert_eq!(
+                cut1["payload"]["result"]["lines"].as_array().unwrap()[0]
+                    .as_u64()
+                    .unwrap(),
+                edge
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
 fn full_folds_the_log_then_live_lines_and_the_latest_status() {
     let opened = Opened::open(vec![]);
     opened.log.append(&step(), None, None).unwrap();

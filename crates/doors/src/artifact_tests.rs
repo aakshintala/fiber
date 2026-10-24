@@ -365,6 +365,47 @@ fn a_file_truncated_after_the_size_capture_is_io() {
 }
 
 #[test]
+fn lines_hold_absolute_starts_past_a_nonzero_offset() {
+    let mut bytes = vec![b'x'; 100];
+    bytes.extend_from_slice(b"C\nDE\n");
+    let (_temp, path) = staged(&bytes);
+    let second = page_at_path(&path, 100).unwrap();
+    assert_eq!(second.lines, vec![100, 102]);
+    assert_eq!(second.text, "C\nDE\n");
+}
+
+#[test]
+fn lines_pin_offsets_cap_cut_malformed_and_empty() {
+    let (_temp, path) = staged(b"a\nb\n");
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines, vec![0, 2]);
+    // 64-entry cap: 65 lines take 64.
+    let (_temp, path) = staged(&lined(65, 2));
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines.len(), 64);
+    assert_eq!(found.lines[0], 0);
+    assert_eq!(found.lines[63], 63 * 2);
+    // Character-boundary cut: first page ends at the lead byte.
+    let mut bytes = vec![b'a'; 65535];
+    bytes.extend_from_slice("é tail\n".as_bytes());
+    let (_temp, path) = staged(&bytes);
+    let first = page_at_path(&path, 0).unwrap();
+    assert_eq!(first.lines, vec![0]);
+    // Malformed bytes map to raw offsets.
+    let (_temp, path) = staged(b"\xffA\nB\n");
+    let found = page_at_path(&path, 0).unwrap();
+    assert_eq!(found.lines, vec![0, 3]);
+    assert_eq!(found.text, "�A\nB\n");
+    // Empty page holds no starts.
+    let (_temp, path) = staged(b"");
+    let found = page_at_path(&path, 0).unwrap();
+    assert!(found.lines.is_empty());
+    let (_temp, path) = staged(b"hello\n");
+    let found = page_at_path(&path, 6).unwrap();
+    assert!(found.lines.is_empty());
+}
+
+#[test]
 fn a_file_grown_after_the_size_capture_pages_to_the_capture() {
     let temp = Temp::new();
     let path = temp.write("a.txt", b"hello\n");
