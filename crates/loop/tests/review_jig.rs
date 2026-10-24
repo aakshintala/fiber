@@ -330,7 +330,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
         Ok(output) => output.unwrap(),
         Err(_) => {
             kill_group(group, "KILL").unwrap_or(false);
-            let output = Deadline::after(Duration::from_secs(5))
+            let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                 .recv(&finished)
                 .expect("the review jig died after KILL");
             panic!(
@@ -339,7 +339,7 @@ fn wait_under(child: Child, bound: Duration) -> Output {
             );
         }
     };
-    watchdog.stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     output
 }
 
@@ -1844,7 +1844,7 @@ impl HeldExchange {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 kill_group(self.group, "KILL").unwrap_or(false);
-                let output = Deadline::after(Duration::from_secs(5))
+                let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
                     .recv(&self.finished)
                     .expect("the review jig died after KILL");
                 panic!(
@@ -1854,7 +1854,7 @@ impl HeldExchange {
             }
         };
         self.watchdog
-            .stand_down(fakes::Deadline::after(Duration::from_secs(5)));
+            .stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
         output
     }
 }
@@ -1938,7 +1938,11 @@ fn stalled_start_keeps_the_exchange_deadline_whole() {
     let before_release = fakes::clock::SystemClock.now();
     let deadline = held.release();
     assert!(
-        deadline.left().saturating_add(before_release.elapsed()) >= START_BOUND,
+        deadline.left().saturating_add(
+            fakes::clock::SystemClock
+                .now()
+                .saturating_duration_since(before_release)
+        ) >= START_BOUND,
         "the exchange deadline starts at release"
     );
     let lines = stdout_lines(&held.finish());
