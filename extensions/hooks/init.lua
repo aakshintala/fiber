@@ -141,13 +141,13 @@ local function register_watcher(name, entry)
     fiber.hook("command", { entry = name })
     return
   end
-  -- No timeout: `fiber.watch` cannot name the entry, so refuse the same
-  -- way as above, leaving a notice that names the entry and `timeout`,
-  -- and the rest register (`docs/extensions.md`, "Hooks declared in
-  -- configuration"). Any other invalid field is refused by `fiber.watch`
-  -- itself.
+  -- No timeout: `fiber.watch` cannot name the entry, so refuse through
+  -- `fiber.hook` with the field as the point, leaving a notice that names
+  -- the entry and `timeout`, and the rest register (`docs/extensions.md`,
+  -- "Hooks declared in configuration"). Any other invalid field is
+  -- refused by `fiber.watch` itself.
   if entry.timeout == nil then
-    fiber.hook("watch", { entry = name })
+    fiber.hook("timeout", { entry = name })
     return
   end
   fiber.watch(entry.watch, {
@@ -161,8 +161,8 @@ local function register(name, entry)
   if type(entry) ~= "table" then
     error("entry `" .. name .. "` must be a table", 0)
   end
-  -- A watcher entry names `watch`, not a hook point: it registers through
-  -- `fiber.watch`, never through the hook path, and takes no `on_failure`
+  -- A watcher entry names `watch`, not a hook point: a valid one
+  -- registers through `fiber.watch` and takes no `on_failure`
   -- (`docs/extensions.md`, "Hooks declared in configuration").
   if entry.watch ~= nil then
     register_watcher(name, entry)

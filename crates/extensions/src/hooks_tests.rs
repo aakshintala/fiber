@@ -3576,6 +3576,35 @@ fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
     assert!(session.notices().is_empty(), "{:?}", session.notices());
 }
 
+/// The first-party entry script registers a valid watcher entry beside
+/// one missing `timeout`: the valid entry registers, and the notice for
+/// the invalid one names the entry and the field (`docs/extensions.md`,
+/// "Hooks declared in configuration").
+#[test]
+fn a_watcher_entry_missing_timeout_names_the_entry_and_field() {
+    let home = Home::new();
+    install_hooks(&home, include_str!("../../../extensions/hooks/init.lua"));
+    let session = load_with_hooks(
+        &home,
+        r#"{"broken":{"watch":["turn_completed"],"command":"true"},"ok":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#,
+    );
+    let watchers = session.lua[0].watchers().unwrap();
+    assert_eq!(watchers.watchers.len(), 1, "{watchers:?}");
+    assert_eq!(watchers.watchers[0].kinds, ["turn_completed"]);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some(config::full_name("hooks").as_str())
+    );
+    assert!(
+        notices[0]
+            .message
+            .contains("`timeout` hook not registered for entry `broken`"),
+        "{notices:?}"
+    );
+}
+
 #[test]
 fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     let home = Home::new();
