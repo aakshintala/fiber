@@ -1548,3 +1548,46 @@ fn a_resumed_command_arms_the_spill() {
     let spilled = spill.close(None, "Exit code 0.");
     assert!(spilled.file.is_ok());
 }
+
+/// The reap window: the group probe can lag the reap while the group is
+/// already empty. A successful listing that finds no members finishes the
+/// call in the foreground with the shell's output and exit code, however
+/// the probe lags.
+#[test]
+fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
+    fn always_alive(_pgid: u32) -> bool {
+        true
+    }
+    let dir = fakes::TempDir::new("fiber-shell-empty-listing");
+    // A `ps` that lists nothing and succeeds: the group has no members.
+    let ps = fakes::script(dir.path(), "ps", "exit 0");
+    let work = dir.path().to_path_buf();
+    let (tx, rx) = mpsc::channel();
+    // The blocking call runs on its own thread: a stuck drive fails the
+    // test at the deadline instead of hanging it.
+    thread::spawn(move || {
+        let clock = FakeClock::new();
+        let cancel = CancelToken::new();
+        let ran = super::execute_for_test(
+            std::path::Path::new("/bin/sh"),
+            "true",
+            &work,
+            Duration::from_secs(60),
+            clock.as_ref(),
+            &cancel,
+            &Recorder::default(),
+            MovePolicy::Foreground,
+            always_alive,
+            &ps,
+        )
+        .unwrap();
+        let _sent = tx.send(ran);
+    });
+    let ran = Deadline::after(JOB_DEADLINE)
+        .recv(&rx)
+        .expect("the foreground call ended within the deadline");
+    let super::Ran::Finished(finished) = ran else {
+        panic!("a shell with no members left finishes in the foreground");
+    };
+    assert_eq!(exit_code_of(finished.status), 0);
+}

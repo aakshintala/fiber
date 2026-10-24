@@ -14,7 +14,7 @@ use contract::jobs::Jobs;
 use contract::tool::Cancel;
 
 use super::background::MoveAsk;
-use super::drive::{LoopEnd, Phase, Run, pump};
+use super::drive::{LoopEnd, Phase, Run, pump_inner};
 use super::moved::{CancelBridge, Moved};
 use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
 use super::spawn::scrub_env;
@@ -127,6 +127,66 @@ pub(crate) fn execute(
     spill: Option<SpillConfig>,
     matches: Option<&Path>,
 ) -> Result<Ran, std::io::Error> {
+    execute_inner(
+        program,
+        command,
+        workdir,
+        timeout,
+        clock,
+        cancel,
+        emit,
+        policy,
+        jobs,
+        spill,
+        matches,
+        support::group::alive,
+        Path::new("ps"),
+    )
+}
+
+/// A crate-local test entry that supplies the injected probe and fixture
+/// member-query program. No test-only switch reaches the shipped binary.
+#[cfg(test)]
+fn execute_for_test(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Duration,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+) -> Result<Ran, std::io::Error> {
+    execute_inner(
+        program, command, workdir, timeout, clock, cancel, emit, policy, None, None, None, alive,
+        ps,
+    )
+}
+
+/// The execution with the group probe and the member-query program
+/// injected, so a test can force the probe to lag the reap and point the
+/// listing at a fixture. Production passes the real probe and bare `ps`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, the move policy, the spill and the injected probe are one call"
+)]
+fn execute_inner(
+    program: &Path,
+    command: &str,
+    workdir: &Path,
+    timeout: Duration,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
+    matches: Option<&Path>,
+    alive: fn(u32) -> bool,
+    ps: &Path,
+) -> Result<Ran, std::io::Error> {
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
     cmd.arg("-c").arg(command).current_dir(workdir);
@@ -227,7 +287,7 @@ pub(crate) fn execute(
         job: None,
         feed: None,
     };
-    let ended = pump(&mut progress, policy, clock, cancel, emit);
+    let ended = pump_inner(&mut progress, policy, clock, cancel, emit, alive, ps);
     // A call that left the foreground wait is no longer counted, whether it
     // finished or moved: `background` must not find it during the open.
     if let Some((ask, _)) = &registered {

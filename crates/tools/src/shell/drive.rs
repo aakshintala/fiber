@@ -1,5 +1,6 @@
 //! Driving a command through running, stopping, draining and finishing.
 
+use std::path::Path;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -73,10 +74,33 @@ pub(super) fn pump(
     cancel: &dyn Cancel,
     emit: &dyn Emit,
 ) -> LoopEnd {
+    pump_inner(
+        progress,
+        policy,
+        clock,
+        cancel,
+        emit,
+        support::group::alive,
+        Path::new("ps"),
+    )
+}
+
+/// The drive loop with the group probe and the member-query program
+/// injected, so a test can force the probe to lag the reap and point the
+/// listing at a fixture. Production passes the real probe and bare `ps`.
+pub(super) fn pump_inner(
+    progress: &mut Run,
+    policy: MovePolicy,
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+    emit: &dyn Emit,
+    alive: fn(u32) -> bool,
+    _ps: &Path,
+) -> LoopEnd {
     loop {
         let view = view(&progress.shared, cancel);
         // Empty only counts after the shell is reaped, so its zombie is gone.
-        if view.reaped && !support::group::alive(progress.pgid) {
+        if view.reaped && !alive(progress.pgid) {
             progress.seen_empty = true;
         }
         // Stopping or draining: a later `background` moves nothing.
