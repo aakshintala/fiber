@@ -195,7 +195,15 @@ impl Ws {
     /// deadline for the whole wait, so a hub that trickles fails here.
     #[track_caller]
     fn next(&self, what: &str) -> Item {
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        self.next_before(Deadline::after(fakes::MUST_SUCCEED_WITHIN), what)
+    }
+
+    /// Takes the next item before `deadline`, failing with `what` past
+    /// it: consecutive receives in one drain share one deadline, so the
+    /// whole wait is bounded once (`docs/testing.md`, "Waits and timeouts").
+    #[track_caller]
+    fn next_before(&self, deadline: Deadline, what: &str) -> Item {
+        deadline
             .recv(&self.rx)
             .unwrap_or_else(|_| panic!("the client reads {what} before its deadline"))
     }
@@ -672,12 +680,18 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
     let accepted = authenticate(&client, "c1", "t0k3n");
     assert_eq!(accepted["kind"], "command_accepted");
     client.text(r#"{"id":"c_stop","command":"stop","args":{}}"#);
+    // One deadline bounds the whole drain: each receive takes what remains
+    // of it, so a hub that trickles one item per bound fails here
+    // (`docs/testing.md`, "Waits and timeouts").
+    let drain = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let mut ack: Option<Value> = None;
     let mut closed = false;
     let mut ended = false;
     for _ in 0..3 {
-        match client.next("the stop acknowledgement, the close or the end") {
+        match client.next_before(drain, "the stop acknowledgement, the close or the end") {
             Item::Text(bytes) => {
+                // Every driver command is answered exactly once
+                // (`docs/events.md`, "Command acknowledgements").
                 assert!(ack.is_none(), "the stop answers once");
                 ack = Some(
                     serde_json::from_slice(&bytes)
@@ -685,13 +699,19 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
                 );
             }
             Item::Close(code, reason) => {
+                // `stop` ends the hub as SIGTERM does (`docs/invocation.md`,
+                // "Driver commands"), and SIGTERM sends each websocket one
+                // close message (`docs/invocation.md`, "The terminal and the
+                // hub").
                 assert!(!closed, "the connection closes once");
                 assert_eq!(code, 1000);
                 assert!(reason.is_empty(), "the close carries no reason");
                 closed = true;
             }
+            // The close shuts the connection, so the stream ends with it
+            // (`docs/invocation.md`, "The terminal and the hub"): received,
+            // not counted, since no doc promises an EOF count.
             Item::Eof => {
-                assert!(!ended, "the stream ends once");
                 ended = true;
             }
             other @ (Item::Response(_) | Item::Pong(_)) => {
