@@ -33,17 +33,6 @@ use crate::testkit::await_true;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-/// One named deadline per expected item: the hub answers before it.
-const DEADLINE: Duration = Duration::from_secs(5);
-
-/// How fast a shutdown lands: `Web::shut` fails a blocked write at once,
-/// while a TCP stream left to the operating system takes seconds here and
-/// never closes on Linux, so a missing shutdown fails this bound.
-const SHUT: Duration = Duration::from_secs(1);
-
-/// How long a hub-state wait lasts, in wall time.
-const WITHIN: Duration = Duration::from_secs(5);
-
 /// The smallest step of fake time.
 const TICK: Duration = Duration::from_nanos(1);
 
@@ -206,7 +195,7 @@ impl Ws {
     /// deadline for the whole wait, so a hub that trickles fails here.
     #[track_caller]
     fn next(&self, what: &str) -> Item {
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&self.rx)
             .unwrap_or_else(|_| panic!("the client reads {what} before its deadline"))
     }
@@ -693,7 +682,7 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
     assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -720,7 +709,9 @@ fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
         .name("hub-test-scripted-session".to_owned())
         .spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            stream
+                .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+                .unwrap();
             let mut read = BufReader::new(stream.try_clone().unwrap());
             let mut write = stream;
             for _ in 0..2 {
@@ -746,6 +737,7 @@ fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
     let ack = text_of(&client, "the stop acknowledgement");
     assert_eq!(ack["kind"], "command_accepted");
     assert_eq!(ack["payload"]["command_id"], "c_stop");
+    // docs/events.md:1389 defines `sessions_stopped` as the sessions that confirmed closed.
     assert_eq!(
         ack["payload"]["result"],
         json!({"sessions_stopped": 1}),
@@ -754,7 +746,7 @@ fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
     assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -791,7 +783,9 @@ fn a_websocket_stop_interrupted_mid_scan_names_what_is_still_running() {
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
-                stream.set_read_timeout(Some(DEADLINE)).unwrap();
+                stream
+                    .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+                    .unwrap();
                 let answered_tx = answered_tx.clone();
                 thread::Builder::new()
                     .name("hub-test-scripted-conn".to_owned())
@@ -838,7 +832,7 @@ fn a_websocket_stop_interrupted_mid_scan_names_what_is_still_running() {
         })
         .unwrap();
     client.text(r#"{"id":"c_stop","command":"stop","args":{"sessions":true}}"#);
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&answered_rx)
         .expect("the session answers both lines");
     signal(&hub, &got);
@@ -853,7 +847,7 @@ fn a_websocket_stop_interrupted_mid_scan_names_what_is_still_running() {
     assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
     assert_eq!(client.next("the end"), Item::Eof);
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -873,7 +867,7 @@ fn a_signal_closes_every_websocket_saying_the_hub_is_stopping() {
     let second = helloed(port, None);
     signal(&hub, &got);
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -908,7 +902,7 @@ fn failed_stop_spawns_still_shut_every_websocket_without_waiting() {
             stopped_tx.send(()).unwrap_or(());
         })
         .unwrap();
-    Deadline::after(WITHIN)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&stopped_rx)
         .expect("stop_all returns after every stop spawn fails");
 
@@ -948,20 +942,23 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         Item::Close(1001, "The hub is stopping.".to_owned())
     );
     assert!(
-        clock.await_parked(start + STOP_CLOSE_WAIT, fakes::Deadline::after(WITHIN)),
+        clock.await_parked(
+            start + STOP_CLOSE_WAIT,
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        ),
         "the stop waits out its bound"
     );
     let mark = clock.advance_when_parked(
         Some(start + STOP_CLOSE_WAIT),
         None,
         STOP_CLOSE_WAIT.checked_sub(TICK).unwrap(),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert!(
         clock.await_parked_since(
             &mark,
             Some(start + STOP_CLOSE_WAIT),
-            fakes::Deadline::after(WITHIN)
+            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         ),
         "the stop reparks at its bound after the advance"
     );
@@ -973,10 +970,10 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         Some(start + STOP_CLOSE_WAIT),
         None,
         TICK,
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1014,7 +1011,7 @@ fn a_close_waiting_on_the_sink_goes_out_once_it_frees() {
         Item::Close(1001, "The hub is stopping.".to_owned())
     );
     assert_eq!(
-        Deadline::after(DEADLINE)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
             .expect("the hub stops"),
         143
@@ -1051,7 +1048,9 @@ fn a_handshake_with_stop_set_gets_101_then_eof() {
     let client = Ws::connect(port, None);
     assert_eq!(client.next("the handshake answer"), Item::Response(101));
     assert_eq!(client.next("the end"), Item::Eof);
-    Deadline::after(DEADLINE).recv(&rx).expect("serve returns");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&rx)
+        .expect("serve returns");
 }
 
 #[test]
@@ -1173,7 +1172,9 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     let tcp_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let tcp_addr = tcp_listener.local_addr().unwrap();
     let tcp_client = TcpStream::connect(tcp_addr).unwrap();
-    tcp_client.set_read_timeout(Some(DEADLINE)).unwrap();
+    tcp_client
+        .set_read_timeout(Some(fakes::MUST_SUCCEED_WITHIN))
+        .unwrap();
     let mut tcp_client = tcp_client;
     let (tcp_server, _) = tcp_listener.accept().unwrap();
     let web = Arc::new(Web {
@@ -1272,7 +1273,7 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
             .attention
             .notify("s_0000000000000000", None, &first, false),
     );
-    let drained = Deadline::after(DEADLINE);
+    let drained = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     let needle: &[u8] = b"run r0";
     let mut overlap = Vec::new();
     loop {
@@ -1355,7 +1356,7 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
     // One deadline for the pump's end and the TCP drain together: the
     // per-read timeout is only a poll pause, so a stalled drain fails
     // this wait by name instead of hanging the loop.
-    let shut = Deadline::after(SHUT);
+    let shut = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     shut.recv(&pump_rx).expect("the pump to end");
     let mut buf = [0; 8];
     loop {
@@ -1370,7 +1371,7 @@ fn overflow_on_a_websocket_bridge_shuts_the_unix_pair_and_the_tcp_stream() {
             Err(error) => panic!("the TCP side closes: {error}"),
         }
     }
-    Deadline::after(DEADLINE)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&serve_rx)
         .expect("the read loop to return");
     assert_eq!(hub.clients(), 0, "the count released");

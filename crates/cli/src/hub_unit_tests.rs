@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
 
+use crate::CliError;
+
 use super::{Manager, Service, name, unit_path};
 
 #[test]
@@ -40,8 +42,16 @@ fn a_name_over_240_bytes_is_refused_naming_fiber_home() {
     assert_eq!(name(Path::new(&longest)).unwrap().len(), 240);
     let over = format!("/{}", "a".repeat(231));
     let error = name(Path::new(&over)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::Usage);
-    assert!(error.message.contains("FIBER_HOME"), "{}", error.message);
+    assert!(
+        matches!(error, CliError::HubUnitNameTooLong { bytes: 241 }),
+        "{error}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert!(
+        error.to_string().contains("FIBER_HOME"),
+        "{}",
+        error.to_string()
+    );
 }
 
 #[test]
@@ -122,8 +132,9 @@ fn an_unset_or_relative_home_is_usage_naming_home() {
     for manager in [Manager::Launchd { uid: 501 }, Manager::Systemd] {
         for set in [vars(&[]), vars(&[("HOME", "home/a")])] {
             let error = unit_path(manager, "fiber-hub-x", &set).unwrap_err();
-            assert_eq!(error.code, ErrorCode::Usage);
-            assert!(error.message.contains("HOME"), "{}", error.message);
+            assert!(matches!(error, CliError::HubHomeUnavailable), "{error}");
+            assert_eq!(error.code(), ErrorCode::Usage);
+            assert!(error.to_string().contains("HOME"), "{error}");
         }
     }
 }
@@ -291,12 +302,12 @@ fn a_control_character_or_non_utf8_path_is_refused_naming_it() {
         for path in &bad {
             for (exe, home) in [(path.as_path(), Path::new("/h")), (Path::new("/f"), path)] {
                 let error = service(manager, exe, home).render(None).unwrap_err();
-                assert_eq!(error.code, ErrorCode::IoFailed);
                 assert!(
-                    error.message.contains(&format!("{path:?}")),
-                    "{}",
-                    error.message
+                    matches!(error, CliError::HubUnitPathUnrepresentable { .. }),
+                    "{error}"
                 );
+                assert_eq!(error.code(), ErrorCode::IoFailed);
+                assert!(error.to_string().contains(&format!("{path:?}")), "{error}");
             }
         }
     }
