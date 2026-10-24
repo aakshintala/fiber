@@ -2932,68 +2932,13 @@ fn take_report_with_usages(
     })
 }
 
-/// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
-/// tap forwards ahead of the runner's report: the shared core stashes
-/// each while the take loops past them, until the `Job` notice arrives.
-#[track_caller]
-fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
-    reported_with_usage_before(rig, None)
-}
-
-/// The parked forward's gate, shared with the watcher: the test owns
-/// the sender half and releases the park by dropping it, so a failed
-/// test unwinds the sender first and never leaves the watcher parked
-/// (as the `Block` watch reply). Parking forces the order a loaded
-/// machine produces by accident (see #3051): the report lands with
-/// nothing stashed, and the drain collects every line after the
-/// release, instead of racing the watcher's scheduling.
-struct Park {
-    rx: Mutex<mpsc::Receiver<()>>,
-}
-
-impl Park {
-    /// A closed gate: the sender half that releases it, and the shared
-    /// half the forward parks on.
-    fn closed() -> (mpsc::Sender<()>, Arc<Self>) {
-        let (tx, rx) = mpsc::channel();
-        (tx, Arc::new(Self { rx: Mutex::new(rx) }))
-    }
-
-    /// Waits for the release under the plan's bound: expiry names the
-    /// missing release instead of hanging the watcher, and a dropped
-    /// sender (a failed test's unwind) releases at once.
-    fn wait(&self) {
-        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.rx.lock().unwrap()) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("the report never released the parked forward")
-            }
-        }
-    }
-}
-
-/// The registry's forward behind a release gate: every watcher line
-/// parks until the test drops the sender half, then forwards as usual.
-/// The runner's reap and report never wait on the watcher, so parking
-/// cannot deadlock the report the release waits for.
-fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
-    let forward = rig.registry.usage_forward();
-    let park = Arc::clone(park);
-    Arc::new(
-        move |session: SessionId, line: contract::events::UsageRecorded| {
-            park.wait();
-            forward(session, line);
-        },
-    )
-}
-
 /// Collects streamed `DelegateUsage` deliveries until `want` have
 /// arrived, after the run already reported: the watcher's forwards
 /// always follow on the inbox (the tap runs before each offer), so a
 /// Job that precedes them (see #3005) only delays this drain. The
-/// bound is the plan's MUST_SUCCEED_WITHIN, the same bound the parked
-/// forward's release waits on: under saturation the watcher thread can
-/// go unscheduled past the old 3s report deadline (see #3001).
+/// bound is the plan's MUST_SUCCEED_WITHIN: under saturation the
+/// watcher thread can go unscheduled past the old 3s report deadline
+/// (see #3001).
 fn drain_streamed_usages(
     rig: &Rig,
     mut usages: Vec<(SessionId, String)>,
@@ -3029,9 +2974,14 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    // The forward parks until the report lands: a loaded machine
-    // schedules the watcher after the drain otherwise (see #3051).
-    let (release, park) = Park::closed();
+    // No gate on the forward: the fake persists every delivered line,
+    // so the reap's synchronous file replay recovers the usage even
+    // when the watcher loses the race, and the take below holds the
+    // Job and the streamed line whichever lands first. A park here
+    // would wait for the report from inside the forward while the
+    // report waits out the same bound under load; on expiry the parked
+    // thread dies holding the only claim and the line never arrives
+    // (see #3051).
     let waited = rig
         .start_timeout(
             &shell,
@@ -3039,20 +2989,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &park)),
+            Some(rig.registry.usage_forward()),
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
-    // Nothing is stashed: every line is still parked behind the
-    // release, which proves the hold before the drain releases it.
-    assert!(usages.is_empty(), "the parked forward holds every line");
-    drop(release);
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
-    // The Job can precede the watcher's forward, so the tap is read
-    // only after the streamed line lands on the inbox.
-    let usages = drain_streamed_usages(&rig, usages, 1);
+    // The tap runs before the inbox offer on the same forward, so a
+    // streamed line the take holds proves the tap saw it first.
+    let (notice, usages) = take_report_with_usages(&rig, 1);
     assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].0, SessionId("s_child".into()));
