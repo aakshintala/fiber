@@ -660,7 +660,7 @@ resumes the session and delivers the command. If that resume fails
 the 5-second shutdown bound, and the client gets `session_held` only once the
 bound has passed. Commands keep their order across that resume ("What the hub
 speaks"). A command after `close` and before `fiber_exited` still gets
-`closing`, except a `close` with `now`, which is accepted and upgrades the close.
+`closing`, except a `close` with `now`, which is accepted and upgrades the close. A line that arrives after the session stops reading, just before `fiber_exited`, is never read: the hub re-routes it after the clean exit, and a direct client reads end of file.
 
 A command the hub sent to a session that then ended without answering it is
 answered by the hub, by how the session ended:

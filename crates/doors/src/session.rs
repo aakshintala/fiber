@@ -648,11 +648,16 @@ impl Session {
         self.settle_answers();
     }
 
-    /// Stops the readers and answers everything they read: the readers
-    /// stop reading another line (a reader finishes and answers the line
-    /// it is dispatching, and a line already in its buffer is still
-    /// dispatched), then waits up to [`conns::GRACE`] for the answers owed
-    /// and cuts what is still unanswered, answering each `indeterminate`.
+    /// Answers everything the readers read: the readers keep reading
+    /// through the wait — every line one reads after `close` is answered
+    /// `closing` at once, except a `close` with `now`, which is accepted
+    /// and upgrades the close — and each such answer is owed like any
+    /// other, so the wait below covers it. Waits up to [`conns::GRACE`]
+    /// for the answers owed (the grace still bounds the wait, so a client
+    /// that keeps sending cannot hold the exit), then stops the readers,
+    /// and cuts what is still unanswered, answering each
+    /// `indeterminate`. A reader finishes and answers the line it is
+    /// dispatching, and a line already in its buffer is still dispatched.
     /// A cut writer flushes what the cut decided and stays up, and
     /// [`conns::CUT_FLUSH`] more lets the flush land before `fiber_exited`
     /// is written, so every connection streams it. Every line a
@@ -663,13 +668,16 @@ impl Session {
         if self.gate.answered.swap(true, Ordering::Relaxed) {
             return;
         }
-        self.gate.conns.mark_stopped();
-        self.gate.conns.quiet_readers();
         let clock = self.gate.clock.as_ref();
         let until = clock.now() + GRACE;
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.accepted.wait_owed(clock, until);
+        // The reader stop is the last step before the cut: once every
+        // answer owed is on its connection, the readers stop reading
+        // another line.
+        self.gate.conns.mark_stopped();
+        self.gate.conns.quiet_readers();
         self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
             self.gate.accepted.unanswered(reader) > 0
         });

@@ -247,38 +247,62 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     first.send(&import("c_q", &id));
     let writer = world.await_import();
     let held = world.session_pids();
-    first.send(&prompt("c_p", &id, "two"));
 
     let second = world.client();
     subscribe(&second, "c_sub2", &id);
+    // The prompt runs its turn on the free connection before the close, so
+    // no command straddles the quiesce reader stop: a line the reader reads
+    // after the close is answered `closing` at once, on a path with no
+    // ordering against the relayed answers, which no deterministic test can
+    // park on (`docs/invocation.md`, "Lifecycle").
+    second.send(&prompt("c_p", &id, "two"));
+    let prompted = support::recv_answer(&second, "c_p", "the prompt's answer");
+    assert_eq!(prompted["kind"], "command_accepted", "{prompted}");
     second.send(&close(&id));
     // The loop accepts the close before it quiesces: releasing now lets
     // the held import finish inside the quiesce grace, so the held run
     // answers it before `fiber_exited`.
-    support::recv_answer(&second, "c_close", "the closing command");
+    let closing = support::recv_answer(&second, "c_close", "the closing command");
     World::release(writer);
-    until(&second, "fiber_exited", |line| {
+    // Every answer reaches its own connection exactly once.
+    let mut second_lines = vec![prompted, closing];
+    second_lines.extend(until(&second, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
-    });
+    }));
+    assert_eq!(answers(&second_lines, "c_p").len(), 1, "{second_lines:?}");
+    assert_eq!(
+        answers(&second_lines, "c_close").len(),
+        1,
+        "{second_lines:?}"
+    );
     world.await_socket_absent();
     world.await_exit(&held);
 
-    // The resumed run answers `c_p` when its loop takes the prompt, which a
-    // later `tools` answer on the same connection does not wait for: the
-    // test waits for `c_p`'s own answer, then for a barrier after it.
-    let mut lines = until(&first, "c_p's answer", |line| is_answer(line, "c_p"));
+    // `c_after` resumes the session, which is why three runs started.
+    // The released answer streams before the exit line: both reach the
+    // command's own connection in the order the session wrote them.
+    let mut lines = until(&first, "c_q's answer", |line| is_answer(line, "c_q"));
+    lines.extend(until(&first, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    }));
     first.send(&command("c_after", &id, "tools", &json!({})));
     lines.extend(until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
     }));
     assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
     assert_eq!(answers(&lines, "c_q")[0]["kind"], "command_accepted");
-    let prompted = answers(&lines, "c_p");
-    assert_eq!(prompted.len(), 1, "one answer for the prompt: {lines:?}");
-    assert_eq!(prompted[0]["kind"], "command_accepted", "{lines:?}");
+    // The replay carries the setup run's own exit before the answer, so
+    // the exit the assertion pins is the first one after it.
+    let answered_at = position(&lines, "c_q");
+    let exited_at = lines
+        .iter()
+        .enumerate()
+        .find(|(at, line)| *at > answered_at && line["kind"] == "fiber_exited")
+        .map(|(at, _)| at)
+        .expect("fiber_exited streams after the released answer");
     assert!(
-        position(&lines, "c_q") < position(&lines, "c_p"),
-        "answers keep the order the commands were sent in: {lines:?}"
+        answered_at < exited_at,
+        "the released command is answered before fiber_exited: {lines:?}"
     );
     let log = world.log();
     let started: Vec<_> = log
@@ -288,7 +312,7 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     assert_eq!(
         started.len(),
         3,
-        "the ask, the held run and the resumed run"
+        "the ask, the held run and the run c_after resumed"
     );
     assert_eq!(started[2]["payload"]["resumed"], true);
     world.end_session();

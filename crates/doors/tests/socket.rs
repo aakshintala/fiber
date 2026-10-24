@@ -4948,29 +4948,104 @@ fn message_after_the_stopper_is_rejected_closing() {
     opened.close();
 }
 
+/// `docs/invocation.md`, "Lifecycle": a command after `close` and before `fiber_exited` still gets `closing`, except a `close` with `now`, which is accepted and upgrades the close.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
-fn message_after_quiesce_is_never_read() {
+fn message_during_quiesce_is_rejected_closing() {
+    struct Sealed {
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+    }
+    impl contract::extension::ExtensionDoor for Sealed {
+        fn command(
+            &self,
+            _id: &contract::CommandId,
+            _name: &str,
+            _text: &str,
+        ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
+            Err(contract::inbox::Rejection {
+                code: ErrorCode::UnknownCommand,
+                message: "none".into(),
+            })
+        }
+        fn seal(&self) {
+            if let Some(tx) = self.entered.lock().expect("the seal lock").take() {
+                tx.send(()).unwrap_or(());
+            }
+        }
+    }
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
     let session = &opened.session;
+    let (sealed_tx, sealed_rx) = mpsc::channel();
+    let door = Arc::new(Sealed {
+        entered: Mutex::new(Some(sealed_tx)),
+    });
+    opened.session.extensions(door);
+    let (hook_tx, hook_rx) = mpsc::channel();
+    opened.session.close_now(Arc::new(move || {
+        hook_tx.send(()).unwrap_or(());
+    }));
     let (tx, rx) = mpsc::channel();
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
-            session.quiesce();
-            send(&client, &message_line("c_m1", SENDER, "Too late."));
-            // The readers stopped at quiesce, so the line is never read:
-            // no answer is written for it and the inbox stays empty.
-            assert!(
-                client.recv(Deadline::after(Duration::ZERO)).is_none(),
-                "no answer is written for a line never read"
+            // `c_hold` stays owed: the take below never answers it, so
+            // quiesce parks in its answer wait.
+            send(
+                &client,
+                &message_line("c_hold", SENDER, "Hold the quiesce."),
             );
-            assert!(
-                inbox.try_recv().is_err(),
-                "the unread message reached no inbox"
-            );
+            let Delivery::Message(held, hold_ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the hold message is delivered")
+            else {
+                panic!("the hold message is delivered as a message");
+            };
+            assert_eq!(held.command_id.0, "c_hold");
+            thread::scope(|scope| {
+                let (done_tx, done_rx) = mpsc::channel();
+                scope.spawn(move || {
+                    session.quiesce();
+                    done_tx.send(()).unwrap_or(());
+                });
+                // Quiesce seals after marking closed, so the seal means a
+                // later line is already past the close.
+                Deadline::after(DEADLINE)
+                    .recv(&sealed_rx)
+                    .expect("quiesce started");
+                // The readers keep reading through the wait: a line read
+                // after the close is answered `closing` at once.
+                send(&client, &message_line("c_m1", SENDER, "Too late."));
+                let rejected = response(&client, "c_m1");
+                assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+                // A `close` with `now` in the same window is accepted and
+                // upgrades the close.
+                send(
+                    &client,
+                    r#"{"id":"c_now","command":"close","args":{"now":true}}"#,
+                );
+                let upgraded = response(&client, "c_now");
+                assert_eq!(kind(&upgraded), "command_accepted", "{upgraded}");
+                assert_eq!(command_id(&upgraded), Some("c_now"));
+                Deadline::after(DEADLINE)
+                    .recv(&hook_rx)
+                    .expect("the shutdown hook ran");
+                // Both answers landed while quiesce was still parked on the
+                // held message, so before the reader stop and the cut.
+                assert!(
+                    done_rx.try_recv().is_err(),
+                    "quiesce returned before the held answer was released"
+                );
+                // Release the hold: the acknowledgement is written before it
+                // is marked answered, so quiesce returns with every answer
+                // on the connection.
+                hold_ack.0(Ok(None));
+                Deadline::after(DEADLINE)
+                    .recv(&done_rx)
+                    .expect("quiesce returns once the hold is answered");
+            });
             tx.send(client).unwrap();
             Ok(())
         })
@@ -4979,15 +5054,21 @@ fn message_after_quiesce_is_never_read() {
         .recv(&rx)
         .expect("the client outlives the run");
     opened.close();
-    // End of file carries no answer for the unread line.
+    // End of file carries exactly one answer for the held line: its own.
     let mut lines = Vec::new();
     while let Some(line) = client.recv(Deadline::after(DEADLINE)) {
         lines.push(line);
     }
-    assert!(
-        lines.iter().all(|line| command_id(line) != Some("c_m1")),
-        "no answer is written for a line never read: {lines:?}"
+    let held_answers: Vec<&Value> = lines
+        .iter()
+        .filter(|line| command_id(line) == Some("c_hold"))
+        .collect();
+    assert_eq!(
+        held_answers.len(),
+        1,
+        "one answer for the held line: {lines:?}"
     );
+    assert_eq!(kind(held_answers[0]), "command_accepted", "{lines:?}");
 }
 
 #[test]
