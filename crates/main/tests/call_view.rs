@@ -284,19 +284,37 @@ fn temp_id(setup: &Setup) -> String {
 /// The grid's text with the temporary directory redacted, plus every
 /// string in `extra` (a test server's URL, whose port varies). Normalize
 /// the truncated workspace path too: its visible prefix depends on whether
-/// the runner's temp directory is `/tmp` or a longer path.
+/// the runner's temp directory is `/tmp` or a longer path, so any prefix
+/// before `[session]/w` folds to `[workspace]/w`. The title row's pad
+/// before the `auto` status varies with that prefix length, so it folds
+/// to one space.
 fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
     let mut ids = vec![temp_id(setup)];
     ids.extend(extra.iter().cloned());
     let text = grid_text(&grid.rows, grid.cursor, grid.hide_cursor, &ids);
     text.lines()
         .map(|row| {
-            let Some(path) = row.find("tmp/[session]/w") else {
-                return row.to_owned();
+            let mut row = if let Some(path) = row.find("[session]/w") {
+                let path_end = path + "[session]/w".len();
+                let path_start = row[..path].rfind(' ').map_or(0, |space| space + 1);
+                format!("{}[workspace]/w{}", &row[..path_start], &row[path_end..])
+            } else {
+                row.to_owned()
             };
-            let path_end = path + "tmp/[session]/w".len();
-            let path_start = row[..path].rfind(' ').map_or(0, |space| space + 1);
-            format!("{}[workspace]/w{}", &row[..path_start], &row[path_end..])
+            if let Some(marker) = row.find("[workspace]/w") {
+                let after = marker + "[workspace]/w".len();
+                if let Some(status) = row[after..].find("auto") {
+                    let gap = &row[after..after + status];
+                    if !gap.is_empty() && gap.chars().all(|cell| cell == ' ') {
+                        row = format!(
+                            "{}[workspace]/w auto{}",
+                            &row[..marker],
+                            &row[after + status + 4..]
+                        );
+                    }
+                }
+            }
+            row
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -354,14 +372,27 @@ fn any_marked(grid: &Grid) -> bool {
 }
 
 /// Types into the view's find bar and asserts the scoped hit through
-/// the rows' match marks: the tail output row marks, while the
-/// ledger's thought behind the view marks nothing and its marks clear
-/// once the rescan lands.
+/// the rows' match marks and the find-bar count: the tail output row
+/// marks with a `1 of 1` count, while the ledger's thought behind the
+/// view marks nothing and its miss counts `no matches`, with its marks
+/// clearing once the rescan lands.
 fn scoped_search(run: &mut Run) {
     run.write(b"\x06TAIL");
-    run.wait_screen("the scoped tail hit", tail_row_marked);
+    let grid = run.wait_screen("the scoped tail hit", |grid| {
+        tail_row_marked(grid) && grid.rows.iter().any(|row| row.contains("1 of 1"))
+    });
+    assert!(
+        grid.rows.iter().any(|row| row.contains("1 of 1")),
+        "the tail hit counts once"
+    );
     run.write(b"\x7f\x7f\x7f\x7fDoing");
-    run.wait_screen("the scoped miss", |grid| !any_marked(grid));
+    let grid = run.wait_screen("the scoped miss", |grid| {
+        !any_marked(grid) && grid.rows.iter().any(|row| row.contains("no matches"))
+    });
+    assert!(
+        grid.rows.iter().any(|row| row.contains("no matches")),
+        "the ledger thought counts never"
+    );
     // Esc closes the find bar; the view stays open on its footer, and
     // the next `y` copies instead of typing into the bar.
     run.write(b"\x1b[27u");
