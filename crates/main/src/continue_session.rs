@@ -27,6 +27,10 @@ use crate::{ask_failed, failed};
 /// malformed worktree record is `log_corrupt`; a worktree removed after
 /// the shared hold is taken names the old session `session_not_found`.
 /// Every refusal answers before any session line is written.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the continues call takes each launch option once"
+)]
 pub(crate) fn session_continues(
     new: SessionId,
     old: SessionId,

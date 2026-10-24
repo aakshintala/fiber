@@ -128,6 +128,10 @@ pub trait Starter: Send + Sync {
     /// workspace (`docs/invocation.md`, "Isolation"). With `supervised`
     /// true, the session is driven by a program (`docs/permissions.md`,
     /// "Supervised sessions").
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the start call takes each launch option once"
+    )]
     fn start(
         &self,
         id: &SessionId,
