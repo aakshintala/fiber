@@ -50,6 +50,10 @@ mod extension_test;
 )]
 mod feedback;
 mod hub_env;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_list;
 #[allow(
     clippy::result_large_err,
@@ -66,12 +70,20 @@ mod hub_refresh;
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod hub_service;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_status;
 #[allow(
     clippy::result_large_err,
     reason = "every command returns the finest-grained error by value; the error path is cold"
 )]
 mod hub_token;
+#[allow(
+    clippy::result_large_err,
+    reason = "every command returns the finest-grained error by value; the error path is cold"
+)]
 mod hub_unit;
 #[allow(
     clippy::result_large_err,
@@ -203,10 +215,6 @@ pub fn project_of(
     let sessions = log::sessions_dir(home, &project);
     let key = ::config::ProjectKey::new(log::project_key(&project))?;
     Ok((sessions, key))
-}
-
-fn usage(message: impl Into<String>) -> Failure {
-    failure(ErrorCode::Usage, message)
 }
 
 fn failed(code: ErrorCode, e: impl Display) -> Failure {

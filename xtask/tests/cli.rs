@@ -836,8 +836,8 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_report`. Done.\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. Done.\n";
     const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);
@@ -858,6 +858,88 @@ fn ci_needs_passes_fails_and_errors() {
     let (code, out) = xtask(&dir, &["ci-needs"], &[], "");
     assert_eq!(code, 2);
     assert!(out.contains("docs/ci.md"), "{out}");
+}
+
+#[test]
+fn flake_report_prints_one_json_line_per_unmatched_title() {
+    let dir = TempDir::new("xtask-flake-report");
+    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}, {\"title\": \"Flaky test: a\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}, \"events\": {\"9\": {\"ok\": true, \"events\": [{\"event\": \"closed\", \"id\": 1, \"commit_id\": null, \"created_at\": \"2026-10-24T11:00:00Z\"}]}}, \"ancestry\": {}}";
+    assert_eq!(
+        xtask(&dir, &["flake-report"], &[], INPUT),
+        (
+            0,
+            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky test: a\"}\n".to_owned()
+        )
+    );
+    assert_eq!(xtask(&dir, &["flake-report"], &[], "{}").0, 2);
+}
+
+#[test]
+fn flake_report_tested_commit_reopens_when_the_latest_fix_is_an_ancestor() {
+    // The real `git merge-base --is-ancestor` probe: the fix commit is an
+    // ancestor of the tested commit, so the decision reopens. Without the
+    // existence check the probe answers unknown instead.
+    let dir = TempDir::new("xtask-flake-report-ancestry");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    dir.write("fix.txt", "the fix\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "fix"]);
+    let fix = common::git(&dir, &["rev-parse", "HEAD"]);
+    let input = format!(
+        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{fix}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["flake-report", "--tested-commit", &fix],
+            &[],
+            &input
+        ),
+        (
+            0,
+            "{\"action\":\"reopen\",\"issue\":9,\"title\":\"Flaky test: a\"}\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn flake_report_tested_commit_is_unknown_when_the_fix_object_is_missing() {
+    // `git cat-file` fails for an object the checkout lacks, so the probe
+    // answers unknown. A probe stuck at a boolean decides instead.
+    let dir = TempDir::new("xtask-flake-report-missing-fix");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    dir.write("fix.txt", "the fix\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "fix"]);
+    let tested = common::git(&dir, &["rev-parse", "HEAD"]);
+    let missing = "0123456789012345678901234567890123456789";
+    let input = format!(
+        "{{\"flakes\": [{{\"title\": \"Flaky test: a\"}}], \"open\": {{\"ok\": true, \"issues\": []}}, \"closed\": {{\"ok\": true, \"issues\": [{{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}}]}}, \"events\": {{\"9\": {{\"ok\": true, \"events\": [{{\"event\": \"closed\", \"id\": 1, \"commit_id\": \"{missing}\", \"created_at\": \"2026-10-24T11:00:00Z\"}}]}}}}}}"
+    );
+    assert_eq!(
+        xtask(
+            &dir,
+            &["flake-report", "--tested-commit", &tested],
+            &[],
+            &input
+        ),
+        (
+            0,
+            "{\"action\":\"unknown\",\"issue\":9,\"source\":\"ancestry\",\"title\":\"Flaky test: a\"}\n"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn flake_report_events_prints_only_numbers_needing_event_fetches() {
+    let dir = TempDir::new("xtask-flake-report-events");
+    const INPUT: &str = "{\"flakes\": [{\"title\": \"Flaky test: a\"}, {\"title\": \"Flaky test: b\"}], \"open\": {\"ok\": true, \"issues\": [{\"number\": 7, \"title\": \"Flaky test: b\"}]}, \"closed\": {\"ok\": true, \"issues\": [{\"number\": 9, \"title\": \"Flaky test: a\", \"closed_at\": \"2026-10-24T11:00:00Z\"}]}}";
+    assert_eq!(
+        xtask(&dir, &["flake-report-events"], &[], INPUT),
+        (0, "9\n".to_owned())
+    );
+    assert_eq!(xtask(&dir, &["flake-report-events"], &[], "{}").0, 2);
 }
 
 #[test]

@@ -1,9 +1,9 @@
 //! A client's hub list and device tokens (`docs/invocation.md`, "Several hubs").
 use crate::login::{KeyReader, NoEcho, Plain};
-use crate::{failed, usage, with_dirs};
+use crate::{CliError, with_dirs};
 use config::{ConfigError, CredentialFile, CredentialLock, Secret};
+use contract::clock::Clock;
 use contract::commands::hub::{HubCommand, Pair};
-use contract::{ErrorCode, clock::Clock, shapes::Failure};
 use doors::hub::{Address, Hub};
 use serde_json::Value;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -51,27 +51,27 @@ fn add_run(
     input: &mut dyn BufRead,
     err: &mut dyn Write,
     connect: &mut dyn FnMut(&Address) -> Result<Hub, doors::Error>,
-) -> Result<(), Failure> {
-    doors::hub::check_name(name).map_err(door_failure)?;
-    let parsed = Address::parse(address).map_err(door_failure)?;
+) -> Result<(), CliError> {
+    doors::hub::check_name(name).map_err(CliError::Hub)?;
+    let parsed = Address::parse(address).map_err(CliError::Hub)?;
     let held = lock_name(home, name)?;
     if config::get_global(home, &format!("hubs.\"{name}\""))
-        .map_err(crate::mcp::config_failure)?
+        .map_err(CliError::Config)?
         .is_some()
     {
-        return Err(already_declared(name));
+        return Err(CliError::HubAlreadyDeclared {
+            name: name.to_owned(),
+        });
     }
     let paired = matches!(parsed, Address::Web(_));
     if paired {
         let code = keys
             .read_key("pairing code: ", input, err)
-            .map_err(|e| failed(ErrorCode::IoFailed, format!("standard input: {e}")))?;
+            .map_err(CliError::StandardInput)?;
         if code.expose().is_empty() {
-            return Err(usage(
-                "No pairing code was given. Run `fiber --help` for usage.",
-            ));
+            return Err(CliError::HubPairingCodeMissing);
         }
-        let (stream, _) = connect(&parsed).map_err(door_failure)?;
+        let (stream, _) = connect(&parsed).map_err(CliError::Hub)?;
         let answer = crate::sessions::request(
             &mut io::BufReader::new(stream),
             "c_pair",
@@ -79,19 +79,19 @@ fn add_run(
         )
         .map_err(|mut error| {
             error.message = error.message.replace(code.expose(), "[redacted]");
-            error
+            CliError::Forwarded(error)
         })?;
         let token = answer
             .get("token")
             .and_then(Value::as_str)
-            .ok_or_else(|| failed(ErrorCode::IoFailed, "the hub's pairing answer has no token"))?;
+            .ok_or(CliError::HubPairingTokenMissing)?;
         let token = Secret::new(token.into());
         if let Err(error) = config::store_credential(home, "hubs", name, &token) {
             delete_token(home, name, &held, err);
-            return Err(crate::mcp::config_failure(error));
+            return Err(CliError::Config(error));
         }
     }
-    let project = config::ProjectKey::new("hub-list").map_err(crate::mcp::config_failure)?;
+    let project = config::ProjectKey::new("hub-list").map_err(CliError::Config)?;
     match config::insert_entry(
         home,
         home,
@@ -106,7 +106,9 @@ fn add_run(
             if paired {
                 delete_token(home, name, &held, err);
             }
-            return Err(already_declared(name));
+            return Err(CliError::HubAlreadyDeclared {
+                name: name.to_owned(),
+            });
         }
         Err(error) => {
             if paired {
@@ -117,32 +119,31 @@ fn add_run(
     }
     if default {
         config::replace_global(home, "hub.default", Some(Value::String(name.into())))
-            .map_err(crate::mcp::config_failure)?;
+            .map_err(CliError::Config)?;
     }
     Ok(())
 }
 
-fn remove_run(home: &Path, name: &str) -> Result<(), Failure> {
-    doors::hub::check_name(name).map_err(door_failure)?;
+fn remove_run(home: &Path, name: &str) -> Result<(), CliError> {
+    doors::hub::check_name(name).map_err(CliError::Hub)?;
     let held = lock_name(home, name)?;
-    let project = config::ProjectKey::new("hub-list").map_err(crate::mcp::config_failure)?;
+    let project = config::ProjectKey::new("hub-list").map_err(CliError::Config)?;
     let removed = config::remove_entry(home, home, &project, config::Layer::Global, "hubs", name);
     let unsynced = match removed {
         Ok(true) => None,
         Ok(false) => {
-            return Err(usage(format!(
-                "No hub named `{name}` in this client's list. Run `fiber --help` for usage."
-            )));
+            return Err(CliError::HubNotFound {
+                name: name.to_owned(),
+            });
         }
         Err(error @ ConfigError::Unsynced { .. }) => Some(error),
-        Err(error) => return Err(crate::mcp::config_failure(error)),
+        Err(error) => return Err(CliError::Config(error)),
     };
-    config::delete_credential_held(home, "hubs", name, &held)
-        .map_err(crate::mcp::config_failure)?;
+    config::delete_credential_held(home, "hubs", name, &held).map_err(CliError::Config)?;
     config::clear_global_if_equals(home, "hub.default", &Value::String(name.into()))
-        .map_err(crate::mcp::config_failure)?;
+        .map_err(CliError::Config)?;
     if let Some(error) = unsynced {
-        return Err(crate::mcp::config_failure(error));
+        return Err(CliError::Config(error));
     }
     Ok(())
 }
@@ -159,36 +160,21 @@ fn settle_token(
     }
 }
 
-fn entry_failure(error: ConfigError, paired: bool) -> Failure {
-    let message = if paired && matches!(error, ConfigError::Unsynced { .. }) {
-        format!("{error} The device token the entry refers to was kept.")
-    } else {
-        error.to_string()
-    };
-    failed(error.code(), message)
+fn entry_failure(error: ConfigError, paired: bool) -> CliError {
+    CliError::HubEntryFailed {
+        source: error,
+        paired,
+    }
 }
 
-fn door_failure(error: doors::Error) -> Failure {
-    failed(error.code(), error)
-}
-
-fn lock_name(home: &Path, name: &str) -> Result<CredentialLock, Failure> {
+fn lock_name(home: &Path, name: &str) -> Result<CredentialLock, CliError> {
     CredentialFile::new(home, "hubs", name)
-        .map_err(crate::mcp::config_failure)?
+        .map_err(CliError::Config)?
         .try_lock()
-        .map_err(crate::mcp::config_failure)?
-        .ok_or_else(|| {
-            failed(
-                ErrorCode::IoFailed,
-                format!("another `fiber hub add` or `fiber hub remove` of `{name}` is running"),
-            )
+        .map_err(CliError::Config)?
+        .ok_or_else(|| CliError::HubListLocked {
+            name: name.to_owned(),
         })
-}
-
-fn already_declared(name: &str) -> Failure {
-    usage(format!(
-        "`{name}` is already declared in the global layer. Run `fiber hub remove {name}` to remove it first. Run `fiber --help` for usage."
-    ))
 }
 
 fn delete_token(home: &Path, name: &str, held: &CredentialLock, err: &mut dyn Write) {

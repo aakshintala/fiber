@@ -255,6 +255,64 @@ fn a_hub_that_never_gets_a_port_fails_with_the_log() {
 }
 
 #[test]
+fn add_without_a_pairing_code_is_usage_and_stores_nothing() {
+    let setup = Setup::new();
+    let output = add(&setup, "box", "ws://127.0.0.1:1", "", false);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"pairing code: fiber: No pairing code was given. Run `fiber --help` for usage.\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(entry(&setup, "box").is_none());
+}
+
+#[test]
+fn add_of_a_declared_hub_is_usage_and_keeps_the_entry() {
+    let setup = Setup::new();
+    succeeds(&run(&setup, &["hub", "add", "fwd", "unix:/tmp/hub"]));
+    let output = run(&setup, &["hub", "add", "fwd", "unix:/tmp/other"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"fiber: `fwd` is already declared in the global layer. Run `fiber hub remove fwd` to remove it first. Run `fiber --help` for usage.\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(entry(&setup, "fwd"), Some(json!("unix:/tmp/hub")));
+}
+
+#[test]
+fn remove_of_an_unknown_hub_is_usage() {
+    let setup = Setup::new();
+    let output = run(&setup, &["hub", "remove", "nope"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        output.stderr,
+        b"fiber: No hub named `nope` in this client's list. Run `fiber --help` for usage.\n"
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn a_held_name_lock_fails_remove_without_touching_the_entry() {
+    let setup = Setup::new();
+    succeeds(&run(&setup, &["hub", "add", "box", "unix:/tmp/hub"]));
+    let file = config::CredentialFile::new(&setup.home(), "hubs", "box").unwrap();
+    let held = file.try_lock().unwrap().unwrap();
+    let output = run(&setup, &["hub", "remove", "box"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        output.stderr,
+        b"fiber: another `fiber hub add` or `fiber hub remove` of `box` is running\n"
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(entry(&setup, "box"), Some(json!("unix:/tmp/hub")));
+    drop(held);
+    succeeds(&run(&setup, &["hub", "remove", "box"]));
+    assert!(entry(&setup, "box").is_none());
+}
+
+#[test]
 fn unknown_hub_is_usage_before_any_hub_starts() {
     let setup = Setup::new();
     let output = run(&setup, &["sessions", "--hub", "nope"]);

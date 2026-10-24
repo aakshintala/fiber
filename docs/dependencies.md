@@ -14,10 +14,12 @@ promises about memory is
 
 ## Admitting a crate
 
-Every direct dependency of every Fiber crate is listed in the tables on this
-page, with what Fiber uses it for. CI fails when a `Cargo.toml` names a crate
-that is not listed. Adding a crate therefore means editing this page in the
-same pull request.
+Every direct dependency of every Fiber crate that comes from outside the
+workspace is listed in the tables on this page, with what Fiber uses it for.
+CI fails when a `Cargo.toml` names such a crate and it is not listed. Adding
+one therefore means editing this page in the same pull request. Which
+workspace crates may depend on which is set by `docs/architecture.md`, "The
+call rules".
 
 A crate is admitted when:
 

@@ -153,6 +153,166 @@ fn the_installed_hub_binds_answers_status_and_exits_143_on_sigterm() {
     assert_eq!(hub.wait().code(), Some(143));
 }
 
+/// A fake hub on the home's `run/hub`: it says `hub_hello`, reads the one
+/// command line so the close or answer below cannot race the handshake,
+/// then runs `then`.
+fn fake_status_hub(
+    setup: &Setup,
+    then: impl FnOnce(std::os::unix::net::UnixStream) + Send + 'static,
+) {
+    use std::io::{BufRead, Write};
+    let socket = setup.hub_socket();
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let hello = serde_json::json!({
+            "kind": "hub_hello", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION, "payload": {},
+        });
+        writeln!(stream, "{hello}").unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        then(stream);
+    });
+}
+
+#[test]
+fn status_with_an_invalid_hub_port_is_a_config_error() {
+    let setup = Setup::new();
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"hub": {"port": 70000}}"#,
+    )
+    .unwrap();
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "fiber: hub.port in {} is not a port: 70000\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn status_with_an_unreadable_devices_dir_is_an_io_error() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.home().join("hub")).unwrap();
+    fs::write(setup.home().join("hub/devices"), b"x").unwrap();
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "fiber: reading {}: Not a directory (os error 20)\n",
+            setup.home().join("hub/devices").display()
+        )
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn status_reports_a_hub_that_closes_before_answering() {
+    let setup = Setup::new();
+    fake_status_hub(&setup, drop);
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "fiber: the hub closed the connection before answering status\n"
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn status_reports_a_rejection_with_its_code() {
+    let setup = Setup::new();
+    fake_status_hub(&setup, |mut stream| {
+        use std::io::Write;
+        let rejected = serde_json::json!({
+            "kind": "command_rejected", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_status", "code": "invalid_arguments", "message": "nope"},
+        });
+        writeln!(stream, "{rejected}").unwrap();
+    });
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "fiber: nope\n");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn status_reports_an_answer_missing_its_fields() {
+    let setup = Setup::new();
+    fake_status_hub(&setup, |mut stream| {
+        use std::io::Write;
+        let bare = serde_json::json!({
+            "kind": "command_accepted", "ts": 1,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": {"command_id": "c_status", "result": {"running": true}},
+        });
+        writeln!(stream, "{bare}").unwrap();
+    });
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub status",
+        setup.fiber(&["hub", "status"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "fiber: the hub's answer to status has no fiber_version or clients\n"
+    );
+    assert!(output.stdout.is_empty());
+}
+
 #[test]
 fn install_with_port_0_is_a_usage_error_that_writes_nothing() {
     let setup = Setup::new();
