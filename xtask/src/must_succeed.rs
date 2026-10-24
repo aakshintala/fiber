@@ -110,8 +110,6 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         ABSENT,
     ),
     kept("crates/cli/src/doctor/files_tests.rs", "ABSENT", ABSENT),
-    held("crates/hub/src/idle_tests.rs", "held by #3009"),
-    held("crates/hub/src/port_tests.rs", "held by #3009"),
     held("crates/main/tests/delegates.rs", "held by #3001"),
 ];
 
