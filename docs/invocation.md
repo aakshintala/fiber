@@ -112,17 +112,19 @@ groups, then the flags and examples.
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
-| `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
+| `continue [--hub <name>]` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With `--hub`, it opens the most recent session on that hub in any project, since a client has no launch directory there. With none, it is a usage error naming `fiber`. |
 | `sessions [--all] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. |
 | `sessions search [--all] [--json] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. |
-| `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
+| `sessions delete [--cascade] [--yes] [--hub <name>] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
-| `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
+| `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes] [--hub <name>]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
 | `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one notice per provider and missing setting on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
-outside one it is every project. `sessions --all` lists every project.
+outside one it is every project. With `--hub`, `continue`, `sessions delete`
+and `sessions prune` never read this machine's directory or logs: their scope
+is every project on that hub. `sessions --all` lists every project.
 
 `models` prints each provider's cached model list at once, and runs a
 provider's `models()` only when it has no cached copy. A list older than
@@ -1090,6 +1092,7 @@ websocket for everything it does.
 | `sessions` | `project` (string, optional) | Answers once with the latest `session_status` of every running top-level session and the `recent.jsonl` row of every exited one, newest first, delegates skipped, each session once. `project` keeps only that project's sessions, as for `recent`. A hub that has just started answers once it has read `run/` and each session it found there has sent its `session_status` or closed; a session that stays silent holds it for at most one rescan past the read. A session started since the hub last read `run/` can be missing, as it is from the feed. |
 | `start` | `workspace` (string), `model` (string, optional), `overrides` (array of strings, optional), `worktree` (boolean, optional), `continues` (string, optional), `content` (optional), `supervised` (boolean, optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `supervised` true, the session is driven by a program, a supervisor outside Fiber, and `session_started` records it: it follows the delegate rules (`docs/permissions.md`, "Supervised sessions") and stays top-level, in the feed. Each of `overrides` is a `key=value` passed to the session as `-c` ("Commands and flags"). With `worktree` true, the session runs in a new worktree of the workspace ("Isolation"). With `continues` naming a session id, the session runs in that session's worktree instead of a new one, and the workspace must be that worktree's path ("Isolation"). An unknown session, a missing log, or a removed worktree refuses `session_not_found`; `continues` with `worktree` true, a named session with no worktree, and a workspace that is not the worktree refuse `invalid_arguments`. With `content`, the hub sends it as the session's first prompt after answering: once the session has accepted a `full` `subscribe` for the new session from the connection that sent `start`, at once when that connection closes first, or 1 second after the answer when neither has happened. A client that subscribes `full` when it reads the answer is connected when the session takes the prompt, so it can answer the repository's offer (`docs/extensions.md`, "Code a repository ships"); for a connection that never subscribes `full`, such as a script's, the session takes the prompt after the bound, and it decides with nobody to answer unless another `full` client is connected by then. A `content` that does not fit `prompt`'s `args` is rejected `invalid_arguments` before any session starts. A rejection of the first prompt after the answer is logged, not answered: the hub writes the session id, the `start` command id and the code to `logs/hub.log`, and no client is told. |
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
+| `prune` | `older_than` (string, optional, a duration such as `30d`), `cascade` (boolean, optional), `force` (boolean, optional), `dry_run` (boolean, optional) | Prunes the hub's machine across every project, as `fiber sessions prune` does there ("Deleting and pruning"), and answers with what it deleted, or with `dry_run` what it would delete, each line as prune prints it, and the space freed or that would be freed. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
@@ -1402,6 +1405,10 @@ session:
   session and everything `--cascade` adds. On the command line `--yes`
   confirms; without it the command lists what it would delete and asks, and
   with no terminal to ask on it is a usage error.
+- **With `--hub`, the id resolves on that hub.** The command matches it
+  against that hub's `sessions` answer, across every project, as
+  `fiber resume --hub` does, then sends that hub `delete`. `--cascade` and
+  `--yes` work as they do locally.
 - **A kept worktree the session made stays.** Pruning removes worktrees.
 - **`recent.jsonl` keeps the session's row.** Nothing rewrites that file, and
   readers skip a row whose session directory is gone (`docs/state.md`,
@@ -1452,6 +1459,10 @@ that hold nothing to lose:
 - **What it frees.** `--dry-run` prints what prune would delete and the space
   it would free, and deletes nothing. Otherwise prune prints the same list,
   asks as delete does (`--yes` confirms), deletes, and prints the space freed.
+- **With `--hub`, the hub prunes its own machine.** The command sends that
+  hub `prune`, and the hub runs everything above on its machine across every
+  project. Without `--yes` the command first sends it with `dry_run`, prints
+  the answer and asks; the confirmation stays with the client.
 
 ## The delegation supervisor is external
 
