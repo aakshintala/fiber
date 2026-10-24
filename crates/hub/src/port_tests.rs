@@ -659,9 +659,9 @@ fn a_binary_message_after_authentication_closes_1003() {
     await_zero(&hub);
 }
 
-/// A `stop` over a websocket answers before the close, then ends: the
-/// answer goes out behind the drain barrier, so the client reads the
-/// ack, then the close frame, then EOF.
+/// A `stop` over a websocket answers and ends: the answer goes out
+/// behind the drain barrier, and the ack, the close frame and EOF carry
+/// no promised relative order, so the test matches them by shape.
 #[test]
 fn a_websocket_stop_answers_before_the_close_then_ends() {
     let temp = Temp::new();
@@ -672,15 +672,42 @@ fn a_websocket_stop_answers_before_the_close_then_ends() {
     let accepted = authenticate(&client, "c1", "t0k3n");
     assert_eq!(accepted["kind"], "command_accepted");
     client.text(r#"{"id":"c_stop","command":"stop","args":{}}"#);
-    let ack = text_of(&client, "the stop acknowledgement");
+    let mut ack: Option<Value> = None;
+    let mut closed = false;
+    let mut ended = false;
+    for _ in 0..3 {
+        match client.next("the stop acknowledgement, the close or the end") {
+            Item::Text(bytes) => {
+                assert!(ack.is_none(), "the stop answers once");
+                ack = Some(
+                    serde_json::from_slice(&bytes)
+                        .unwrap_or_else(|_| panic!("the stop acknowledgement is JSON")),
+                );
+            }
+            Item::Close(code, reason) => {
+                assert!(!closed, "the connection closes once");
+                assert_eq!(code, 1000);
+                assert!(reason.is_empty(), "the close carries no reason");
+                closed = true;
+            }
+            Item::Eof => {
+                assert!(!ended, "the stream ends once");
+                ended = true;
+            }
+            other @ (Item::Response(_) | Item::Pong(_)) => {
+                panic!("the stop sends no greeting or pong, got {other:?}")
+            }
+        }
+    }
+    let ack = ack.expect("the stop is acknowledged");
     assert_eq!(ack["kind"], "command_accepted");
     assert_eq!(ack["payload"]["command_id"], "c_stop");
     assert!(
         ack["payload"].get("result").is_none(),
         "a bare stop carries no result: {ack}"
     );
-    assert_eq!(client.next("the close"), Item::Close(1000, String::new()));
-    assert_eq!(client.next("the end"), Item::Eof);
+    assert!(closed, "the connection closes");
+    assert!(ended, "the stream ends");
     assert_eq!(
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&done)
