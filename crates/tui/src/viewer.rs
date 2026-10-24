@@ -4,12 +4,9 @@
 //! `cache/images/` in Fiber home (`docs/state.md`), which is always
 //! safe to delete.
 
-use std::collections::hash_map::RandomState;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
-use std::hash::BuildHasher;
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::fs::{self};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -92,29 +89,9 @@ fn write_copy(
         .map_err(|error| format!("`{}` could not be written: {error}", dir.display()))?;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("`{}` could not be written: {error}", dir.display()))?;
-    let tmp = dir.join(format!(
-        ".{session}-{name}.{:016x}.tmp",
-        RandomState::new().hash_one(name)
-    ));
-    let wrote = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
-        .map_err(|error| format!("`{name}` could not be written: {error}"))
-        .and_then(|mut file| {
-            file.write_all(bytes)
-                .map_err(|error| format!("`{name}` could not be written: {error}"))
-        });
-    if let Err(error) = wrote {
-        fs::remove_file(&tmp).unwrap_or(());
-        return Err(error);
-    }
     let path = dir.join(format!("{session}-{name}"));
-    if let Err(error) = fs::rename(&tmp, &path) {
-        fs::remove_file(&tmp).unwrap_or(());
-        return Err(format!("`{name}` could not be written: {error}"));
-    }
+    support::write_atomic(&path, bytes, 0o600)
+        .map_err(|error| format!("`{name}` could not be written: {error}"))?;
     Ok(path)
 }
 
