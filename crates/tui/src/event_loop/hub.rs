@@ -70,12 +70,6 @@ fn earlier(frame_deadline: Option<Instant>, wait_deadline: Instant) -> Option<In
     Some(frame_deadline.map_or(wait_deadline, |at| at.min(wait_deadline)))
 }
 
-/// Sets the hub stream's write timeout: [`HISTORY_WAIT`] in production,
-/// a short limit in the kernel test forcing a blocked write.
-pub(super) fn set_write_timeout(stream: &UnixStream, timeout: Duration) -> std::io::Result<()> {
-    stream.set_write_timeout(Some(timeout))
-}
-
 /// The hub stream, the held inputs and the hub thread's permit, with the
 /// interface the loop uses. All state stays private: the loop passes the
 /// app and the tick to each method that needs them.
@@ -209,7 +203,7 @@ impl Connection {
     /// `send` hangs up. A setup that fails leaves no stream: the
     /// `Connected` handler reads that as a failed connection.
     pub(super) fn store(&mut self, stream: UnixStream) {
-        self.store_with(stream, |end| set_write_timeout(end, HISTORY_WAIT));
+        self.store_with(stream, |end| end.set_write_timeout(Some(HISTORY_WAIT)));
     }
 
     /// Stores the connected stream with `set` as its write-timeout

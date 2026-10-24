@@ -4321,9 +4321,12 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     // The key may have reached the wait before the clock moved, ending
     // the wait on the tick, or after, ending it on the key with the tick
     // still queued: either way the stash and the loss match, so drain to
-    // the disconnect, acking a stray tick.
+    // the disconnect, acking a stray tick. One deadline for the whole
+    // drain (docs/testing.md, "Waits and timeouts"): a fresh deadline
+    // per receive would keep resetting the wait.
+    let drain = Deadline::after(DEADLINE);
     loop {
-        match Deadline::after(DEADLINE).recv(&rx) {
+        match drain.recv(&rx) {
             Ok(Input::Disconnected) => {
                 lp.hub.on_disconnected(&mut lp.app);
                 break;
@@ -4333,15 +4336,24 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
             Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
         }
     }
+    // The loss reconnects as after a disconnect (docs/tui.md, "History
+    // and paging", and "A dropped connection" for the banner and the
+    // draft staying).
     assert_eq!(
         lp.app.banner().as_deref(),
         Some("Connection lost · reconnecting (attempt 1)…")
     );
-    // The key pressed during the wait lands in the draft under the
-    // banner once handled as a key pressed while disconnected.
-    let stashed = lp.hub.stashed();
-    assert_eq!(stashed.len(), 1);
-    assert!(matches!(&stashed[0], Input::Bytes(bytes) if bytes.as_slice() == b"x"));
+    // The key pressed during the wait waits stashed (docs/tui.md,
+    // "History and paging": stashed lines fold in order): every stashed
+    // line is that key, however many the wait held — no count, just
+    // what the wait held.
+    assert!(
+        lp.hub
+            .stashed()
+            .iter()
+            .all(|input| matches!(input, Input::Bytes(bytes) if bytes.as_slice() == b"x")),
+        "the wait stashed only the key pressed during it"
+    );
     let Some(first) = lp.hub.take_batch(&rx) else {
         panic!("the stashed key");
     };
@@ -4405,7 +4417,6 @@ fn an_answer_just_before_the_deadline_draws() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Ok(super::super::hub::Answer::Lines(want)));
     assert!(lp.hub.has_stream(), "no hang-up before the deadline");
-    assert_eq!(lp.hub.stashed().len(), 0);
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 
@@ -4451,10 +4462,14 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the expired wait hangs up");
-    let stashed = lp.hub.stashed();
-    assert_eq!(stashed.len(), 1);
+    // The input at the deadline waits for after the loss (docs/tui.md,
+    // "History and paging": stashed lines fold in order): the matching
+    // answer is among what the wait held, however many lines that is.
     assert!(
-        matches!(&stashed[0], Input::Hub(Line::Session(line)) if answers(line, "a_1")),
+        lp.hub
+            .stashed()
+            .iter()
+            .any(|input| matches!(input, Input::Hub(Line::Session(line)) if answers(line, "a_1"))),
         "the matching answer waits stashed"
     );
 }
@@ -4486,7 +4501,6 @@ fn a_tick_at_the_deadline_ends_the_wait_before_a_late_answer() {
     ))))
     .unwrap_or_else(|err| panic!("send: {err}"));
     assert!(matches!(rx.try_recv(), Ok(Input::Hub(_))));
-    assert_eq!(lp.hub.stashed().len(), 0);
 }
 
 /// A frame deadline earlier than the wait's wakes the wait first: its
@@ -4509,9 +4523,15 @@ fn a_frame_tick_during_the_wait_is_acked_and_the_answer_draws() {
         clock.await_parked(frame, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
     );
-    clock.advance(Duration::from_millis(120));
-    // The tick woke the wait and was acked: the answer still draws, and
-    // the stream stays up.
+    let mark = clock.advance_marked(Duration::from_millis(120));
+    // The re-arm proves the tick was received and acked before the
+    // answer is sent: the wait holds at its own deadline again, so the
+    // answer cannot win the race.
+    let deadline = wait_deadline(&clock);
+    assert!(
+        clock.await_parked_since(&mark, Some(deadline), Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to re-park at the wait's deadline after the tick"
+    );
     tx.send(Input::Hub(Line::Session(command_answer(
         "a_1",
         want.clone(),
@@ -4596,7 +4616,8 @@ fn a_blocked_hub_write_ends_in_its_timeout() {
     std::thread::Builder::new()
         .name("attach-write-timeout".to_owned())
         .spawn(move || {
-            let result = super::super::hub::set_write_timeout(&ours, Duration::from_millis(100))
+            let result = ours
+                .set_write_timeout(Some(Duration::from_millis(100)))
                 .and_then(|()| crate::link::write_line(&ours, &"x".repeat(65536)));
             done.send(result.map_err(|error| error.kind()))
                 .unwrap_or(());
