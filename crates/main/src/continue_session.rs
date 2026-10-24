@@ -35,6 +35,7 @@ pub(crate) fn session_continues(
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
+    supervised: bool,
 ) -> i32 {
     // One reads for the process, cancelled when this returns whatever the
     // result; there is no worktree isolation to outlive here.
@@ -95,6 +96,7 @@ pub(crate) fn session_continues(
         None,
         None,
         reads,
+        supervised,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

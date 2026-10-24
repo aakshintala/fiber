@@ -464,6 +464,7 @@ fn start_runs_the_recorded_path() {
         &[],
         false,
         None,
+        false,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded start");
@@ -480,6 +481,7 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
         &["retry.attempts=2", "model=fake/m2"],
         false,
         None,
+        false,
         false,
     );
     assert_eq!(command.get_program(), "/bin/fiber");
@@ -504,6 +506,7 @@ fn start_command_passes_each_override_as_its_own_dash_c_in_order() {
         &[],
         false,
         None,
+        false,
         false,
     );
     assert_eq!(
@@ -609,6 +612,7 @@ fn start_runs_with_the_published_environment_and_the_flag() {
         &[],
         false,
         None,
+        false,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");
@@ -711,6 +715,7 @@ fn an_inherited_environment_runs_without_the_flag() {
         &[],
         false,
         None,
+        false,
     )
     .unwrap();
     assert_eq!(exit_of(started).message, "recorded");
@@ -794,6 +799,7 @@ fn start_command_passes_continues_only_when_set() {
         false,
         Some(&old),
         false,
+        false,
     );
     assert_eq!(
         args_of(&with),
@@ -812,6 +818,7 @@ fn start_command_passes_continues_only_when_set() {
         &[],
         false,
         None,
+        false,
         false,
     );
     assert!(
@@ -833,6 +840,7 @@ fn start_command_passes_worktree_only_when_set() {
         true,
         None,
         false,
+        false,
     );
     assert!(args_of(&with).contains(&"--worktree".to_owned()));
     let without = start_command(
@@ -843,6 +851,7 @@ fn start_command_passes_worktree_only_when_set() {
         &[],
         false,
         None,
+        false,
         false,
     );
     assert!(!args_of(&without).contains(&"--worktree".to_owned()));

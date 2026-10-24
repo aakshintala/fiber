@@ -448,6 +448,47 @@ fn reason_follows_the_documented_transitions() {
     }
 }
 
+/// A `status_of` status driven by a program: only `finished` is
+/// suppressed for it (`docs/permissions.md`, "Supervised sessions").
+fn supervised(state: &str, request: Option<&str>) -> SessionStatus {
+    let mut now = status_of(state, request, S, None);
+    now.supervised = true;
+    now
+}
+
+#[test]
+fn reason_sends_no_finished_for_a_supervised_session() {
+    let was_tool = supervised("tool", None);
+    let now_idle = supervised("idle", None);
+    let idle_after_tool = Facts {
+        before: Some(Seen {
+            status: &was_tool,
+            live: true,
+        }),
+        unseen: false,
+        fresh: true,
+        announced: &announced(None, None),
+    };
+    assert_eq!(reason(&now_idle, &idle_after_tool), None);
+    let unseen = Facts {
+        before: None,
+        unseen: true,
+        fresh: true,
+        announced: &announced(None, None),
+    };
+    assert_eq!(reason(&now_idle, &unseen), None);
+    // Only `finished` is suppressed: a waiting supervised session still
+    // reports, as documented (`docs/invocation.md`, "Attention").
+    let now_waiting = supervised("waiting", Some("r1"));
+    let waiting = Facts {
+        before: None,
+        unseen: false,
+        fresh: true,
+        announced: &announced(None, None),
+    };
+    assert_eq!(reason(&now_waiting, &waiting), Some(Reason::Waiting));
+}
+
 #[test]
 fn ended_unseen_needs_a_since_at_or_after_the_hub_start() {
     let held = fakes::TempDir::new("hb");

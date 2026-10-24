@@ -60,12 +60,16 @@ pub(crate) struct Facts<'a> {
     pub(crate) announced: &'a Announced,
 }
 
-/// The attention `now` calls for. None for a delegate.
+/// The attention `now` calls for. None for a delegate, and no `finished`
+/// for a supervised session: it stays in the feed, but a program drives
+/// it, so it sends no attention line (`docs/permissions.md`, "Supervised
+/// sessions"). Only `finished` is suppressed: `waiting` still reports, as
+/// documented (`docs/invocation.md`, "Attention").
 pub(crate) fn reason(now: &SessionStatus, facts: &Facts<'_>) -> Option<Reason> {
     if now.parent.is_some() {
         return None;
     }
-    match &now.state {
+    let reason = match &now.state {
         SessionState::Waiting { waiting } => {
             if facts.announced.request.as_ref() == Some(&waiting.request_id) {
                 None
@@ -75,21 +79,22 @@ pub(crate) fn reason(now: &SessionStatus, facts: &Facts<'_>) -> Option<Reason> {
         }
         SessionState::Idle => {
             if !facts.fresh || facts.announced.since == Some(now.since) {
-                return None;
-            }
-            match facts.before {
-                Some(seen) if seen.live => match &seen.status.state {
-                    SessionState::Streaming
-                    | SessionState::Tool { .. }
-                    | SessionState::Retrying
-                    | SessionState::Waiting { .. } => Some(Reason::Finished),
-                    SessionState::Jobs | SessionState::Idle => None,
-                },
-                _ => {
-                    if facts.unseen {
-                        Some(Reason::Finished)
-                    } else {
-                        None
+                None
+            } else {
+                match facts.before {
+                    Some(seen) if seen.live => match &seen.status.state {
+                        SessionState::Streaming
+                        | SessionState::Tool { .. }
+                        | SessionState::Retrying
+                        | SessionState::Waiting { .. } => Some(Reason::Finished),
+                        SessionState::Jobs | SessionState::Idle => None,
+                    },
+                    _ => {
+                        if facts.unseen {
+                            Some(Reason::Finished)
+                        } else {
+                            None
+                        }
                     }
                 }
             }
@@ -98,6 +103,13 @@ pub(crate) fn reason(now: &SessionStatus, facts: &Facts<'_>) -> Option<Reason> {
         | SessionState::Tool { .. }
         | SessionState::Retrying
         | SessionState::Jobs => None,
+    };
+    // A supervised session sends no `finished` attention; every other
+    // shape reports as documented.
+    if now.supervised && reason == Some(Reason::Finished) {
+        None
+    } else {
+        reason
     }
 }
 

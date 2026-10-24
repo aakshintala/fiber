@@ -558,7 +558,11 @@ fn resumed_session(
     ));
     extensions.model_to(host_model.clone());
     extensions.delegate_to(Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>);
-    let answerable = !one_turn;
+    // A resume restores the flag from the log's first line: a supervised
+    // resume stays unanswerable even when a person drives it
+    // (`docs/permissions.md`, "Supervised sessions").
+    let supervised = folded.supervised;
+    let answerable = crate::session_command::effective_answerable(!one_turn, supervised);
     extensions.answerable(answerable);
     extensions.browse_with(
         Arc::new(extensions::SystemBrowser::default()),
@@ -723,6 +727,7 @@ fn resumed_session(
                 warm,
                 // `fiber ask --resume` runs one turn with no client.
                 !one_turn,
+                supervised,
                 reviewer,
                 limits,
                 retry,
