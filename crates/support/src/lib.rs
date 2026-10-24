@@ -1,13 +1,18 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
 //! process clock and the clock-parked wait, the cancel signal, the process-group
 //! guard, the poison-ignoring `lock`, the admission lock, the stoppable read, the line
-//! framing, lowercase hex and SHA-256, the `mint` id, and the scrubbed `git`
+//! framing, lowercase hex and SHA-256, the `mint` id, the atomic file write,
+//! and the scrubbed `git`
 //! command builder (`docs/architecture.md`, "The modules").
 
 use std::sync::{Mutex, MutexGuard};
 
 /// The admission lock: a door that admits until it is closed, once and for good.
 pub mod admission;
+
+/// An atomic whole-file write: bytes synced to a temporary beside the
+/// destination, then renamed over it.
+pub mod atomic;
 
 /// The cancel signal a call watches, and the `Cancel` trait behind it
 /// (`docs/tools.md`, "Cancellation").
@@ -40,6 +45,8 @@ mod hex;
 
 /// Text on one line: control characters as spaces.
 pub mod text;
+
+pub use atomic::write_atomic;
 
 pub use hex::{hex, sha256_hex};
 

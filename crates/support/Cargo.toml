@@ -11,7 +11,11 @@ ring.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 
+[features]
+test-hooks = []
+
 [dev-dependencies]
+support = { path = ".", features = ["test-hooks"] }
 fakes = { path = "../fakes" }
 
 [lints]
