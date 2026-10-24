@@ -18,8 +18,9 @@ use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
@@ -142,11 +143,11 @@ impl Setup {
             }
         });
         let (err_tx, stderr_rx) = mpsc::channel();
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
         thread::spawn(move || {
-            let mut text = String::new();
-            match std::io::Read::read_to_string(&mut BufReader::new(stderr_pipe), &mut text) {
-                Ok(_) | Err(_) => {}
-            }
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = support::drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             match err_tx.send(text) {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
@@ -159,8 +160,10 @@ impl Setup {
                 guard,
                 lines,
                 stderr: stderr_rx,
+                stderr_snapshot,
                 first: Vec::new(),
                 deadline: self.deadline,
+                diag: None,
             },
             stdin,
         )
@@ -264,10 +267,16 @@ struct Running {
     guard: KillGroup,
     lines: mpsc::Receiver<String>,
     stderr: mpsc::Receiver<String>,
+    /// The stderr text so far, appended by the drain thread: the timeout
+    /// dump reads it while the session still runs.
+    stderr_snapshot: Arc<Mutex<String>>,
     /// Stdout lines taken as the readiness signal, as written, prepended
     /// to what [`Running::wait`] returns.
     first: Vec<String>,
     deadline: Deadline,
+    /// The timeout dump's log directory, carried onto the socket at
+    /// [`Running::connect`].
+    diag: Option<PathBuf>,
 }
 
 impl Running {
@@ -275,6 +284,13 @@ impl Running {
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
+    /// Registers the session log directory for the timeout dump: the next
+    /// [`Running::connect`] carries it and the stderr snapshot onto the
+    /// socket. Without it the socket keeps the old timeout message.
+    fn set_diag(&mut self, log_dir: PathBuf) {
+        self.diag = Some(log_dir);
+    }
+
     #[track_caller]
     fn connect(&mut self, socket: &Path) -> Socket {
         let line = match self.deadline.recv(&self.lines) {
@@ -287,8 +303,15 @@ impl Running {
             }
         };
         self.first.push(line);
-        Socket::connect(self.deadline, socket)
-            .expect("the session's socket accepted before the deadline")
+        let mut client = Socket::connect(self.deadline, socket)
+            .expect("the session's socket accepted before the deadline");
+        if let Some(log_dir) = self.diag.clone() {
+            client.set_diag(support::Diag::new(
+                Arc::clone(&self.stderr_snapshot),
+                log_dir,
+            ));
+        }
+        client
     }
 
     /// Reads stdout lines until one of `kind` arrives, each taking what
@@ -383,6 +406,8 @@ impl Running {
 struct Socket {
     write: Mutex<UnixStream>,
     read: Mutex<BufReader<UnixStream>>,
+    /// Context for the timeout dump, carried from [`Running::connect`].
+    diag: Option<support::Diag>,
     deadline: Deadline,
 }
 
@@ -400,8 +425,20 @@ impl Socket {
         Ok(Self {
             write: Mutex::new(write),
             read: Mutex::new(BufReader::new(read)),
+            diag: None,
             deadline,
         })
+    }
+
+    fn set_diag(&mut self, diag: support::Diag) {
+        self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     #[track_caller]
@@ -427,9 +464,10 @@ impl Socket {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error) if error.kind() == ErrorKind::TimedOut => {
-                panic!("waited until the deadline for {what}; got {got:?}")
-            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
+                Some(diag) => panic!("{}", diag.report(what, got)),
+                None => panic!("waited until the deadline for {what}; got {got:?}"),
+            },
             Err(error) => {
                 panic!("reading the session socket while waiting for {what}: {error}")
             }
@@ -2146,6 +2184,7 @@ fn job_session(
     setup.provider(server);
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
     let client = running.connect(&setup.socket(&id));
     running.wait_for("extensions_loaded");
     send(
@@ -2165,6 +2204,76 @@ fn job_session(
     // process dies.
     std::mem::forget(Watchdog::group(job_group));
     (running, client, job_group, id)
+}
+
+#[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
+    let mut client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the socket never closes: the close wait then
+    // expires on a zero bound instead of spending what remains of the
+    // test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = until_session(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_prompt"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..1000 {
+            match client.next("the session to close the socket", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the session closed the socket while waiting for the timeout; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered while waiting for the timeout; got {got:?}");
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    support::assert_timeout_dump(&message);
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    drop(client);
+    let group = running.group;
+    let cleanup = running.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let mut child = running.child;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    match cleanup.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    running.watchdog.stand_down(cleanup);
+    std::mem::forget(running.guard);
 }
 
 #[test]
