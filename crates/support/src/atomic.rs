@@ -116,6 +116,35 @@ fn call_count() -> usize {
     })
 }
 
+// Every `write_atomic` call on this thread, whatever its outcome, so a
+// test can assert how many writes an operation made. Unlike the private
+// count behind `fail_nth`, this one runs whether or not a failure is
+// armed. Test-only; non-test builds never count.
+#[cfg(feature = "test-hooks")]
+thread_local! {
+    static WRITE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Bumps the [`write_count`] counter once per [`write_atomic`] entry.
+#[cfg(feature = "test-hooks")]
+fn count_write() {
+    WRITE_COUNT.with(|cell| cell.set(cell.get().saturating_add(1)));
+}
+
+/// How many [`write_atomic`] calls this thread made since the last
+/// [`reset_write_count`]. Test-only; non-test builds never count.
+#[cfg(feature = "test-hooks")]
+pub fn write_count() -> usize {
+    WRITE_COUNT.with(|cell| cell.get())
+}
+
+/// Zeroes this thread's [`write_count`]. Test-only; non-test builds never
+/// count.
+#[cfg(feature = "test-hooks")]
+pub fn reset_write_count() {
+    WRITE_COUNT.with(|cell| cell.set(0));
+}
+
 /// Whether [`fail_nth`] armed the `call`th [`write_atomic`] call to fail
 /// at `stage`.
 #[cfg(feature = "test-hooks")]
@@ -129,6 +158,8 @@ fn fail_nth_stage(call: usize, stage: Stage) -> bool {
 pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
     #[cfg(feature = "test-hooks")]
     let call = call_count();
+    #[cfg(feature = "test-hooks")]
+    count_write();
     let pid = std::process::id();
     let (tmp, mut out) = {
         let mut tried = 0;
