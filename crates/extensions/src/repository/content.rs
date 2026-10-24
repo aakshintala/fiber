@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 use super::declared::RepoItem;
 use super::kind_name;
 use crate::Error;
-use crate::install::{io as io_error, unique_name};
+use crate::install::io as io_error;
 
 // debt: a file opened after its path was resolved and checked inside the
 // repository can be swapped for a link to outside in the window between the
@@ -105,18 +105,8 @@ impl Index {
                 }),
             );
         }
-        let Some(name) = file.file_name() else {
-            return Err(io_error(file)(io::Error::other(
-                "the index file has no file name",
-            )));
-        };
-        let temp = file.with_file_name(unique_name(&format!("{}.tmp", name.to_string_lossy())));
-        let written =
-            fs::write(&temp, Value::Object(map).to_string()).and_then(|()| fs::rename(&temp, file));
-        if let Err(e) = written {
-            fs::remove_file(&temp).unwrap_or(());
-            return Err(io_error(file)(e));
-        }
+        support::write_atomic(file, Value::Object(map).to_string().as_bytes(), 0o666)
+            .map_err(io_error(file))?;
         self.dirty = false;
         Ok(())
     }
