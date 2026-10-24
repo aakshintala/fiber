@@ -506,8 +506,20 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
         1,
         "exactly one answer for the prompt: {lines:?}"
     );
-    assert_eq!(prompted[0]["kind"], "command_rejected", "{lines:?}");
-    assert_eq!(prompted[0]["payload"]["code"], "closing", "{lines:?}");
+    assert_eq!(
+        prompted[0]["kind"],
+        "command_rejected",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
+    assert_eq!(
+        prompted[0]["payload"]["code"],
+        "closing",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
     assert!(
         position(&lines, "c_q") < position(&lines, "c_q2")
             && position(&lines, "c_q2") < position(&lines, "c_p"),
