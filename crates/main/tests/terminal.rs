@@ -1162,7 +1162,9 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     run.wait_screen("the finished turn", |grid| {
         grid.contents.contains("completed")
     });
-    run.wait_screen("the spend row", |grid| grid.contents.contains("cache hits"));
+    run.wait_screen("the final usage rows", |grid| {
+        grid.contents.contains("10 / 3") && grid.contents.contains("40%")
+    });
     // The card draws top-down, its bottom edge lands last, and the `cost`
     // row lands later still (`crates/tui/src/view/panel.rs`, `session_rows`):
     // wait for the edge at the panel columns and the whole-word `cost` label
