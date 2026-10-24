@@ -1543,9 +1543,8 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     }
 }
 
-/// The escalation test's parent stream kinds in order, setting aside
-/// `session_status`, `clients` and `attention` per `docs/testing.md`
-/// ("Event streams"). Pinned from a real run.
+/// An escalation parent fixture. Only its non-usage skeleton is ordered;
+/// copied and reviewer usage are checked as bounded multisets.
 const ESC_PARENT_ORDERED: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1600,8 +1599,8 @@ const ESC_PARENT_ORDERED: &[&str] = &[
     "fiber_exited",
 ];
 
-/// The escalation test's delegate log kinds in order: the log file holds no
-/// unpositioned lines, so this is the complete list.
+/// An escalation child fixture, with reviewer usage allowed on either
+/// side of the permission decision, not assigned a position by this list.
 const ESC_CHILD_ORDERED: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1626,6 +1625,130 @@ const ESC_CHILD_ORDERED: &[&str] = &[
     "turn_completed",
     "fiber_exited",
 ];
+
+fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
+    let lo = lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    let hi = lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_exited")
+        .unwrap();
+    let first = expected
+        .iter()
+        .position(|kind| *kind == "fiber_started")
+        .unwrap();
+    let last = expected
+        .iter()
+        .position(|kind| *kind == "fiber_exited")
+        .unwrap();
+    support::assert_set_between(lines, lo, hi, &expected[first + 1..last]);
+    let ordered: Vec<_> = support::kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "usage_recorded")
+        .collect();
+    let skeleton: Vec<_> = expected
+        .iter()
+        .copied()
+        .filter(|kind| *kind != "usage_recorded")
+        .collect();
+    assert_eq!(ordered, skeleton);
+}
+
+/// Count the session's own calls by action, and reviewer calls by purpose.
+/// Copies are checked against the child's calls separately, never deduplicated.
+fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
+    for (start, assistant) in lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line["kind"] == "assistant_message_started")
+    {
+        let action = &assistant["action_id"];
+        let end = lines
+            .iter()
+            .position(|line| {
+                line["kind"] == "assistant_message_completed" && line["action_id"] == *action
+            })
+            .unwrap();
+        let usage: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line["kind"] == "usage_recorded"
+                    && line["payload"]["origin_session_id"].is_null()
+                    && line["action_id"] == *action
+            })
+            .collect();
+        assert_eq!(usage.len(), 1, "one model call for {action}");
+        assert!(
+            start < usage[0].0 && usage[0].0 < end,
+            "own call settles within its assistant message"
+        );
+    }
+    let action = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap()["action_id"]
+        .clone();
+    let mut review: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded"
+                && line["payload"]["origin_session_id"].is_null()
+                && !line["payload"]["reviewer"].is_null()
+        })
+        .map(|line| {
+            assert_eq!(line["payload"]["reviewer"]["action_id"], action);
+            assert!(line["action_id"].is_null());
+            line["payload"]["reviewer"]["purpose"].as_str().unwrap()
+        })
+        .collect();
+    review.sort_unstable();
+    assert_eq!(review, purposes);
+}
+
+#[test]
+fn escalation_copy_can_precede_the_independent_parent_turn_end() {
+    let mut lines = support::expected(ESC_PARENT_ORDERED);
+    lines.swap(34, 35);
+    assert_escalation_stream(&lines, ESC_PARENT_ORDERED);
+    for usage in [9, 11, 22, 32, 34, 36, 37, 38, 47] {
+        let mut missing = lines.clone();
+        assert_eq!(missing.remove(usage)["kind"], "usage_recorded");
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&missing, ESC_PARENT_ORDERED))
+                .is_err()
+        );
+        let mut duplicate = lines.clone();
+        duplicate.insert(usage, lines[usage].clone());
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&duplicate, ESC_PARENT_ORDERED))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn escalation_review_usage_can_follow_the_permission_decision() {
+    let mut lines = support::expected(ESC_CHILD_ORDERED);
+    lines.swap(12, 13);
+    assert_escalation_stream(&lines, ESC_CHILD_ORDERED);
+    for usage in [9, 11, 13, 18] {
+        let mut missing = lines.clone();
+        assert_eq!(missing.remove(usage)["kind"], "usage_recorded");
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&missing, ESC_CHILD_ORDERED))
+                .is_err()
+        );
+        let mut duplicate = lines.clone();
+        duplicate.insert(usage, lines[usage].clone());
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&duplicate, ESC_CHILD_ORDERED))
+                .is_err()
+        );
+    }
+}
 
 #[test]
 fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
@@ -1668,7 +1791,8 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    assert_eq!(ordered_kinds(&lines), ESC_PARENT_ORDERED);
+    assert_escalation_stream(&lines, ESC_PARENT_ORDERED);
+    assert_escalation_calls(&lines, &["stage_1"]);
     assert!(
         lines
             .iter()
@@ -1679,8 +1803,53 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
-    assert_eq!(owned_kinds(&child_lines), ESC_CHILD_ORDERED);
+    let child_lines = read_lines(&ask_sessions(&setup).join(&child_id).join("events.jsonl"));
+    assert_escalation_stream(&child_lines, ESC_CHILD_ORDERED);
+    assert_escalation_calls(&child_lines, &["stage_1", "stage_1"]);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "usage_recorded")
+            .count(),
+        parent.requests().len() + child.requests().len(),
+        "one root usage line per actual call, including each child copy"
+    );
+    let copies: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && !line["payload"]["origin_session_id"].is_null()
+        })
+        .collect();
+    assert_eq!(copies.len(), 4, "one copy per child call");
+    let started = lines
+        .iter()
+        .position(|line| line["kind"] == "delegate_started")
+        .unwrap();
+    let ended = lines
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let child_usage: Vec<_> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    for (copy, original) in copies.iter().zip(&child_usage) {
+        assert_eq!(copy["payload"]["origin_session_id"], child_id);
+        for field in ["generation_id", "model", "tokens", "cost", "reviewer"] {
+            assert_eq!(
+                copy["payload"][field], original["payload"][field],
+                "copied {field}"
+            );
+        }
+        let at = lines
+            .iter()
+            .position(|line| std::ptr::eq(line, *copy))
+            .unwrap();
+        assert!(
+            started < at && at < ended,
+            "copy stays within the delegate run"
+        );
+    }
     assert!(
         child_lines
             .iter()
@@ -2232,10 +2401,18 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let client = running.connect(&setup);
     subscribe(&client);
     client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
-    let late = running.wait_line("the late turn", |line| {
-        line["kind"] == "turn_completed" && line["payload"]["outcome"] == "failed"
+    let mut late = running.wait_line("the steer starts the late turn", |line| {
+        line["kind"] == "turn_started"
+            && line["payload"]["input"]
+                .as_array()
+                .is_some_and(|input| input.iter().any(|item| item["command_id"] == "c_late"))
     });
+    let late_turn = late.last().unwrap()["turn_id"].clone();
+    late.extend(running.wait_line("the late turn fails", |line| {
+        line["kind"] == "turn_completed" && line["turn_id"] == late_turn
+    }));
     let late_completed = late.last().unwrap();
+    assert_eq!(late_completed["payload"]["outcome"], "failed");
     assert_eq!(
         late_completed["payload"]["error"]["code"],
         "budget_exceeded"
