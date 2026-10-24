@@ -86,11 +86,6 @@ fn declared(
 /// reviewer names the call's other commands while still seeing all of it.
 /// `None` when every stage reads, when none does, or when the parse leaves
 /// no trustworthy parts.
-/// The stages the reviewer was not shown read-only, for the reviewer's
-/// prompt (`docs/tools.md`, "Shell", "Effects"): the whole line, so the
-/// reviewer names the call's other commands while still seeing all of it.
-/// `None` when every stage reads, when none does, or when the parse leaves
-/// no trustworthy parts.
 pub(super) fn not_shown_read_only(
     command: &str,
     workdir: &Path,
@@ -108,16 +103,12 @@ pub(super) fn not_shown_read_only(
     if !shown || unshown.is_empty() {
         return None;
     }
-    let mut line = String::from("Not shown read-only: ");
-    for (index, text) in unshown.iter().enumerate() {
-        if index > 0 {
-            line.push_str(", ");
-        }
-        line.push('`');
-        line.push_str(text);
-        line.push('`');
-    }
-    Some(line)
+    let unshown = unshown
+        .iter()
+        .map(|text| format!("`{text}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("Not shown read-only: {unshown}"))
 }
 
 /// The subject reviewers see and the prefix allow rules match: the single
@@ -199,6 +190,17 @@ fn stage_text(stage: &Stage) -> &str {
     }
 }
 
+/// Record every stage as unshown after the path is lost: no later part
+/// is trustworthy, but the note can still name the call's tail.
+fn push_unshown(walked: &mut Walked, stages: &[Stage]) {
+    for stage in stages {
+        walked.parts.push(Part {
+            text: stage_text(stage).to_owned(),
+            shown: false,
+        });
+    }
+}
+
 fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
     let walked = walk(script, workdir, configured);
     if walked.saw_executes {
@@ -229,23 +231,13 @@ fn walk(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -
         // stage is unshown, so the note can still name the call's tail.
         if lost {
             walked.saw_executes = true;
-            for stage in &element.stages {
-                walked.parts.push(Part {
-                    text: stage_text(stage).to_owned(),
-                    shown: false,
-                });
-            }
+            push_unshown(&mut walked, &element.stages);
             continue;
         }
         let Some(dirs) = cwd.enter(element.join) else {
             lost = true;
             walked.saw_executes = true;
-            for stage in &element.stages {
-                walked.parts.push(Part {
-                    text: stage_text(stage).to_owned(),
-                    shown: false,
-                });
-            }
+            push_unshown(&mut walked, &element.stages);
             continue;
         };
         let mut cd_target = None;

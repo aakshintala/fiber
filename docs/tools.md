@@ -44,7 +44,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   cache is untouched (`docs/permissions.md`, "What it is shown"). Only the
   shell sets one today: when some commands in a call are read-only and
   others are not, it names the ones that were not
-  (``Not shown read-only: `npm test` ``; "Shell", "Effects").
+  (``Not shown read-only: `npm test` ``; "Shell", "Effects"). In the
+  reviewer item the note is its own line after the `Declared effects:` line
+  and before the rest.
 - Optionally: how a long result is cut, and its own size cap. By default a
   cut keeps the start; a tool may instead declare how many bytes of the
   start and of the end to keep, as the shell does.

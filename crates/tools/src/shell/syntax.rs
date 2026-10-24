@@ -353,27 +353,30 @@ fn attach_simple(elements: &mut [Element], redirect: Node, src: &str, trailing: 
     }
 }
 
-/// Widen a stage's span over an attached outer redirect, keeping the
-/// verbatim source slice the review note names.
-fn extend_text(simple: &mut Simple, redirect: Node, src: &str) {
+/// The source slice covering the stage's span and the redirect's, with
+/// its bounds, or the stage's own slice and span when the union does not
+/// slice the command (unreachable for nodes the parser returned).
+fn covering_text(simple: &Simple, redirect: Node, src: &str) -> (String, usize, usize) {
     let start = simple.start.min(redirect.start_byte());
     let end = simple.end.max(redirect.end_byte());
-    if let Some(text) = src.get(start..end) {
-        simple.text = text.to_string();
-        simple.start = start;
-        simple.end = end;
+    match src.get(start..end) {
+        Some(text) => (text.to_string(), start, end),
+        None => (simple.text.clone(), simple.start, simple.end),
     }
 }
 
-/// The verbatim source slice of a refused stage with its refused redirect:
-/// the span both cover, or the stage's own slice when the span does not
-/// slice the command (unreachable for nodes the parser returned).
+/// Widen a stage's span over an attached outer redirect, keeping the
+/// verbatim source slice the review note names.
+fn extend_text(simple: &mut Simple, redirect: Node, src: &str) {
+    let (text, start, end) = covering_text(simple, redirect, src);
+    simple.text = text;
+    simple.start = start;
+    simple.end = end;
+}
+
+/// The verbatim source slice of a refused stage with its refused redirect.
 fn merged_text(simple: &Simple, redirect: Node, src: &str) -> String {
-    let start = simple.start.min(redirect.start_byte());
-    let end = simple.end.max(redirect.end_byte());
-    src.get(start..end)
-        .unwrap_or(simple.text.as_str())
-        .to_string()
+    covering_text(simple, redirect, src).0
 }
 
 /// The verbatim source slice of `node`, or empty when its span does not
