@@ -3035,6 +3035,7 @@ dependencies = [
  "fakes",
  "ring",
  "rustix",
+ "support",
  "thiserror 2.0.21",
 ]
 
