@@ -1523,3 +1523,37 @@ fn no_color_a_scrolled_focused_card_lifts_on_its_own_rows() {
         }
     }
 }
+
+/// A drag across a rail card's name row copies the name: the stripe,
+/// the box side and the gap are decoration and never go into the
+/// copy.
+#[test]
+fn a_drag_on_a_rail_card_copies_its_text_without_the_stripe() {
+    use super::super::{render, text};
+    use crate::app::Effect;
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::Pointer;
+    use contract::clock::Clock;
+    let mut app = two(20.0, json!({}));
+    let area = Rect::new(0, 0, 200, 40);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
+    let byte = shown.find("fix the parser").expect("the card name shows");
+    let row = shown[..byte].matches('\n').count();
+    let line_start = shown[..byte].rfind('\n').map_or(0, |at| at + 1);
+    let col = shown[line_start..byte].chars().count();
+    let col = u16::try_from(col).expect("a column");
+    let row = u16::try_from(row).expect("a row");
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), col, row);
+    let _ = report(MouseKind::Drag(Button::Left), col + 13, row);
+    let effect = report(MouseKind::Release, col + 13, row);
+    assert_eq!(effect, Effect::Copy("fix the parser".to_owned()));
+}

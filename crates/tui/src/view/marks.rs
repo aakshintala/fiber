@@ -46,6 +46,16 @@ const CURRENT_NO_COLOR: Style = Style::new()
     .add_modifier(Modifier::REVERSED)
     .add_modifier(Modifier::BOLD);
 
+/// The selection's highlight style, shared by every surface that paints
+/// one (`docs/tui.md`, "Selection and copy").
+pub(crate) fn selection_style() -> Style {
+    if crate::surface::boxed() {
+        SELECTION_NO_COLOR
+    } else {
+        SELECTION
+    }
+}
+
 /// The matched and current styles shared by conversation and results.
 pub(super) fn hit_styles() -> (Style, Style) {
     if crate::surface::boxed() {
@@ -103,17 +113,13 @@ pub(super) fn draw(
     // With no colour the marks keep their modifiers and the paint
     // pass strips the tints; in colour the tints carry the marks with
     // no modifier (`docs/tui.md`, "Look", "Search").
-    let selection = if crate::surface::boxed() {
-        SELECTION_NO_COLOR
-    } else {
-        SELECTION
-    };
+    let selection = selection_style();
     let (matched, current_mark) = hit_styles();
     for (rect, current) in app.find_marks(area) {
         let style = if current { current_mark } else { matched };
         buf.set_style(rect.intersection(area), style);
     }
-    for rect in app.selection_cells(area) {
+    for rect in app.selection_cells(crate::app::SurfaceId::Conversation, area) {
         buf.set_style(rect.intersection(area), selection);
     }
     let focused = app.focused();

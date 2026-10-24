@@ -231,6 +231,107 @@ pub(super) fn draw(
     layout.top.saturating_sub(u16::from(fits))
 }
 
+/// Draws `panel` as `draw` does and notes its text rows for the
+/// selection: each line's drawn rows with its text, wrapping joined
+/// with nothing and lines broken, the marks' styles adding no text
+/// (`docs/tui.md`, "Selection and copy"). Spots stay clickable: a drag
+/// from one still selects.
+pub(super) fn draw_noted(
+    app: &crate::app::App,
+    panel: &Panel,
+    area: Rect,
+    bottom: u16,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> u16 {
+    let top = draw(panel, area, bottom, buf, targets);
+    // The draw's layout recomputed: `Layout::new` is pure in the panel
+    // and the area, so the noted rows sit where the draw put them.
+    let room = usize::from(area.height);
+    let fits = edged(panel, area.width, room);
+    let layout = Layout::new(panel, area, bottom.saturating_sub(u16::from(fits)));
+    let mut noted = Vec::new();
+    for (line, text) in panel.lines.iter().enumerate() {
+        let Some((rect, skip)) = layout.place(line, area) else {
+            continue;
+        };
+        // The rows the paragraph draws, read from the line's own spans
+        // through the shared placer: a selection is screen cells, its
+        // copy the text under them (`docs/tui.md`, "Selection and
+        // copy"). The scratch stays inside the placer; no buffer is
+        // read back.
+        let drawn = styled(panel, line, text);
+        let source = drawn.to_string();
+        let mut shown: Vec<(u16, String, usize, usize)> = Vec::new();
+        for cell in crate::cells::place(&drawn, rect.width) {
+            if cell.col >= rect.width {
+                continue;
+            }
+            let piece = source.get(cell.bytes.clone()).unwrap_or_default();
+            match shown.last_mut() {
+                Some(last) if last.0 == cell.row => {
+                    last.1.push_str(piece);
+                    last.3 = cell.bytes.end;
+                }
+                _ => shown.push((cell.row, piece.to_owned(), cell.bytes.start, cell.bytes.end)),
+            }
+        }
+        // The shown rows in reading order, blank ones included: a gap
+        // holding a newline starts its own line, one holding the space
+        // the wrap dropped reads it back, and a wrap inside a word
+        // joins with nothing.
+        let first = skip;
+        let mut at = 0usize;
+        for row_no in 0..rect.height {
+            let prow = first.saturating_add(usize::from(row_no));
+            while shown.get(at).is_some_and(|row| usize::from(row.0) < prow) {
+                at = at.saturating_add(1);
+            }
+            let (text, join) = match shown.get(at) {
+                Some(row) if usize::from(row.0) == prow => {
+                    let gap = if prow == 0 {
+                        ""
+                    } else {
+                        let before = shown
+                            .iter()
+                            .rev()
+                            .find(|other| usize::from(other.0) < prow)
+                            .map_or(0, |other| other.3);
+                        source.get(before..row.2).unwrap_or_default()
+                    };
+                    at = at.saturating_add(1);
+                    (
+                        row.1.clone(),
+                        if prow == 0 || gap.contains('\n') {
+                            crate::rows::Join::Break
+                        } else if gap.contains(' ') {
+                            crate::rows::Join::WrapSpace
+                        } else {
+                            crate::rows::Join::Wrap
+                        },
+                    )
+                }
+                _ => (String::new(), crate::rows::Join::Break),
+            };
+            noted.push(crate::app::SpanRow {
+                y: rect.y.saturating_add(row_no),
+                x: rect.x,
+                end: rect.x.saturating_add(rect.width),
+                text,
+                join,
+            });
+        }
+    }
+    app.note_surface(crate::app::NotedSurface {
+        surface: crate::app::SurfaceId::Request,
+        rows: noted,
+    });
+    for rect in app.selection_cells(crate::app::SurfaceId::Request, area) {
+        buf.set_style(rect.intersection(area), super::marks::selection_style());
+    }
+    top
+}
+
 /// The text cursor's cell on the form's words row, while the panel draws
 /// that row; the column stops at the inset's last one.
 pub(super) fn caret(panel: &Panel, area: Rect, bottom: u16) -> Option<Position> {

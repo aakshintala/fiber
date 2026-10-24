@@ -19,6 +19,7 @@ use crate::surface;
 
 pub(crate) mod delegates;
 pub(crate) mod quota;
+mod selection;
 
 /// The permission mode every session runs in (`docs/permissions.md`,
 /// "One mode"): the literal, shared by the Session title row and the
@@ -220,6 +221,19 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // card's first two rows are its edge and title: the ask range counts
     // from the first delegate row. An empty range asks nothing, so the
     // range needs no guard.
+    // The selection reads the same shown rows the draw kept.
+    selection::note(
+        app,
+        &rows,
+        skip,
+        x,
+        area.y.saturating_add(1),
+        area.bottom(),
+        text,
+    );
+    for rect in app.selection_cells(crate::app::SurfaceId::Panel, area) {
+        buf.set_style(rect.intersection(area), super::marks::selection_style());
+    }
     // removed: the `to > first` guard; asking an empty range is a no-op
     // because `ask` only fires on a contained state row.
     if let Some(span) = span {
@@ -856,7 +870,7 @@ fn jobs_rows(app: &App) -> Vec<Row> {
 /// The card text's width: the rect less the slab offset and one margin
 /// column each side, two narrower where a box takes the sides
 /// (`docs/tui.md`, "Look").
-fn card_text_width(width: u16) -> usize {
+pub(super) fn card_text_width(width: u16) -> usize {
     if surface::box_fit(width) {
         text_width(width).saturating_sub(2)
     } else {

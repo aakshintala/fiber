@@ -1337,3 +1337,40 @@ fn long_feedback_keeps_the_cursor_on_the_deny_row() {
     // The next row is the blank one: the stripe alone.
     assert_eq!(rows[9], "▌", "{shown}");
 }
+
+/// A drag over a question form copies its rows' text: the prompt's
+/// wrapped rows join with the space the wrap dropped, and a blank row
+/// between the prompt and the options starts its own line
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_a_question_form_copies_its_wrapped_prompt() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = asking(four_long_options(), 80, 24);
+    let (screen, _) = screen(&app, 80, 24);
+    let (y, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("description long"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the wrapped description draws");
+    // The column counts cells, not bytes: the row's marks are multibyte.
+    let prefix = line.split("description").next().unwrap_or_default();
+    let x = crate::text::to_u16(crate::format::width(prefix));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let _ = screen;
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 10, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 10, y),
+        crate::app::Effect::Copy("description".to_owned())
+    );
+}

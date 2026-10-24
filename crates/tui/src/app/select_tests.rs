@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::COPY_FAILED;
-use crate::app::{App, Effect, Target};
+use crate::app::{App, Effect, SurfaceId, Target};
 use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -183,7 +183,10 @@ fn a_press_then_release_selects_nothing() {
     assert_eq!(release(&mut app, at), Effect::None);
     assert_eq!(app.select.span(), None);
     assert!(!app.copied());
-    assert!(app.selection_cells(app.conversation_area()).is_empty());
+    assert!(
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
     // A drag reported on the press's own cell is still a click.
     press(&mut app, at);
     assert_eq!(drag(&mut app, at), Effect::None);
@@ -243,7 +246,7 @@ fn dragging_selects_from_the_press_to_the_pointer() {
     drag(&mut app, right(at, 4));
     let area = app.conversation_area();
     assert_eq!(
-        app.selection_cells(area),
+        app.selection_cells(SurfaceId::Conversation, area),
         [Rect::new(at.0, at.1, 5, 1)],
         "the press's cell to the pointer's"
     );
@@ -305,7 +308,7 @@ fn the_highlight_stays_inside_the_area_and_off_new_below() {
     app.jump(top - 3);
     reply(&mut app, "a_n", "more");
     assert!(app.has_new());
-    let cells = app.selection_cells(area);
+    let cells = app.selection_cells(SurfaceId::Conversation, area);
     assert!(!cells.is_empty());
     for rect in cells {
         assert!(rect.y < area.bottom() - 1, "{rect:?} past {area:?}");
@@ -410,7 +413,7 @@ fn a_selection_starting_inside_a_wide_character_copies_it_whole() {
     assert_eq!(press(&mut app, from), Effect::None);
     assert_eq!(drag(&mut app, to), Effect::None);
     assert_eq!(
-        app.selection_cells(app.conversation_area()),
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area()),
         [Rect::new(base + 2, row, 2, 1)],
         "the second cell of 界 and b"
     );
@@ -522,7 +525,7 @@ fn laid_out(width: u16, height: u16) -> App {
 }
 
 #[test]
-fn presses_outside_the_area_select_nothing() {
+fn presses_outside_the_area_click_while_drags_select() {
     // The input box, and the blank rows above a short conversation.
     let mut app = replied(40, 10, "hello there");
     let area = app.conversation_area();
@@ -546,7 +549,15 @@ fn presses_outside_the_area_select_nothing() {
     ));
     assert!(app.panel().is_some());
     let area = app.conversation_area();
-    assert_eq!(tried(&mut app, (2, area.bottom())), None, "the panel");
+    // A press alone is a click: no selection shows, so the panel keeps
+    // its targets. The drag a press starts turns into a selection
+    // instead (rule R2).
+    press(&mut app, (2, area.bottom()));
+    assert_eq!(app.select.span(), None, "the panel");
+    assert!(
+        tried(&mut app, (2, area.bottom())).is_some(),
+        "a drag from the panel"
+    );
 
     // The rail, the panel and the column's header at 160x48.
     let mut app = laid_out(160, 48);
@@ -556,8 +567,20 @@ fn presses_outside_the_area_select_nothing() {
     let layout = app.chrome().layout().expect("the layout applies");
     let rail = layout.rail.expect("a rail at 160 columns");
     let panel = layout.panel.expect("a panel at 160 columns");
-    assert_eq!(tried(&mut app, (rail.x, 30)), None, "the rail");
-    assert_eq!(tried(&mut app, (panel.x + 1, 30)), None, "the panel");
+    press(&mut app, (rail.x, 30));
+    assert_eq!(app.select.span(), None, "the rail");
+    // Below the last card row no note covers the cell, so even a drag
+    // selects nothing here.
+    assert_eq!(tried(&mut app, (rail.x, 30)), None, "a drag from the rail");
+    press(&mut app, (panel.x + 1, 30));
+    assert_eq!(app.select.span(), None, "the panel");
+    // Below the last card row no note covers the cell, so even a drag
+    // selects nothing here.
+    assert_eq!(
+        tried(&mut app, (panel.x + 1, 30)),
+        None,
+        "a drag from the panel"
+    );
     assert_eq!(
         tried(&mut app, (layout.column.x + 1, layout.column.y)),
         None,
@@ -569,7 +592,7 @@ fn presses_outside_the_area_select_nothing() {
 }
 
 #[test]
-fn a_press_on_a_notice_or_new_below_selects_nothing() {
+fn a_press_on_a_notice_clicks_while_a_drag_selects() {
     let mut app = attached(40, 10);
     prompt(&mut app, " ");
     let text: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
@@ -580,10 +603,14 @@ fn a_press_on_a_notice_or_new_below_selects_nothing() {
         .iter()
         .find(|target| matches!(target.id, TargetId::Notice(_)))
         .expect("the notice is drawn");
-    assert_eq!(
-        tried(&mut app, (notice.rect.x + 1, notice.rect.y)),
-        None,
-        "a notice"
+    // A press alone is a click: the notice keeps its dismiss target
+    // and no selection shows. The drag a press starts turns into a
+    // selection instead (rule R2).
+    press(&mut app, (notice.rect.x + 1, notice.rect.y));
+    assert_eq!(app.select.span(), None, "a notice");
+    assert!(
+        tried(&mut app, (notice.rect.x + 1, notice.rect.y)).is_some(),
+        "a drag from a notice"
     );
     // Scrolled up, new output shows "↓ New messages below".
     app.on_key(Key::PageUp, now());
@@ -654,9 +681,11 @@ fn no_selection_on_home_or_under_a_cover() {
     assert!(app.notice_overlay().is_some());
     assert_eq!(tried(&mut app, at), None, "the notice overlay");
 
-    // The repository offer's swapped view.
+    // The repository offer's swapped view: the body's drawn rows read
+    // as the surface's text, so a drag over them selects (`docs/tui.md`,
+    // "Selection and copy"). The offer wiring notes the body's rows; the
+    // title row never copies.
     let mut app = replied(40, 10, "hello there");
-    let at = find(&app, "hello");
     app.on_line(line(
         "repository_code_offered",
         json!({"request_id": "r_1", "items": [{"kind": "mcp_server", "name": "a",
@@ -665,7 +694,12 @@ fn no_selection_on_home_or_under_a_cover() {
         None,
     ));
     assert!(app.offer_open());
-    assert_eq!(tried(&mut app, at), None, "the repository offer");
+    let at = find(&app, "MCP");
+    assert_eq!(
+        select(&mut app, at, right(at, 2)),
+        Effect::Copy("MCP".to_owned()),
+        "the repository offer"
+    );
 }
 
 #[test]
@@ -1235,7 +1269,7 @@ fn a_selection_with_the_layout_covers_the_pressed_text() {
         Effect::Copy("hello".to_owned())
     );
     let area = app.conversation_area();
-    let cells = app.selection_cells(area);
+    let cells = app.selection_cells(SurfaceId::Conversation, area);
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0], Rect::new(at.0, at.1, 5, 1));
     // The highlight sits on the reply's cells: exactly the five cells
@@ -1271,5 +1305,215 @@ fn a_selection_at_the_area_edge_draws_no_empty_rect() {
     };
     app.select.anchor = Some(edge);
     app.select.head = Some(edge);
-    assert_eq!(app.selection_cells(area), Vec::<Rect>::new());
+    assert_eq!(
+        app.selection_cells(SurfaceId::Conversation, area),
+        Vec::<Rect>::new()
+    );
+}
+
+/// Types `text` into the input box, `\\n` as a line break.
+fn type_draft(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        if ch == '\n' {
+            app.on_edit(crate::keys::Edit::ShiftEnter);
+        } else {
+            app.on_key(Key::Char(ch), now());
+        }
+    }
+}
+
+#[test]
+fn a_drag_in_the_input_box_copies_its_text() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    assert_eq!(press(&mut app, at), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Input));
+    assert_eq!(drag(&mut app, right(at, 4)), Effect::None);
+    assert_eq!(
+        release(&mut app, right(at, 4)),
+        Effect::Copy("zzqx".to_owned())
+    );
+    assert!(app.copied());
+    assert_eq!(app.input().selected_text().as_deref(), Some("zzqx"));
+    // The conversation claims nothing: identical coordinates do not alias.
+    assert!(
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_drag_starting_in_the_input_box_stays_inside_it() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    assert_eq!(press(&mut app, at), Effect::None);
+    // The pointer leaves the box past its top-right corner: the drag
+    // clamps to the box's edge cell and never spills into the
+    // conversation above.
+    assert_eq!(drag(&mut app, (39, 0)), Effect::None);
+    assert_eq!(release(&mut app, (39, 0)), Effect::Copy("zzqx".to_owned()));
+}
+
+#[test]
+fn a_drag_starting_in_the_conversation_ignores_the_input_box() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let from = find(&app, "hello");
+    let into_box = find(&app, "zzqx");
+    assert_eq!(press(&mut app, from), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    assert_eq!(drag(&mut app, into_box), Effect::None);
+    let effect = release(&mut app, into_box);
+    assert!(matches!(effect, Effect::Copy(_)), "{effect:?}");
+    assert!(
+        app.selection_cells(SurfaceId::Input, Rect::new(0, 0, 40, 12))
+            .is_empty()
+    );
+}
+
+#[test]
+fn press_then_esc_clears_the_anchor_and_keeps_the_interrupt() {
+    let mut app = attached(40, 10);
+    prompt(&mut app, "go");
+    reply(&mut app, "a_m", "hello there");
+    let at = find(&app, "hello");
+    press(&mut app, at);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    // Esc clears the held press, then still interrupts the running turn.
+    assert!(matches!(app.on_key(Key::Esc, now()), Effect::Send(_)));
+    assert_eq!(app.select.surface(), None);
+    assert_eq!(app.select.span(), None);
+}
+
+#[test]
+fn a_press_on_a_link_anchors_and_a_drag_copies() {
+    let mut app = replied(40, 12, "see [hi](http://example.com) now");
+    let at = find(&app, "hi");
+    assert_eq!(press(&mut app, at), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    assert_eq!(drag(&mut app, right(at, 1)), Effect::None);
+    assert!(app.select.span().is_some());
+    assert!(matches!(release(&mut app, right(at, 1)), Effect::Copy(_)));
+}
+
+#[test]
+fn a_person_binding_for_end_wins_over_the_line_edit() {
+    let mut app = replied(40, 12, "hello there");
+    // The person moves `jump_to_end` off End and binds End to delete to
+    // the line's start: their binding wins, so End never edits the line
+    // end.
+    let mut user = serde_json::Map::new();
+    user.insert("jump_to_end".to_owned(), json!([]));
+    user.insert("delete_to_line_start".to_owned(), json!("end"));
+    app.set_keys(crate::KeysSetup { user });
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    select(&mut app, at, right(at, 4));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    let _ = app.on_press(
+        crate::stroke::Stroke {
+            code: crate::stroke::Code::End,
+            mods: crate::stroke::Mods::NONE,
+        },
+        now(),
+    );
+    assert_eq!(app.input().expand(), "");
+}
+
+#[test]
+fn unclaimed_surfaces_highlight_nothing() {
+    // Identical screen coordinates on overlapping surfaces must not
+    // alias: only the claimed surface highlights.
+    let mut app = replied(40, 12, "hello there");
+    let at = find(&app, "hello");
+    select(&mut app, at, right(at, 4));
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    let area = app.conversation_area();
+    for surface in [
+        SurfaceId::Input,
+        SurfaceId::Notices,
+        SurfaceId::Panel,
+        SurfaceId::Rail,
+        SurfaceId::Request,
+        SurfaceId::Swapped,
+        SurfaceId::Overlay,
+        SurfaceId::Home,
+    ] {
+        assert!(
+            app.selection_cells(surface, area).is_empty(),
+            "{surface:?} highlights nothing"
+        );
+    }
+    assert!(
+        !app.selection_cells(SurfaceId::Conversation, area)
+            .is_empty()
+    );
+}
+
+/// `cells_range` pins the screen cells of `text`'s chars in `from..to`
+/// past `x`: `None` when no char shows there (`docs/tui.md`,
+/// "Selection and copy": the selection is screen cells).
+#[test]
+fn cells_range_pins_the_cells_covered() {
+    use super::cells_range;
+    // The whole text in range reads its cells past `x`.
+    assert_eq!(cells_range("ab", 10, 0, 2), Some((10, 12)));
+    // A middle slice reads only its own cells.
+    assert_eq!(cells_range("ab", 10, 1, 2), Some((11, 12)));
+    // An empty range covers nothing.
+    assert_eq!(cells_range("ab", 10, 1, 1), None);
+    // A range past the text covers nothing.
+    assert_eq!(cells_range("ab", 10, 5, 7), None);
+    // A range ending where the text starts covers nothing.
+    assert_eq!(cells_range("ab", 10, 0, 0), None);
+    // No text shows no cells.
+    assert_eq!(cells_range("", 10, 0, 2), None);
+    // A wide char reads both its cells while its first cell is in.
+    assert_eq!(cells_range("あ", 10, 0, 1), Some((10, 12)));
+    // Past the wide char nothing shows.
+    assert_eq!(cells_range("あ", 10, 2, 3), None);
+}
+
+/// A drag leaving a noted surface's box clamps to its edge cell: the
+/// nearest noted row to the clamped row, the last row on or above it
+/// (`docs/tui.md`, "Selection and copy": the drag selects within its
+/// surface and does not spill into a neighbour).
+#[test]
+fn a_drag_leaving_the_noted_box_clamps_to_the_nearest_row() {
+    use super::{NotedSurface, Selection};
+    use crate::app::SurfaceId;
+    use crate::rows::Join;
+    let noted = Selection::default();
+    noted.note_surface(NotedSurface {
+        surface: SurfaceId::Swapped,
+        rows: vec![
+            super::SpanRow {
+                y: 5,
+                x: 10,
+                end: 20,
+                text: "upper row".to_owned(),
+                join: Join::Break,
+            },
+            super::SpanRow {
+                y: 7,
+                x: 10,
+                end: 20,
+                text: "lower row".to_owned(),
+                join: Join::Break,
+            },
+        ],
+    });
+    // Between the rows the drag reads as the upper row's end: the
+    // last noted row on or above the clamped row.
+    let clamped = noted
+        .clamp_noted(SurfaceId::Swapped, 30, 6)
+        .expect("inside the noted box");
+    assert_eq!(clamped, super::Point { row: 0, col: 9 });
+    // Below the box the drag reads as the lower row's end.
+    let clamped = noted
+        .clamp_noted(SurfaceId::Swapped, 30, 40)
+        .expect("inside the noted box");
+    assert_eq!(clamped, super::Point { row: 1, col: 9 });
 }

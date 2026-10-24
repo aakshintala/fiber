@@ -811,11 +811,12 @@ fn the_wake_is_the_earliest_unpaused_event_expiry() {
     notices.push("config_invalid", "y".to_owned());
     notices.sweep(at(t0, 5_000));
     assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
-    // A held event contributes no wake until the release.
+    // Rows showing at the hold wait out their fade with no wake until
+    // the release; a pushed event contributes none either, unborn.
     notices.hold();
     notices.push("malformed", "z".to_owned());
     notices.sweep(at(t0, 6_000));
-    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    assert_eq!(notices.notices_wake(), None);
     notices.release();
     notices.sweep(at(t0, 6_000));
     assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
@@ -825,37 +826,66 @@ fn the_wake_is_the_earliest_unpaused_event_expiry() {
     notices.close();
     assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
     // Past the first fade its row is gone, and the wake moves to the
-    // next expiry; the standing condition row shows throughout.
+    // next expiry; the standing condition row shows throughout
+    // (`docs/tui.md`, "Notices": one row each until dismissed, oldest
+    // first).
     notices.sweep(at(t0, 10_000));
     assert_eq!(texts(&notices.lines()), ["closed", "y", "z"]);
     assert_eq!(notices.notices_wake(), Some(at(t0, 15_000)));
 }
 
 #[test]
+fn a_row_showing_at_hold_keeps_its_row_past_fade() {
+    let t0 = fakes::clock::FakeClock::new().now();
+    // A drag holds every visible notice against expiry, not just the
+    // ones pushed after the press: the row showing at hold time waits
+    // out its fade, then expires on the first sweep past the release
+    // (`docs/tui.md`, "Notices": one row each until dismissed; a notice
+    // that arrives during a drag waits for the release).
+    let mut notices = Notices::default();
+    notices.push("io_failed", "before".to_owned());
+    notices.sweep(t0);
+    assert_eq!(texts(&notices.lines()), ["before"]);
+    notices.hold();
+    // Past the fade the row still shows, and holds no wake either.
+    notices.sweep(at(t0, 30_000));
+    assert_eq!(texts(&notices.lines()), ["before"]);
+    assert_eq!(notices.notices_wake(), None);
+    // The release resumes expiry: the next sweep drops the row.
+    notices.release();
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    notices.sweep(at(t0, 30_000));
+    assert!(notices.lines().is_empty());
+}
+
+#[test]
 fn a_held_notice_and_an_overlay_notice_pause_expiry() {
     let t0 = fakes::clock::FakeClock::new().now();
-    // A notice pushed before the hold expires on time; one pushed during
-    // the hold is retained but waits, hidden until the release.
+    // One pushed during the hold is retained but waits, hidden until
+    // the release.
     let mut notices = Notices::default();
     notices.push("io_failed", "before".to_owned());
     notices.sweep(t0);
     notices.hold();
     notices.push("io_failed", "during".to_owned());
-    notices.sweep(at(t0, 30_000));
-    assert!(notices.lines().is_empty());
+    notices.sweep(at(t0, 10_000));
+    // The visible row waits out its fade still showing; the pushed one
+    // stays unborn and hidden until the release (`docs/tui.md`,
+    // "Notices": one row each until dismissed, oldest first).
+    assert_eq!(texts(&notices.lines()), ["before"]);
     // The held notice gained no birth while hidden, so it contributes
     // no wake either: expiry counts from showing, not from the push.
     notices.release();
+    assert_eq!(texts(&notices.lines()), ["before", "during"]);
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
+    // The first sweep showing the pushed one births it; it fades ten
+    // seconds after that sweep, while the before row is already gone.
+    notices.sweep(at(t0, 10_000));
     assert_eq!(texts(&notices.lines()), ["during"]);
-    assert_eq!(notices.notices_wake(), None);
-    // The first sweep showing it births it; it fades ten seconds
-    // after that sweep.
-    notices.sweep(at(t0, 30_000));
+    assert_eq!(notices.notices_wake(), Some(at(t0, 20_000)));
+    notices.sweep(at(t0, 19_999));
     assert_eq!(texts(&notices.lines()), ["during"]);
-    assert_eq!(notices.notices_wake(), Some(at(t0, 40_000)));
-    notices.sweep(at(t0, 39_999));
-    assert_eq!(texts(&notices.lines()), ["during"]);
-    notices.sweep(at(t0, 40_000));
+    notices.sweep(at(t0, 20_000));
     assert!(notices.lines().is_empty());
 }
 
@@ -936,15 +966,20 @@ fn an_open_single_notice_on_a_held_notice_gains_no_birth() {
     notices.open(1);
     notices.sweep(t0);
     notices.close();
-    // Past the fade the born row expires, while the held row — never
-    // born — stands waiting for the release with a fresh life.
+    // Past the fade the born row waits out the hold still showing,
+    // while the held row — never born — stands waiting for the
+    // release with a fresh life (`docs/tui.md`, "Notices": one row
+    // each until dismissed, oldest first).
     notices.sweep(at(t0, 10_000));
+    assert_eq!(texts(&notices.lines()), ["shown"]);
     notices.release();
-    assert_eq!(texts(&notices.lines()), ["held"]);
-    // Still unborn, it contributes no wake; the first sweep showing
-    // it births it, ten seconds to its own fade.
-    assert_eq!(notices.notices_wake(), None);
+    assert_eq!(texts(&notices.lines()), ["shown", "held"]);
+    // The shown row's fade waited out the hold: its wake is due, and
+    // the next sweep drops it while birthing the held row, which is
+    // still unborn and contributes no wake of its own.
+    assert_eq!(notices.notices_wake(), Some(at(t0, 10_000)));
     notices.sweep(at(t0, 10_000));
+    assert_eq!(texts(&notices.lines()), ["held"]);
     assert_eq!(notices.notices_wake(), Some(at(t0, 20_000)));
     notices.sweep(at(t0, 19_999));
     assert_eq!(texts(&notices.lines()), ["held"]);
