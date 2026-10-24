@@ -2302,6 +2302,15 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let grandchild_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
     subscribe(&grandchild_socket);
+    // Drain while the tree stops: otherwise the grandchild's socket writer
+    // can spend its bounded close grace behind this unread full stream.
+    let (grandchild_exit_tx, grandchild_exit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let lines = support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+        grandchild_exit_tx.send(lines).unwrap();
+    });
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
     // ends, the next request is refused, and the turn ends failed.
@@ -2330,10 +2339,9 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         "the stopped child exits",
         |line| line["kind"] == "fiber_exited",
     ));
-    let observed_grandchild =
-        support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
-            line["kind"] == "fiber_exited"
-        });
+    let observed_grandchild = setup
+        .deadline
+        .recv_or_fail(&grandchild_exit_rx, "the stopped grandchild exits");
     assert_eq!(observed_child.last().unwrap()["payload"]["exit_code"], 143);
     assert_eq!(observed_grandchild.last().unwrap()["kind"], "fiber_exited");
     let child_lines = read_lines(
