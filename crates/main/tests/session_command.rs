@@ -459,22 +459,14 @@ fn until_session_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
-/// The ordered event kinds, omitting `clients`, which can race with loop writes.
-fn kinds_except_clients(lines: &[Value]) -> Vec<&str> {
-    kinds(lines)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
-}
 /// The socket's event kinds for one prompt and `close`: the subscribe, the
 /// prompt's turn, and the close. The prompt-over-the-socket, skill and
 /// same-id tests run exactly this shape, so they share it.
-const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 19] = [
+const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 18] = [
     "command_accepted",
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -493,11 +485,10 @@ const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 19] = [
 
 /// The same run's stdout kinds: the loop's own lines, without the
 /// socket's `command_accepted` echoes.
-const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
+const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 15] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -711,6 +702,19 @@ fn an_idle_session_exits_with_a_client_still_connected() {
     let mut stream = vec![sub];
     stream.extend(attached);
     stream.extend(tail);
+    // One `clients` line for this full connection attaching
+    // (`docs/events.md`, `clients`); the count is fixed, so it is pinned
+    // against the raw lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "the client attached once: {stream:?}"
+    );
+    // The ordered turn: subscribe, then the held prompt's turn, then the
+    // close (`docs/loop.md`, "Starting a turn", "Ending a turn").
     assert_eq!(
         kinds(&stream),
         [
@@ -723,7 +727,6 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -744,7 +747,6 @@ fn an_idle_session_exits_with_a_client_still_connected() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -859,7 +861,6 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -891,7 +892,6 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
-            "clients",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
@@ -1161,7 +1161,6 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1195,7 +1194,6 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1628,7 +1626,6 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "command_accepted",
             "fiber_exited",
@@ -1640,7 +1637,6 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "fiber_exited",
         ],
     );
@@ -1715,16 +1711,16 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
     assert!(status.success(), "stderr: {stderr}");
     for stream in [&events, &out] {
         assert_eq!(
-            kinds(stream)
+            stream
                 .iter()
-                .filter(|kind| **kind == "clients")
+                .filter(|line| line["kind"] == "clients")
                 .count(),
             1,
             "the resumed client was counted once"
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -1750,7 +1746,7 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -2053,15 +2049,13 @@ fn unreadable_pasted_images_are_rejected_without_a_turn() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
-/// The stdout kinds every `close` test's session opens with: startup, the
-/// client's attach, and the prompt's turn starting. `clients` lands after
-/// `extensions_loaded` because each test connects after
-/// `running.wait_for("extensions_loaded")`, as the existing tests do.
-const CLOSE_START: [&str; 7] = [
+/// The ordered stdout kinds every `close` test's session opens with:
+/// startup and the prompt's turn starting. Independently triggered lines
+/// are set aside (`docs/testing.md`, "Event streams").
+const CLOSE_START: [&str; 6] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
-    "clients",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -2173,13 +2167,34 @@ fn job_session(
     (running, client, job_group, id)
 }
 
+#[test]
+fn stdout_projection_also_sets_aside_job_deltas() {
+    let lines = support::expected(&[
+        "clients",
+        "fiber_started",
+        "session_status",
+        "job_delta",
+        "attention",
+        "date_changed",
+        "fiber_exited",
+    ]);
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
+    assert_eq!(
+        kinds(&lines),
+        ["fiber_started", "job_delta", "fiber_exited"]
+    );
+    assert_eq!(stdout_kinds(&lines), ["fiber_started", "fiber_exited"]);
+}
+
 /// The session's stdout kinds without `job_delta`: it is ephemeral, and
 /// where it lands depends on when the job writes. Like [`kinds`], without
 /// `session_status`.
 fn stdout_kinds(out: &[Value]) -> Vec<&str> {
-    out.iter()
-        .filter(|line| line["kind"] != "job_delta" && line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
+    kinds(out)
+        .into_iter()
+        .filter(|kind| *kind != "job_delta")
         .collect()
 }
 
@@ -3194,7 +3209,6 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "command_accepted",
             "fiber_exited",
@@ -3206,7 +3220,6 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "fiber_exited",
         ],
     );
@@ -3276,16 +3289,16 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
     assert!(status.success(), "stderr: {stderr}");
     for stream in [&events, &out] {
         assert_eq!(
-            kinds(stream)
+            stream
                 .iter()
-                .filter(|kind| **kind == "clients")
+                .filter(|line| line["kind"] == "clients")
                 .count(),
             1,
             "the resumed client was counted once"
         );
     }
     assert_eq!(
-        kinds_except_clients(&events),
+        kinds(&events),
         [
             "command_accepted",
             "session_started",
@@ -3311,7 +3324,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         ],
     );
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "fiber_started",
             "extensions_loaded",
@@ -3370,7 +3383,6 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -3510,7 +3522,7 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let (status, out, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
     assert_eq!(
-        kinds_except_clients(&out),
+        kinds(&out),
         [
             "session_started",
             "fiber_started",

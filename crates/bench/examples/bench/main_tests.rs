@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 #[cfg(target_os = "macos")]
@@ -267,17 +269,24 @@ fn only_wheel_parses_and_runs_just_the_wheel_workload() {
 fn measure_all_hands_each_workload_its_counts_and_records_them() {
     let parsed = args("--fiber f --out o --runs 5 --timing-runs 3 --paging j").unwrap();
     // The per-call sequence the single-side run makes: every workload's
-    // calls in selection order, each with its run count; the failing
-    // `busy turn` ends its row after one call.
+    // calls in selection order, each with its run count, except a sampled
+    // row's one call per sample; the failing `busy turn` ends its row
+    // after one call.
     let expected: Vec<(Side, &str, u32, u32)> = selected(&parsed)
         .iter()
         .flat_map(|(workload, repeats, runs)| {
-            let calls = if workload.name == "busy turn" {
-                1
+            let (calls, each) = if workload.name == "sessions list" {
+                (*runs, 1)
+            } else if workload.name == "terminal attach" || workload.name == "terminal wheel" {
+                // Each attach fixture and each wheel session runs `runs`
+                // samples: one call per sample on each side.
+                (2 * *runs, 1)
+            } else if workload.name == "busy turn" {
+                (1, *runs)
             } else {
-                *repeats
+                (*repeats, *runs)
             };
-            (1..=calls).map(|n| (Side::Head, workload.name, n, *runs))
+            (1..=calls).map(move |n| (Side::Head, workload.name, n, each))
         })
         .collect();
     let mut head = Pass::new(Side::Head, parsed);
@@ -348,40 +357,139 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
 }
 
 #[test]
-fn block_rows_run_the_head_block_then_the_base_block() {
-    // Each block row is its head call then its base call, with no other
-    // row's call between; a mutant interleaving another row fails this.
+fn sampled_rows_alternate_head_and_base_by_sample() {
+    // A repeated row alternates per run, and a sampled row per sample
+    // (`docs/performance.md`, "Measuring"), so listing's 3 samples,
+    // attach's 2 fixtures of 5 and wheel's 2 sessions of 3 interleave.
+    // A mutant running a sampled row's head block then its base block,
+    // or interleaving another row, fails the log below.
     let head = args("--fiber f --out o --runs 5 --timing-runs 3 --only timing").unwrap();
     let base = args("--fiber b --out ob --runs 5 --timing-runs 3 --only timing").unwrap();
     let (forward, back) = (Side::Head, Side::Base);
+    let mut expected = vec![
+        (forward, "session start", 1),
+        (back, "session start", 1),
+        (forward, "session start", 2),
+        (back, "session start", 2),
+        (forward, "session start", 3),
+        (back, "session start", 3),
+        (forward, "terminal first frame", 1),
+        (back, "terminal first frame", 1),
+        (forward, "terminal first frame", 2),
+        (back, "terminal first frame", 2),
+        (forward, "terminal first frame", 3),
+        (back, "terminal first frame", 3),
+        (forward, "session_list", 1),
+        (back, "session_list", 1),
+        (forward, "session_list", 2),
+        (back, "session_list", 2),
+        (forward, "session_list", 3),
+        (back, "session_list", 3),
+    ];
+    // Each sampled row is one call per sample: listing's 3, attach's 2
+    // fixtures of 5, wheel's 2 sessions of 3.
+    for (name, total) in [
+        ("sessions list", 3),
+        ("terminal attach", 10),
+        ("terminal wheel", 6),
+    ] {
+        for s in 1..=total {
+            expected.push((forward, name, s));
+            expected.push((back, name, s));
+        }
+    }
+    assert_eq!(order(head, Some(base)), expected);
+}
+
+/// The acceptance for alternate-by-sample scheduling
+/// (`docs/performance.md`, "Measuring"): with a scripted clock, one
+/// stalled call delays only the samples after it, so each index's head
+/// and base samples stay within one sample cost of each other. The
+/// closure records what `order` records, plus each call's scripted
+/// time; no real clock sleeps. A mutant running a side's block in one
+/// go shifts the whole base block past the stalled head block, failing
+/// the skew bound below.
+#[test]
+fn a_stall_shifts_one_sample_not_a_side() {
+    const STEP: Duration = Duration::from_millis(1);
+    const STALL: Duration = Duration::from_millis(50);
+    let lone_list = || {
+        argv(&[
+            "--fiber",
+            "f",
+            "--out",
+            "o",
+            "--runs",
+            "3",
+            "--timing-runs",
+            "3",
+            "--only",
+            "timing",
+            "--skip-rows",
+            "session start,terminal first frame,session_list,paging,terminal attach,terminal wheel",
+        ])
+        .unwrap()
+    };
+    let mut head = Pass::new(Side::Head, lone_list());
+    let mut base = Pass::new(Side::Base, lone_list());
+    let clock = fakes::clock::FakeClock::new();
+    let mut log: Vec<(Side, &'static str, u32, Instant)> = Vec::new();
+    let mut calls = 0u32;
+    measure_all(&mut head, Some(&mut base), |side, workload, _, run, _| {
+        calls += 1;
+        log.push((side, workload.name, run, clock.now()));
+        // One sample costs STEP; the second call stalls the runner.
+        clock.advance(if calls == 2 { STALL } else { STEP });
+        Ok(vec![("stall_ms", json!(1.0))])
+    });
     assert_eq!(
-        order(head, Some(base)),
+        log.iter()
+            .map(|(side, name, run, _)| (*side, *name, *run))
+            .collect::<Vec<_>>(),
         [
-            (forward, "session start", 1),
-            (back, "session start", 1),
-            (forward, "session start", 2),
-            (back, "session start", 2),
-            (forward, "session start", 3),
-            (back, "session start", 3),
-            (forward, "terminal first frame", 1),
-            (back, "terminal first frame", 1),
-            (forward, "terminal first frame", 2),
-            (back, "terminal first frame", 2),
-            (forward, "terminal first frame", 3),
-            (back, "terminal first frame", 3),
-            (forward, "session_list", 1),
-            (back, "session_list", 1),
-            (forward, "session_list", 2),
-            (back, "session_list", 2),
-            (forward, "session_list", 3),
-            (back, "session_list", 3),
-            (forward, "sessions list", 1),
-            (back, "sessions list", 1),
-            (forward, "terminal attach", 1),
-            (back, "terminal attach", 1),
-            (forward, "terminal wheel", 1),
-            (back, "terminal wheel", 1),
+            (Side::Head, "sessions list", 1),
+            (Side::Base, "sessions list", 1),
+            (Side::Head, "sessions list", 2),
+            (Side::Base, "sessions list", 2),
+            (Side::Head, "sessions list", 3),
+            (Side::Base, "sessions list", 3),
         ]
+    );
+    let at = |side: Side, run: u32| {
+        log.iter()
+            .find(|(logged, _, logged_run, _)| *logged == side && *logged_run == run)
+            .map(|(_, _, _, at)| *at)
+    };
+    // The stall delays every later sample equally: each index's samples
+    // stay within one sample cost. A block schedule holds the whole
+    // base block until the stalled head block ends, skewing every index
+    // by the stall.
+    for run in 1..=3 {
+        let head_at = at(Side::Head, run).unwrap_or_else(|| panic!("no head sample {run}"));
+        let base_at = at(Side::Base, run).unwrap_or_else(|| panic!("no base sample {run}"));
+        let skew = if head_at > base_at {
+            head_at - base_at
+        } else {
+            base_at - head_at
+        };
+        assert!(
+            skew <= STEP,
+            "sample {run} skews by {skew:?}, over one sample cost {STEP:?}"
+        );
+    }
+    // The stall happened: one consecutive same-side gap reaches it, so
+    // the bound above does not pass on an unstalled run alone.
+    let mut slowest = Duration::ZERO;
+    for side in [Side::Head, Side::Base] {
+        for run in 1..3 {
+            let gap = at(side, run + 1).unwrap_or_else(|| panic!("no {side:?} sample"))
+                - at(side, run).unwrap_or_else(|| panic!("no {side:?} sample"));
+            slowest = slowest.max(gap);
+        }
+    }
+    assert!(
+        slowest >= STALL,
+        "no same-side gap reaches the {STALL:?} stall: {slowest:?}"
     );
 }
 
@@ -697,13 +805,15 @@ fn a_base_row_the_head_did_not_select_does_not_run() {
     let parsed = args("--fiber f --out o --only wheel --base-fiber b --base-out ob").unwrap();
     let (head_args, base_args) = sides(&parsed);
     assert!(base_args.is_some());
-    assert_eq!(
-        order(head_args, base_args),
-        [
-            (Side::Head, "terminal wheel", 1),
-            (Side::Base, "terminal wheel", 1),
-        ]
-    );
+    // The wheel row alternates its 2 sessions of 5 samples head and
+    // base (`docs/performance.md`, "Measuring"); a mutant running the
+    // head block then the base block fails this.
+    let mut expected = Vec::new();
+    for s in 1..=10 {
+        expected.push((Side::Head, "terminal wheel", s));
+        expected.push((Side::Base, "terminal wheel", s));
+    }
+    assert_eq!(order(head_args, base_args), expected);
 }
 
 #[test]
@@ -728,18 +838,22 @@ fn attach_keeps_its_full_count_on_both_sides() {
             Ok(Vec::new())
         },
     );
+    // Each side times one attach per call (`docs/performance.md`,
+    // "Measuring"): 2 fixtures of 5, alternating head and base, each
+    // call carrying a single sample.
     let attach: Vec<(Side, &str, u32, u32)> = log
         .iter()
         .filter(|(_, name, _, _)| *name == "terminal attach")
         .cloned()
         .collect();
-    assert_eq!(
-        attach,
-        [
-            (Side::Head, "terminal attach", 1, 5),
-            (Side::Base, "terminal attach", 1, 5),
-        ]
-    );
+    let mut expected = Vec::new();
+    for s in 1..=10 {
+        expected.push((Side::Head, "terminal attach", s, 1));
+        expected.push((Side::Base, "terminal attach", s, 1));
+    }
+    assert_eq!(attach, expected);
+    assert_eq!(head.metrics["attach_ms"].len(), 10);
+    assert_eq!(base.metrics["attach_ms"].len(), 10);
     assert_eq!(head.metric_runs["attach_ms"], 5);
     assert_eq!(base.metric_runs["attach_ms"], 5);
 }

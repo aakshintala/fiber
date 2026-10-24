@@ -210,14 +210,173 @@ fn owned_kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
-/// The stream's kinds in order, setting aside only the lines
-/// `docs/testing.md` ("Event streams") leaves unpositioned: `clients`,
-/// `session_status` and the hub's `attention`.
-fn ordered_kinds(lines: &[Value]) -> Vec<String> {
-    owned_kinds(lines)
-        .into_iter()
-        .filter(|kind| kind != "clients" && kind != "session_status" && kind != "attention")
-        .collect()
+#[test]
+fn ordered_projections_set_aside_exactly_the_independent_kinds() {
+    let lines = support::expected(&[
+        "clients",
+        "turn_started",
+        "session_status",
+        "usage_recorded",
+        "attention",
+        "command_accepted",
+        "date_changed",
+        "turn_completed",
+        "job_delta",
+        "unknown_future_kind",
+    ]);
+    let expected = [
+        "turn_started",
+        "usage_recorded",
+        "command_accepted",
+        "turn_completed",
+        "job_delta",
+        "unknown_future_kind",
+    ];
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
+    assert_eq!(support::kinds(&lines), expected);
+}
+
+#[test]
+fn event_windows_preserve_multiplicity_without_pinning_independent_order() {
+    // Delegate Events promises the anchors, not finish versus copied usage.
+    for members in [
+        ["usage_recorded", "delegate_finished"],
+        ["delegate_finished", "usage_recorded"],
+    ] {
+        for date_position in 0..=4 {
+            let mut lines =
+                support::expected(&["turn_completed", members[0], members[1], "job_completed"]);
+            lines[0]["turn_id"] = json!("t_cancel");
+            lines[3]["payload"] = json!({"job_id": "j_cancel"});
+            lines.insert(date_position, json!({"kind": "date_changed"}));
+            let lo = lines
+                .iter()
+                .position(|line| line["turn_id"] == "t_cancel")
+                .unwrap();
+            let hi = lines
+                .iter()
+                .position(|line| line["payload"]["job_id"] == "j_cancel")
+                .unwrap();
+            assert_eq!(lines[lo]["kind"], "turn_completed");
+            assert_eq!(lines[hi]["kind"], "job_completed");
+            support::assert_set_between(&lines, lo, hi, &["usage_recorded", "delegate_finished"]);
+        }
+    }
+    let empty = support::expected(&["turn_completed", "job_completed"]);
+    support::assert_set_between(&empty, 0, 1, &[]);
+    let repeated = support::expected(&[
+        "turn_completed",
+        "usage_recorded",
+        "usage_recorded",
+        "job_completed",
+    ]);
+    support::assert_set_between(&repeated, 0, 3, &["usage_recorded", "usage_recorded"]);
+}
+
+#[test]
+fn event_windows_reject_missing_extra_duplicate_and_invalid_anchors() {
+    for members in [
+        vec!["delegate_finished"],
+        vec!["usage_recorded", "delegate_finished", "extra"],
+        vec!["usage_recorded", "usage_recorded", "delegate_finished"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(members);
+        kinds.push("job_completed");
+        let lines = support::expected(&kinds);
+        assert!(
+            std::panic::catch_unwind(|| support::assert_set_between(
+                &lines,
+                0,
+                lines.len() - 1,
+                &["usage_recorded", "delegate_finished"]
+            ))
+            .is_err(),
+            "accepted {kinds:?}"
+        );
+    }
+    let lines = support::expected(&["turn_completed", "usage_recorded", "job_completed"]);
+    for (lo, hi) in [
+        (0, 0),
+        (1, 1),
+        (2, 1),
+        (0, 3),
+        (0, 4),
+        (3, 4),
+        (usize::MAX, 0),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| support::assert_set_between(
+                &lines,
+                lo,
+                hi,
+                &["usage_recorded"]
+            ))
+            .is_err(),
+            "accepted anchors {lo}, {hi}"
+        );
+    }
+    // Exact membership is not permission to reverse a promised relation.
+    let reversed = support::expected(&[
+        "fiber_started",
+        "delegate_started",
+        "job_started",
+        "fiber_exited",
+    ]);
+    support::assert_set_between(&reversed, 0, 3, &["job_started", "delegate_started"]);
+    assert!(
+        std::panic::catch_unwind(|| assert_eq!(
+            support::kinds(&reversed[1..3]),
+            ["job_started", "delegate_started"]
+        ))
+        .is_err()
+    );
+}
+
+/// The cancelled call's usage and finish share a bounded window; the
+/// finish still precedes the job end (`docs/delegates.md`, "Events").
+fn cancellation_kinds(lines: &[Value], lo: usize, hi: usize) -> Vec<&str> {
+    support::assert_set_between(lines, lo, hi, &["usage_recorded", "delegate_finished"]);
+    let mut ordered = support::kinds(&lines[..=lo]);
+    ordered.push("delegate_finished");
+    ordered.extend(support::kinds(&lines[hi..]));
+    ordered
+}
+
+#[test]
+fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
+    for interior in [
+        vec!["usage_recorded", "delegate_finished"],
+        vec!["delegate_finished", "usage_recorded"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(interior);
+        kinds.extend(["job_completed", "fiber_exited"]);
+        let lines = support::expected(&kinds);
+        assert_eq!(
+            cancellation_kinds(&lines, 0, 3),
+            [
+                "turn_completed",
+                "delegate_finished",
+                "job_completed",
+                "fiber_exited"
+            ]
+        );
+    }
+    for interior in [
+        vec!["delegate_finished"],
+        vec!["delegate_finished", "usage_recorded", "usage_recorded"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(interior);
+        kinds.push("job_completed");
+        let lines = support::expected(&kinds);
+        assert!(
+            std::panic::catch_unwind(|| cancellation_kinds(&lines, 0, lines.len() - 1)).is_err()
+        );
+    }
 }
 
 /// The `job_completed` line for `job`.
@@ -275,6 +434,7 @@ impl Running {
         args: &[&str],
         stdin: Stdio,
     ) -> (Self, Option<std::process::ChildStdin>) {
+        fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
         let mut command = setup.fiber(args);
         command.stdin(stdin);
         let mut child = command.spawn().unwrap();
@@ -829,6 +989,7 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     let _guard = arm(&setup);
     let full = "the scan found three caches";
     let child = ProviderServer::start([text_reply(full)]).unwrap();
+    child.hold();
     // The wait names the job the receipt minted, which no script can know:
     // the server builds the wait call from the receipt it sees.
     let parent = ProviderServer::start_responding(answering(
@@ -849,7 +1010,19 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
     standing_allow(&setup);
     slow_idle(&setup);
 
-    let running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the child call is held"
+    );
+    let requested = running.wait_line("the jobs wait is requested", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    let action = requested.last().unwrap()["action_id"].clone();
+    running.wait_line("the matching jobs wait starts", |line| {
+        line["kind"] == "tool_call_started" && line["action_id"] == action
+    });
+    child.release();
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
 
@@ -882,6 +1055,7 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
         let line = lines.iter().find(|line| line["kind"] == kind).unwrap();
         assert_eq!(line["payload"]["job_id"], job_id);
         assert_eq!(line["action_id"], action, "{kind} came as a notice");
+        assert_eq!(one(&lines, kind)["job_id"], job_id, "no duplicate notice");
     }
 }
 
@@ -1321,7 +1495,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The crash is contained to the dead delegate: it ends failed with
     // the signal named, never a `failed signal` status; its sibling and
     // the late delegate complete, and every parent turn completes.
-    assert_eq!(ordered_kinds(&lines), CRASH_ORDERED);
+    assert_eq!(support::kinds(&lines), CRASH_ORDERED);
     assert_eq!(
         lines
             .iter()
@@ -1361,9 +1535,8 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     }
 }
 
-/// The escalation test's parent stream kinds in order, setting aside
-/// `session_status`, `clients` and `attention` per `docs/testing.md`
-/// ("Event streams"). Pinned from a real run.
+/// An escalation parent fixture. Only its non-usage skeleton is ordered;
+/// copied and reviewer usage are checked as bounded multisets.
 const ESC_PARENT_ORDERED: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1418,8 +1591,8 @@ const ESC_PARENT_ORDERED: &[&str] = &[
     "fiber_exited",
 ];
 
-/// The escalation test's delegate log kinds in order: the log file holds no
-/// unpositioned lines, so this is the complete list.
+/// An escalation child fixture, with reviewer usage allowed on either
+/// side of the permission decision, not assigned a position by this list.
 const ESC_CHILD_ORDERED: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -1444,6 +1617,141 @@ const ESC_CHILD_ORDERED: &[&str] = &[
     "turn_completed",
     "fiber_exited",
 ];
+
+fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
+    // docs/events.md, "Process boundary": start/exit bound the process.
+    // "usage_recorded": one per fixture model call; docs/delegates.md,
+    // "Streams": each child usage is copied, with no order against turn end.
+    // "Permissions": a child's escalation is a block, not a person request.
+    let lo = lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    let hi = lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_exited")
+        .unwrap();
+    let first = expected
+        .iter()
+        .position(|kind| *kind == "fiber_started")
+        .unwrap();
+    let last = expected
+        .iter()
+        .position(|kind| *kind == "fiber_exited")
+        .unwrap();
+    support::assert_set_between(lines, lo, hi, &expected[first + 1..last]);
+    let ordered: Vec<_> = support::kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "usage_recorded")
+        .collect();
+    let skeleton: Vec<_> = expected
+        .iter()
+        .copied()
+        .filter(|kind| *kind != "usage_recorded")
+        .collect();
+    // docs/loop.md, "One step": reply, permission, then tool execution.
+    // docs/delegates.md, "Events": job start precedes delegate start;
+    // delegate finish precedes job completion. Usage has no position here.
+    assert_eq!(ordered, skeleton);
+}
+
+/// Count the session's own calls by action, and reviewer calls by purpose.
+/// Copies are checked against the child's calls separately, never deduplicated.
+fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
+    for (start, assistant) in lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line["kind"] == "assistant_message_started")
+    {
+        let action = &assistant["action_id"];
+        let end = lines
+            .iter()
+            .position(|line| {
+                line["kind"] == "assistant_message_completed" && line["action_id"] == *action
+            })
+            .unwrap();
+        let usage: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line["kind"] == "usage_recorded"
+                    && line["payload"]["origin_session_id"].is_null()
+                    && line["action_id"] == *action
+            })
+            .collect();
+        // docs/events.md, "usage_recorded": one per model call;
+        // "Actions": the assistant message encloses the streamed reply.
+        assert_eq!(usage.len(), 1, "one model call for {action}");
+        assert!(
+            start < usage[0].0 && usage[0].0 < end,
+            "own call settles within its assistant message"
+        );
+    }
+    let action = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap()["action_id"]
+        .clone();
+    let mut review: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded"
+                && line["payload"]["origin_session_id"].is_null()
+                && !line["payload"]["reviewer"].is_null()
+        })
+        .map(|line| {
+            assert_eq!(line["payload"]["reviewer"]["action_id"], action);
+            assert!(line["action_id"].is_null());
+            line["payload"]["reviewer"]["purpose"].as_str().unwrap()
+        })
+        .collect();
+    review.sort_unstable();
+    // docs/events.md, "usage_recorded": reviewer purpose and action_id
+    // identify each fixture review call, outside assistant-message actions.
+    assert_eq!(review, purposes);
+}
+
+#[test]
+fn escalation_copy_can_precede_the_independent_parent_turn_end() {
+    let mut lines = support::expected(ESC_PARENT_ORDERED);
+    lines.swap(34, 35);
+    assert_escalation_stream(&lines, ESC_PARENT_ORDERED);
+    for usage in [9, 11, 22, 32, 34, 36, 37, 38, 47] {
+        let mut missing = lines.clone();
+        assert_eq!(missing.remove(usage)["kind"], "usage_recorded");
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&missing, ESC_PARENT_ORDERED))
+                .is_err()
+        );
+        let mut duplicate = lines.clone();
+        duplicate.insert(usage, lines[usage].clone());
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&duplicate, ESC_PARENT_ORDERED))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn escalation_review_usage_can_follow_the_permission_decision() {
+    let mut lines = support::expected(ESC_CHILD_ORDERED);
+    lines.swap(12, 13);
+    assert_escalation_stream(&lines, ESC_CHILD_ORDERED);
+    for usage in [9, 11, 13, 18] {
+        let mut missing = lines.clone();
+        assert_eq!(missing.remove(usage)["kind"], "usage_recorded");
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&missing, ESC_CHILD_ORDERED))
+                .is_err()
+        );
+        let mut duplicate = lines.clone();
+        duplicate.insert(usage, lines[usage].clone());
+        assert!(
+            std::panic::catch_unwind(|| assert_escalation_stream(&duplicate, ESC_CHILD_ORDERED))
+                .is_err()
+        );
+    }
+}
 
 #[test]
 fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
@@ -1486,7 +1794,8 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
     let (status, lines, stderr) = running.wait();
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
-    assert_eq!(ordered_kinds(&lines), ESC_PARENT_ORDERED);
+    assert_escalation_stream(&lines, ESC_PARENT_ORDERED);
+    assert_escalation_calls(&lines, &["stage_1"]);
     assert!(
         lines
             .iter()
@@ -1497,8 +1806,53 @@ fn a_delegate_escalation_is_a_block_the_parent_never_sees() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
-    assert_eq!(owned_kinds(&child_lines), ESC_CHILD_ORDERED);
+    let child_lines = read_lines(&ask_sessions(&setup).join(&child_id).join("events.jsonl"));
+    assert_escalation_stream(&child_lines, ESC_CHILD_ORDERED);
+    assert_escalation_calls(&child_lines, &["stage_1", "stage_1"]);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "usage_recorded")
+            .count(),
+        parent.requests().len() + child.requests().len(),
+        "one root usage line per actual call, including each child copy"
+    );
+    let copies: Vec<_> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "usage_recorded" && !line["payload"]["origin_session_id"].is_null()
+        })
+        .collect();
+    assert_eq!(copies.len(), 4, "one copy per child call");
+    let started = lines
+        .iter()
+        .position(|line| line["kind"] == "delegate_started")
+        .unwrap();
+    let ended = lines
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let child_usage: Vec<_> = child_lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    for (copy, original) in copies.iter().zip(&child_usage) {
+        assert_eq!(copy["payload"]["origin_session_id"], child_id);
+        for field in ["generation_id", "model", "tokens", "cost", "reviewer"] {
+            assert_eq!(
+                copy["payload"][field], original["payload"][field],
+                "copied {field}"
+            );
+        }
+        let at = lines
+            .iter()
+            .position(|line| std::ptr::eq(line, *copy))
+            .unwrap();
+        assert!(
+            started < at && at < ended,
+            "copy stays within the delegate run"
+        );
+    }
     assert!(
         child_lines
             .iter()
@@ -1681,6 +2035,108 @@ fn ccall_id(id: &str, name: &str, arguments: &Value) -> Value {
         "finish_reason": "tool_calls"}]})
 }
 
+/// The budget copy and every ending in a stopped stream, between raw
+/// identity-selected anchors. Other calls keep their own field checks.
+fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
+    let turn = lines[lo..hi]
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .unwrap()["turn_id"]
+        .clone();
+    let mut window = vec![lines[lo].clone()];
+    window.extend(
+        lines[lo + 1..hi]
+            .iter()
+            .filter(|line| match line["kind"].as_str().unwrap() {
+                "usage_recorded" => line["payload"]["generation_id"] == "g_cost",
+                "delegate_finished" | "job_completed" => true,
+                "turn_completed" => line["turn_id"] == turn,
+                _ => false,
+            })
+            .cloned(),
+    );
+    window.push(lines[hi].clone());
+    // docs/delegates.md, "Streams"/"Events": one copied usage and one
+    // finish/completion per run; docs/loop.md, "Spending budget": the
+    // selected turn fails on that spend, without ordering it against fanout.
+    support::assert_set_between(&window, 0, window.len() - 1, expected);
+    let ordered = support::kinds(&window);
+    let usage = ordered
+        .iter()
+        .position(|kind| *kind == "usage_recorded")
+        .unwrap();
+    let turn = ordered
+        .iter()
+        .position(|kind| *kind == "turn_completed")
+        .unwrap();
+    // docs/loop.md, "Spending budget": the received spend trips the turn.
+    assert!(
+        usage < turn,
+        "the spend precedes the budget end: {ordered:?}"
+    );
+    if expected.contains(&"delegate_finished") {
+        let finish = ordered
+            .iter()
+            .position(|kind| *kind == "delegate_finished")
+            .unwrap();
+        let job = ordered
+            .iter()
+            .position(|kind| *kind == "job_completed")
+            .unwrap();
+        // docs/delegates.md, "Events": finish is just before job completion.
+        assert!(finish < job, "finish precedes job completion: {ordered:?}");
+    }
+}
+
+#[test]
+fn tree_stop_does_not_order_the_turn_end_against_job_fanout() {
+    let expected = [
+        "usage_recorded",
+        "turn_completed",
+        "delegate_finished",
+        "job_completed",
+    ];
+    for members in [
+        expected,
+        [
+            "usage_recorded",
+            "delegate_finished",
+            "job_completed",
+            "turn_completed",
+        ],
+    ] {
+        let mut kinds = vec!["turn_started"];
+        kinds.extend(members);
+        kinds.push("fiber_exited");
+        let mut lines = support::expected(&kinds);
+        lines[1]["payload"] =
+            json!({"generation_id": "g_cost", "origin_session_id": "s_grandchild"});
+        lines[0]["turn_id"] = json!("t_budget");
+        for line in lines
+            .iter_mut()
+            .filter(|line| line["kind"] == "turn_completed")
+        {
+            line["turn_id"] = json!("t_budget");
+        }
+        assert_tree_stop(&lines, 0, 5, &expected);
+        let mut extra_turn = lines.clone();
+        extra_turn.insert(5, json!({"kind": "turn_completed", "turn_id": "t_notice"}));
+        assert_tree_stop(&extra_turn, 0, 6, &expected);
+        for missing in 1..=4 {
+            let mut broken = lines.clone();
+            broken.remove(missing);
+            assert!(
+                std::panic::catch_unwind(|| assert_tree_stop(&broken, 0, 4, &expected)).is_err()
+            );
+            let mut duplicate = lines.clone();
+            duplicate.insert(missing, lines[missing].clone());
+            assert!(
+                std::panic::catch_unwind(|| assert_tree_stop(&duplicate, 0, 6, &expected)).is_err()
+            );
+        }
+    }
+}
+
 #[test]
 fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let setup = support::Setup::new();
@@ -1790,7 +2246,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
-    let parked = running.wait_line("the root parked in jobs wait", |line| {
+    let mut parked = running.wait_line("the root parked in jobs wait", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
     });
     // The spawn ran first, then the wait the root now parks in.
@@ -1802,6 +2258,59 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
                 && line["payload"]["name"] == "delegate_spawn"),
         "the spawn ran before the wait"
     );
+    let wait_action = parked.last().unwrap()["action_id"].clone();
+    parked.extend(running.wait_line("the root jobs wait starts", |line| {
+        line["kind"] == "tool_call_started" && line["action_id"] == wait_action
+    }));
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the child model call is held"
+    );
+    let live_child = one(&parked, "delegate_started")["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
+    subscribe(&child_socket);
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "the child's spawn review is held"
+    );
+    child.release_one();
+    let mut observed_child = support::until(&child_socket, "the grandchild starts", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let live_grandchild = observed_child.last().unwrap()["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_wait = support::until(&child_socket, "the child jobs wait is requested", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    let child_wait_action = child_wait.last().unwrap()["action_id"].clone();
+    observed_child.extend(child_wait);
+    observed_child.extend(support::until(
+        &child_socket,
+        "the child jobs wait starts",
+        |line| line["kind"] == "tool_call_started" && line["action_id"] == child_wait_action,
+    ));
+    assert!(
+        child.await_requests(3, setup.deadline),
+        "the costly grandchild call is held"
+    );
+    let grandchild_socket =
+        support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
+    subscribe(&grandchild_socket);
+    // Drain while the tree stops: otherwise the grandchild's socket writer
+    // can spend its bounded close grace behind this unread full stream.
+    let (grandchild_exit_tx, grandchild_exit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let lines = support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+        grandchild_exit_tx.send(lines).unwrap();
+    });
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
     // ends, the next request is refused, and the turn ends failed.
@@ -1825,6 +2334,16 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    observed_child.extend(support::until(
+        &child_socket,
+        "the stopped child exits",
+        |line| line["kind"] == "fiber_exited",
+    ));
+    let observed_grandchild = setup
+        .deadline
+        .recv_or_fail(&grandchild_exit_rx, "the stopped grandchild exits");
+    assert_eq!(observed_child.last().unwrap()["payload"]["exit_code"], 143);
+    assert_eq!(observed_grandchild.last().unwrap()["kind"], "fiber_exited");
     let child_lines = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
             .join(child_id)
@@ -1870,6 +2389,31 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     let grandchild_exited = grandchild_lines.last().unwrap().clone();
     assert_eq!(grandchild_exited["kind"], "fiber_exited");
+    let child_start = child_lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    assert_tree_stop(
+        &child_lines,
+        child_start,
+        child_lines.len() - 1,
+        &[
+            "usage_recorded",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+        ],
+    );
+    let grandchild_start = grandchild_lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    assert_tree_stop(
+        &grandchild_lines,
+        grandchild_start,
+        grandchild_lines.len() - 1,
+        &["usage_recorded", "turn_completed"],
+    );
     // The grandchild's normal exit after its reply races the stop: it
     // either finished first or was killed with the tree. Either way it
     // is done, and the stalled child above proves the stop itself.
@@ -1883,24 +2427,50 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let client = running.connect(&setup);
     subscribe(&client);
     client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
-    let late = running.wait_line("the late turn", |line| {
-        line["kind"] == "turn_completed" && line["payload"]["outcome"] == "failed"
+    let mut late = running.wait_line("the steer starts the late turn", |line| {
+        line["kind"] == "turn_started"
+            && line["payload"]["input"]
+                .as_array()
+                .is_some_and(|input| input.iter().any(|item| item["command_id"] == "c_late"))
     });
+    let late_turn = late.last().unwrap()["turn_id"].clone();
+    late.extend(running.wait_line("the late turn fails", |line| {
+        line["kind"] == "turn_completed" && line["turn_id"] == late_turn
+    }));
     let late_completed = late.last().unwrap();
+    assert_eq!(late_completed["payload"]["outcome"], "failed");
     assert_eq!(
         late_completed["payload"]["error"]["code"],
         "budget_exceeded"
     );
-    let started: Vec<Value> = before
+    let root_log = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
+    let root_start = root_log
         .iter()
-        .chain(late.iter())
+        .position(|line| line["kind"] == "turn_started")
+        .unwrap();
+    let late_start = root_log
+        .iter()
+        .rposition(|line| line["kind"] == "turn_started")
+        .unwrap();
+    assert_tree_stop(
+        &root_log,
+        root_start,
+        late_start,
+        &[
+            "usage_recorded",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+        ],
+    );
+    let started: Vec<Value> = root_log
+        .iter()
         .filter(|line| line["kind"] == "delegate_started")
         .cloned()
         .collect();
     assert_eq!(started.len(), 1, "no late delegate starts: {started:?}");
-    let ends: Vec<Value> = before
+    let ends: Vec<Value> = root_log
         .iter()
-        .chain(late.iter())
         .filter(|line| line["kind"] == "job_completed")
         .cloned()
         .collect();
@@ -5685,12 +6255,9 @@ const ASK_CHILD_DURABLE: &[&str] = &[
     "fiber_exited",
 ];
 
-/// The parent's durable kinds, pinned from a real run: the spawn turn,
-/// the wake turn carrying the delegate's questions with the person's form
-/// and the resume, and the final wake. A hub-started session idles
-/// after its turn instead of taking an ending-notice turn, so the
-/// delegate's finish wakes a turn of its own. The log is read before the
-/// test closes the parent, so it ends with the last wake turn.
+/// A separate-notice fixture: the parent idles between both delegate
+/// runs. A notice may instead join a running turn at its next step
+/// (`docs/loop.md`, "One step"), without changing any tool result.
 const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
     "session_started",
     "fiber_started",
@@ -5755,16 +6322,145 @@ const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
     "turn_completed",
 ];
 
+/// Assert every startup, turn and step without fixing how many turns a
+/// pair of job notices needs (`docs/loop.md`, "One step").
+fn assert_wake_schedule(lines: &[Value]) {
+    let lines = without_copies(lines);
+    // docs/delegates.md, "Results"/"Events": ask_user ends the first run;
+    // delegate_message resumes it; each of the fixture's two runs ends once.
+    for kind in ["delegate_finished", "job_completed"] {
+        assert_eq!(
+            lines.iter().filter(|line| line["kind"] == kind).count(),
+            2,
+            "two delegate runs: {kind}"
+        );
+    }
+    let first = lines
+        .iter()
+        .position(|line| line["kind"] == "turn_started")
+        .unwrap();
+    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
+    // the startup prefix precedes the first turn (docs/loop.md, "Starting a turn").
+    assert_eq!(
+        support::kinds(&lines[..first]),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message"
+        ]
+    );
+    // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": each turn encloses its
+    // steps; notices can join an existing step, so the turn count is open.
+    for turn in lines[first..].split_inclusive(|line| line["kind"] == "turn_completed") {
+        assert_eq!(turn.first().unwrap()["kind"], "turn_started");
+        assert_eq!(turn.last().unwrap()["kind"], "turn_completed");
+        let interior = &turn[1..turn.len() - 1];
+        assert_eq!(interior.first().unwrap()["kind"], "step_started");
+        let mut starts: Vec<usize> = interior
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| (line["kind"] == "step_started").then_some(i))
+            .collect();
+        starts.push(interior.len());
+        for bounds in starts.windows(2) {
+            let step = &interior[bounds[0]..bounds[1]];
+            let assistant = step
+                .iter()
+                .position(|line| line["kind"] == "assistant_message_started")
+                .unwrap();
+            let notice = if support::kinds(&step[..assistant]).contains(&"job_completed") {
+                vec!["delegate_finished", "job_completed"]
+            } else {
+                vec![]
+            };
+            // docs/loop.md, "One step": drain notices after step_started,
+            // before the request; docs/delegates.md, "Events": finish then job end.
+            support::assert_set_between(step, 0, assistant, &notice);
+            assert_eq!(
+                support::kinds(&step[1..assistant]),
+                notice,
+                "finish precedes job completion"
+            );
+            let call = step
+                .iter()
+                .find(|line| line["kind"] == "tool_call_requested");
+            let mut expected = vec!["assistant_message_started"];
+            if let Some(call) = call {
+                expected.extend([
+                    "tool_call_requested",
+                    "usage_recorded",
+                    "assistant_message_completed",
+                ]);
+                match call["payload"]["name"].as_str().unwrap() {
+                    "delegate_spawn" | "delegate_message" => expected.extend([
+                        "usage_recorded",
+                        "permission_resolved",
+                        "tool_call_started",
+                        "job_started",
+                        "delegate_started",
+                        "tool_call_completed",
+                    ]),
+                    "ask_user" => expected.extend([
+                        "tool_call_started",
+                        "interaction_requested",
+                        "interaction_resolved",
+                        "tool_call_completed",
+                    ]),
+                    name => panic!("unexpected relay tool {name}"),
+                }
+            } else {
+                expected.extend([
+                    "text_completed",
+                    "usage_recorded",
+                    "assistant_message_completed",
+                ]);
+            }
+            // docs/loop.md, "One step": stream reply, decide permission,
+            // run tools; docs/events.md, "usage_recorded": one per fixture call;
+            // "Interactions": request then resolution; docs/delegates.md,
+            // "Events": job_started then delegate_started for each run.
+            assert_eq!(support::kinds(&step[assistant..]), expected);
+        }
+    }
+}
+
+#[test]
+fn wake_schedule_accepts_a_notice_joining_the_running_turn() {
+    for merged in [false, true] {
+        let mut lines = support::expected(ASK_WAKE_PARENT_DURABLE);
+        for (call, name) in lines
+            .iter_mut()
+            .filter(|line| line["kind"] == "tool_call_requested")
+            .zip(["delegate_spawn", "ask_user", "delegate_message"])
+        {
+            call["payload"] = json!({"name": name});
+        }
+        if merged {
+            let last_turn = lines
+                .iter()
+                .rposition(|line| line["kind"] == "turn_started")
+                .unwrap();
+            lines.remove(last_turn);
+            lines.remove(last_turn - 1);
+        }
+        assert_wake_schedule(&lines);
+    }
+}
+
 #[test]
 fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     let setup = support::Setup::new();
     let guard = arm(&setup);
-    let parent = ProviderServer::start_responding(|request: &Request| {
+    let (completion_tx, completion_rx) = mpsc::channel();
+    let parent = ProviderServer::start_responding(move |request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
         if !text.contains(r#""name":"delegate_spawn""#) {
             return text_reply("allow");
         }
         if text.contains(PORCH_DONE) {
+            completion_tx.send(()).unwrap();
             return support::hello();
         }
         if text.contains("Resumed delegate") {
@@ -5918,12 +6614,21 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
         "the resumed run carries the verbatim answer line"
     );
     child.release();
-    // The resumed run ends on its final message, and the parent's last
-    // wake turn ends on its own: three turns in all.
-    let mut turns = 1;
-    let mut batch = support::until(&main, "the parent's last turn ends", |line| {
-        turns += usize::from(line["kind"] == "turn_completed" && is_session(line, &parent_id));
-        turns == 3
+    let mut batch = support::until(&main, "the resumed job completes", |line| {
+        line["kind"] == "job_completed"
+            && is_session(line, &parent_id)
+            && line["payload"]["job_id"] == job
+    });
+    let completion_turn = batch.last().unwrap()["turn_id"].clone();
+    lines.append(&mut batch);
+    setup.deadline.recv_or_fail(
+        &completion_rx,
+        "the parent request carries the final delegate message",
+    );
+    let mut batch = support::until(&main, "the completion-bearing turn ends", |line| {
+        line["kind"] == "turn_completed"
+            && is_session(line, &parent_id)
+            && line["turn_id"] == completion_turn
     });
     lines.append(&mut batch);
     drop(other);
@@ -5944,10 +6649,12 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             "the wake carries the whole question line: {body}"
         );
     }
-    // Six session requests and two reviewer verdicts: the spawn, the
-    // receipt, the wake, the answer, the resume receipt, and the final
-    // wake. The person's form is never reviewed.
-    assert_eq!(parent.requests().len(), 8, "two reviews and six turns");
+    // The spawn and resume are reviewed; the person's form is not
+    // (`docs/delegates.md`, "Permissions": `delegate_spawn`,
+    // `delegate_fork` and `delegate_message` are always reviewed).
+    // Session request counts depend on which step takes the job notice.
+    let requests = parent.requests();
+    assert_eq!(requests.len() - session_bodies(&requests).len(), 2);
 
     let parent_log = sessions_in(&setup.home(), &setup.workspace())
         .join(&parent_id)
@@ -5995,14 +6702,12 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     }
     // The wake turn's input holds one jobs item naming the job, and the
     // parent's own form resolved by the person with one result line.
-    let turns: Vec<&Value> = parent_lines
-        .iter()
-        .filter(|line| line["kind"] == "turn_started")
-        .collect();
-    assert_eq!(turns.len(), 3, "{:?}", owned_kinds(&parent_lines));
-    assert_eq!(
-        turns[1]["payload"]["input"],
-        json!([{"type": "jobs", "job_ids": [job]}])
+    let wake_input = json!([{"type": "jobs", "job_ids": [job]}]);
+    assert!(
+        parent_lines.iter().any(|line| {
+            line["kind"] == "turn_started" && line["payload"]["input"] == wake_input
+        }),
+        "the idle parent's wake names the job"
     );
     let asked = parent_lines
         .iter()
@@ -6098,10 +6803,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     {
         assert_eq!(exited["payload"]["exit_code"], 0);
     }
-    assert_eq!(
-        durable_kinds(&without_copies(&parent_lines)),
-        ASK_WAKE_PARENT_DURABLE
-    );
+    assert_wake_schedule(&parent_lines);
 
     // Closing the parent ends it; its sessions leave no process behind.
     main.send(&format!(
@@ -6167,17 +6869,21 @@ const DELEGATE_COMMAND_DURABLE: &[&str] = &[
 fn subscribed_command_session(
     setup: &support::Setup,
     id: &str,
-) -> (extension_harness::Socket, extension_harness::Running) {
+) -> (
+    extension_harness::Socket,
+    extension_harness::Running,
+    Vec<Value>,
+) {
     let mut running = setup.start_session(id, &[]);
     let client = running.connect(&setup.socket(id));
     send(
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    until_session(&client, "the subscribe acknowledgement", |line| {
+    let prefix = until_session(&client, "the subscribe acknowledgement", |line| {
         line["kind"] == "command_accepted"
     });
-    (client, running)
+    (client, running, prefix)
 }
 
 /// The socket's `extension_ui` statuses from `extension`.
@@ -6205,7 +6911,7 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let id = doors::mint("s_");
-    let (client, running) = subscribed_command_session(&setup, &id);
+    let (client, running, _prefix) = subscribed_command_session(&setup, &id);
     send(
         &client,
         r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
@@ -6276,6 +6982,96 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
     }
 }
 
+/// The subscribe and reload bound startup; command acceptance can race
+/// replay, while startup and job start retain their own promised order.
+fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
+    // docs/events.md, "Process boundary"/"extensions_loaded": session start,
+    // process start, then extension load. "Command acknowledgements": one
+    // acceptance per command, with no order against the replayed prefix.
+    // docs/delegates.md, "Events": one job/delegate start per fixture run.
+    support::assert_set_between(
+        lines,
+        lo,
+        hi,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "command_accepted",
+            "job_started",
+            "delegate_started",
+            "extension_ui",
+        ],
+    );
+    let window = &lines[lo + 1..hi];
+    assert_eq!(answered(window, "c_go")["kind"], "command_accepted");
+    let ordered: Vec<_> = support::kinds(window)
+        .into_iter()
+        .filter(|kind| *kind != "command_accepted")
+        .collect();
+    let expected = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "job_started",
+        "delegate_started",
+        "extension_ui",
+    ];
+    let mut between = expected;
+    between.swap(4, 5);
+    let mut before = expected;
+    before[3..].copy_from_slice(&["extension_ui", "job_started", "delegate_started"]);
+    // docs/delegates.md, "Events": job start precedes delegate start;
+    // docs/events.md, "extension_ui": no order against those job events.
+    assert!(
+        [expected.as_slice(), between.as_slice(), before.as_slice()].contains(&ordered.as_slice()),
+        "startup order: {ordered:?}"
+    );
+}
+
+#[test]
+fn startup_acknowledgement_can_join_the_replayed_prefix() {
+    for ui in 3..=5 {
+        for ack in 0..=6 {
+            let mut lines = support::expected(&[
+                "session_started",
+                "fiber_started",
+                "extensions_loaded",
+                "job_started",
+                "delegate_started",
+            ]);
+            lines.insert(ui, json!({"kind": "extension_ui"}));
+            lines.insert(
+                ack,
+                json!({"kind": "command_accepted", "payload": {"command_id": "c_go"}}),
+            );
+            lines.insert(
+                0,
+                json!({"kind": "command_accepted", "payload": {"command_id": "c_sub"}}),
+            );
+            lines.push(json!({"kind": "reloaded"}));
+            assert_command_startup(&lines, 0, 8);
+            let mut missing = lines.clone();
+            missing.remove(ack + 1);
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&missing, 0, 7)).is_err());
+            let mut duplicate = lines.clone();
+            duplicate.insert(ack + 1, lines[ack + 1].clone());
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&duplicate, 0, 9)).is_err());
+            let mut reversed = lines.clone();
+            let job = reversed
+                .iter()
+                .position(|line| line["kind"] == "job_started")
+                .unwrap();
+            let delegate = reversed
+                .iter()
+                .position(|line| line["kind"] == "delegate_started")
+                .unwrap();
+            reversed.swap(job, delegate);
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&reversed, 0, 8)).is_err());
+        }
+    }
+}
+
 #[test]
 fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     let setup = support::Setup::new();
@@ -6294,14 +7090,14 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let id = doors::mint("s_");
-    let (client, running) = subscribed_command_session(&setup, &id);
+    let (client, running, mut stream) = subscribed_command_session(&setup, &id);
     send(
         &client,
         r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
     );
-    let mut stream = until_session(&client, "the delegate start", |line| {
+    stream.extend(until_session(&client, "the delegate start", |line| {
         line["kind"] == "extension_ui" && line["payload"].to_string().contains("started:")
-    });
+    }));
     assert!(
         child.await_requests(1, setup.deadline),
         "the delegate child is running"
@@ -6343,10 +7139,17 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // cancelled delegate's unfinished call still settles its
     // `usage_recorded`, copied with the delegate as origin
     // (`docs/events.md`, "Usage and notices").
+    let logged = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
+    let lo = logged
+        .iter()
+        .position(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let hi = logged
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
     assert_eq!(
-        durable_kinds(&read_lines(
-            &support::session_dir(&setup, &id).join("events.jsonl")
-        )),
+        cancellation_kinds(&logged, lo, hi),
         [
             "session_started",
             "fiber_started",
@@ -6356,7 +7159,6 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "reloaded",
             "extensions_loaded",
             "preamble_built",
-            "usage_recorded",
             "delegate_finished",
             "job_completed",
         ]
@@ -6375,41 +7177,44 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // precedes `delegate_started`; `extension_ui` may land before, between,
     // or after them. Those three placements are valid; anything duplicated,
     // missing or otherwise reordered fails.
-    let kinds = owned_kinds(&stream);
-    let ordered: Vec<&str> = kinds
+    let lo = stream
         .iter()
-        .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
-        .map(String::as_str)
-        .collect();
-    let started_first: [&str; 16] = [
-        "session_started",
-        "fiber_started",
-        "extensions_loaded",
-        "command_accepted",
-        "job_started",
-        "delegate_started",
-        "extension_ui",
-        "reloaded",
-        "command_accepted",
-        "extensions_loaded",
-        "preamble_built",
-        // The cancelled delegate's unfinished call settles here too
-        // (`docs/events.md`, "Usage and notices").
-        "usage_recorded",
-        "delegate_finished",
-        "job_completed",
-        "command_accepted",
-        "fiber_exited",
-    ];
-    let mut ui_first = started_first;
-    ui_first.swap(5, 6);
-    let mut ui_before_job = started_first;
-    ui_before_job[4] = "extension_ui";
-    ui_before_job[5] = "job_started";
-    ui_before_job[6] = "delegate_started";
-    assert!(
-        ordered == started_first || ordered == ui_first || ordered == ui_before_job,
-        "unexpected stream: {ordered:?}"
+        .position(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let hi = stream
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let sub = stream
+        .iter()
+        .position(|line| is_answer(line, "c_sub"))
+        .unwrap();
+    let reload = stream
+        .iter()
+        .position(|line| line["kind"] == "reloaded")
+        .unwrap();
+    assert_command_startup(&stream, sub, reload);
+    assert_eq!(
+        answered(&stream[reload..], "c_reload")["kind"],
+        "command_accepted"
+    );
+    assert_eq!(
+        answered(&stream[hi..], "c_close")["kind"],
+        "command_accepted"
+    );
+    let ordered = cancellation_kinds(&stream[reload..], lo - reload, hi - reload);
+    assert_eq!(
+        ordered,
+        [
+            "reloaded",
+            "command_accepted",
+            "extensions_loaded",
+            "preamble_built",
+            "delegate_finished",
+            "job_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
     );
     drop(client);
     let (status, _out, stderr) = running.wait();
@@ -6423,6 +7228,13 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // The model's first turn calls the `go` tool; the second ends the
     // turn, so the prompt ends the session. Reviewer verdicts answer
     // "allow", as the answering helper does.
+    // Held: the delegate is still running when the prompt ends the session.
+    // Built before the parent and shared, so the parent's responder can
+    // wait for the delegate's model call before ending the turn.
+    let child = Arc::new(ProviderServer::start([text_reply(SENTINEL)]).unwrap());
+    child.hold();
+    let deadline = setup.deadline;
+    let waiting = Arc::clone(&child);
     let called = Arc::new(AtomicBool::new(false));
     let parent = ProviderServer::start_responding(move |request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
@@ -6430,14 +7242,15 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             return text_reply("allow");
         }
         if called.swap(true, Ordering::SeqCst) {
+            assert!(
+                waiting.await_requests(1, deadline),
+                "the delegate called its model"
+            );
             return text_reply("all done");
         }
         support::stream(&[function_call("call_go", "go", &json!({}))])
     })
     .unwrap();
-    // Held: the delegate is still running when the prompt ends the session.
-    let child = ProviderServer::start([text_reply(SENTINEL)]).unwrap();
-    child.hold();
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
@@ -6447,11 +7260,15 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // `session_status` lines set aside: they carry no position relative
     // to the session's other lines (`docs/testing.md`, "Event streams").
     let kinds = owned_kinds(&lines);
-    let ordered: Vec<&str> = kinds
+    let turn_end = lines
         .iter()
-        .filter(|kind| *kind != "session_status")
-        .map(String::as_str)
-        .collect();
+        .position(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    let job_end = lines
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let ordered = cancellation_kinds(&lines, turn_end, job_end);
     assert_eq!(
         ordered,
         [

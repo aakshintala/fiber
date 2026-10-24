@@ -630,6 +630,9 @@ pub(crate) struct Socket {
     pub(crate) read: Mutex<BufReader<UnixStream>>,
     /// Lines [`recv_answer`] read past, returned by [`Socket::next`] first.
     kept: Mutex<std::collections::VecDeque<Value>>,
+    /// Set by [`Socket::pumped`]: the lines a reader thread took off the
+    /// socket, `None` once the far end closed it.
+    pump: Option<Mutex<mpsc::Receiver<Option<Value>>>>,
     deadline: Deadline,
 }
 
@@ -667,6 +670,15 @@ impl Socket {
     pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
         if let Some(line) = self.kept.lock().unwrap().pop_front() {
             return Some(line);
+        }
+        if let Some(pump) = &self.pump {
+            return match self.deadline.recv(&pump.lock().unwrap()) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited until the deadline for {what}; got {got:?}")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            };
         }
         match read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
             Ok(None) => None,
@@ -853,8 +865,39 @@ impl Socket {
             write: Mutex::new(stream),
             read: Mutex::new(BufReader::new(read)),
             kept: Mutex::default(),
+            pump: None,
             deadline,
         }
+    }
+
+    /// Reads the socket on a thread from now on, so a client the test holds
+    /// open and does not read never fills its socket buffer and wedges the
+    /// hub's relay (macOS buffers 8 KiB per Unix socket, Linux ~212 KiB).
+    /// [`Socket::next`] takes the lines from the thread, still bounded by
+    /// the deadline. Call it before the first line is read.
+    pub(crate) fn pumped(mut self) -> Self {
+        let stream = self.write.lock().unwrap().try_clone().unwrap();
+        let (lines, pump) = mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stream);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                let line = match reader.read_line(&mut buf) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => {
+                        let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
+                        Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+                    }
+                };
+                let closed = line.is_none();
+                if lines.send(line).is_err() || closed {
+                    return;
+                }
+            }
+        });
+        self.pump = Some(Mutex::new(pump));
+        self
     }
 }
 
@@ -1206,30 +1249,43 @@ pub(crate) fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what this test pins (as `tests/session_command.rs`
-/// filters it).
+/// Independently triggered lines have no position in an ordered projection
+/// (`docs/testing.md`, "Event streams"). Fixed counts use the raw lines.
+const UNORDERED_KINDS: &[&str] = &["clients", "session_status", "attention", "date_changed"];
+
+/// The ordered event kinds, setting aside independently triggered lines.
 pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
         .map(|line| line["kind"].as_str().unwrap())
+        .filter(|kind| !UNORDERED_KINDS.contains(kind))
         .collect()
 }
 
-/// The event kinds of `lines`, in order, without `session_status` or
-/// `attention`: an observer thread writes `session_status`, so where it
-/// falls among the loop's own lines is not what this test pins (as
-/// `tests/session_command.rs` filters it), and the hub's `attention` line
-/// derives from that status, so whether it comes and where is not pinned
-/// either.
+/// The ordered event kinds, also setting aside the hub's attention lines.
 pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
+    kinds(lines)
+}
+
+/// Asserts exact multiset membership strictly between identity-selected
+/// anchors. Callers separately assert the anchors and any promised order.
+pub(crate) fn assert_set_between(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
+    assert!(lo < hi, "anchors must increase: {lo}, {hi}");
+    assert!(
+        hi < lines.len(),
+        "anchor {hi} outside {} lines",
+        lines.len()
+    );
+    let mut actual = kinds(&lines[lo + 1..hi]);
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(
+        actual,
+        expected,
+        "event window {lo}..{hi}: {:?}",
+        kinds(lines)
+    );
 }
 
 pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {

@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use crate::client;
 use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
+
 use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
@@ -27,6 +28,7 @@ use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::steering::Queue;
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
+use log::diag::{Diag, Level, Process, Severity};
 use log::{Injector, Log, Watcher};
 use support::lock;
 
@@ -39,10 +41,11 @@ mod event;
 mod shells;
 use accept::accept_loop;
 use accepted::Accepted;
+pub(crate) use accepted::Answered;
 use clients::Clients as ClientCounts;
+pub(crate) use conns::CUT;
 use conns::Conns;
-#[cfg(test)]
-use conns::GRACE;
+use conns::{CUT_FLUSH, GRACE};
 pub(crate) use event::envelope;
 use shells::Shells;
 pub(crate) use shells::Stopped;
@@ -178,6 +181,10 @@ pub(crate) struct Gate {
     /// A setter that must stop at `close`'s start reads this, not the
     /// connections' stopped state, which is marked after the wait.
     pub(crate) sealed: AtomicBool,
+    /// Whether the shutdown waits ran: [`Session::quiesce`] waits before
+    /// `fiber_exited` is written, so [`Session::close`] waits when
+    /// `quiesce` did not.
+    answered: AtomicBool,
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
@@ -623,7 +630,10 @@ impl Session {
 
     /// Makes `fiber_exited` the last line this process writes: no later
     /// `clients` line is emitted, no new driver shell runs, and every
-    /// running one is cancelled and waited for. Called just before
+    /// running one is cancelled and waited for. Every line a reader read is
+    /// answered before it returns, so a log ending in `fiber_exited`
+    /// means the session never read the command
+    /// (`docs/invocation.md`, "Lifecycle"). Called just before
     /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
     pub fn quiesce(&self) {
         // No session message enters once the session quiets.
@@ -635,32 +645,82 @@ impl Session {
         }
         self.gate.cancel_shells();
         self.gate.wait_shells();
+        self.settle_answers();
     }
 
-    /// Ends the door side: marks the gate stopped, unlinks the socket,
-    /// drops `log`
-    /// (the last handle, which releases the lock), waits up to [`conns::GRACE`] for
-    /// each writer, then shuts down whatever is still open. Every driver
-    /// shell is cancelled first, since shutting its socket does not stop the
-    /// tool, and waited for: its thread is not joined, and its answer is
-    /// queued before it ends. The accept thread is detached, never joined
-    /// and never woken: a wake would take a blocking `UnixStream::connect`,
-    /// which on Linux blocks forever when a replacement listener's backlog
-    /// is full, and when the path is gone, or was rebound by another
-    /// listener, nothing can wake this session's `accept`, so a join would
-    /// block forever; process exit ends the thread. A connection the loop
-    /// admits after the stop is rejected, not served: the stopped check and
-    /// the reader's publication share the connection lock, so a late
-    /// reader's stream is shut down and its thread ends instead of leaking.
-    /// A reader can still admit one until it is
-    /// joined; that shell starts cancelled and is waited for once no reader
-    /// is left, though its answer may reach no writer.
+    /// Answers everything the readers read: the readers keep reading
+    /// through the wait — every line one reads after `close` is answered
+    /// `closing` at once, except a `close` with `now`, which is accepted
+    /// and upgrades the close — and each such answer is owed like any
+    /// other, so the wait below covers it. Waits up to [`conns::GRACE`]
+    /// for the answers owed (the grace still bounds the wait, so a client
+    /// that keeps sending cannot hold the exit), then stops the readers,
+    /// and cuts what is still unanswered, answering each
+    /// `indeterminate`. A reader finishes and answers the line it is
+    /// dispatching, and a line already in its buffer is still dispatched.
+    /// A cut writer flushes what the cut decided and stays up, and
+    /// [`conns::CUT_FLUSH`] more lets the flush land before `fiber_exited`
+    /// is written, so every connection streams it. Every line a
+    /// reader read gets exactly one answer on its connection: its own, or
+    /// `indeterminate` when the grace passes first. Runs before
+    /// `fiber_exited` is written.
+    fn settle_answers(&self) {
+        if self.gate.answered.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let clock = self.gate.clock.as_ref();
+        let until = clock.now() + GRACE;
+        #[cfg(test)]
+        self.gate.note(tests::Probe::FirstShellWaitDone);
+        self.gate.accepted.wait_owed(clock, until);
+        // The reader stop is the last step before the cut: once every
+        // answer owed is on its connection, the readers stop reading
+        // another line.
+        self.gate.conns.mark_stopped();
+        self.gate.conns.quiet_readers();
+        self.gate.conns.cut_owed(&self.gate.session_id, |reader| {
+            self.gate.accepted.unanswered(reader) > 0
+        });
+        self.gate.conns.wait_cut(clock, until + CUT_FLUSH);
+    }
+
+    /// Ends the door side, in this order. It cancels every driver shell and
+    /// waits for each, since shutting its socket does not stop the tool; the
+    /// shell's thread is not joined, and its answer is queued before it
+    /// ends. It waits for the writers — [`Session::quiesce`] already
+    /// answered everything owed before `fiber_exited` was written, and
+    /// this wait lets every writer stream it — cuts what still waits at
+    /// the grace, and waits the flush margin, then unlinks the socket. It
+    /// ends every watcher's stream with `log.end_watchers()`, which keeps
+    /// the lock, then drops `log`. The readers are joined only up to the
+    /// grace: a reader still inside a command then is detached, since its
+    /// line was answered, and process exit ends it. One `timeout` line in
+    /// the session's diagnostic log (`docs/state.md`, "What each part
+    /// holds") names each connection the close stopped waiting for. The
+    /// accept thread is detached, never
+    /// joined and never woken: a wake would take a blocking
+    /// `UnixStream::connect`, which on Linux blocks forever when a
+    /// replacement listener's backlog is full, and when the path is gone,
+    /// or was rebound by another listener, nothing can wake this session's
+    /// `accept`, so a join would block forever; process exit ends the
+    /// thread. A connection the loop admits after the stop is rejected, not
+    /// served: the stopped check and the reader's publication share the
+    /// connection lock, so a late reader's stream is shut down and its
+    /// thread ends instead of leaking. A reader can still admit a shell
+    /// from a line already in its buffer when the readers were stopped;
+    /// that shell starts cancelled, its answer is written before its writer
+    /// ends or the line is cut `indeterminate` at the grace, and the second
+    /// `wait_shells` waits for it.
     pub fn close(self, log: Arc<Log>) {
         self.gate.cancel_shells();
         self.gate.wait_shells();
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.conns.mark_stopped();
+        // A reader that stops detaches its connection: no `clients` line
+        // follows the shutdown, as after `quiesce`.
+        self.gate.clients.seal();
+        self.gate.conns.quiet_readers();
         // The inbox sender is dropped here, so a kept receiver sees
         // `Disconnected`: the detached accept thread keeps its own `Arc`
         // until process exit and can no longer be relied on to release it.
@@ -673,9 +733,23 @@ impl Session {
         if !prompted(&self.dir) {
             fs::remove_dir_all(&self.dir).unwrap_or(());
         }
+        // A process that keeps its own `Arc<Log>` until it exits never drops
+        // the last one, so the writers' end comes from here.
+        log.end_watchers();
         drop(log);
-        self.gate.conns.wait_writers(self.gate.clock.as_ref());
-        self.gate.conns.join_clients();
+        let clock = self.gate.clock.as_ref();
+        let until = clock.now() + GRACE;
+        // After `quiesce` nothing is owed, but the writers still need this
+        // window to stream `fiber_exited` before the sockets shut: without
+        // it a slow writer loses the exit line. Then the belt: cut what
+        // still waits, and let it flush before the sockets shut.
+        self.gate.conns.wait_writers(clock, until);
+        self.gate.conns.cut_all(&self.gate.session_id);
+        self.gate.conns.wait_writers(clock, until + CUT_FLUSH);
+        let detached = self.gate.conns.join_clients(clock, until);
+        for _ in 0..detached {
+            self.stopped_waiting();
+        }
         self.gate.wait_shells();
         // The printer's watcher returns only on a `client::STOP` line or
         // the log's end: with nothing written and another `Arc<Log>` still
@@ -686,6 +760,24 @@ impl Session {
         #[cfg(test)]
         self.gate.note(tests::Probe::PrinterStopQueued);
         join(self.printer);
+    }
+
+    /// One `warn` line in the session's diagnostic log: the close stopped
+    /// waiting for a command still running at the grace.
+    fn stopped_waiting(&self) {
+        let diag = Diag::new(
+            &self.gate.home,
+            Process::Session,
+            Level::Info,
+            Arc::clone(&self.gate.clock),
+        );
+        diag.attach(&self.gate.session_id);
+        diag.line(
+            Severity::Warn,
+            None,
+            "timeout",
+            "A command was still running when the session closed; it was answered indeterminate and the session stopped waiting for it.",
+        );
     }
 
     fn start_accept(&self) -> Result<(), Failure> {
@@ -874,6 +966,7 @@ impl Wake for InboxWake {
 impl Wake for Gate {
     fn wake(&self) {
         self.conns.notify();
+        self.accepted.notify();
         // A clock move wakes the loop the way an accepted cancel does.
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
@@ -945,6 +1038,7 @@ fn open_in(
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
         sealed: AtomicBool::new(false),
+        answered: AtomicBool::new(false),
         #[cfg(test)]
         probe: Mutex::new(None),
         clients: ClientCounts::new(),
@@ -1001,6 +1095,17 @@ pub(crate) fn park_reader_for_test() {
 #[cfg(test)]
 pub(crate) fn shutdown_skipped_for_test() -> bool {
     tests::shutdown_skipped()
+}
+
+#[cfg(test)]
+impl Session {
+    /// The session's gate, for a test outside the session module that runs
+    /// a writer with a flight: the flight's probe is the only signal the
+    /// writer parked past the log's end (`docs/testing.md`, "Waits and
+    /// timeouts").
+    pub(crate) fn gate_for_test(&self) -> &Arc<Gate> {
+        &self.gate
+    }
 }
 
 /// Whether the session's log shows it was ever prompted: a `turn_started`

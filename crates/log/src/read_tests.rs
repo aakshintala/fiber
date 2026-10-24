@@ -2,6 +2,13 @@ use super::*;
 use crate::open_log;
 use contract::SessionId;
 use std::io::SeekFrom;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use fakes::Deadline;
+
+const DEADLINE: Duration = Duration::from_secs(10);
 
 fn write(dir: &std::path::Path, bytes: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
@@ -435,4 +442,68 @@ fn pending_is_true_when_failed() {
         ..Default::default()
     };
     assert!(pending(&state));
+}
+
+fn kept_line(kind: &str) -> Envelope {
+    serde_json::from_str(&crate::fixtures::line(
+        kind,
+        "s_1",
+        1,
+        0,
+        &serde_json::json!({}),
+    ))
+    .unwrap()
+}
+
+fn ended_watcher() -> (fakes::TempDir, Watcher) {
+    let sessions = fakes::TempDir::new("log-unit-after-end");
+    let log = crate::Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let mut watcher = log.watch();
+    drop(log);
+    assert!(
+        watcher
+            .recv_timeout(DEADLINE)
+            .expect("dropping the log ends its watchers")
+            .unwrap()
+            .is_none(),
+        "the log's end"
+    );
+    (sessions, watcher)
+}
+
+#[test]
+fn recv_after_end_returns_a_kept_line_pushed_after_the_end() {
+    let (_sessions, mut watcher) = ended_watcher();
+    watcher.injector().push_kept(kept_line("late"));
+    assert_eq!(watcher.recv_after_end().kind, "late");
+}
+
+#[test]
+fn recv_after_end_waits_while_nothing_is_queued() {
+    parked_after_end::clear();
+    let (_sessions, mut watcher) = ended_watcher();
+    let injector = watcher.injector();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(
+        move || {
+            if let Ok(()) = tx.send(watcher.recv_after_end().kind) {}
+        },
+    );
+    parked_after_end::wait();
+    assert!(
+        rx.try_recv().is_err(),
+        "nothing queued: the call waits instead of returning the end"
+    );
+    injector.push_kept(kept_line("late"));
+    assert_eq!(
+        Deadline::after(Duration::from_secs(10))
+            .recv(&rx)
+            .expect("the pushed line wakes the wait"),
+        "late"
+    );
 }

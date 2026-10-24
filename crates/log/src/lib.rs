@@ -125,6 +125,12 @@ pub enum Error {
         /// The failure that stopped it.
         cause: String,
     },
+    /// The session ended: nothing more is written to its log.
+    #[error("session {session} has ended; nothing more is written to it")]
+    Ended {
+        /// The session.
+        session: String,
+    },
     /// The session directory, or its log, does not exist.
     #[error("no session at {0}")]
     NotFound(PathBuf),
@@ -180,6 +186,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Held { .. } => ErrorCode::SessionHeld,
+            Self::Ended { .. } => ErrorCode::Closing,
             Self::NotFound(_) => ErrorCode::SessionNotFound,
             Self::Ambiguous { .. } | Self::Exists(_) => ErrorCode::Usage,
             // Only a failed write or fsync stops a log.

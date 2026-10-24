@@ -695,8 +695,20 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
     send(&client, r#"{"id":"c_close","command":"close"}"#);
     let tail = until_session_close(&client);
     let stream = [lines.clone(), done.clone(), tail.clone()].concat();
+    // One `clients` line for this full connection attaching
+    // (`docs/events.md`, `clients`); the count is fixed, so it is pinned
+    // against the raw lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "the client attached once: {stream:?}"
+    );
     // The complete ordered kinds: the extension command is admitted, then
-    // its driven prompt runs its turn, then the close is admitted.
+    // its driven prompt runs its turn, then the close is admitted
+    // (`docs/loop.md`, "Starting a turn", "Ending a turn").
     assert_eq!(
         kinds(&stream),
         [
@@ -704,7 +716,6 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "preamble_built",
             "opening_message",
@@ -729,7 +740,6 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -858,7 +868,6 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -898,7 +907,6 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1044,7 +1052,6 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1082,7 +1089,6 @@ fn host_drive_reply_to_a_pending_approval_is_refused() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1206,10 +1212,7 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         ],
     );
     assert_eq!(
-        kinds(&out)
-            .iter()
-            .filter(|kind| **kind == "clients")
-            .count(),
+        out.iter().filter(|line| line["kind"] == "clients").count(),
         1
     );
     let notices: Vec<&Value> = out

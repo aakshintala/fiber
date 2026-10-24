@@ -1524,7 +1524,7 @@ fn wait_session_events(setup: &support::Setup, id: &str, expected: &[&str]) -> V
         let bytes = events_bytes(setup, id);
         let text = String::from_utf8(bytes).unwrap();
         let events: Vec<Value> = support::complete_lines(&text);
-        if event_kinds(&events).as_slice() == expected {
+        if support::kinds(&events).as_slice() == expected {
             return events;
         }
         if setup.deadline.left().is_zero() {
@@ -1548,21 +1548,41 @@ fn kinds_of_bytes(bytes: &[u8]) -> Vec<String> {
     let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
     complete
         .lines()
-        .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|line| line.get("kind").and_then(Value::as_str).map(str::to_owned))
-                .unwrap_or_else(|| format!("unparsed: {line}"))
+        .flat_map(|line| match serde_json::from_str::<Value>(line) {
+            Ok(event) if event.get("kind").and_then(Value::as_str).is_some() => {
+                support::kinds(&[event])
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            }
+            _ => vec![format!("unparsed: {line}")],
         })
         .collect()
 }
 
-/// The kinds of the session's log, in order.
-fn event_kinds(events: &[Value]) -> Vec<&str> {
-    events
+#[test]
+fn log_kind_projection_keeps_complete_lines_and_unparsed_diagnostics() {
+    let events = support::expected(&[
+        "clients",
+        "fiber_started",
+        "session_status",
+        "attention",
+        "date_changed",
+        "fiber_exited",
+    ]);
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the ordered projection, whatever positions they held.
+    assert_eq!(support::kinds(&events), ["fiber_started", "fiber_exited"]);
+    let mut bytes = events
         .iter()
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    bytes.push_str("not json\n{\"kind\":\"partial");
+    assert_eq!(
+        kinds_of_bytes(bytes.as_bytes()),
+        ["fiber_started", "fiber_exited", "unparsed: not json"]
+    );
 }
 
 /// The kinds of the session every credential-resume test starts from:
@@ -1792,16 +1812,16 @@ fn resume_with_a_credential_switches_an_exited_session_to_the_asked_label() {
     ]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
         .collect();
-    assert_eq!(changed.len(), 1, "{:?}", event_kinds(&events));
+    assert_eq!(changed.len(), 1, "{:?}", support::kinds(&events));
     assert_eq!(changed[0]["payload"]["source"], "driver");
     assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
     assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
-    let kinds = event_kinds(&events);
+    let kinds = support::kinds(&events);
     let changed_at = kinds
         .iter()
         .position(|kind| *kind == "model_changed")
@@ -1888,8 +1908,8 @@ fn resume_with_a_credential_switches_a_running_session_at_the_next_turn() {
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
-    let kinds = event_kinds(&events);
+    assert_eq!(support::kinds(&events), expected);
+    let kinds = support::kinds(&events);
     let changed: Vec<&Value> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
@@ -1983,7 +2003,7 @@ fn resume_with_a_credential_second_turn_outlives_a_stale_completed_paint() {
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     assert_config_unchanged(&setup, &before_config);
     quit_keys(&mut second);
     quit_keys(&mut first);
@@ -2034,12 +2054,12 @@ fn resume_with_a_credential_after_the_recorded_key_was_deleted() {
     ]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     let changed: Vec<&Value> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
         .collect();
-    assert_eq!(changed.len(), 1, "{:?}", event_kinds(&events));
+    assert_eq!(changed.len(), 1, "{:?}", support::kinds(&events));
     assert_eq!(changed[0]["payload"]["before"]["credential"], "home");
     assert_eq!(changed[0]["payload"]["after"]["credential"], "work");
     assert_config_unchanged(&setup, &before_resume);
@@ -2200,11 +2220,11 @@ fn resume_with_an_unknown_credential_on_a_running_session_stays_attached() {
     let mut expected = opened_kinds(false);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "no switch was recorded: {:?}",
-        event_kinds(&events)
+        support::kinds(&events)
     );
     assert_config_unchanged(&setup, &before_config);
     // Both terminals leave before either is reaped: each wait holds
@@ -2250,11 +2270,11 @@ fn resume_with_the_recorded_credential_records_nothing() {
     expected.extend(["fiber_started", "extensions_loaded", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "the same label records no change: {:?}",
-        event_kinds(&events)
+        support::kinds(&events)
     );
     assert_config_unchanged(&setup, &before_config);
     quit_live(run);
@@ -2300,11 +2320,11 @@ fn resume_with_the_current_credential_on_a_running_session_records_nothing() {
     let mut expected = opened_kinds(false);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     assert!(
         events.iter().all(|line| line["kind"] != "model_changed"),
         "the same label records no change: {:?}",
-        event_kinds(&events)
+        support::kinds(&events)
     );
     assert_config_unchanged(&setup, &before_config);
     // Both terminals leave before either is reaped: each wait holds
@@ -2817,7 +2837,7 @@ fn credential_journey(pick: Option<&[u8]>) {
     expected.extend(["model_changed", "preamble_built"]);
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     let changed: Vec<_> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")
@@ -3023,7 +3043,7 @@ fn credential_after_a_queued_model_switch_saves_to_the_queued_provider() {
     ];
     expected.extend(resumed_turn_kinds());
     let events = wait_session_events(&setup, &id, &expected);
-    assert_eq!(event_kinds(&events), expected);
+    assert_eq!(support::kinds(&events), expected);
     let changed: Vec<_> = events
         .iter()
         .filter(|line| line["kind"] == "model_changed")

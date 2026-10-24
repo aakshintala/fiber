@@ -90,6 +90,9 @@ struct Inner {
     latest: BTreeMap<String, Envelope>,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
+    /// Set by [`Log::end_watchers`]: nothing more is written, and a watcher
+    /// registered afterwards starts closed.
+    ended: bool,
 }
 
 impl Log {
@@ -197,6 +200,11 @@ impl Log {
             return Err(Error::Poisoned {
                 session: inner.session_id.0.clone(),
                 cause: cause.clone(),
+            });
+        }
+        if inner.ended {
+            return Err(Error::Ended {
+                session: inner.session_id.0.clone(),
             });
         }
         let sync = fsyncs(event, action_id.is_some());
@@ -336,6 +344,9 @@ impl Log {
         let queue = Arc::new(Queue::default());
         if let Some(cause) = &inner.failed {
             queue.fail(&inner.session_id.0, cause);
+        }
+        if inner.ended {
+            queue.close();
         }
         // Forget watchers already dropped, so attaching and leaving while
         // idle keeps nothing.
@@ -499,11 +510,25 @@ struct Armed {
     next: u64,
 }
 
-impl Drop for Log {
-    fn drop(&mut self) {
-        for queue in self.lock().watchers.iter().filter_map(Weak::upgrade) {
+impl Log {
+    /// Ends every watcher's stream and writes nothing more: each watcher
+    /// returns the lines already queued, then `None`, a watcher registered
+    /// afterwards starts ended, and every later append returns
+    /// [`Error::Ended`]. The session lock stays held. Idempotent. A
+    /// process that keeps its `Arc<Log>` until it exits calls this when its
+    /// session ends, since only dropping the log would close the queues.
+    pub fn end_watchers(&self) {
+        let mut inner = self.lock();
+        inner.ended = true;
+        for queue in inner.watchers.iter().filter_map(Weak::upgrade) {
             queue.close();
         }
+    }
+}
+
+impl Drop for Log {
+    fn drop(&mut self) {
+        self.end_watchers();
     }
 }
 
@@ -537,6 +562,7 @@ impl Inner {
             subscribers: Vec::new(),
             latest: BTreeMap::new(),
             failed: None,
+            ended: false,
         }
     }
 
