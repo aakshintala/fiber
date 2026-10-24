@@ -882,6 +882,11 @@ impl ModelCall for AdvanceCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         if self.first {
             // No code under test waits on the clock here: the advance runs on the loop thread inside the first model call, before any wait, and the step is stamped before it (ruling 6179406086).
+            assert!(
+                self.clock.parked().is_empty(),
+                "Shape 3 advance with a parked thread: {:?}",
+                self.clock.parked()
+            );
             self.clock.advance(self.by);
         }
         self.inner.run(sink)
