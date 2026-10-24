@@ -231,6 +231,10 @@ pub(crate) struct App {
     armed_at: Option<Instant>,
     /// Whether detection saw kitty's keyboard flags.
     kitty: bool,
+    /// Whether detection saw kitty's graphics protocol: the probe's
+    /// answer, which never delays the first frame (`docs/tui.md`,
+    /// "Images").
+    graphics: bool,
     /// Approval requests from every session.
     queue: Queue,
     /// The attached session's offer of its repository's code.
@@ -337,6 +341,7 @@ impl App {
             renderer_reported: BTreeSet::new(),
             armed_at: None,
             kitty: false,
+            graphics: false,
             queue: Queue::default(),
             offer: crate::offer::Offer::default(),
             steering: Steering::default(),
@@ -1188,6 +1193,12 @@ impl App {
     /// Whether detection saw kitty's keyboard flags.
     pub(crate) fn kitty(&self) -> bool {
         self.kitty
+    }
+
+    /// Records the graphics probe's answer: the terminal speaks kitty's
+    /// graphics protocol (`docs/tui.md`, "Images").
+    pub(crate) fn set_graphics(&mut self) {
+        self.graphics = true;
     }
 
     /// The draft in the input box.

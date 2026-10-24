@@ -95,9 +95,9 @@ fn write(file: &std::path::Path, value: &Value) {
 /// Synchronized output's begin and end markers (DEC mode 2026).
 const BEGIN: &[u8] = b"\x1b[?2026h";
 const END: &[u8] = b"\x1b[?2026l";
-/// The end of the setup writes: the device-attributes query, the last
-/// sequence `term::setup` sends.
-const SETUP_END: &[u8] = b"\x1b[c";
+/// The end of the setup writes: the graphics probe, the last sequence
+/// `term::setup` sends.
+const SETUP_END: &[u8] = b"\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// The start of the restore writes: popping kitty's keyboard flags, the
 /// first sequence the quit path sends.
 const RESTORE_START: &[u8] = b"\x1b[<u";
@@ -165,7 +165,7 @@ fn assert_frames_wrapped(terminal: &[u8], pre_resize: usize) {
         .windows(SETUP_END.len())
         .position(|window| window == SETUP_END)
         .map(|at| at + SETUP_END.len())
-        .expect("the setup writes end with the device-attributes query");
+        .expect("the setup writes end with the graphics probe");
     assert!(
         terminal[..setup_end]
             .windows(b"\x1b[?1049h".len())

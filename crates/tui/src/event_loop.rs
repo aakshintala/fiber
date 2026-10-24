@@ -498,6 +498,10 @@ impl<B: Backend> Loop<B> {
                     self.screen.appearance(appearance);
                     Effect::None
                 }
+                Event::Reply(Reply::Graphics { id, ok }) => {
+                    self.graphics(id, ok);
+                    Effect::None
+                }
                 Event::Reply(Reply::DeviceAttributes) | Event::Focus(_) => Effect::None,
             };
             match effect {
@@ -814,6 +818,16 @@ impl<B: Backend> Loop<B> {
         let bytes = self.app.take_alerts();
         let mut tty = &self.tty;
         tty.write_all(&bytes).unwrap_or(());
+    }
+
+    /// Kitty's graphics reply: the probe's success records graphics
+    /// support, so later frames may draw images inline (`docs/tui.md`,
+    /// "Images"). An error, or any other image's id, records nothing
+    /// here: transmit errors fail their image when answers land.
+    fn graphics(&mut self, id: u32, ok: bool) {
+        if id == term::PROBE_ID && ok {
+            self.app.set_graphics();
+        }
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need
