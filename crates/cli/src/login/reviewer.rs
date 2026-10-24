@@ -9,7 +9,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use config::{Config, Sources, get_global, replace_global};
 use contract::clock::Clock;
@@ -288,6 +288,75 @@ fn wait_ready(fd: &impl AsFd, clock: &Arc<dyn Clock>) -> io::Result<()> {
     }
 }
 
+/// One cancellable wait slice for a blocked terminal write: parks `clock`
+/// until `until`, waiting on `term` for real while parked, so a test
+/// drives the wait with its fake clock instead of reading the process one.
+/// An `OUT` event ends the slice early; only a wait failure of its own
+/// surfaces.
+fn wait_writable(term: BorrowedFd<'_>, until: Instant, clock: &Arc<dyn Clock>) -> io::Result<()> {
+    let mut outcome = Ok(());
+    clock.wait_until(Some(until), &mut |bound| {
+        let wait = bound.or(Some(POLL_SLICE));
+        let spec = wait.map(|wait| Timespec {
+            tv_sec: wait.as_secs().min(i64::MAX as u64).cast_signed(),
+            tv_nsec: wait.subsec_nanos() as _,
+        });
+        let mut waiting = [PollFd::new(&term, PollFlags::OUT)];
+        match poll(&mut waiting, spec.as_ref()) {
+            Ok(_) | Err(Errno::INTR) => {}
+            Err(e) => outcome = Err(io::Error::from(e)),
+        }
+    });
+    outcome
+}
+
+/// Writes `buf` to `err` and flushes, waiting through `WouldBlock` in
+/// [`POLL_SLICE`] slices until the terminal takes every byte: partial
+/// writes continue in byte order, and the latch is rechecked after every
+/// slice, so cancellation lands within [`PROMPT_POLL`] even mid-write.
+/// Returns true when cancellation interrupts the write, leaving partial
+/// text behind; any other write error surfaces at once, exactly as the
+/// blocking writes did.
+fn write_all_wait(
+    err: &mut dyn Write,
+    term: BorrowedFd<'_>,
+    buf: &[u8],
+    stopped: &dyn Fn() -> bool,
+    clock: &Arc<dyn Clock>,
+) -> io::Result<bool> {
+    let mut written = 0;
+    while written < buf.len() {
+        if stopped() {
+            return Ok(true);
+        }
+        match err.write(buf.get(written..).unwrap_or_default()) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write the whole prompt",
+                ));
+            }
+            Ok(n) => written += n,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_writable(term, clock.now() + POLL_SLICE, clock)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    loop {
+        if stopped() {
+            return Ok(true);
+        }
+        match err.flush() {
+            Ok(()) => return Ok(false),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                wait_writable(term, clock.now() + POLL_SLICE, clock)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// What the terminal prompt answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Pick {
@@ -355,8 +424,16 @@ pub(crate) fn prompt_choice(
         if stopped() {
             return Ok(Pick::Cancelled);
         }
-        write!(err, "Reviewer, by number or name: ")?;
-        err.flush()?;
+        let cancelled = if terminal {
+            write_all_wait(err, term, b"Reviewer, by number or name: ", stopped, clock)?
+        } else {
+            write!(err, "Reviewer, by number or name: ")?;
+            err.flush()?;
+            false
+        };
+        if cancelled {
+            return Ok(Pick::Cancelled);
+        }
         let mut line = String::new();
         if terminal {
             // Stoppable: a buffered or freshly typed line lands at once
@@ -400,16 +477,36 @@ pub(crate) fn prompt_choice(
             if let Some(keep) = choices.selected.as_deref() {
                 return Ok(Pick::Chosen(keep.to_owned()));
             }
-            writeln!(err, "No reviewer is selected; choose a number or name.")?;
+            let cancelled = if terminal {
+                write_all_wait(
+                    err,
+                    term,
+                    b"No reviewer is selected; choose a number or name.\n",
+                    stopped,
+                    clock,
+                )?
+            } else {
+                writeln!(err, "No reviewer is selected; choose a number or name.")?;
+                false
+            };
+            if cancelled {
+                return Ok(Pick::Cancelled);
+            }
             continue;
         }
         if let Some(pick) = parse_pick(answer, choices) {
             return Ok(Pick::Chosen(pick));
         }
-        writeln!(
-            err,
-            "`{answer}` is not a listed reviewer; choose a number or name."
-        )?;
+        let retry = format!("`{answer}` is not a listed reviewer; choose a number or name.\n");
+        let cancelled = if terminal {
+            write_all_wait(err, term, retry.as_bytes(), stopped, clock)?
+        } else {
+            write!(err, "{retry}")?;
+            false
+        };
+        if cancelled {
+            return Ok(Pick::Cancelled);
+        }
     }
 }
 

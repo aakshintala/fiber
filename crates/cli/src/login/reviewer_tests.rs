@@ -6,12 +6,13 @@
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "test code; a failure is the test's"
 )]
 
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{BufRead, Cursor, ErrorKind, Write};
+use std::io::{BufRead, Cursor, ErrorKind, Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use config::{Secret, store_credential};
-use contract::clock::Wake;
+use contract::clock::{Clock, Wake};
 
 use crate::CliError;
 use extensions::{Browser, Providers};
@@ -1440,5 +1441,185 @@ fn a_would_block_write_retries_until_the_prompt_completes() {
         out.matches("is not a listed reviewer").count(),
         1,
         "the retry message lands whole: {out}"
+    );
+}
+
+/// How long one pipe write-wait test waits for a park or a worker result.
+const PIPE_WAIT: Duration = Duration::from_secs(30);
+
+/// Makes a nonblocking pipe: the test fills the write end until it
+/// refuses, and the helper under test polls it through `term`.
+fn nonblocking_pipe() -> (std::io::PipeReader, std::io::PipeWriter) {
+    let (read, write) = std::io::pipe().unwrap();
+    for end in [read.as_fd(), write.as_fd()] {
+        let flags = rustix::fs::fcntl_getfl(end).unwrap();
+        rustix::fs::fcntl_setfl(end, flags.union(rustix::fs::OFlags::NONBLOCK)).unwrap();
+    }
+    (read, write)
+}
+
+/// Fills `write` until a one-byte write refuses with `WouldBlock`, leaving
+/// the pipe full with nobody reading. Bounds the fill so a bottomless pipe
+/// fails instead of spinning.
+fn fill_pipe(write: &mut fs::File) {
+    let mut total = 0;
+    loop {
+        match write.write(&[0x78]) {
+            Ok(1) => total += 1,
+            Ok(n) => panic!("a one-byte pipe write took {n} bytes"),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => panic!("filling the pipe: {e:?}"),
+        }
+        assert!(
+            total <= 1 << 20,
+            "the pipe took {total} bytes without refusing"
+        );
+    }
+}
+
+/// Empties `read` until it refuses or ends: the pipe the helper blocked on
+/// has room again. Bounds the drain so a refilling pipe fails instead of
+/// spinning.
+fn drain_pipe(read: &mut std::io::PipeReader) {
+    let mut buf = [0u8; 1024];
+    let mut total = 0;
+    loop {
+        match read.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => total += n,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => panic!("draining the pipe: {e:?}"),
+        }
+        assert!(
+            total <= 1 << 20,
+            "the pipe gave {total} bytes without refusing"
+        );
+    }
+}
+
+/// An `err` writer over a pipe that fails its first write with `WouldBlock`
+/// after filling the pipe, then forwards: the helper must wait again
+/// instead of spinning or dropping bytes.
+struct FillOnceThenForward {
+    file: fs::File,
+    filled: bool,
+    out: Vec<u8>,
+}
+
+impl Write for FillOnceThenForward {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.filled {
+            self.filled = true;
+            fill_pipe(&mut self.file);
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        let written = self.file.write(buf)?;
+        self.out.extend_from_slice(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
+    // The first write reports WouldBlock with the pipe now full, so the
+    // helper parks; the retry still meets the full pipe, so the helper
+    // parks again instead of spinning or surfacing the error. Draining the
+    // pipe then lets the whole text through in order.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-write-wait".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = FillOnceThenForward {
+                file,
+                filled: false,
+                out: Vec::new(),
+            };
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the write worker reports its thread");
+    let first = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(first), Some(id), super::POLL_SLICE, &within, || {
+        // No drain: the retry still meets the full pipe and parks again.
+    });
+    let second = first + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(second), Some(id), super::POLL_SLICE, &within, || {
+        drain_pipe(&mut read);
+    });
+    let (outcome, out) = within.recv_or_fail(&done, "the drained write completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the write");
+    assert_eq!(out.as_slice(), text, "every byte lands in order");
+    assert_eq!(
+        clock.now(),
+        second,
+        "two slices move the clock, one per park"
+    );
+    worker.join().unwrap();
+}
+
+/// An `err` writer that fails its first write with `Other`, then accepts:
+/// the helper must surface the error at once instead of waiting and
+/// retrying into the accepting write.
+struct FailOnceThenAccept {
+    failed: bool,
+    out: Vec<u8>,
+}
+
+impl Write for FailOnceThenAccept {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.failed {
+            self.failed = true;
+            return Err(std::io::Error::other("broken"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_non_would_block_write_error_surfaces_at_once() {
+    // Only WouldBlock waits: any other write error ends the write, even
+    // though the retry would accept.
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (_read, write) = nonblocking_pipe();
+    let mut err = FailOnceThenAccept {
+        failed: false,
+        out: Vec::new(),
+    };
+    let outcome = super::write_all_wait(
+        &mut err,
+        write.as_fd(),
+        b"Reviewer, by number or name: ",
+        &|| false,
+        &worker_clock,
+    );
+    let error = outcome.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+    assert!(
+        err.out.is_empty(),
+        "no retry follows a fatal write error: {:?}",
+        err.out
     );
 }
