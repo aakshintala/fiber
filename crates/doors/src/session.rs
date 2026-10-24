@@ -1097,6 +1097,17 @@ pub(crate) fn shutdown_skipped_for_test() -> bool {
     tests::shutdown_skipped()
 }
 
+#[cfg(test)]
+impl Session {
+    /// The session's gate, for a test outside the session module that runs
+    /// a writer with a flight: the flight's probe is the only signal the
+    /// writer parked past the log's end (`docs/testing.md`, "Waits and
+    /// timeouts").
+    pub(crate) fn gate_for_test(&self) -> &Arc<Gate> {
+        &self.gate
+    }
+}
+
 /// Whether the session's log shows it was ever prompted: a `turn_started`
 /// or a `repository_code_offered`, read one line at a time up to the first:
 /// a session that exits on its first offer is kept, so the offer is raised

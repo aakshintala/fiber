@@ -264,11 +264,16 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     // answers it before `fiber_exited`.
     let closing = support::recv_answer(&second, "c_close", "the closing command");
     World::release(writer);
-    // Every answer reaches its own connection exactly once.
+    // Every answer reaches its own connection exactly once
+    // (`docs/invocation.md`, "What the hub speaks", "Commands keep their
+    // order": every line a session reads gets exactly one answer on its
+    // connection before the session shuts it).
     let mut second_lines = vec![prompted, closing];
     second_lines.extend(until(&second, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
+    // One answer for each command the session read (`docs/invocation.md`,
+    // "What the hub speaks", "Commands keep their order").
     assert_eq!(answers(&second_lines, "c_p").len(), 1, "{second_lines:?}");
     assert_eq!(
         answers(&second_lines, "c_close").len(),
@@ -289,6 +294,9 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     lines.extend(until(&first, "c_after's acknowledgement", |line| {
         is_answer(line, "c_after")
     }));
+    // One answer for the released command (`docs/invocation.md`, "What the
+    // hub speaks", "Commands keep their order": every line a session reads
+    // gets exactly one answer on its connection).
     assert_eq!(answers(&lines, "c_q").len(), 1, "{lines:?}");
     assert_eq!(answers(&lines, "c_q")[0]["kind"], "command_accepted");
     // The replay carries the setup run's own exit before the answer, so
@@ -300,6 +308,12 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
         .find(|(at, line)| *at > answered_at && line["kind"] == "fiber_exited")
         .map(|(at, _)| at)
         .expect("fiber_exited streams after the released answer");
+    // The session's answers come back in the order it sent them: the
+    // released command is answered before `fiber_exited`
+    // (`docs/invocation.md`, "What the hub speaks", "Commands keep their
+    // order": a command the session answers when it ends is acknowledged
+    // then, so the order holds for acknowledgements as the session sends
+    // them).
     assert!(
         answered_at < exited_at,
         "the released command is answered before fiber_exited: {lines:?}"

@@ -682,24 +682,55 @@ impl Write for SharedOut {
 fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
     use contract::events::{CommandRejected, Event};
 
-    let (_temp, log, id, clock) = open_log();
-    let watcher = log.watch_all();
+    let opened = support::Opened::open(Vec::new());
+    let gate = Arc::clone(opened.session.gate_for_test());
+    let watcher = opened.log.watch_all();
     let injector = watcher.injector();
+    let conn = gate
+        .conns
+        .push_reader(thread::spawn(|| {}), Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    let reader = thread::current().id();
+    gate.accepted.track(reader);
+    gate.conns.note_owed(conn, reader);
+    // The flight's probe is the only signal the writer reached past the
+    // end: the writer notes it before every `recv_after_end`, so a line
+    // pushed after this wait arrives past the end, never before it
+    // (`docs/testing.md`, "Waits and timeouts").
+    let (past_tx, past_end) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == crate::session::tests::Probe::WriterPastEnd
+            && let Ok(()) = past_tx.send(())
+        {}
+    }));
+    let flight = crate::client::Flight {
+        gate: Arc::clone(&gate),
+        conn,
+        reader,
+    };
     let (_switch_tx, switches) = mpsc::channel();
     let out = Arc::new(Mutex::new(Vec::new()));
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn({
         let out = Arc::clone(&out);
         move || {
-            let ended =
-                crate::client::write_loop(watcher, Box::new(SharedOut(out)), false, switches, None);
+            let ended = crate::client::write_loop(
+                watcher,
+                Box::new(SharedOut(out)),
+                false,
+                switches,
+                Some(&flight),
+            );
             if let Ok(()) = done_tx.send(ended) {}
         }
     });
-    drop(log);
+    opened.log.end_watchers();
+    Deadline::after(DEADLINE)
+        .recv(&past_end)
+        .expect("the writer reads past the log's end");
     let answer = crate::session::envelope(
-        &id,
-        clock.as_ref(),
+        &gate.session_id,
+        opened.clock.as_ref(),
         &Event::CommandRejected(CommandRejected {
             command_id: Some(CommandId("c_held".into())),
             code: contract::ErrorCode::Closing,
@@ -707,7 +738,7 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         }),
     );
     injector.push_kept(answer);
-    injector.push_kept(control_line(&id, crate::client::STOP, 0));
+    injector.push_kept(control_line(&gate.session_id, crate::client::STOP, 0));
     assert!(
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "the writer returns once STOP follows the answer"
@@ -720,6 +751,8 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         "the kept answer pushed after the end is written before stop; got {lines:?}"
     );
     assert_eq!(lines[0].kind, "command_rejected");
+    gate.conns.finish(conn);
+    support::close_within(opened.session, opened.log);
 }
 
 /// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
