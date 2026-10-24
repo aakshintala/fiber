@@ -7,10 +7,11 @@ use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use support::lock;
 
 /// How long the capture waits for the shell (`docs/invocation.md`, "The
 /// capture has 10 seconds").
@@ -146,10 +147,6 @@ impl Wake for ClockWake {
 
 /// Locks, never poisoned: no thread holding one of these locks panics
 /// while holding it.
-fn lock<'a, T>(state: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// The shell command running `script` as an interactive login shell: `$SHELL`
 /// with `-l -i -c`, from `base` only, with stdin and stderr on `/dev/null`
 /// and stdout on `stdout`. The shell leads a new session with no

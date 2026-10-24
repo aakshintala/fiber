@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use crate::feed::{Closer, Fanout, WriterEnd, close_connections};
 
@@ -16,6 +16,7 @@ use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
 use contract::{HubLine, RequestId, SCHEMA_VERSION};
 use serde_json::{Map, Value};
+use support::lock;
 
 /// Why the hub tells clients a session needs the person (closed set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,10 +335,6 @@ fn close_and_join(ends: Vec<WriterEnd>) {
             Ok(()) | Err(_) => {}
         }
     }
-}
-
-fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

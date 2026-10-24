@@ -1837,6 +1837,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-platform-verifier",
+ "support",
  "thiserror 2.0.21",
  "ureq",
  "webpki-roots",
