@@ -792,7 +792,7 @@ mod notes;
 
 mod entries;
 
-pub use atomic::write_atomic;
+pub use atomic::{atomic_error, write_atomic};
 pub use entries::update_global_entries;
 pub use notes::{FileOutcome, FileSaved, NotesSaved, NotesWrite, save_reviewer_notes, version};
 

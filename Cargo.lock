@@ -477,6 +477,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -3035,6 +3036,7 @@ dependencies = [
  "fakes",
  "ring",
  "rustix",
+ "support",
  "thiserror 2.0.21",
 ]
 
