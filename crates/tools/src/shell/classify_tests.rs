@@ -1502,6 +1502,14 @@ fn the_note_names_a_stage_reading_under_proc() {
 }
 
 #[test]
+fn the_note_names_the_command_after_a_lost_path() {
+    assert_eq!(
+        noted(&cd_chain(32)),
+        Some("Not shown read-only: `ls`".to_owned())
+    );
+}
+
+#[test]
 fn an_oversize_call_has_no_note() {
     let over = format!("echo {}", "a".repeat(9_996));
     assert!(over.len() > super::super::syntax::MAX_COMMAND_BYTES);

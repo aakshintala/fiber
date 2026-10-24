@@ -106,6 +106,13 @@ fn default_guidelines_is_none() {
     assert_eq!(EchoTool.guidelines(), None);
 }
 
+/// The default `review_note` is `None`: a tool with no per-call note adds
+/// no line to the reviewer item.
+#[test]
+fn default_review_note_is_none() {
+    assert_eq!(EchoTool.review_note(&Map::new()), None);
+}
+
 /// `Display` writes the held message for both variants.
 #[test]
 fn effects_error_display_writes_the_held_message() {
