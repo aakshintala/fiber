@@ -5,8 +5,6 @@ use crate::pty_watch::{DEADLINE, watch, watched};
 use fakes::Deadline;
 use std::fs::File;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
 
 /// What `setup` writes with hover on: the alternate screen, the title
 /// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, the
@@ -33,20 +31,12 @@ struct Pair {
 /// Opens a pty pair.
 #[track_caller]
 fn open() -> Pair {
-    let main =
-        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
-            .unwrap_or_else(|err| panic!("openpt: {err}"));
-    rustix::pty::grantpt(&main).unwrap_or_else(|err| panic!("grantpt: {err}"));
-    rustix::pty::unlockpt(&main).unwrap_or_else(|err| panic!("unlockpt: {err}"));
-    let name =
-        rustix::pty::ptsname(&main, Vec::new()).unwrap_or_else(|err| panic!("ptsname: {err}"));
-    let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.as_bytes()));
+    let (main, path) = fakes::pty::open().unwrap_or_else(|err| panic!("pty open: {err}"));
     let slave = File::options()
         .read(true)
         .write(true)
-        .open(path)
+        .open(&path)
         .unwrap_or_else(|err| panic!("open slave: {err}"));
-    let main = File::from(main);
     Pair { main, slave }
 }
 

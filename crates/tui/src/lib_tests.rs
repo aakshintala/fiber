@@ -11,7 +11,6 @@ use fakes::Deadline;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -59,14 +58,7 @@ pub(super) fn open() -> Pair {
 /// Opens a pty pair at `width` by `height`.
 #[track_caller]
 fn open_at(width: u16, height: u16) -> Pair {
-    let main =
-        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
-            .unwrap_or_else(|err| panic!("openpt: {err}"));
-    rustix::pty::grantpt(&main).unwrap_or_else(|err| panic!("grantpt: {err}"));
-    rustix::pty::unlockpt(&main).unwrap_or_else(|err| panic!("unlockpt: {err}"));
-    let name =
-        rustix::pty::ptsname(&main, Vec::new()).unwrap_or_else(|err| panic!("ptsname: {err}"));
-    let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.as_bytes()));
+    let (main, path) = fakes::pty::open().unwrap_or_else(|err| panic!("pty open: {err}"));
     let slave = File::options()
         .read(true)
         .write(true)
@@ -82,10 +74,7 @@ fn open_at(width: u16, height: u16) -> Pair {
         },
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
-    Pair {
-        main: File::from(main),
-        slave,
-    }
+    Pair { main, slave }
 }
 
 /// Whether canonical mode, echo and signals are on. Compared flag by flag:
