@@ -6,22 +6,23 @@
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "test code; a failure is the test's"
 )]
 
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{BufRead, Cursor, ErrorKind, Write};
+use std::io::{BufRead, Cursor, ErrorKind, Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, Weak, atomic, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use config::{Secret, store_credential};
-use contract::clock::Wake;
+use contract::clock::{Clock, Wake};
 
 use crate::CliError;
 use extensions::{Browser, Providers};
@@ -664,6 +665,7 @@ fn an_unknown_provider_is_a_usage_error() {
 /// Asks `input` of `choices` on a pipe, returning the pick and the terminal text.
 fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let stdin = std::io::stdin();
     let mut err = Vec::new();
     let pick = prompt_choice(
         name,
@@ -673,6 +675,7 @@ fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
         &|| false,
         false,
         &clock,
+        stdin.as_fd(),
     )
     .unwrap();
     (pick, String::from_utf8(err).unwrap())
@@ -730,6 +733,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
     assert_eq!(pick, Pick::Cancelled, "EOF saves nothing");
     let mut err = Vec::new();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let stdin = std::io::stdin();
     let pick = prompt_choice(
         "acme",
         &listed(),
@@ -738,6 +742,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
         &|| true,
         false,
         &clock,
+        stdin.as_fd(),
     )
     .unwrap();
     assert_eq!(pick, Pick::Cancelled, "cancellation saves nothing");
@@ -1316,6 +1321,12 @@ impl BufRead for Script {
 /// and the terminal text.
 fn ask_term(choices: &ReviewerModels, steps: Vec<Step>) -> (std::io::Result<Pick>, String) {
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
     let mut err = Vec::new();
     let mut input = Script {
         steps: steps.into_iter().collect(),
@@ -1328,6 +1339,7 @@ fn ask_term(choices: &ReviewerModels, steps: Vec<Step>) -> (std::io::Result<Pick
         &|| false,
         true,
         &clock,
+        slave.as_fd(),
     );
     (pick, String::from_utf8(err).unwrap())
 }
@@ -1354,4 +1366,597 @@ fn an_unexpected_error_surfaces_instead_of_retrying() {
     let (pick, _) = ask_term(&listed(), vec![Step::Fail, Step::Line("1\n")]);
     let error = pick.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Other);
+}
+
+/// An `err` writer that fails the first prompt write and the first of each
+/// retry message write with `WouldBlock`, then accepts everything: the
+/// prompt must wait through each and complete the whole text.
+struct WouldBlockThenAccept {
+    out: Vec<u8>,
+    prompt_blocked: bool,
+    retry_blocked: bool,
+    blank_blocked: bool,
+}
+
+impl Write for WouldBlockThenAccept {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        if !self.prompt_blocked && text.contains("Reviewer, by number or name: ") {
+            self.prompt_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        if !self.retry_blocked && text.contains("is not a listed reviewer") {
+            self.retry_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        if !self.blank_blocked && text.contains("No reviewer is selected") {
+            self.blank_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_would_block_write_retries_until_the_prompt_completes() {
+    // The first prompt write and the first retry message each block once:
+    // the prompt waits through both and still writes every byte, then the
+    // listed answer lands.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_pipe_read, pipe_write) = nonblocking_pipe();
+    let mut input = Script {
+        steps: [Step::Line("nope\n"), Step::Line("2\n")]
+            .into_iter()
+            .collect(),
+    };
+    let mut err = WouldBlockThenAccept {
+        out: Vec::new(),
+        prompt_blocked: false,
+        retry_blocked: false,
+        blank_blocked: true,
+    };
+    let pick = prompt_choice(
+        "acme",
+        &listed(),
+        &mut input,
+        &mut err,
+        &|| false,
+        true,
+        &clock,
+        pipe_write.as_fd(),
+    )
+    .unwrap();
+    assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
+    let out = String::from_utf8(err.out).unwrap();
+    assert!(
+        out.contains("Reviewer, by number or name: "),
+        "the prompt lands whole: {out}"
+    );
+    assert!(
+        out.contains("is not a listed reviewer"),
+        "the retry message lands whole: {out}"
+    );
+}
+
+#[test]
+fn a_would_block_write_retries_until_the_blank_retry_completes() {
+    // A blank answer with nothing preselected prints the "No reviewer is
+    // selected" retry: the first write of that message blocks once, the
+    // prompt waits through it and still writes every byte, then the listed
+    // answer lands.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_pipe_read, pipe_write) = nonblocking_pipe();
+    let mut input = Script {
+        steps: [Step::Line("\n"), Step::Line("2\n")].into_iter().collect(),
+    };
+    let mut err = WouldBlockThenAccept {
+        out: Vec::new(),
+        prompt_blocked: true,
+        retry_blocked: true,
+        blank_blocked: false,
+    };
+    let pick = prompt_choice(
+        "acme",
+        &listed(),
+        &mut input,
+        &mut err,
+        &|| false,
+        true,
+        &clock,
+        pipe_write.as_fd(),
+    )
+    .unwrap();
+    assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
+    let out = String::from_utf8(err.out).unwrap();
+    assert!(
+        out.contains("No reviewer is selected"),
+        "the blank-answer retry lands whole: {out}"
+    );
+    assert!(
+        out.contains("Reviewer, by number or name: "),
+        "the prompt lands whole: {out}"
+    );
+}
+
+/// How long one pipe write-wait test waits for a park or a worker result.
+const PIPE_WAIT: Duration = Duration::from_secs(30);
+
+/// Makes a nonblocking pipe: the test fills the write end until it
+/// refuses, and the helper under test polls it through `term`.
+fn nonblocking_pipe() -> (std::io::PipeReader, std::io::PipeWriter) {
+    let (read, write) = std::io::pipe().unwrap();
+    for end in [read.as_fd(), write.as_fd()] {
+        let flags = rustix::fs::fcntl_getfl(end).unwrap();
+        rustix::fs::fcntl_setfl(end, flags.union(rustix::fs::OFlags::NONBLOCK)).unwrap();
+    }
+    (read, write)
+}
+
+/// Fills `write` until a one-byte write refuses with `WouldBlock`, leaving
+/// the pipe full with nobody reading. Bounds the fill so a bottomless pipe
+/// fails instead of spinning.
+fn fill_pipe(write: &mut fs::File) {
+    let mut total = 0;
+    loop {
+        match write.write(&[0x78]) {
+            Ok(1) => total += 1,
+            Ok(n) => panic!("a one-byte pipe write took {n} bytes"),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => panic!("filling the pipe: {e:?}"),
+        }
+        assert!(
+            total <= 1 << 20,
+            "the pipe took {total} bytes without refusing"
+        );
+    }
+}
+
+/// Empties `read` until it refuses or ends: the pipe the helper blocked on
+/// has room again. Bounds the drain so a refilling pipe fails instead of
+/// spinning.
+fn drain_pipe(read: &mut std::io::PipeReader) {
+    let mut buf = [0u8; 1024];
+    let mut total = 0;
+    loop {
+        match read.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => total += n,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => panic!("draining the pipe: {e:?}"),
+        }
+        assert!(
+            total <= 1 << 20,
+            "the pipe gave {total} bytes without refusing"
+        );
+    }
+}
+
+/// An `err` writer over a pipe that forwards every write, except once
+/// when the drain hook arms it: a spurious writable report followed by
+/// `WouldBlock`, which must cause another wait instead of spinning or
+/// dropping bytes. Every other `WouldBlock` comes from the really-full
+/// pipe, so a retry always re-derives the park the driver expects.
+/// An `err` writer over a pipe that fakes one spurious `WouldBlock`:
+/// the first write attempted while the pipe has room — right after a
+/// writable report — refills the pipe and reports `WouldBlock` anyway,
+/// so the helper must wait again instead of spinning or surfacing the
+/// error. Writes attempted while the pipe is full go through to the
+/// really-full pipe, so every retry re-derives the parked instant from
+/// real pipe state. The refill's many syscalls also delay the worker
+/// past the draining hook's advance, pinning the second park one slice
+/// past the first on every interleaving.
+struct SpuriousReadyThenFull {
+    file: fs::File,
+    filler: fs::File,
+    faked: bool,
+    out: Vec<u8>,
+}
+
+impl Write for SpuriousReadyThenFull {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.faked && pipe_has_room(&self.file) {
+            self.faked = true;
+            fill_pipe(&mut self.filler);
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        let written = self.file.write(buf)?;
+        self.out.extend_from_slice(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Whether `file`'s pipe currently takes a write without refusing: a
+/// zero-timeout `OUT` poll, so the spurious fake fires only after a
+/// real writable report. Any doubt answers no, leaving the write to
+/// meet the pipe itself.
+fn pipe_has_room(file: &fs::File) -> bool {
+    let mut waiting = [rustix::event::PollFd::new(
+        file,
+        rustix::event::PollFlags::OUT,
+    )];
+    match rustix::event::poll(
+        &mut waiting,
+        Some(&rustix::event::Timespec::try_from(Duration::ZERO).unwrap()),
+    ) {
+        Ok(_) => waiting
+            .first()
+            .is_some_and(|polled| !polled.revents().is_empty()),
+        Err(_) => false,
+    }
+}
+
+#[test]
+fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
+    // The first write reports WouldBlock with the pipe full, so the
+    // helper parks; the hook drains the pipe, earning the writable
+    // report the retry follows, but that retry still says WouldBlock —
+    // the writer refilled the pipe — so the helper parks again instead
+    // of spinning or surfacing the error; draining again lets the whole
+    // text through in order.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let filler = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-write-wait".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = SpuriousReadyThenFull {
+                file,
+                filler,
+                faked: false,
+                out: Vec::new(),
+            };
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the write worker reports its thread");
+    let first = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(first), Some(id), super::POLL_SLICE, &within, || {
+        // Drain, earning the writable report the retry follows.
+        drain_pipe(&mut read);
+    });
+    let second = first + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(second), Some(id), super::POLL_SLICE, &within, || {
+        // The retry met room yet still said WouldBlock, so the writer
+        // refilled the pipe: draining again is what lets it complete.
+        match fill.write(&[0x78]) {
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+            outcome => panic!("the spurious write refilled the pipe: {outcome:?}"),
+        }
+        drain_pipe(&mut read);
+    });
+    let (outcome, out) = within.recv_or_fail(&done, "the drained write completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the write");
+    assert_eq!(out.as_slice(), text, "every byte lands in order");
+    worker.join().unwrap();
+}
+
+/// An `err` writer that fails its first write with `Other`, then accepts:
+/// the helper must surface the error at once instead of waiting and
+/// retrying into the accepting write.
+struct FailOnceThenAccept {
+    failed: bool,
+    out: Vec<u8>,
+}
+
+impl Write for FailOnceThenAccept {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.failed {
+            self.failed = true;
+            return Err(std::io::Error::other("broken"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_non_would_block_write_error_surfaces_at_once() {
+    // Only WouldBlock waits: any other write error ends the write, even
+    // though the retry would accept.
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (_read, write) = nonblocking_pipe();
+    let mut err = FailOnceThenAccept {
+        failed: false,
+        out: Vec::new(),
+    };
+    let outcome = super::write_all_wait(
+        &mut err,
+        write.as_fd(),
+        b"Reviewer, by number or name: ",
+        &|| false,
+        &worker_clock,
+    );
+    let error = outcome.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+    assert!(
+        err.out.is_empty(),
+        "no retry follows a fatal write error: {:?}",
+        err.out
+    );
+}
+
+/// An `err` writer that accepts every write and fails its first flush
+/// with `WouldBlock`: the helper must wait and retry the flush instead of
+/// surfacing the error.
+struct FlushWouldBlockOnce {
+    flushed: bool,
+    out: Vec<u8>,
+}
+
+impl Write for FlushWouldBlockOnce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.flushed {
+            self.flushed = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_would_block_flush_waits_and_retries_instead_of_surfacing() {
+    // A WouldBlock flush parks exactly like a WouldBlock write: the retry
+    // flush lands, every byte stays, and nothing surfaces. The park the
+    // test advances pins the flush-wait deadline one slice ahead.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-flush-wait".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = FlushWouldBlockOnce {
+                flushed: false,
+                out: Vec::new(),
+            };
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the flush worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        drain_pipe(&mut read);
+    });
+    let (outcome, out) = within.recv_or_fail(&done, "the retried flush completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the flush");
+    assert_eq!(out.as_slice(), text, "every byte lands in order");
+    worker.join().unwrap();
+}
+
+/// An `err` writer that accepts every write and fails its flush with
+/// `Other`: the helper must surface the error at once instead of waiting
+/// on a flush that will never clear.
+struct FailFlushOnce {
+    out: Vec<u8>,
+}
+
+impl Write for FailFlushOnce {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("broken"))
+    }
+}
+
+#[test]
+fn a_non_would_block_flush_error_surfaces_at_once() {
+    // Only a WouldBlock flush waits: any other flush error ends the write
+    // on a worker thread, so a wait instead of a surface would miss the
+    // deadline rather than hang the test.
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (_read, write) = nonblocking_pipe();
+    let (done_tx, done) = mpsc::channel();
+    let worker = thread::Builder::new()
+        .name("pipe-flush-fail".to_owned())
+        .spawn(move || {
+            let mut err = FailFlushOnce { out: Vec::new() };
+            let outcome = super::write_all_wait(
+                &mut err,
+                write.as_fd(),
+                b"Reviewer, by number or name: ",
+                &|| false,
+                &worker_clock,
+            );
+            done_tx.send((outcome, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let (outcome, out) = within.recv_or_fail(&done, "the fatal flush surfaces");
+    let error = outcome.unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Other, "{error:?}");
+    assert_eq!(
+        out.as_slice(),
+        b"Reviewer, by number or name: ",
+        "the writes before the fatal flush stay: {out:?}"
+    );
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_blocked_write_completes_whole_once_the_pipe_drains() {
+    // The pipe starts full, so the first write refuses and the helper
+    // parks; the test drains the pipe in the fake-clock hook before time
+    // moves, and the whole text lands in order with no cancellation.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (mut read, write) = nonblocking_pipe();
+    let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    fill_pipe(&mut fill);
+    let text: &[u8] = b"Reviewer, by number or name: ";
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-write-drain".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut err = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+            let outcome =
+                super::write_all_wait(&mut err, write.as_fd(), text, &|| false, &worker_clock);
+            done_tx.send(outcome).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the write worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        drain_pipe(&mut read);
+    });
+    let outcome = within.recv_or_fail(&done, "the drained write completes");
+    assert!(!outcome.unwrap(), "no cancellation interrupted the write");
+    // The worker wrote after the drain: the pipe holds exactly the text.
+    let mut got = vec![0u8; text.len()];
+    read.read_exact(&mut got).unwrap();
+    assert_eq!(got.as_slice(), text, "every byte lands in order");
+    worker.join().unwrap();
+}
+
+/// An `err` writer that captures the blocking list, then fills the pipe on
+/// the first guarded prompt write and reports WouldBlock: the prompt must
+/// cancel within the poll budget with the pipe still full.
+struct CaptureThenFill {
+    file: fs::File,
+    filled: bool,
+    out: Vec<u8>,
+}
+
+impl Write for CaptureThenFill {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        if !self.filled && text.contains("Reviewer, by number or name: ") {
+            self.filled = true;
+            fill_pipe(&mut self.file);
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_blocked_prompt_write_returns_cancelled_within_the_poll_budget() {
+    // The pipe fills exactly as the guarded prompt write begins, so the
+    // helper parks with nowhere to write; setting the latch in the
+    // fake-clock hook cancels within PROMPT_POLL, even with the prompt
+    // unwritten and the pipe still full.
+    let clock = fakes::clock::FakeClock::new();
+    let start = clock.now();
+    let (_read, write) = nonblocking_pipe();
+    let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let term = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let stopped = Arc::new(atomic::AtomicBool::new(false));
+    let worker_stopped = Arc::clone(&stopped);
+    let (ids_tx, ids) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    let worker_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let worker = thread::Builder::new()
+        .name("pipe-prompt-cancel".to_owned())
+        .spawn(move || {
+            ids_tx.send(thread::current().id()).unwrap_or(());
+            let mut input = Script {
+                steps: [Step::Line("2\n")].into_iter().collect(),
+            };
+            let mut err = CaptureThenFill {
+                file,
+                filled: false,
+                out: Vec::new(),
+            };
+            let halt = move || worker_stopped.load(atomic::Ordering::SeqCst);
+            let pick = prompt_choice(
+                "acme",
+                &listed(),
+                &mut input,
+                &mut err,
+                &halt,
+                true,
+                &worker_clock,
+                term.as_fd(),
+            );
+            done_tx.send((pick, err.out)).unwrap_or(());
+        })
+        .unwrap();
+    let within = fakes::Deadline::after(PIPE_WAIT);
+    let id = within.recv_or_fail(&ids, "the prompt worker reports its thread");
+    let until = start + super::POLL_SLICE;
+    clock.advance_when_parked_then(Some(until), Some(id), super::POLL_SLICE, &within, || {
+        stopped.store(true, atomic::Ordering::SeqCst);
+    });
+    let (pick, out) = within.recv_or_fail(&done, "the blocked prompt answers cancellation");
+    assert_eq!(pick.unwrap(), Pick::Cancelled);
+    assert!(
+        clock.now().duration_since(start) <= super::PROMPT_POLL,
+        "cancellation lands within the poll budget"
+    );
+    let captured = String::from_utf8(out).unwrap();
+    assert!(
+        captured.contains("Reviewer for acme:"),
+        "the blocking list got through: {captured}"
+    );
+    // Nobody drained: the pipe the prompt blocked on is still full.
+    let mut waiting = [rustix::event::PollFd::new(
+        &write,
+        rustix::event::PollFlags::OUT,
+    )];
+    rustix::event::poll(
+        &mut waiting,
+        Some(&rustix::event::Timespec::try_from(Duration::ZERO).unwrap()),
+    )
+    .unwrap();
+    assert!(
+        waiting
+            .first()
+            .is_some_and(|polled| polled.revents().is_empty()),
+        "the pipe stays full"
+    );
+    worker.join().unwrap();
 }
