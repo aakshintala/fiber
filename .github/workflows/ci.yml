@@ -992,11 +992,20 @@ jobs:
                   # means it does.
                   owner=${GH_REPO%%/*}
                   repo=${GH_REPO##*/}
-                  fix=$(gh api graphql \
+                  # A failed lookup is unknown, not proof the issue closed
+                  # without a pull request: only a lookup that succeeds
+                  # with an empty fix reopens on any failure.
+                  fix=""
+                  lookup_failed=no
+                  if ! fix=$(gh api graphql \
                     -f query="query { repository(owner: \"$owner\", name: \"$repo\") { issue(number: $closed) { closedByPullRequestsReferences(first: 1) { nodes { mergeCommit { oid } } } } } }" \
-                    -q '.data.repository.issue.closedByPullRequestsReferences.nodes[0].mergeCommit.oid // empty' || true)
+                    -q '.data.repository.issue.closedByPullRequestsReferences.nodes[0].mergeCommit.oid // empty'); then
+                    lookup_failed=yes
+                  fi
                   holds=yes
-                  if [ -n "$fix" ]; then
+                  if [ "$lookup_failed" = yes ]; then
+                    holds=unknown
+                  elif [ -n "$fix" ]; then
                     status=$(gh api "repos/$GH_REPO/compare/$fix...$GITHUB_SHA" -q .status || true)
                     case "$status" in
                       ahead|identical) holds=yes ;;
@@ -1007,8 +1016,10 @@ jobs:
                     gh issue reopen "$closed"
                     gh issue comment "$closed" --body "$body"
                     gh issue edit "$closed" --add-label needs-triage
-                  else
+                  elif [ "$holds" = no ]; then
                     echo "stale fix: $title was fixed by $fix, which $GITHUB_SHA does not contain" >> "$GITHUB_STEP_SUMMARY"
+                  else
+                    echo "unknown fix: the lookup for the pull request that closed $title failed, so $closed stays closed" >> "$GITHUB_STEP_SUMMARY"
                   fi
                 fi
               fi

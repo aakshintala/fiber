@@ -6,7 +6,8 @@
 # write path is proven: a new issue, a comment on an open issue, a pull
 # request comment for a failing file the pull request owns, a closed issue
 # reopened with its sighting comment and needs-triage, a stale fix that
-# files nothing, and a closed-without-PR issue reopened. Each body names
+# files nothing, a closed-without-PR issue reopened, and a failed
+# closing-PR lookup that files nothing. Each body names
 # the tested commit: `tested <sha> = main <base> + head <head>` on a pull
 # request run with two parents, and `tested <sha>` on a push run or a pull
 # request run with one parent. Nothing reaches the GitHub API.
@@ -16,7 +17,8 @@
 # Cases: a new issue, a comment on an open issue, a pull request comment
 # for a failing file the pull request owns, a closed issue reopened with
 # its sighting comment and needs-triage, a stale tested commit that files
-# nothing, and a closed-without-PR issue reopened on any failure.
+# nothing, a closed-without-PR issue reopened on any failure, and a failed
+# closing-PR lookup that files nothing.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -58,7 +60,9 @@ gh() {
           esac
           ;;
         *"/pulls/"*) printf '%s\n' "$STUB_PR_FILES" ;;
-        *graphql*) printf '%s\n' "$STUB_FIX" ;;
+        *graphql*)
+          if [ -n "${STUB_FIX_FAIL:-}" ]; then return 1; fi
+          printf '%s\n' "$STUB_FIX" ;;
         *) echo "stub gh: unexpected api call: $*" >&2; return 1 ;;
       esac
       ;;
@@ -145,7 +149,10 @@ run_case() {
 }
 
 # run_reopen_case CASE CLOSED FIX STATUS WANT0 WANT1 WANT2: a push run with
-# no open issue whose closed issue reopens: reopen, sighting comment, label.
+# no open issue whose closed issue reopens. The documented outcomes
+# (docs/testing/running.md, "Flaky tests") are the reopen, the sighting
+# comment and the needs-triage label, in no promised order: each want must
+# appear among the writes, wherever it lands.
 run_reopen_case() {
   dir=$tmp/$1
   mkdir -p "$dir/temp/flaky" "$dir/calls"
@@ -159,19 +166,19 @@ run_reopen_case() {
     STUB_CALLS="$dir/calls" \
     bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
   [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
-  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
-  [ "$writes" -eq 3 ] || fail "$1: want three writes, got $writes"
-  i=0
   for want in "$5" "$6" "$7"; do
-    got=$(cat "$dir/calls/$i")
-    [ "$got" = "$want" ] || {
-      echo "--- want $i:" >&2
+    found=no
+    for f in "$dir/calls/"*; do
+      [ -f "$f" ] || continue
+      if [ "$(cat "$f")" = "$want" ]; then found=yes; break; fi
+    done
+    [ "$found" = yes ] || {
+      echo "--- want present:" >&2
       printf '%s\n' "$want" >&2
-      echo "--- got $i:" >&2
-      printf '%s\n' "$got" >&2
-      fail "$1: write $i differs"
+      echo "--- got writes:" >&2
+      for f in "$dir/calls/"*; do [ -f "$f" ] && printf '%s\n' "$(cat "$f")" >&2; done
+      fail "$1: a documented write is missing"
     }
-    i=$((i + 1))
   done
 }
 
@@ -240,8 +247,39 @@ run_reopen_case closed-reopened 9 "$fix" ahead \
 run_stale_case stale-skipped 9 "$fix" diverged \
   "stale fix: $title was fixed by $fix, which $sha does not contain"
 
+# A closing-pull-request lookup that fails files nothing and says so in
+# the summary: the failure is unknown, not proof the issue closed
+# without a pull request.
+run_unknown_case() {
+  dir=$tmp/$1
+  mkdir -p "$dir/temp/flaky" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+  env -i PATH="$PATH" HOME="$dir" \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
+    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
+    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
+    STUB_CLOSED="$2" STUB_FIX="" STUB_FIX_FAIL=1 STUB_STATUS="$3" \
+    STUB_CALLS="$dir/calls" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
+  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
+  [ "$writes" -eq 0 ] || fail "$1: want no writes, got $writes"
+  got=$(cat "$dir/summary")
+  [ "$got" = "$4" ] || {
+    echo "--- want summary:" >&2
+    printf '%s\n' "$4" >&2
+    echo "--- got summary:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the summary differs"
+  }
+}
+
 # A closed issue with no closing pull request reopens on any failure.
 run_reopen_case closed-without-pr 9 "" "" \
   "reopen 9" "$sighting" "label 9 needs-triage"
+
+run_unknown_case lookup-failed 9 ahead \
+  "unknown fix: the lookup for the pull request that closed $title failed, so 9 stays closed"
 
 echo "scripts/test-flake-report: ok"
