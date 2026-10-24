@@ -2519,3 +2519,131 @@ fn a_failed_start_of_a_not_started_server_removes_its_slot_and_its_resources() {
             .contains(&mcp::RESOURCES_TOOL.to_owned())
     );
 }
+
+#[test]
+fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
+    // The timeout branch itself needs the race, but its formatting does
+    // not: fabricated directories drive the dump deterministically.
+    let rig = Rig::new("fiber-reload-dump");
+    let fx = rig.root.path().join("fx");
+    std::fs::create_dir_all(&fx).unwrap();
+    std::fs::write(fx.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    std::fs::write(fx.join("stderr.log"), "boom\n").unwrap();
+    std::fs::write(fx.join("requests.log"), "{\"jsonrpc\":\"2.0\"}\n").unwrap();
+    let gx = rig.root.path().join("gx");
+    std::fs::create_dir_all(&gx).unwrap();
+    std::fs::write(gx.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    std::fs::write(gx.join("fail-start"), "").unwrap();
+    std::fs::write(gx.join("stderr.log"), "").unwrap();
+    // No `tools.json`: not a server, so the dump skips it.
+    let plain = rig.root.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join("config.json"), "{}").unwrap();
+    // Not a directory at all.
+    std::fs::write(rig.root.path().join("stray.txt"), "x").unwrap();
+
+    let dump = dump_fake_servers(rig.root.path());
+    assert!(
+        dump.contains("fake MCP server fx:"),
+        "names every server: {dump}"
+    );
+    assert!(dump.contains("boom"), "shows the stderr: {dump}");
+    assert!(dump.contains("jsonrpc"), "shows the requests: {dump}");
+    assert!(
+        dump.contains("fake MCP server gx:"),
+        "names the failed server too: {dump}"
+    );
+    assert!(
+        dump.contains("requests.log: <absent>"),
+        "a start that never read has no requests: {dump}"
+    );
+    assert!(
+        dump.contains("stderr.log: <empty>"),
+        "an empty stderr reads empty, not absent: {dump}"
+    );
+    assert!(!dump.contains("plain"), "skips a non-server: {dump}");
+    assert!(!dump.contains("stray"), "skips a file: {dump}");
+    assert!(
+        dump.find("fake MCP server fx:").unwrap() < dump.find("fake MCP server gx:").unwrap(),
+        "sorts the servers: {dump}"
+    );
+}
+
+#[test]
+fn a_caught_panic_reports_its_text() {
+    let str_payload: Box<dyn std::any::Any + Send> = Box::new("bang");
+    assert_eq!(panic_text(&str_payload), "bang");
+    let string_payload: Box<dyn std::any::Any + Send> = Box::new(String::from("boom"));
+    assert_eq!(panic_text(&string_payload), "boom");
+    let other_payload: Box<dyn std::any::Any + Send> = Box::new(42);
+    assert_eq!(panic_text(&other_payload), "a non-string panic");
+}
+
+#[test]
+fn a_failed_prepare_reports_the_fake_servers_logs() {
+    // An invalid config fails the preparation at once, driving the
+    // failure branch deterministically: the panic names the wait and
+    // carries the live servers' logs.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    std::fs::write(fixture.rig.home.join("config.json"), "{").unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fixture.prepare()));
+    let payload = match failure {
+        Ok(_) => panic!("an invalid config fails the prepare"),
+        Err(payload) => payload,
+    };
+    let text = panic_text(&payload);
+    assert!(
+        text.contains("reload prepared"),
+        "names the expired wait: {text}"
+    );
+    assert!(
+        text.contains("fake MCP server fx:"),
+        "carries the server dump: {text}"
+    );
+    assert!(
+        text.contains("requests.log:"),
+        "carries the requests log: {text}"
+    );
+}
+
+#[test]
+fn a_prepare_timeout_dump_with_no_servers_says_so() {
+    let rig = Rig::new("fiber-reload-dump-empty");
+    let dump = dump_fake_servers(rig.root.path().join("home").as_path());
+    assert!(
+        dump.contains("none"),
+        "a missing root holds no servers: {dump}"
+    );
+}
+
+#[test]
+fn a_fake_server_entry_captures_stderr_in_its_directory() {
+    let rig = Rig::new("fiber-reload-entry");
+    let fake = FakeServer::new(&rig, "fx", &json!([{"name": "echo"}]));
+    let entry = fake.entry(json!({}));
+    assert_eq!(entry["command"], json!("/bin/sh"));
+    let args = entry["args"].as_array().unwrap();
+    assert_eq!(args.len(), 4, "the wrapper takes its shape: {args:?}");
+    // The wrapper execs the fixture on the directory and redirects the
+    // server's stderr into it: the paths ride as positional parameters,
+    // never interpolated, so no path needs quoting.
+    assert_eq!(args[0], json!("-c"));
+    assert!(
+        args[1].as_str().unwrap().starts_with("exec \"$0\" \"$1\""),
+        "the wrapper execs its parameters: {args:?}"
+    );
+    assert!(
+        args[1].as_str().unwrap().contains("stderr.log"),
+        "the wrapper redirects stderr: {args:?}"
+    );
+    assert_eq!(
+        args[2],
+        json!(fakes::mcp_fixture().display().to_string()),
+        "the fixture rides as $0: {args:?}"
+    );
+    assert_eq!(
+        args[3],
+        json!(fake.dir.display().to_string()),
+        "the directory rides as $1: {args:?}"
+    );
+}
