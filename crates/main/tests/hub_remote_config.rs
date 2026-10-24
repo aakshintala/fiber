@@ -6,11 +6,13 @@
     clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
+#[path = "support/hub_start.rs"]
+mod hub_start;
 mod support;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -194,24 +196,22 @@ fn the_hub_searches_its_own_machine_over_the_port() {
     fs::write(user_home.path().join("hub-home-file"), "hub home").unwrap();
     git_setup(&setup, workspace, &["init", "-q"]);
     git_setup(&setup, workspace, &["add", "src/hub-alpha.rs"]);
-    let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = free.local_addr().unwrap().port();
-    drop(free);
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"hub":{"port":port}}),
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub":{"port":port}}),
+            );
+            let mut command = setup.fiber(&["hub", "serve", "--installed"]);
+            command.env("HOME", user_home.path());
+            command
+        },
     );
-    let process = HubProc::spawn_command(
-        setup.deadline,
-        setup
-            .fiber(&["hub", "serve", "--installed"])
-            .env("HOME", user_home.path()),
-    );
-    let home = setup.home();
-    let (stream, hello) = bounded(setup.deadline, "search hub ready", move || {
-        doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
-    })
-    .unwrap();
+    let port = served.port;
+    let (stream, hello) = served.hub;
     assert_eq!(hello.kind, "hub_hello");
     let local = Socket::from(setup.deadline, stream);
     let mut unauth = Ws::connect(&setup, port);
@@ -270,8 +270,8 @@ fn the_hub_searches_its_own_machine_over_the_port() {
         assert_eq!(accepted(answer), json!({"rows":rows}));
     }
     drop((client, unauth, local));
-    process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
 }
 
 #[test]
@@ -305,25 +305,23 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
     );
     let client_before = fs::read(client_home.join("config.json")).unwrap();
     provider(&setup);
-    let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = free.local_addr().unwrap().port();
-    drop(free);
-    write_json(
-        &setup.home().join("config.json"),
-        &json!({"hub":{"port":port},"model":"acme/m","tui":{"theme":"dark"},"skills":{"disabled":["s"]},"mcp":{"servers":{"x":{"command":"unused","tools":{"disabled":["t"]}}}}}),
+    let served = hub_start::serve_installed(
+        &setup,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &setup.home().join("config.json"),
+                &json!({"hub":{"port":port},"model":"acme/m","tui":{"theme":"dark"},"skills":{"disabled":["s"]},"mcp":{"servers":{"x":{"command":"unused","tools":{"disabled":["t"]}}}}}),
+            );
+            setup.fiber(&["hub", "serve", "--installed"])
+        },
     );
+    let port = served.port;
+    let (stream, hello) = served.hub;
+    assert_eq!(hello.kind, "hub_hello");
     let rule = json!({"decision":"allow","tool":"shell","prefix":"npm test"});
     fs::write(setup.home().join("rules"), format!("{rule}\n")).unwrap();
-    let process = HubProc::spawn_command(
-        setup.deadline,
-        &mut setup.fiber(&["hub", "serve", "--installed"]),
-    );
-    let home = setup.home();
-    let (stream, hello) = bounded(setup.deadline, "installed hub ready", move || {
-        doors::hub::connect(&home, &mut || Ok(()), &SystemClock)
-    })
-    .unwrap();
-    assert_eq!(hello.kind, "hub_hello");
     let local = Socket::from(setup.deadline, stream);
     let mut unauth = Ws::connect(&setup, port);
     assert_eq!(unauth.text(&setup)["kind"], "hub_hello");
@@ -465,6 +463,6 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
     assert!(!setup.hub_log().contains("sk-hub-only"));
     assert!(!setup.hub_log().contains("unauth-secret"));
     drop((client, unauth, local));
-    process.kill("TERM");
-    assert_eq!(process.wait().code(), Some(143));
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
 }

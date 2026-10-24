@@ -6,13 +6,14 @@
 
 use std::io::Write;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use contract::commands::SubscribeLevel;
 use contract::events::{CommandAccepted, CommandResult, Event};
 use contract::inbox::Delivery;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use log::Injector;
+use support::lock;
 
 use super::writer::{Flight, write_counted};
 use super::{Conn, control_line, reject};
@@ -303,10 +304,6 @@ pub(super) fn apply(
     writing.summary = switch.summary;
     writing.cutoff = switch.cutoff;
     Ok(())
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

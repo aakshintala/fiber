@@ -19,9 +19,7 @@ use std::thread;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::repo_provider::declare_repo_provider;
-use support::{
-    Deadline, KillGroup, Output, Setup, group_alive, hello, is_status, run_to_exit, spawn_watched,
-};
+use support::{Deadline, KillGroup, Output, Setup, hello, is_status, run_to_exit, spawn_watched};
 
 impl Setup {
     fn new_with_fc_root() -> Self {
@@ -62,10 +60,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         Output::from(output)

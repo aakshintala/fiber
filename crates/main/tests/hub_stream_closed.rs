@@ -87,7 +87,7 @@ fn finish(running: Running) {
     };
     assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     drop(stdout);

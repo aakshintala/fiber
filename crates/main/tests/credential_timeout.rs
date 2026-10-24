@@ -166,7 +166,7 @@ fn a_signal_while_a_startup_credential_command_runs_kills_it_and_writes_nothing(
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "hi"]);
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
-    support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
+    fakes::kill_pid(fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask hi` to exit", fiber_pid, child);
     assert_eq!(
         output.status.code(),
@@ -206,7 +206,7 @@ fn a_signal_while_a_resumed_sessions_credential_command_runs_kills_it_and_leaves
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "--resume", &id, "hi"]);
     let pgid = ready.wait(setup.deadline)[0];
     let group = Watchdog::group(pgid);
-    support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
+    fakes::kill_pid(fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask --resume` to exit", fiber_pid, child);
     assert_eq!(
         output.status.code(),
@@ -254,7 +254,7 @@ fn a_signal_while_a_resumed_session_starts_its_mcp_server_exits_143_writing_noth
     );
     let (fiber_pid, child, watchdog) = start(&setup, &["ask", "--resume", &id, "hi"]);
     ready.wait(setup.deadline);
-    support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
+    fakes::kill_pid(fiber_pid, "TERM").unwrap();
     let output = finish(&setup, "`fiber ask --resume` to exit", fiber_pid, child);
     assert_eq!(
         output.status.code(),

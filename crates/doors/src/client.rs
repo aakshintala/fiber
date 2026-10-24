@@ -16,7 +16,6 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::PoisonError;
 use std::sync::mpsc;
 use std::thread;
 
@@ -26,6 +25,7 @@ use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::steering::Duplicate;
 use contract::{CommandId, Envelope, ErrorCode};
+use support::lock;
 
 use crate::session::{self, Gate};
 
@@ -265,12 +265,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             }
         }
         Command::Tools => {
-            let tools = conn
-                .gate
-                .tools
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+            let tools = lock(&conn.gate.tools).clone();
             // Without a log the session is closing and the answer keeps
             // its byte sizes.
             let rate = conn
@@ -386,12 +381,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
                 unknown(conn, id, name);
                 return;
             };
-            let tools = conn
-                .gate
-                .tools
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+            let tools = lock(&conn.gate.tools).clone();
             match refresh(tools) {
                 Ok(rows) => {
                     accept(conn, id, Some(CommandResult::McpServers { servers: rows }));
@@ -1059,10 +1049,6 @@ fn settle_response(
         }
     });
     (ack, rx, cancel)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {

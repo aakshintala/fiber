@@ -28,8 +28,8 @@ use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, Setup, git, group_alive, hello_inline_completed as hello,
-    is_status, spawn_watched,
+    Deadline, HELLO_KINDS, KillGroup, Setup, git, hello_inline_completed as hello, is_status,
+    spawn_watched,
 };
 
 #[path = "../../provider/tests/support/probes.rs"]
@@ -191,7 +191,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         // The group is empty. Skip the drop, which would kill it again,

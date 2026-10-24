@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    KillGroup, Output, Setup, Socket, files_holding, first_line, group_alive, hello, run_to_exit,
-    spawn_watched, until, until_close,
+    KillGroup, Output, Setup, Socket, files_holding, first_line, hello, run_to_exit, spawn_watched,
+    until, until_close,
 };
 
 /// Runs `fiber import` with `args` to exit, reaping its process group on
@@ -374,7 +374,7 @@ impl Driven {
         let status = deadline.recv(&done).unwrap().unwrap();
         let text = deadline.recv(&stderr).unwrap();
         assert!(status.success(), "{text}");
-        assert!(!group_alive(deadline, group));
+        assert!(!fakes::group_alive(group));
         std::mem::forget(guard);
         watchdog.stand_down(deadline.cleanup_phase());
     }
