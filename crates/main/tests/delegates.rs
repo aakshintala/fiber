@@ -210,16 +210,6 @@ fn owned_kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
-/// The stream's kinds in order, setting aside only the lines
-/// `docs/testing.md` ("Event streams") leaves unpositioned: `clients`,
-/// `session_status`, the hub's `attention` and `date_changed`.
-fn ordered_kinds(lines: &[Value]) -> Vec<String> {
-    support::kinds(lines)
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
-}
-
 #[test]
 fn ordered_projections_set_aside_exactly_the_independent_kinds() {
     let lines = support::expected(&[
@@ -243,7 +233,6 @@ fn ordered_projections_set_aside_exactly_the_independent_kinds() {
         "unknown_future_kind",
     ];
     assert_eq!(support::kinds(&lines), expected);
-    assert_eq!(support::kinds_without_attention(&lines), expected);
 }
 
 #[test]
@@ -1503,7 +1492,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The crash is contained to the dead delegate: it ends failed with
     // the signal named, never a `failed signal` status; its sibling and
     // the late delegate complete, and every parent turn completes.
-    assert_eq!(ordered_kinds(&lines), CRASH_ORDERED);
+    assert_eq!(support::kinds(&lines), CRASH_ORDERED);
     assert_eq!(
         lines
             .iter()
@@ -1627,6 +1616,10 @@ const ESC_CHILD_ORDERED: &[&str] = &[
 ];
 
 fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
+    // docs/events.md, "Process boundary": start/exit bound the process.
+    // "usage_recorded": one per fixture model call; docs/delegates.md,
+    // "Streams": each child usage is copied, with no order against turn end.
+    // "Permissions": a child's escalation is a block, not a person request.
     let lo = lines
         .iter()
         .position(|line| line["kind"] == "fiber_started")
@@ -1653,6 +1646,9 @@ fn assert_escalation_stream(lines: &[Value], expected: &[&str]) {
         .copied()
         .filter(|kind| *kind != "usage_recorded")
         .collect();
+    // docs/loop.md, "One step": reply, permission, then tool execution.
+    // docs/delegates.md, "Events": job start precedes delegate start;
+    // delegate finish precedes job completion. Usage has no position here.
     assert_eq!(ordered, skeleton);
 }
 
@@ -1680,6 +1676,8 @@ fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
                     && line["action_id"] == *action
             })
             .collect();
+        // docs/events.md, "usage_recorded": one per model call;
+        // "Actions": the assistant message encloses the streamed reply.
         assert_eq!(usage.len(), 1, "one model call for {action}");
         assert!(
             start < usage[0].0 && usage[0].0 < end,
@@ -1705,6 +1703,8 @@ fn assert_escalation_calls(lines: &[Value], purposes: &[&str]) {
         })
         .collect();
     review.sort_unstable();
+    // docs/events.md, "usage_recorded": reviewer purpose and action_id
+    // identify each fixture review call, outside assistant-message actions.
     assert_eq!(review, purposes);
 }
 
@@ -2053,6 +2053,9 @@ fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
             .cloned(),
     );
     window.push(lines[hi].clone());
+    // docs/delegates.md, "Streams"/"Events": one copied usage and one
+    // finish/completion per run; docs/loop.md, "Spending budget": the
+    // selected turn fails on that spend, without ordering it against fanout.
     support::assert_set_between(&window, 0, window.len() - 1, expected);
     let ordered = support::kinds(&window);
     let usage = ordered
@@ -2063,6 +2066,7 @@ fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
         .iter()
         .position(|kind| *kind == "turn_completed")
         .unwrap();
+    // docs/loop.md, "Spending budget": the received spend trips the turn.
     assert!(
         usage < turn,
         "the spend precedes the budget end: {ordered:?}"
@@ -2076,6 +2080,7 @@ fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
             .iter()
             .position(|kind| *kind == "job_completed")
             .unwrap();
+        // docs/delegates.md, "Events": finish is just before job completion.
         assert!(finish < job, "finish precedes job completion: {ordered:?}");
     }
 }
@@ -6300,6 +6305,8 @@ const ASK_WAKE_PARENT_DURABLE: &[&str] = &[
 /// pair of job notices needs (`docs/loop.md`, "One step").
 fn assert_wake_schedule(lines: &[Value]) {
     let lines = without_copies(lines);
+    // docs/delegates.md, "Results"/"Events": ask_user ends the first run;
+    // delegate_message resumes it; each of the fixture's two runs ends once.
     for kind in ["delegate_finished", "job_completed"] {
         assert_eq!(
             lines.iter().filter(|line| line["kind"] == kind).count(),
@@ -6311,6 +6318,8 @@ fn assert_wake_schedule(lines: &[Value]) {
         .iter()
         .position(|line| line["kind"] == "turn_started")
         .unwrap();
+    // docs/events.md, "Process boundary"/"extensions_loaded"/"Opening message":
+    // the startup prefix precedes the first turn (docs/loop.md, "Starting a turn").
     assert_eq!(
         support::kinds(&lines[..first]),
         [
@@ -6321,6 +6330,8 @@ fn assert_wake_schedule(lines: &[Value]) {
             "opening_message"
         ]
     );
+    // docs/loop.md, "Starting a turn"/"One step"/"Ending a turn": each turn encloses its
+    // steps; notices can join an existing step, so the turn count is open.
     for turn in lines[first..].split_inclusive(|line| line["kind"] == "turn_completed") {
         assert_eq!(turn.first().unwrap()["kind"], "turn_started");
         assert_eq!(turn.last().unwrap()["kind"], "turn_completed");
@@ -6343,6 +6354,8 @@ fn assert_wake_schedule(lines: &[Value]) {
             } else {
                 vec![]
             };
+            // docs/loop.md, "One step": drain notices after step_started,
+            // before the request; docs/delegates.md, "Events": finish then job end.
             support::assert_set_between(step, 0, assistant, &notice);
             assert_eq!(
                 support::kinds(&step[1..assistant]),
@@ -6383,6 +6396,10 @@ fn assert_wake_schedule(lines: &[Value]) {
                     "assistant_message_completed",
                 ]);
             }
+            // docs/loop.md, "One step": stream reply, decide permission,
+            // run tools; docs/events.md, "usage_recorded": one per fixture call;
+            // "Interactions": request then resolution; docs/delegates.md,
+            // "Events": job_started then delegate_started for each run.
             assert_eq!(support::kinds(&step[assistant..]), expected);
         }
     }
@@ -6945,6 +6962,10 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
 /// The subscribe and reload bound startup; command acceptance can race
 /// replay, while startup and job start retain their own promised order.
 fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
+    // docs/events.md, "Process boundary"/"extensions_loaded": session start,
+    // process start, then extension load. "Command acknowledgements": one
+    // acceptance per command, with no order against the replayed prefix.
+    // docs/delegates.md, "Events": one job/delegate start per fixture run.
     support::assert_set_between(
         lines,
         lo,
@@ -6977,6 +6998,8 @@ fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
     between.swap(4, 5);
     let mut before = expected;
     before[3..].copy_from_slice(&["extension_ui", "job_started", "delegate_started"]);
+    // docs/delegates.md, "Events": job start precedes delegate start;
+    // docs/events.md, "extension_ui": no order against those job events.
     assert!(
         [expected.as_slice(), between.as_slice(), before.as_slice()].contains(&ordered.as_slice()),
         "startup order: {ordered:?}"
