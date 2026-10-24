@@ -2091,6 +2091,269 @@ fn the_summary_names_no_skip_without_a_skipped_base() {
     );
 }
 
+/// The six selectable timing rows with the budgets each feeds and the
+/// metric ids those budgets read: the harness's own mapping, written
+/// literally so the test below fails if `ROW_METRICS` drifts from it.
+const HEAD_SKIP_ROWS: &[(&str, &[&str], &[&str])] = &[
+    (
+        "session start",
+        &["Session start, the internal session command to its first line, no hub"],
+        &["session_start_ms"],
+    ),
+    (
+        "sessions list",
+        &["Listing 1,000 sessions in one project, warm cache"],
+        &["sessions_list_ms"],
+    ),
+    (
+        "terminal first frame",
+        &["Terminal to its first frame, new session"],
+        &["terminal_first_frame_ms"],
+    ),
+    (
+        "terminal attach",
+        &[
+            "Terminal to its first frame, attaching",
+            "Terminal, attaching a 10 MiB session",
+            "Terminal, memory kept after attaching a 10 MiB session",
+        ],
+        &[
+            "terminal_attach_ms",
+            "terminal_attach_rss_kib",
+            "terminal_attach_retained_kib",
+        ],
+    ),
+    (
+        "terminal wheel",
+        &[
+            "Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48",
+            "Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48",
+        ],
+        &["wheel_paging_ms", "wheel_read_ms"],
+    ),
+    (
+        "paging",
+        &[
+            "`paging` jig, its session at scale 1 and 160 by 48",
+            "`paging` jig, open pass and first frame",
+            "`paging` jig, slowest frame that loaded pages",
+            "`paging` jig, slowest jump frame",
+            "`paging` jig, slowest re-count at a new width",
+            "`paging` jig, slowest append frame",
+            "`paging` jig at scale 16, slowest re-count at a new width",
+            "`paging` jig at scale 16, a search of the whole session with no match",
+        ],
+        &[
+            "paging_rss_kib",
+            "paging_open_ms",
+            "paging_load_ms",
+            "paging_jump_ms",
+            "paging_width_ms",
+            "paging_append_ms",
+            "paging_search_ms",
+            "paging_scale16_width_ms",
+            "paging_scale16_search_ms",
+        ],
+    ),
+];
+
+/// The comment's budget rows that read skipped: every table row whose
+/// result cell is `skipped`, by budget.
+fn skipped_budgets(comment: &str) -> Vec<String> {
+    comment
+        .lines()
+        .filter(|line| line.starts_with("| ") && line.ends_with("| skipped |"))
+        .map(|line| {
+            line.strip_prefix("| ")
+                .and_then(|rest| rest.split(" |").next())
+                .unwrap_or("")
+                .to_owned()
+        })
+        .filter(|budget| budget != "Budget")
+        .collect()
+}
+
+#[test]
+fn each_head_skipped_row_skips_exactly_the_budgets_it_feeds() {
+    // A mutant that skips the wrong budgets, or judges a skipped budget
+    // as before, fails the rows below.
+    for (row_name, budgets, ids) in HEAD_SKIP_ROWS {
+        let mut head = head();
+        for id in *ids {
+            head = without_metric(&head, id);
+        }
+        let head = with_skipped(head, &[*row_name]);
+        let out = judge(&head, Some(&base()), Event::PullRequest);
+        assert_eq!(out.failures, Vec::<String>::new(), "{row_name}");
+        for budget in *budgets {
+            let line = row(&out.comment, budget);
+            assert!(line.ends_with("| skipped |"), "{row_name} {budget}: {line}");
+            assert!(
+                line.contains(&format!("skipped: the selection did not run {row_name}")),
+                "{row_name} {budget}: {line}"
+            );
+        }
+        // No other budget reads skipped: the ten-turns row aside, which
+        // holds its metrics here and stays passed.
+        let skipped = skipped_budgets(&out.comment);
+        assert_eq!(skipped.len(), budgets.len(), "{row_name}: {skipped:?}");
+        for budget in skipped {
+            assert!(budgets.contains(&budget.as_str()), "{row_name}: {budget}");
+        }
+    }
+}
+
+#[test]
+fn a_head_skip_forgives_only_the_budgets_it_feeds() {
+    // The head skips `paging` but still owes `session_start_ms`: the
+    // missing metric fails while the paging budgets read skipped.
+    let mut head = head();
+    for id in [
+        "paging_rss_kib",
+        "paging_open_ms",
+        "paging_load_ms",
+        "paging_jump_ms",
+        "paging_width_ms",
+        "paging_append_ms",
+        "paging_search_ms",
+        "paging_scale16_width_ms",
+        "paging_scale16_search_ms",
+    ] {
+        head = without_metric(&head, id);
+    }
+    let head = without_metric(&with_skipped(head, &["paging"]), "session_start_ms");
+    let out = judge(&head, Some(&base()), Event::PullRequest);
+    assert!(!out.failures.is_empty());
+    assert!(has(&out.failures, "session_start_ms"), "{:?}", out.failures);
+    let line = row(&out.comment, "`paging` jig, open pass and first frame");
+    assert!(line.ends_with("| skipped |"), "{line}");
+}
+
+#[test]
+fn a_skipped_budget_still_checks_its_table_row() {
+    // A mutant that skips the table checks for a skipped budget fails
+    // each case below.
+    let paging_head = || {
+        let mut head = head();
+        for id in [
+            "paging_rss_kib",
+            "paging_open_ms",
+            "paging_load_ms",
+            "paging_jump_ms",
+            "paging_width_ms",
+            "paging_append_ms",
+            "paging_search_ms",
+            "paging_scale16_width_ms",
+            "paging_scale16_search_ms",
+        ] {
+            head = without_metric(&head, id);
+        }
+        with_skipped(head, &["paging"])
+    };
+    // A changed pin on a skipped scale-16 ratio row fails.
+    let out = judge_doc(
+        &doc_with(
+            "24 times the same run's scale-1 re-count",
+            "25 times the same run's scale-1 re-count",
+        ),
+        &paging_head(),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(
+            &out.failures,
+            "`paging` jig at scale 16, slowest re-count at a new width"
+        ),
+        "{:?}",
+        out.failures
+    );
+    // A ceiling in the wrong unit on a skipped memory budget fails.
+    let mut attach_head = head();
+    for id in [
+        "terminal_attach_ms",
+        "terminal_attach_rss_kib",
+        "terminal_attach_retained_kib",
+    ] {
+        attach_head = without_metric(&attach_head, id);
+    }
+    let out = judge_doc(
+        &doc_with("200 MiB peak RSS", "200 ms peak RSS"),
+        &with_skipped(attach_head, &["terminal attach"]),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "Terminal, attaching a 10 MiB session"),
+        "{:?}",
+        out.failures
+    );
+    // A malformed class cell on a skipped timing budget fails.
+    let out = judge_doc(
+        &doc_with("| 725 ms |", "| fast |"),
+        &paging_head(),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "`paging` jig, open pass and first frame"),
+        "{:?}",
+        out.failures
+    );
+    // A changed attaching pin fails when the attach row is skipped.
+    let mut pin_head = head();
+    for id in [
+        "terminal_attach_ms",
+        "terminal_attach_rss_kib",
+        "terminal_attach_retained_kib",
+    ] {
+        pin_head = without_metric(&pin_head, id);
+    }
+    let out = judge_doc(
+        &doc_with(
+            "50 ms plus 10 ms per MiB of session log",
+            "50 ms plus 11 ms per MiB of session log",
+        ),
+        &with_skipped(pin_head, &["terminal attach"]),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        has(&out.failures, "Terminal to its first frame, attaching"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn row_metrics_names_match_the_selectors_rows() {
+    // A docs-only diff selects no row, so the selector returns every row
+    // in table order: the judge's row table must name the same rows.
+    let selected = crate::select::base_rows_skipped("pull_request", &["README.md".to_owned()]);
+    let names: Vec<&str> = super::judge::ROW_METRICS
+        .iter()
+        .map(|(row, _)| *row)
+        .collect();
+    assert_eq!(names, selected);
+}
+
+#[test]
+fn a_row_the_head_did_not_skip_is_judged_as_before() {
+    // The head skips `session start` yet holds an over-ceiling paging
+    // median: the paging budget fails while session start reads skipped.
+    // A mutant scoping the skip to the whole head file fails the second
+    // assert; one scoping it to the wrong rows fails the first.
+    let head = with_metric(
+        with_skipped(head(), &["session start"]),
+        "paging_rss_kib",
+        json!(vec![999999; 5]),
+    );
+    let out = judge(&head, Some(&base()), Event::PullRequest);
+    assert!(has(&out.failures, "paging_rss_kib"), "{:?}", out.failures);
+    let line = row(&out.comment, "Session start, the internal");
+    assert!(line.ends_with("| skipped |"), "{line}");
+}
+
 #[test]
 fn a_skipped_base_leaves_the_head_ten_turns_skip_alone() {
     let headed = with_skipped(head(), &["10 busy turns"]);
