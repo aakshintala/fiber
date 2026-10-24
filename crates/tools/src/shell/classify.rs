@@ -81,6 +81,45 @@ fn declared(
     crate::tool_util::effects(vec![effect], reversible, paths, subject, prefix)
 }
 
+/// The stages the reviewer was not shown read-only, for the reviewer's
+/// prompt (`docs/tools.md`, "Shell", "Effects"): the whole line, so the
+/// reviewer names the call's other commands while still seeing all of it.
+/// `None` when every stage reads, when none does, or when the parse leaves
+/// no trustworthy parts.
+/// The stages the reviewer was not shown read-only, for the reviewer's
+/// prompt (`docs/tools.md`, "Shell", "Effects"): the whole line, so the
+/// reviewer names the call's other commands while still seeing all of it.
+/// `None` when every stage reads, when none does, or when the parse leaves
+/// no trustworthy parts.
+pub(super) fn not_shown_read_only(
+    command: &str,
+    workdir: &Path,
+    configured: &[(String, Vec<String>)],
+) -> Option<String> {
+    let script = super::syntax::parse(command)?;
+    let walked = walk(&script, workdir, configured);
+    let shown = walked.parts.iter().any(|part| part.shown);
+    let unshown: Vec<&str> = walked
+        .parts
+        .iter()
+        .filter(|part| !part.shown)
+        .map(|part| part.text.as_str())
+        .collect();
+    if !shown || unshown.is_empty() {
+        return None;
+    }
+    let mut line = String::from("Not shown read-only: ");
+    for (index, text) in unshown.iter().enumerate() {
+        if index > 0 {
+            line.push_str(", ");
+        }
+        line.push('`');
+        line.push_str(text);
+        line.push('`');
+    }
+    Some(line)
+}
+
 /// The subject reviewers see and the prefix allow rules match: the single
 /// simple stage's raw tokens joined, then its first one or two words. A
 /// pipeline, an opaque stage, a leading redirect or a leading assignment
@@ -134,24 +173,79 @@ pub(super) enum Outcome {
     Network(Vec<String>),
 }
 
+/// One stage's verdict beside its source slice: whether the reviewer was
+/// shown it read-only.
+struct Part {
+    text: String,
+    shown: bool,
+}
+
+/// One walk over the script: the call's verdict inputs and every stage's
+/// own verdict. `not_shown_read_only` reads the parts; `outcome` folds
+/// the verdict.
+struct Walked {
+    saw_executes: bool,
+    saw_network: bool,
+    paths: Vec<String>,
+    parts: Vec<Part>,
+}
+
+/// The verbatim source slice of a stage: a simple command as written, or
+/// an opaque statement's own slice.
+fn stage_text(stage: &Stage) -> &str {
+    match stage {
+        Stage::Simple(simple) => simple.text.as_str(),
+        Stage::Opaque(text) => text.as_str(),
+    }
+}
+
 fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Outcome {
+    let walked = walk(script, workdir, configured);
+    if walked.saw_executes {
+        Outcome::Executes
+    } else if walked.saw_network {
+        Outcome::Network(walked.paths)
+    } else {
+        Outcome::Reads(walked.paths)
+    }
+}
+
+fn walk(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]) -> Walked {
+    let mut walked = Walked {
+        saw_executes: false,
+        saw_network: false,
+        paths: Vec::new(),
+        parts: Vec::new(),
+    };
     let Some(start) = workdir.to_str() else {
-        return Outcome::Executes;
+        walked.saw_executes = true;
+        return walked;
     };
     let mut cwd = Cwd::new(start);
     let mut saw_cd = false;
-    let mut saw_executes = false;
-    let mut saw_network = false;
     let mut lost = false;
-    let mut paths = Vec::new();
     for element in &script.elements {
+        // A lost path leaves no trustworthy part behind: every later
+        // stage is unshown, so the note can still name the call's tail.
         if lost {
-            saw_executes = true;
+            walked.saw_executes = true;
+            for stage in &element.stages {
+                walked.parts.push(Part {
+                    text: stage_text(stage).to_owned(),
+                    shown: false,
+                });
+            }
             continue;
         }
         let Some(dirs) = cwd.enter(element.join) else {
             lost = true;
-            saw_executes = true;
+            walked.saw_executes = true;
+            for stage in &element.stages {
+                walked.parts.push(Part {
+                    text: stage_text(stage).to_owned(),
+                    shown: false,
+                });
+            }
             continue;
         };
         let mut cd_target = None;
@@ -183,25 +277,24 @@ fn outcome(script: &Script, workdir: &Path, configured: &[(String, Vec<String>)]
                 stdin_known && stdin_static,
             );
             let network = matches!(verdict, Outcome::Network(_));
+            let shown = !matches!(verdict, Outcome::Executes);
+            walked.parts.push(Part {
+                text: stage_text(stage).to_owned(),
+                shown,
+            });
             match verdict {
-                Outcome::Executes => saw_executes = true,
+                Outcome::Executes => walked.saw_executes = true,
                 Outcome::Reads(more) | Outcome::Network(more) => {
-                    saw_network = saw_network || network;
+                    walked.saw_network = walked.saw_network || network;
                     stdin_known = true;
                     stdin_static = stdin_static && static_words(stage, &mut stdin_words);
-                    paths.extend(more);
+                    walked.paths.extend(more);
                 }
             }
         }
         cwd.leave(element.join, cd_target);
     }
-    if saw_executes {
-        Outcome::Executes
-    } else if saw_network {
-        Outcome::Network(paths)
-    } else {
-        Outcome::Reads(paths)
-    }
+    walked
 }
 
 fn stage_outcome(

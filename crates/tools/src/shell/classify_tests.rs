@@ -1433,3 +1433,77 @@ fn cd_chain(count: usize) -> String {
     command.push_str(" ; ls");
     command
 }
+
+fn noted(command: &str) -> Option<String> {
+    super::not_shown_read_only(command, Path::new("/work"), &[])
+}
+
+#[test]
+fn the_note_names_only_the_stages_that_were_not_shown_read_only() {
+    assert_eq!(
+        noted("ls && npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+    assert_eq!(noted("npm test"), None);
+    assert_eq!(noted("ls && pwd"), None);
+    assert_eq!(noted("ls &&"), None);
+    assert_eq!(
+        noted("echo $(x) && ls"),
+        Some("Not shown read-only: `echo $(x)`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_joins_several_unshown_parts_with_comma() {
+    assert_eq!(
+        noted("ls && npm test && npm run"),
+        Some("Not shown read-only: `npm test`, `npm run`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_git_stage_failed_by_an_earlier_cd() {
+    assert_eq!(
+        noted("cd sub && git status"),
+        Some("Not shown read-only: `git status`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_an_opaque_subshell_stage() {
+    assert_eq!(
+        noted("(ls) && pwd"),
+        Some("Not shown read-only: `(ls)`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_keeps_verbatim_spacing() {
+    assert_eq!(
+        noted("ls  &&  npm   test"),
+        Some("Not shown read-only: `npm   test`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_pipeline_stage() {
+    assert_eq!(
+        noted("ls | npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+}
+
+#[test]
+fn the_note_names_a_stage_reading_under_proc() {
+    assert_eq!(
+        noted("cat /proc/version && ls"),
+        Some("Not shown read-only: `cat /proc/version`".to_owned())
+    );
+}
+
+#[test]
+fn an_oversize_call_has_no_note() {
+    let over = format!("echo {}", "a".repeat(9_996));
+    assert!(over.len() > super::super::syntax::MAX_COMMAND_BYTES);
+    assert_eq!(noted(&over), None);
+}

@@ -49,21 +49,28 @@ pub(super) struct Element {
 
 /// One pipeline stage: a simple command the recogniser read fully, or an
 /// opaque statement (a subshell, a loop, a refused redirect) that still
-/// classifies but never reads.
+/// classifies but never reads. The payload is the stage's verbatim source
+/// slice, so the review note names the stage as written.
 pub(super) enum Stage {
     Simple(Simple),
-    Opaque,
+    Opaque(String),
 }
 
 /// One simple command: its leading `NAME=value` assignments, its operand
 /// words after quote removal, its redirects in source order, and the tokens
 /// the subject is built from: the operand words and redirect spellings in
-/// source order, assignments excluded.
+/// source order, assignments excluded. `text` is the stage's verbatim
+/// source slice, redirects included, so the review note names the stage as
+/// written; `start` and `end` are its byte span, extended as outer
+/// redirects attach.
 pub(super) struct Simple {
     pub(super) assignments: Vec<(String, String)>,
     pub(super) words: Vec<Word>,
     pub(super) redirects: Vec<Redirect>,
     pub(super) tokens: Vec<String>,
+    pub(super) text: String,
+    start: usize,
+    end: usize,
 }
 
 /// One operand word: its raw spelling and its cooked text after quote
@@ -132,22 +139,24 @@ pub(super) fn parse(command: &str) -> Option<Script> {
 fn push_statement(node: Node, src: &str, elements: &mut Vec<Element>, join: Join) {
     match node.kind() {
         "command" => elements.push(Element {
-            stages: vec![cook_command(node, src).map_or(Stage::Opaque, Stage::Simple)],
+            stages: vec![
+                cook_command(node, src)
+                    .map_or_else(|| Stage::Opaque(text_of(node, src)), Stage::Simple),
+            ],
             join,
         }),
         "list" => push_list(node, src, elements, join),
         "pipeline" => elements.push(pipeline(node, src, join)),
         "redirected_statement" => elements.extend(redirected(node, src, join)),
         "variable_assignment" => elements.push(Element {
-            stages: vec![
-                cook_assignment(node, src).map_or(Stage::Opaque, |assignments| {
-                    Stage::Simple(Simple::assigned(assignments))
-                }),
-            ],
+            stages: vec![cook_assignment(node, src).map_or_else(
+                || Stage::Opaque(text_of(node, src)),
+                |assignment| Stage::Simple(Simple::assigned(assignment, node, src)),
+            )],
             join,
         }),
         _ => elements.push(Element {
-            stages: vec![Stage::Opaque],
+            stages: vec![Stage::Opaque(text_of(node, src))],
             join,
         }),
     }
@@ -168,7 +177,7 @@ fn push_list(node: Node, src: &str, elements: &mut Vec<Element>, incoming: Join)
             (children.next(), children.next(), children.next())
         else {
             elements.push(Element {
-                stages: vec![Stage::Opaque],
+                stages: vec![Stage::Opaque(text_of(node, src))],
                 join,
             });
             continue;
@@ -178,7 +187,7 @@ fn push_list(node: Node, src: &str, elements: &mut Vec<Element>, incoming: Join)
             "||" => Join::Or,
             _ => {
                 elements.push(Element {
-                    stages: vec![Stage::Opaque],
+                    stages: vec![Stage::Opaque(text_of(node, src))],
                     join,
                 });
                 continue;
@@ -186,7 +195,7 @@ fn push_list(node: Node, src: &str, elements: &mut Vec<Element>, incoming: Join)
         };
         if children.next().is_some() {
             elements.push(Element {
-                stages: vec![Stage::Opaque],
+                stages: vec![Stage::Opaque(text_of(node, src))],
                 join,
             });
             continue;
@@ -200,7 +209,7 @@ fn push_list(node: Node, src: &str, elements: &mut Vec<Element>, incoming: Join)
 /// whole element opaque; any other surprise does the same.
 fn pipeline(node: Node, src: &str, join: Join) -> Element {
     let opaque = || Element {
-        stages: vec![Stage::Opaque],
+        stages: vec![Stage::Opaque(text_of(node, src))],
         join,
     };
     let mut stages = Vec::new();
@@ -213,7 +222,10 @@ fn pipeline(node: Node, src: &str, join: Join) -> Element {
         };
         match stage.kind() {
             "command" => {
-                stages.push(cook_command(stage, src).map_or(Stage::Opaque, Stage::Simple));
+                stages.push(
+                    cook_command(stage, src)
+                        .map_or_else(|| Stage::Opaque(text_of(stage, src)), Stage::Simple),
+                );
             }
             "redirected_statement" => {
                 let Some(stage) = single_stage(redirected(stage, src, join)) else {
@@ -221,11 +233,10 @@ fn pipeline(node: Node, src: &str, join: Join) -> Element {
                 };
                 stages.push(stage);
             }
-            "variable_assignment" => stages.push(
-                cook_assignment(stage, src).map_or(Stage::Opaque, |assignments| {
-                    Stage::Simple(Simple::assigned(assignments))
-                }),
-            ),
+            "variable_assignment" => stages.push(cook_assignment(stage, src).map_or_else(
+                || Stage::Opaque(text_of(stage, src)),
+                |assignment| Stage::Simple(Simple::assigned(assignment, stage, src)),
+            )),
             _ => return opaque(),
         }
         let Some(separator) = children.next() else {
@@ -264,7 +275,7 @@ fn single_stage(nested: Vec<Element>) -> Option<Stage> {
 fn redirected(node: Node, src: &str, incoming: Join) -> Vec<Element> {
     let opaque = || {
         vec![Element {
-            stages: vec![Stage::Opaque],
+            stages: vec![Stage::Opaque(text_of(node, src))],
             join: incoming,
         }]
     };
@@ -326,13 +337,49 @@ fn attach_simple(elements: &mut [Element], redirect: Node, src: &str, trailing: 
     let Some(stage) = stage else {
         return;
     };
-    let attached = match stage {
-        Stage::Simple(simple) => push_redirect(simple, redirect, src, !trailing),
-        Stage::Opaque => true,
+    let refused = match stage {
+        Stage::Simple(simple) => {
+            if push_redirect(simple, redirect, src, !trailing) {
+                extend_text(simple, redirect, src);
+                None
+            } else {
+                Some(merged_text(simple, redirect, src))
+            }
+        }
+        Stage::Opaque(_) => None,
     };
-    if !attached {
-        *stage = Stage::Opaque;
+    if let Some(text) = refused {
+        *stage = Stage::Opaque(text);
     }
+}
+
+/// Widen a stage's span over an attached outer redirect, keeping the
+/// verbatim source slice the review note names.
+fn extend_text(simple: &mut Simple, redirect: Node, src: &str) {
+    let start = simple.start.min(redirect.start_byte());
+    let end = simple.end.max(redirect.end_byte());
+    if let Some(text) = src.get(start..end) {
+        simple.text = text.to_string();
+        simple.start = start;
+        simple.end = end;
+    }
+}
+
+/// The verbatim source slice of a refused stage with its refused redirect:
+/// the span both cover, or the stage's own slice when the span does not
+/// slice the command (unreachable for nodes the parser returned).
+fn merged_text(simple: &Simple, redirect: Node, src: &str) -> String {
+    let start = simple.start.min(redirect.start_byte());
+    let end = simple.end.max(redirect.end_byte());
+    src.get(start..end)
+        .unwrap_or(simple.text.as_str())
+        .to_string()
+}
+
+/// The verbatim source slice of `node`, or empty when its span does not
+/// slice the command (unreachable for a node the parser returned).
+fn text_of(node: Node, src: &str) -> String {
+    text(node, src).unwrap_or_default()
 }
 
 /// Build one simple command from a `command` node: leading assignments, one
@@ -340,7 +387,7 @@ fn attach_simple(elements: &mut [Element], redirect: Node, src: &str, trailing: 
 /// hold only blanks; anything else (a carriage return splitting two words)
 /// refuses the stage, as does anything the recogniser does not implement.
 fn cook_command(node: Node, src: &str) -> Option<Simple> {
-    let mut simple = Simple::empty();
+    let mut simple = Simple::empty(node, src);
     let mut seen_name = false;
     let mut end = node.start_byte();
     for child in node.children(&mut node.walk()) {
@@ -638,22 +685,23 @@ fn text(node: Node, src: &str) -> Option<String> {
 }
 
 impl Simple {
-    fn empty() -> Self {
+    fn empty(node: Node, src: &str) -> Self {
+        let (start, end) = (node.start_byte(), node.end_byte());
         Simple {
             assignments: Vec::new(),
             words: Vec::new(),
             redirects: Vec::new(),
             tokens: Vec::new(),
+            text: text_of(node, src),
+            start,
+            end,
         }
     }
 
-    fn assigned(assignments: (String, String)) -> Self {
-        Simple {
-            assignments: vec![assignments],
-            words: Vec::new(),
-            redirects: Vec::new(),
-            tokens: Vec::new(),
-        }
+    fn assigned(assignment: (String, String), node: Node, src: &str) -> Self {
+        let mut simple = Self::empty(node, src);
+        simple.assignments = vec![assignment];
+        simple
     }
 }
 
