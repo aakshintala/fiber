@@ -161,28 +161,6 @@ pub(crate) fn bounded<T: Send + 'static>(
     fakes::within(what, deadline, work)
 }
 
-/// Sends `signal` to process group `group` through `fakes::kill_group`: a
-/// kill(2) call that starts no process, so it runs directly with no bound.
-/// It keeps its deadline so every signal site reads the same.
-// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
-#[track_caller]
-pub(crate) fn kill_group(
-    _deadline: Deadline,
-    group: u32,
-    signal: &'static str,
-) -> io::Result<bool> {
-    fakes::kill_group(group, signal)
-}
-
-/// Sends `signal` to process `pid` through `fakes::kill_pid`: a kill(2)
-/// call that starts no process, so it runs directly with no bound. It
-/// keeps its deadline so every signal site reads the same.
-// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
-#[track_caller]
-pub(crate) fn kill_pid(_deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
-    fakes::kill_pid(pid, signal)
-}
-
 /// `fakes::kill_matching` bounded by `deadline.cleanup()`.
 #[track_caller]
 pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
@@ -192,15 +170,6 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
         deadline.cleanup_phase(),
         move || fakes::kill_matching(&text),
     )
-}
-
-/// Whether any process remains in process group `group`, probed directly:
-/// a kill(2) call starts no process, so it runs with no bound. It keeps
-/// its deadline so every signal site reads the same.
-// debt: _deadline stays unread until support::group_alive's callers are granted (parked on #1702, item 7 and the fence); upgrade trigger: #1702 item 7 grants the fence.
-#[track_caller]
-pub(crate) fn group_alive(_deadline: Deadline, group: u32) -> bool {
-    fakes::kill_group(group, "0").unwrap()
 }
 
 /// For `Drop` impls: kills every process whose command line holds
@@ -633,7 +602,158 @@ pub(crate) struct Socket {
     /// Set by [`Socket::pumped`]: the lines a reader thread took off the
     /// socket, `None` once the far end closed it.
     pump: Option<Mutex<mpsc::Receiver<Option<Value>>>>,
+    /// Context for the timeout dump, set once after connect at the sites
+    /// that hold a session's stderr snapshot and log directory.
+    diag: Option<Diag>,
     deadline: Deadline,
+}
+
+/// What a session-socket wait prints when the deadline expires: the live
+/// stderr snapshot the drain thread keeps, and the directory holding the
+/// session's `events.jsonl`. The snapshot rides an `Arc` so the drain
+/// thread appends while the wait reads.
+pub(crate) struct Diag {
+    stderr: Arc<Mutex<String>>,
+    log_dir: PathBuf,
+}
+
+impl Diag {
+    pub(crate) fn new(stderr: Arc<Mutex<String>>, log_dir: PathBuf) -> Self {
+        Self { stderr, log_dir }
+    }
+
+    /// The timeout message for `what` with the lines `got` so far: the old
+    /// first line, then the stderr snapshot, then the session-log tail. The
+    /// stderr lock is released before the log file is read, and a poisoned
+    /// lock yields what was captured, so the dump never replaces the
+    /// timeout panic with its own.
+    pub(crate) fn report(&self, what: &str, got: &[Value]) -> String {
+        let stderr = self
+            .stderr
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        timeout_message(what, got, &stderr, &session_log_tail(&self.log_dir))
+    }
+}
+
+/// The session-log lines a timeout dump shows: the last 20 complete lines
+/// of `dir/events.jsonl`, mirroring the hub-start report's tail. A trailing
+/// fragment without its newline is still being written, so it is dropped;
+/// a missing log reads as empty.
+pub(crate) fn session_log_tail(dir: &Path) -> String {
+    const TAIL: usize = 20;
+    let text = fs::read_to_string(dir.join("events.jsonl")).unwrap_or_default();
+    let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+    let lines: Vec<&str> = complete.lines().collect();
+    let start = lines.len().saturating_sub(TAIL);
+    lines[start..].join("\n")
+}
+
+/// Asserts a session-socket timeout dump: the received lines before the
+/// stderr section, the stderr snapshot section, then the session-log tail
+/// holding a `session_started` line. The three acceptance tests share it.
+#[track_caller]
+pub(crate) fn assert_timeout_dump(message: &str) {
+    let head = message.split("fiber stderr:").next().unwrap_or_default();
+    assert!(head.contains("command_accepted"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    let tail_header = "session log tail (events.jsonl, last 20 lines):";
+    assert!(message.contains(tail_header), "{message}");
+    let tail = message.split(tail_header).nth(1).unwrap_or_default();
+    assert!(tail.contains("\"kind\":\"session_started\""), "{message}");
+}
+
+/// The timeout message: the old first line naming `what` and `got`, then
+/// the stderr snapshot (or the still-running marker when nothing was
+/// captured yet), then the session-log tail.
+pub(crate) fn timeout_message(what: &str, got: &[Value], stderr: &str, log_tail: &str) -> String {
+    let stderr = if stderr.is_empty() {
+        "(still running: no stderr captured yet)"
+    } else {
+        stderr
+    };
+    format!(
+        "waited until the deadline for {what}; got {got:?}\n\
+         fiber stderr:\n\
+         {stderr}\n\
+         session log tail (events.jsonl, last 20 lines):\n\
+         {log_tail}"
+    )
+}
+
+/// Reads `pipe` to its end, appending every chunk to `snapshot` as it
+/// arrives while returning the full text: the timeout dump sees stderr
+/// written before the timeout, and the caller still gets the whole stream
+/// once at EOF. A multibyte character split across two reads is kept whole:
+/// trailing bytes that do not yet decode wait for the next read, so neither
+/// the text nor the snapshot ever holds a replacement character for one.
+/// An unreadable or empty stream snapshots as empty.
+pub(crate) fn drain_stderr_to_snapshot(
+    pipe: &mut impl io::Read,
+    snapshot: &Arc<Mutex<String>>,
+) -> String {
+    let mut text = String::new();
+    let mut chunk = [0_u8; 4096];
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                pending.extend_from_slice(&chunk[..read]);
+                let piece = take_decoded_prefix(&mut pending);
+                text.push_str(&piece);
+                match snapshot.lock() {
+                    Ok(mut guard) => guard.push_str(&piece),
+                    Err(poisoned) => poisoned.into_inner().push_str(&piece),
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if !pending.is_empty() {
+        let piece = String::from_utf8_lossy(&pending);
+        text.push_str(&piece);
+        match snapshot.lock() {
+            Ok(mut guard) => guard.push_str(&piece),
+            Err(poisoned) => poisoned.into_inner().push_str(&piece),
+        }
+    }
+    text
+}
+
+/// Moves every complete character out of `pending`, leaving only trailing
+/// bytes that may complete a character once more arrive: the valid prefix,
+/// with each invalid byte replaced. A trailing fragment with no error
+/// length is an incomplete character, so it stays for the next read.
+fn take_decoded_prefix(pending: &mut Vec<u8>) -> String {
+    let mut piece = String::new();
+    loop {
+        match str::from_utf8(pending) {
+            Ok(valid) => {
+                piece.push_str(valid);
+                pending.clear();
+                return piece;
+            }
+            Err(error) => {
+                let up_to = error.valid_up_to();
+                if up_to > 0 {
+                    // `valid_up_to` is always a character boundary.
+                    let valid = str::from_utf8(&pending[..up_to]).unwrap_or_default();
+                    piece.push_str(valid);
+                    pending.drain(..up_to);
+                    continue;
+                }
+                match error.error_len() {
+                    Some(len) => {
+                        piece.push('\u{FFFD}');
+                        pending.drain(..len);
+                    }
+                    None => return piece,
+                }
+            }
+        }
+    }
 }
 
 impl Socket {
@@ -674,9 +794,10 @@ impl Socket {
         if let Some(pump) = &self.pump {
             return match self.deadline.recv(&pump.lock().unwrap()) {
                 Ok(line) => line,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited until the deadline for {what}; got {got:?}")
-                }
+                Err(mpsc::RecvTimeoutError::Timeout) => match &self.diag {
+                    Some(diag) => panic!("{}", diag.report(what, got)),
+                    None => panic!("waited until the deadline for {what}; got {got:?}"),
+                },
                 Err(mpsc::RecvTimeoutError::Disconnected) => None,
             };
         }
@@ -686,9 +807,10 @@ impl Socket {
                 let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
                 Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
             }
-            Err(error) if error.kind() == ErrorKind::TimedOut => {
-                panic!("waited until the deadline for {what}; got {got:?}")
-            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
+                Some(diag) => panic!("{}", diag.report(what, got)),
+                None => panic!("waited until the deadline for {what}; got {got:?}"),
+            },
             Err(error) => panic!("reading the socket while waiting for {what}: {error}"),
         }
     }
@@ -866,8 +988,23 @@ impl Socket {
             read: Mutex::new(BufReader::new(read)),
             kept: Mutex::default(),
             pump: None,
+            diag: None,
             deadline,
         }
+    }
+
+    /// Registers the timeout dump's context: the stderr snapshot the drain
+    /// thread keeps and the session's log directory. Without it the timeout
+    /// branch keeps the old message, so other `Socket` users are unaffected.
+    pub(crate) fn set_diag(&mut self, diag: Diag) {
+        self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    pub(crate) fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
     }
 
     /// Reads the socket on a thread from now on, so a client the test holds
@@ -1422,4 +1559,128 @@ pub(crate) fn session_cost_drawn(grid: &pty::Grid, left: u16) -> bool {
                 spells && before_ok && after_ok && !continued
             })
     })
+}
+
+#[test]
+fn timeout_message_holds_the_old_first_line_and_all_three_sections() {
+    let dir = fakes::TempDir::new("diag");
+    let dir_path = dir.path().join("s_1");
+    fs::create_dir_all(&dir_path).unwrap();
+    fs::write(
+        dir_path.join("events.jsonl"),
+        "{\"kind\":\"session_started\"}\n{\"kind\":\"fiber_started\"}\n",
+    )
+    .unwrap();
+    let stderr = Arc::new(Mutex::new("boom on fd 2\n".to_owned()));
+    let diag = Diag::new(Arc::clone(&stderr), dir_path);
+    let got = vec![json!({"kind": "command_accepted"})];
+    let message = diag.report("the refused prompt", &got);
+    let first = message.lines().next().unwrap_or_default();
+    assert_eq!(
+        first,
+        "waited until the deadline for the refused prompt; got [Object {\"kind\": String(\"command_accepted\")}]"
+    );
+    assert!(message.contains("fiber stderr:"), "{message}");
+    assert!(message.contains("boom on fd 2"), "{message}");
+    assert!(
+        message.contains("session log tail (events.jsonl, last 20 lines):"),
+        "{message}"
+    );
+    assert!(
+        message.contains("\"kind\":\"session_started\""),
+        "{message}"
+    );
+}
+
+#[test]
+fn timeout_message_marks_empty_stderr_as_still_running() {
+    let message = timeout_message("the refused prompt", &[], "", "{\"kind\":\"x\"}\n");
+    assert!(
+        message.contains("(still running: no stderr captured yet)"),
+        "{message}"
+    );
+    let message = timeout_message("the refused prompt", &[], "late line\n", "");
+    assert!(!message.contains("still running"), "{message}");
+    assert!(message.contains("late line"), "{message}");
+}
+
+#[test]
+fn session_log_tail_keeps_only_complete_lines() {
+    // No asserted count cites a `docs/<area>.md` line promising it
+    // (`docs/code-quality.md`, "What a reviewer checks"): the tail's width
+    // is the helper's own bound, so this test pins presence and recency,
+    // not the bound. A short log comes back whole.
+    let dir = fakes::TempDir::new("diag-tail");
+    assert_eq!(session_log_tail(&dir.path().join("missing")), "");
+    let file = dir.path().join("s_2");
+    fs::create_dir_all(&file).unwrap();
+    fs::write(file.join("events.jsonl"), "{\"kind\":\"partial\"}").unwrap();
+    assert_eq!(session_log_tail(&file), "");
+    let short: String = (0..5).map(|n| format!("{{\"n\":{n}}}\n")).collect();
+    fs::write(file.join("events.jsonl"), &short).unwrap();
+    assert_eq!(session_log_tail(&file), short.trim_end());
+    // A long log keeps its last line and drops an early one; a trailing
+    // fragment without its newline is still being written, so it is dropped.
+    let long: String = (0..40).map(|n| format!("{{\"n\":{n}}}\n")).collect();
+    fs::write(file.join("events.jsonl"), &long).unwrap();
+    let tail = session_log_tail(&file);
+    assert!(tail.contains("{\"n\":39}"), "{tail}");
+    assert!(!tail.contains("{\"n\":0}"), "{tail}");
+    let mut cut = long.clone();
+    cut.push_str("{\"n\":40");
+    fs::write(file.join("events.jsonl"), &cut).unwrap();
+    let tail = session_log_tail(&file);
+    assert!(!tail.contains("{\"n\":40"), "{tail}");
+    assert!(tail.contains("{\"n\":39}"), "{tail}");
+}
+
+#[test]
+fn stderr_drain_keeps_a_live_snapshot_of_the_full_text() {
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let mut pipe = io::Cursor::new(b"first line\nsecond line\n".to_vec());
+    let text = drain_stderr_to_snapshot(&mut pipe, &snapshot);
+    assert_eq!(text, "first line\nsecond line\n");
+    assert_eq!(*snapshot.lock().unwrap(), "first line\nsecond line\n");
+    let mut empty = io::Cursor::new(Vec::new());
+    let blank = Arc::new(Mutex::new(String::new()));
+    assert_eq!(drain_stderr_to_snapshot(&mut empty, &blank), "");
+    assert_eq!(*blank.lock().unwrap(), "");
+}
+
+/// A reader that dribbles out at most `max` bytes per read, so a multibyte
+/// character lands split across reads.
+struct Dribble<'a> {
+    rest: &'a [u8],
+    max: usize,
+}
+
+impl io::Read for Dribble<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.rest.is_empty() {
+            return Ok(0);
+        }
+        let take = self.rest.len().min(buf.len()).min(self.max);
+        buf[..take].copy_from_slice(&self.rest[..take]);
+        self.rest = &self.rest[take..];
+        Ok(take)
+    }
+}
+
+#[test]
+fn stderr_drain_keeps_a_character_split_across_reads() {
+    // One byte per read splits `é` and `ö` across reads: decoding each read
+    // alone would leave a replacement character per half.
+    let snapshot = Arc::new(Mutex::new(String::new()));
+    let mut pipe = Dribble {
+        rest: "héllo wörld\n".as_bytes(),
+        max: 1,
+    };
+    let text = drain_stderr_to_snapshot(&mut pipe, &snapshot);
+    assert_eq!(text, "héllo wörld\n");
+    assert_eq!(*snapshot.lock().unwrap(), "héllo wörld\n");
+    assert!(
+        !snapshot.lock().unwrap().contains('\u{FFFD}'),
+        "{}",
+        snapshot.lock().unwrap()
+    );
 }

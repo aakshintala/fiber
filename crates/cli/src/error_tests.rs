@@ -1352,6 +1352,192 @@ fn devices_malformed_names_devices() {
 }
 
 #[test]
+fn hub_unit_name_too_long_names_the_bytes() {
+    check(
+        &CliError::HubUnitNameTooLong { bytes: 241 },
+        ErrorCode::Usage,
+        "Fiber home's path is too long to name the hub's login service (241 bytes, at most \
+         240); set FIBER_HOME to a shorter path.",
+    );
+}
+
+#[test]
+fn hub_home_unavailable_names_home() {
+    check(
+        &CliError::HubHomeUnavailable,
+        ErrorCode::Usage,
+        "HOME must be an absolute path to find the hub's login service.",
+    );
+}
+
+#[test]
+fn hub_unit_path_unrepresentable_names_the_path() {
+    let path = std::path::PathBuf::from("/b\nin/f");
+    check(
+        &CliError::HubUnitPathUnrepresentable { path: path.clone() },
+        ErrorCode::IoFailed,
+        &format!(
+            "{path:?} is not UTF-8 or holds a control character, so the hub's login \
+             service cannot name it."
+        ),
+    );
+}
+
+#[test]
+fn hub_pairing_code_missing_is_usage() {
+    check(
+        &CliError::HubPairingCodeMissing,
+        ErrorCode::Usage,
+        "No pairing code was given. Run `fiber --help` for usage.",
+    );
+}
+
+#[test]
+fn hub_pairing_token_missing_names_the_token() {
+    check(
+        &CliError::HubPairingTokenMissing,
+        ErrorCode::IoFailed,
+        "the hub's pairing answer has no token",
+    );
+}
+
+#[test]
+fn hub_list_locked_names_the_running_command() {
+    check(
+        &CliError::HubListLocked {
+            name: "box".to_owned(),
+        },
+        ErrorCode::IoFailed,
+        "another `fiber hub add` or `fiber hub remove` of `box` is running",
+    );
+}
+
+#[test]
+fn hub_already_declared_names_the_removal() {
+    check(
+        &CliError::HubAlreadyDeclared {
+            name: "box".to_owned(),
+        },
+        ErrorCode::Usage,
+        "`box` is already declared in the global layer. Run `fiber hub remove box` to remove \
+         it first. Run `fiber --help` for usage.",
+    );
+}
+
+#[test]
+fn hub_not_found_names_the_list() {
+    check(
+        &CliError::HubNotFound {
+            name: "box".to_owned(),
+        },
+        ErrorCode::Usage,
+        "No hub named `box` in this client's list. Run `fiber --help` for usage.",
+    );
+}
+
+#[test]
+fn hub_entry_failed_keeps_the_source_code_and_suffix() {
+    let file = std::path::PathBuf::from("/tmp/config.json");
+    let unsynced = || ConfigError::Unsynced {
+        file: file.clone(),
+        source: io::Error::other("sync failed"),
+    };
+    let plain = || ConfigError::Io {
+        file: file.clone(),
+        source: io::Error::other("write failed"),
+    };
+    let kept = unsynced();
+    check(
+        &CliError::HubEntryFailed {
+            source: unsynced(),
+            paired: true,
+        },
+        ErrorCode::IoFailed,
+        &format!("{kept} The device token the entry refers to was kept."),
+    );
+    let message = unsynced().to_string();
+    check(
+        &CliError::HubEntryFailed {
+            source: unsynced(),
+            paired: false,
+        },
+        ErrorCode::IoFailed,
+        &message,
+    );
+    let message = plain().to_string();
+    check(
+        &CliError::HubEntryFailed {
+            source: plain(),
+            paired: true,
+        },
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
+fn hub_port_invalid_names_the_file_and_value() {
+    check(
+        &CliError::HubPortInvalid {
+            value: serde_json::json!("fast"),
+            path: std::path::PathBuf::from("/home/a/.fiber/config.json"),
+        },
+        ErrorCode::ConfigInvalid,
+        "hub.port in /home/a/.fiber/config.json is not a port: \"fast\"",
+    );
+}
+
+#[test]
+fn hub_devices_read_names_the_directory() {
+    check(
+        &CliError::HubDevicesRead {
+            path: std::path::PathBuf::from("/home/a/.fiber/hub/devices"),
+            source: io_error(),
+        },
+        ErrorCode::IoFailed,
+        "reading /home/a/.fiber/hub/devices: boom",
+    );
+}
+
+#[test]
+fn hub_status_late_names_the_seconds() {
+    check(
+        &CliError::HubStatusLate { seconds: 5.0 },
+        ErrorCode::IoFailed,
+        "the hub did not answer status in 5 s",
+    );
+}
+
+#[test]
+fn hub_status_closed_names_the_close() {
+    check(
+        &CliError::HubStatusClosed,
+        ErrorCode::IoFailed,
+        "the hub closed the connection before answering status",
+    );
+}
+
+#[test]
+fn hub_status_answer_missing_names_version_and_clients() {
+    check(
+        &CliError::HubStatusAnswerMissing,
+        ErrorCode::IoFailed,
+        "the hub's answer to status has no fiber_version or clients",
+    );
+}
+
+#[test]
+fn hub_status_json_names_the_status() {
+    let source = json_error();
+    let message = format!("the hub's status: {source}");
+    check(
+        &CliError::HubStatusJson(source),
+        ErrorCode::IoFailed,
+        &message,
+    );
+}
+
+#[test]
 fn finish_maps_a_cli_error_to_its_exit_code() {
     assert_eq!(finish(Err(CliError::LogoutNeedsProvider)), 2);
     assert_eq!(
