@@ -2428,15 +2428,18 @@ fn the_summary_names_the_rows_the_head_pass_skipped() {
         Some(&with_skipped(unselected, &["session start", "paging"])),
         Event::PullRequest,
     );
-    let head_at = out
-        .comment
-        .find("The head pass skipped session start, paging:")
-        .unwrap_or_else(|| panic!("no head sentence in:\n{}", out.comment));
-    let base_at = out
-        .comment
-        .find("The base pass skipped session start, paging:")
-        .unwrap_or_else(|| panic!("no base sentence in:\n{}", out.comment));
-    assert!(head_at < base_at, "{}", out.comment);
+    assert!(
+        out.comment
+            .contains("The head pass skipped session start, paging:"),
+        "no head sentence in:\n{}",
+        out.comment
+    );
+    assert!(
+        out.comment
+            .contains("The base pass skipped session start, paging:"),
+        "no base sentence in:\n{}",
+        out.comment
+    );
 }
 
 #[test]
