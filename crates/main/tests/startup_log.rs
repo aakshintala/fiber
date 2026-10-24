@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use serde_json::Value;
-use support::{KillGroup, Setup, group_alive, spawn_watched};
+use support::{KillGroup, Setup, spawn_watched};
 
 const SECRET: &str = "sk-planted-secret-4242";
 
@@ -46,10 +46,7 @@ impl Setup {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber ask` to exit"),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         output.status.code()

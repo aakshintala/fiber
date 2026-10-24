@@ -248,6 +248,11 @@ jobs:
         with:
           shared-key: ci-line-tables
           save-if: ${{ github.event_name == 'push' }}
+      # The cache can hold target/nextest/ci/junit.xml from an earlier run.
+      # Remove it before any step can fail, so the if: always() upload below
+      # only ever sees XML this run wrote.
+      - name: Remove any cached JUnit XML
+        run: rm -f target/nextest/ci/junit.xml
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest
@@ -333,6 +338,17 @@ jobs:
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
+      # The full-suite scripts/check XML, captured after retry handling and
+      # before the hub_service run below overwrites the file. Linux x86_64
+      # only: this anchor is shared verbatim with the arm64/macOS legs.
+      - name: Upload the full-suite JUnit XML
+        if: always() && matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
       # The hub's login service against systemd's user instance
       # (crates/main/tests/hub_service.rs). The runner has no user instance
       # until lingering is enabled for its user.

@@ -129,7 +129,7 @@ impl Setup {
             ),
         };
         assert!(
-            !support::group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);

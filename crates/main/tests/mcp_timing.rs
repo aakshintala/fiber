@@ -25,9 +25,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{
-    KillGroup, Run, Setup, function_call, group_alive, hello, is_status, spawn_watched, stream,
-};
+use support::{KillGroup, Run, Setup, function_call, hello, is_status, spawn_watched, stream};
 
 impl Setup {
     /// Runs `fiber` with `args` in `dir` under `home` to exit under the
@@ -61,10 +59,7 @@ impl Setup {
                 &format!("`fiber {}` to exit", args.join(" ")),
             ),
         };
-        assert!(
-            !group_alive(self.deadline, group),
-            "`fiber` left a process behind"
-        );
+        assert!(!fakes::group_alive(group), "`fiber` left a process behind");
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup_phase());
         let stdout = String::from_utf8(output.stdout).unwrap();
