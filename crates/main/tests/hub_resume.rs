@@ -217,7 +217,7 @@ impl Drop for Hub {
     /// thread until the cleanup deadline: a drop never blocks past it and
     /// never panics.
     fn drop(&mut self) {
-        support::kill_group_detached(self.group, "KILL");
+        drop(fakes::kill_group(self.group, "KILL"));
         support::kill_matching_detached(&self.workspace);
         if let Some(mut child) = self.child.take() {
             let (done, reaped) = mpsc::channel();

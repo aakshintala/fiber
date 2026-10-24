@@ -182,7 +182,7 @@ impl Session {
         let status = self.setup.deadline.recv(&done).unwrap().unwrap();
         let stderr = self.setup.deadline.recv(&self.stderr).unwrap();
         assert!(status.success(), "{stderr}");
-        assert!(!group_alive(self.setup.deadline, group));
+        assert!(!fakes::group_alive(group));
         std::mem::forget(self.guard);
         self.watchdog
             .stand_down(self.setup.deadline.cleanup_phase());
@@ -595,7 +595,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
     let status = session.setup.deadline.recv(&done).unwrap().unwrap();
     let stderr = session.setup.deadline.recv(&session.stderr).unwrap();
     assert!(status.success(), "{stderr}");
-    assert!(!group_alive(session.setup.deadline, group));
+    assert!(!fakes::group_alive(group));
     std::mem::forget(session.guard);
     session
         .watchdog
@@ -988,7 +988,7 @@ fn reload_replaces_restarts_starts_and_drops_mcp_servers() {
         .trim()
         .parse()
         .unwrap();
-    support::kill_pid(session.setup.deadline, pid, "KILL").unwrap();
+    fakes::kill_pid(pid, "KILL").unwrap();
     write_json(
         &session.setup.home().join("config.json"),
         &json!({"model": "fake/m", "mcp": {"servers": {

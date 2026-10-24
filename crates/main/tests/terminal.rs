@@ -2376,7 +2376,7 @@ fn signal_takes_the_normal_exit_path(signal: &'static str, code: i32) {
     run.wait_screen("the answer", |grid| grid.contents.contains("Hel"));
     run.turn_finished(from);
     let id = only_session(&setup);
-    support::kill_pid(setup.deadline, run.id(), signal).unwrap();
+    fakes::kill_pid(run.id(), signal).unwrap();
     let output = run.wait();
     assert_eq!(
         output.status.code(),

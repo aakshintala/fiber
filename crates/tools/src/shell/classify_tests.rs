@@ -257,6 +257,20 @@ fn assert_declares(command: &str, paths: &[&str]) {
     );
 }
 
+/// The network a `gh` read declares: the default GitHub API endpoint,
+/// in the shape `web_fetch` declares it.
+fn assert_network(command: &str, entries: &[(String, Vec<String>)], paths: &[&str]) {
+    let effects = classified_with(command, entries);
+    assert_eq!(effects.declared.effects, vec![Effect::Network], "{command}");
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()]),
+        "{command}"
+    );
+    let paths = paths.iter().map(|path| (*path).to_owned()).collect();
+    assert_eq!(effects.declared.paths, Some(paths), "{command}");
+}
+
 fn assert_closed(command: &str) {
     let effects = classified(command);
     assert_eq!(
@@ -386,6 +400,7 @@ fn hostile_git_forms_execute() {
     for command in [
         "git -c a=b log",
         "git -c diff.external=x diff",
+        "git --config-env=a=b log",
         "git --exec-path=/x log",
         "git --exec-path log",
         "git -p log",
@@ -426,6 +441,74 @@ fn hostile_git_forms_execute() {
     ] {
         assert_closed(command);
     }
+}
+
+#[test]
+fn gh_read_only_forms_read() {
+    // The table tests below prove every flag alone and every row reads;
+    // one combined row pins the declared network, host and paths.
+    assert_network(
+        "gh pr view 123 --json number,title --comments --repo owner/name -R owner/name",
+        &[],
+        &["/work/123"],
+    );
+    assert_network("LC_ALL=C gh pr view 123", &[], &["/work/123"]);
+}
+
+#[test]
+fn gh_host_overrides_execute() {
+    // Any host override leaves the default endpoint, so the call is
+    // reviewed: an assignment prefix naming a host variable, and the
+    // `--hostname` flag, whose value the classifier never sees.
+    for command in [
+        "GH_HOST=example.com gh pr view 123",
+        "GH_ENTERPRISE_TOKEN=token gh pr view 123",
+        "env GH_HOST=example.com gh pr view 123",
+        "gh pr view 123 --hostname example.com",
+    ] {
+        assert_closed(command);
+    }
+}
+
+#[test]
+fn other_gh_forms_execute() {
+    for command in [
+        "gh",
+        "gh api repos/owner/name",
+        "gh pr merge 123",
+        "gh pr create --title x",
+        "gh pr view 123 --web",
+        "gh pr view -- x",
+        "gh -R owner/name pr view 123",
+        "gh pr view 123 --repo github.corp/owner/repo",
+        "gh pr view 123 --repo=github.corp/owner/repo",
+        "gh pr view 123 -R github.corp/owner/repo",
+        "gh issue close 123",
+        "gh repo clone owner/name",
+        "gh auth status",
+        "gh run watch 123",
+        "curl https://example.com",
+    ] {
+        assert_closed(command);
+    }
+    // A configured `gh pr view` adds nothing: the built-in path owns the
+    // name. A configured `gh pr status` is honoured: no built-in owns it.
+    let view = [configured("gh pr view", &["--web"])];
+    assert_configured_closed("gh pr view 123 --web", &view);
+    // Only echo stages print statically-known words: a gh stage's output
+    // leaves a later `xargs` reader unproven, so the call is reviewed.
+    assert_closed("gh pr view 123 | xargs wc -l");
+    let status = [configured("gh pr status", &["--json="])];
+    // A configured `gh` entry hits the network too, so it declares
+    // `Network` with the default host instead of `Reads`.
+    assert_network("gh pr status 123", &status, &["/work/123"]);
+    assert_network("gh pr status 123 --json number", &status, &["/work/123"]);
+    assert_eq!(
+        classified_with("gh pr status 123 --web", &status)
+            .declared
+            .effects,
+        vec![Effect::Executes]
+    );
 }
 
 #[test]
@@ -597,6 +680,13 @@ fn denied_flags_are_absent_from_every_allowed_list() {
 #[test]
 fn every_listed_command_with_a_plain_operand_reads() {
     for command in COMMANDS {
+        // A `gh` command hits the network, so it declares `Network`
+        // with the default host instead of `Reads`.
+        if command.name.starts_with("gh ") {
+            let line = format!("{} x", command.name);
+            assert_network(&line, &[], &["/work/x"]);
+            continue;
+        }
         let line = format!("{} x", command.name);
         assert_reads(&line);
         let paths = classified(&line).declared.paths;
@@ -613,6 +703,19 @@ fn every_listed_command_with_a_plain_operand_reads() {
 #[test]
 fn each_allowed_flag_keeps_the_command_read_only() {
     for command in COMMANDS {
+        // A `gh` command hits the network, so it declares `Network`
+        // with the default host instead of `Reads`.
+        if command.name.starts_with("gh ") {
+            for flag in command.flags {
+                let line = if flag.takes_value {
+                    format!("{} {} v", command.name, flag.spelling)
+                } else {
+                    format!("{} {}", command.name, flag.spelling)
+                };
+                assert_network(&line, &[], &["/work"]);
+            }
+            continue;
+        }
         for flag in command.flags {
             let line = if flag.takes_value {
                 format!("{} {} v", command.name, flag.spelling)
@@ -796,6 +899,15 @@ fn every_command_states_whether_double_dash_ends_flags() {
         ("git rev-parse", true),
         ("git ls-files", true),
         ("git blame", true),
+        ("gh pr view", false),
+        ("gh pr list", false),
+        ("gh pr diff", false),
+        ("gh pr checks", false),
+        ("gh issue view", false),
+        ("gh issue list", false),
+        ("gh repo view", false),
+        ("gh run list", false),
+        ("gh run view", false),
     ];
     assert_eq!(COMMANDS.len(), stated.len());
     for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {

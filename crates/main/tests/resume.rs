@@ -30,8 +30,8 @@ use contract::{ActionId, CommandId, SessionId, TurnId};
 use fakes::{ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, Setup, first_line, function_call, group_alive,
-    hello_inline_completed as hello, is_status, spawn_watched, stream, text_reply,
+    Deadline, KillGroup, Setup, first_line, function_call, hello_inline_completed as hello,
+    is_status, spawn_watched, stream, text_reply,
 };
 
 impl Setup {
@@ -101,7 +101,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -1349,7 +1349,7 @@ fn finish(running: Running) {
         .expect("waited until the deadline for stderr to close");
     assert!(status.success(), "stderr: {stderr}");
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "fiber left a process in its group"
     );
     // The group is empty. Skip the drop, which would kill it again.
@@ -1387,7 +1387,7 @@ fn finish_output(running: Running) -> Finished {
         Err(_) => support::expired(deadline, group, &finished, "`fiber` to exit"),
     };
     assert!(
-        !group_alive(deadline, group),
+        !fakes::group_alive(group),
         "`fiber` left a process in its group behind"
     );
     std::mem::forget(guard);

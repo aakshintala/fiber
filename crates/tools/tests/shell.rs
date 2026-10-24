@@ -2999,3 +2999,68 @@ fn a_capped_clone_shares_the_read_only_handle() {
         vec![contract::shapes::Effect::Executes]
     );
 }
+
+#[test]
+fn a_shell_guards_git_reads_by_repository() {
+    let dir = fakes::TempDir::new("fiber-shell-read-only-repo");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(workspace.join(".git")).unwrap();
+    std::fs::write(workspace.join("f"), "Top.\n").unwrap();
+    let shell = Shell::new(workspace.clone(), FakeClock::new());
+    // A normal repository reads, declaring operand paths, and the
+    // repository-independent `gh` form declares the default host.
+    for command in ["git status", "git log --oneline f"] {
+        let effects = effects_of(&shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Reads],
+            "{command}"
+        );
+    }
+    let effects = effects_of(&shell, "gh pr view 123");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Network]
+    );
+    assert_eq!(
+        effects.hosts,
+        Some(vec!["https://api.github.com/".to_owned()])
+    );
+    assert_eq!(
+        effects_of(&shell, "git log --oneline f").declared.paths,
+        Some(vec![workspace.join("f").to_str().unwrap().to_owned()])
+    );
+    // A bare repository executes.
+    let bare = dir.path().join("bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(bare.join("objects")).unwrap();
+    std::fs::create_dir_all(bare.join("refs")).unwrap();
+    let bare_shell = Shell::new(bare.clone(), FakeClock::new());
+    for command in ["git status", "git log --oneline"] {
+        let effects = effects_of(&bare_shell, command);
+        assert_eq!(
+            effects.declared.effects,
+            vec![contract::shapes::Effect::Executes],
+            "{command}"
+        );
+        assert!(effects.declared.paths.is_none(), "{command}");
+    }
+    // A worktree checkout whose `.git` file names a target under another
+    // `.git/` reads.
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    let target = workspace.join(".git").join("worktrees").join("wt");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(
+        checkout.join(".git"),
+        format!("gitdir: {}\n", target.to_str().unwrap()),
+    )
+    .unwrap();
+    let checkout_shell = Shell::new(checkout.clone(), FakeClock::new());
+    let effects = effects_of(&checkout_shell, "git status");
+    assert_eq!(
+        effects.declared.effects,
+        vec![contract::shapes::Effect::Reads]
+    );
+}

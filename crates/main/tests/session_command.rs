@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git,
-    group_alive, hello, kinds, stream, text_reply, write_json,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, complete_lines, function_call, git, hello,
+    kinds, stream, text_reply, write_json,
 };
 
 impl Setup {
@@ -237,7 +237,7 @@ impl Setup {
             }
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -343,7 +343,7 @@ impl Running {
             }
         };
         assert!(
-            !group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);
@@ -2239,7 +2239,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(setup.deadline, job_group),
+        !fakes::group_alive(job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2);
@@ -2275,7 +2275,7 @@ fn close_now_while_idle_with_a_job_starts_no_turn() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(setup.deadline, job_group),
+        !fakes::group_alive(job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 2, "no ending-notice request ran");
@@ -2509,7 +2509,7 @@ fn close_without_now_waits_for_the_job_to_finish() {
         running.child.try_wait().unwrap().is_none(),
         "the session waits for the job"
     );
-    assert!(group_alive(setup.deadline, job_group), "the job still runs");
+    assert!(fakes::group_alive(job_group), "the job still runs");
     fs::write(setup.workspace().join("go"), "").unwrap();
     let _tail = until_session_close(&client);
     drop(client);
@@ -2626,7 +2626,7 @@ fn close_now_after_close_stops_the_job_it_was_waiting_for() {
         .expect("the background job completed");
     assert_eq!(job["payload"]["status"], "cancelled");
     assert!(
-        !group_alive(setup.deadline, job_group),
+        !fakes::group_alive(job_group),
         "the job's group outlived the session"
     );
     assert_eq!(server.requests().len(), 3);

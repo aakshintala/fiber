@@ -30,7 +30,7 @@ use fakes::Watchdog;
 use rustix::event::{PollFd, PollFlags, Timespec};
 use rustix::pty;
 
-use super::{Deadline, KillGroup, Setup, expired, kill_group_detached, kill_pid, spawn_watched};
+use super::{Deadline, KillGroup, Setup, expired, spawn_watched};
 
 /// The driver's default terminal size: a test may pick the size its
 /// layout needs (the look tests use 160 by 48).
@@ -938,7 +938,7 @@ impl Run {
         )
         .unwrap();
         if let Some(child) = self.child.as_ref() {
-            kill_pid(self.deadline, child.id(), "WINCH").unwrap();
+            fakes::kill_pid(child.id(), "WINCH").unwrap();
         }
     }
 
@@ -1037,7 +1037,7 @@ impl Drop for Run {
             reader.stop();
         }
         if let Some(mut child) = self.child.take() {
-            kill_group_detached(child.id(), "KILL");
+            drop(fakes::kill_group(child.id(), "KILL"));
             let reaped = thread::Builder::new().spawn(move || match child.wait() {
                 Ok(_) | Err(_) => {}
             });

@@ -150,7 +150,7 @@ fn a_probe_on_a_live_group_is_bounded() {
     assert!(!fakes::group_alive(group));
 
     let (mut child, group, _guard) = sleeper();
-    kill_group_detached(group, "KILL");
+    drop(fakes::kill_group(group, "KILL"));
     let (done, reaped) = mpsc::channel();
     thread::spawn(move || match done.send(child.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}

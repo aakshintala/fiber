@@ -219,7 +219,7 @@ impl Running {
             }
         };
         assert!(
-            !group_alive(self.deadline, self.group),
+            !fakes::group_alive(self.group),
             "the session left a process in its group behind"
         );
         std::mem::forget(self.guard);
@@ -1418,7 +1418,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     let command: u32 = ready.wait(setup.deadline)[0];
     let watchdog = Watchdog::group(command);
     let session = running.group;
-    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    assert!(fakes::kill_pid(session, "TERM").unwrap());
     let rejected = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
@@ -1429,10 +1429,7 @@ fn sigterm_during_a_switchs_read_exits_143_and_kills_the_command() {
     // this test pins the outcome.
     let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
-    assert!(
-        !group_alive(setup.deadline, command),
-        "the command was killed"
-    );
+    assert!(!fakes::group_alive(command), "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
@@ -1498,7 +1495,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     })
     .unwrap();
     let session = running.group;
-    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    assert!(fakes::kill_pid(session, "TERM").unwrap());
     let rejected = until(&client, "command_rejected", |line| {
         line["kind"] == "command_rejected"
     });
@@ -1510,10 +1507,7 @@ fn sigterm_while_a_switchs_read_is_held_exits_143_and_kills_the_command() {
     // this test pins the outcome.
     let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
-    assert!(
-        !group_alive(setup.deadline, command),
-        "the command was killed"
-    );
+    assert!(!fakes::group_alive(command), "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, then the
     // exit, with no `model_changed`, since the switch died in its read.
@@ -1584,17 +1578,14 @@ fn sigterm_after_a_switchs_read_resolves_keeps_model_changed_and_exits_143() {
     assert_eq!(applied["payload"]["before"]["model"], "fake/m");
     assert_eq!(applied["payload"]["after"]["model"], "other/om");
     let session = running.group;
-    assert!(kill_pid(setup.deadline, session, "TERM").unwrap());
+    assert!(fakes::kill_pid(session, "TERM").unwrap());
     drop(client);
     // The exit takes the test's ordinary deadline, as every other wait
     // does: the shutdown bound itself is pinned on an injected clock, and
     // this test pins the outcome.
     let (status, stderr) = bounded(setup.deadline, "the session's exit", move || running.wait());
     assert_eq!(status.code(), Some(143), "stderr: {stderr}");
-    assert!(
-        !group_alive(setup.deadline, command),
-        "the command was killed"
-    );
+    assert!(!fakes::group_alive(command), "the command was killed");
     watchdog.stand_down(setup.deadline.cleanup_phase());
     // The complete ordered kinds of the session log: the turn, the
     // applied switch, then the exit.

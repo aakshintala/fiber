@@ -22,7 +22,7 @@ use support::*;
 struct Reap(u32);
 impl Drop for Reap {
     fn drop(&mut self) {
-        kill_group_detached(self.0, "KILL");
+        drop(fakes::kill_group(self.0, "KILL"));
     }
 }
 
@@ -175,7 +175,7 @@ fn a_scripted_session_answers_every_codex_label_without_a_model_switch() {
         .unwrap();
     let stderr = setup.deadline.recv(&errors).expect("the stderr drain");
     assert!(status.success(), "{stderr}");
-    assert!(!group_alive(setup.deadline, group));
+    assert!(!fakes::group_alive(group));
     watchdog.stand_down(setup.deadline.cleanup_phase());
     std::mem::forget(guard);
 }

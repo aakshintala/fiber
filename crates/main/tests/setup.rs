@@ -25,7 +25,7 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Output, Setup, group_alive};
+use support::{Output, Setup};
 
 /// The stub managers record to the test root, which `HOME` already names.
 fn stub_dir(setup: &Setup) -> PathBuf {
@@ -101,7 +101,7 @@ impl Setup {
             ),
         };
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
@@ -411,7 +411,7 @@ impl Setup {
         };
         assert!(reader.stop(), "the terminal's reader stopped");
         assert!(
-            !group_alive(self.deadline, group),
+            !fakes::group_alive(group),
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
