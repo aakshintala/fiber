@@ -21,7 +21,7 @@ use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::journey::{
     dismiss_cache_rebuild, grid_text, install_picker_provider, only_session, provider_full,
-    provider_heading, reply, shows, stalled, tui_off, working_elapsed,
+    provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
 };
 use support::pty::{Grid, KITTY_PUSH, Run, WAITING_TITLE, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
@@ -670,6 +670,13 @@ fn journey_interrupt_then_retried_answer() {
         server.await_partial(1, setup.deadline),
         "the stalled response reached the server"
     );
+    // The partial send above proves the server wrote the delta, not that
+    // the terminal drew it: Esc races that path, so wait for the reply
+    // row itself before interrupting. The match is a whole trimmed row,
+    // so the working status line never satisfies it.
+    run.wait_screen("the partial reply Working", |screen| {
+        shows_row(screen, "Working")
+    });
     run.write(b"\x1b[27u");
     let interrupted = run.wait_screen("the interrupted turn", |screen| {
         screen.alternate_screen
