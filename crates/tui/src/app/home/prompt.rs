@@ -19,6 +19,8 @@ use contract::events::CommandAccepted;
 
 mod exit;
 
+mod clear;
+
 /// A stop, delete or import waiting for its answer: a refusal becomes
 /// the row's note and a notice, an accepted delete drops the row, an
 /// accepted import closes the first-run offer.
@@ -78,15 +80,31 @@ pub(super) enum Prompt {
         /// Whether the session was open elsewhere when it opened.
         elsewhere: bool,
     },
+    /// Asking to clear while the old session waits: Enter sends the
+    /// staged `start`, and its `close` goes with `now` only then; Esc
+    /// stays. It holds what the question drew when it opened.
+    Clear {
+        /// The session `/clear` clears from.
+        id: SessionId,
+        /// The session's name, or its id without one.
+        name: String,
+        /// What the old session waits on: "approval" or "question".
+        waiting: String,
+        /// Whether Enter staged the `start`: its `close` goes with
+        /// `now`.
+        now: bool,
+    },
 }
 
 impl Prompt {
     /// The session the delete question asks about; none for the import
-    /// offer, quitting, or stopping, whose answers never clear a delete.
+    /// offer, quitting, stopping, or clearing, whose answers never
+    /// clear a delete.
     fn id(&self) -> Option<&SessionId> {
         match self {
             Prompt::Delete { id, .. } => Some(id),
             Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. } => None,
+            Prompt::Clear { .. } => None,
         }
     }
 }
@@ -375,7 +393,11 @@ impl App {
             .and_then(|home| match &home.questions.prompt {
                 Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
                 Some(
-                    Prompt::Import | Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. },
+                    Prompt::Import
+                    | Prompt::Quit
+                    | Prompt::CloseAll { .. }
+                    | Prompt::Stop { .. }
+                    | Prompt::Clear { .. },
                 )
                 | None => None,
             });
