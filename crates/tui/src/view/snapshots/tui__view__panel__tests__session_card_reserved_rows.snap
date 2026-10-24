@@ -1,0 +1,19 @@
+---
+source: crates/tui/src/view/panel_tests.rs
+expression: "super::super::text(&draw_targets(&app).0)"
+---
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                             auto
+
+
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
+   handoff at —                 —
+   then a summary, fresh context
+   tokens in / out              —
+   cache hits                   —
+   cost                         —
+   cost on subscription         —
+   speed, last reply            —
+   turns                        0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
