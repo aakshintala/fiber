@@ -9,6 +9,7 @@ use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::stroke::{Code, Mods, Stroke};
+use contract::SessionId;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -127,15 +128,10 @@ fn key(app: &App, session: &str) -> u64 {
         .unwrap_or_else(|| panic!("a card for {session}"))
 }
 
-/// The card number of `session`, if it is a card with one.
+/// The number the rail holds for `session`, whether its row has
+/// folded or not.
 fn number(app: &App, session: &str) -> Option<usize> {
-    let key = app.rail_cards().and_then(|(cards, _)| {
-        cards
-            .iter()
-            .find(|row| row.id.0 == session)
-            .map(|row| row.key)
-    })?;
-    app.rail_state().number(key)
+    app.rail_state().number(&SessionId(session.to_owned()))
 }
 
 /// A linked app on home with `sessions` live and idle, in order.
@@ -231,9 +227,8 @@ fn an_exited_card_leaves_a_gap_until_a_new_session_fills_it() {
 #[test]
 fn an_exited_row_gives_up_its_number() {
     let mut app = with(&[A, B]);
-    let a = key(&app, A);
     app.on_line(left(A, "exited"));
-    assert_eq!(app.rail_state().number(a), None);
+    assert_eq!(number(&app, A), None);
     assert_eq!(number(&app, B), Some(2));
 }
 
@@ -247,6 +242,56 @@ fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
         "a closing row is no card"
     );
     assert_eq!(number(&app, B), Some(2));
+}
+
+/// The accepted `start` answer moves the old session's number to the
+/// new id before the new row folds: a third session folding first
+/// takes the next number, the old id keeps no card and no number, and
+/// no number is duplicated.
+#[test]
+fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
+    let mut app = with(&[A, B]);
+    let new = "s_nnnnnnnnnnnnnnnn";
+    app.rail_state
+        .replace(SessionId(A.to_owned()), SessionId(new.to_owned()));
+    app.on_line(live(C, json!({})));
+    assert_eq!(number(&app, new), Some(1));
+    assert_eq!(number(&app, B), Some(2));
+    assert_eq!(number(&app, C), Some(3));
+    assert_eq!(number(&app, A), None);
+    assert!(
+        app.rail_cards()
+            .is_some_and(|(cards, _)| { cards.iter().all(|card| card.id.0 != A) }),
+        "the replaced id keeps no card"
+    );
+}
+
+/// A replaced session with no number leaves the new id unnumbered
+/// until its row folds, when it takes the smallest free number.
+#[test]
+fn a_replaced_session_without_a_number_reserves_nothing() {
+    let mut app = with(&[A]);
+    app.on_line(left(A, "exited"));
+    assert_eq!(number(&app, A), None);
+    let new = "s_nnnnnnnnnnnnnnnn";
+    app.rail_state
+        .replace(SessionId(A.to_owned()), SessionId(new.to_owned()));
+    assert_eq!(number(&app, new), None);
+    app.on_line(live(new, json!({})));
+    assert_eq!(number(&app, new), Some(1));
+}
+
+/// The replaced mark lasts until the old session leaves: its exit
+/// clears it.
+#[test]
+fn a_replaced_mark_clears_when_the_old_session_leaves() {
+    let mut app = with(&[A, B]);
+    let new = "s_nnnnnnnnnnnnnnnn";
+    app.rail_state
+        .replace(SessionId(A.to_owned()), SessionId(new.to_owned()));
+    assert!(app.rail_state.is_cardless(&SessionId(A.to_owned())));
+    app.on_line(left(A, "exited"));
+    assert!(!app.rail_state.is_cardless(&SessionId(A.to_owned())));
 }
 
 #[test]
@@ -294,7 +339,7 @@ fn no_home_no_numbers() {
     app.on_line(hello());
     app.on_line(live(A, json!({})));
     assert!(app.rail_cards().is_none());
-    assert_eq!(app.rail_state().number(0), None);
+    assert_eq!(number(&app, A), None);
 }
 
 /// Presses `key`.

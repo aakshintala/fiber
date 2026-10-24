@@ -385,7 +385,7 @@ impl App {
                 // A closing row keeps no ⌥N on home, even before the
                 // rail sheds its card.
                 let number = (!row.status.as_ref().is_some_and(|status| status.closing))
-                    .then(|| self.rail_state().number(row.key))
+                    .then(|| self.rail_state().number(&row.id))
                     .flatten();
                 list.push(ListLine::Live {
                     key: row.key,
@@ -595,8 +595,11 @@ impl App {
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.left(&exited, how);
                         if after_attach {
-                            home.left_after_attach = Some(exited);
+                            home.left_after_attach = Some(exited.clone());
                         }
+                    }
+                    if how == Left::Exited {
+                        self.rail_state.note_exited(&exited);
                     }
                     Some(Vec::new())
                 }

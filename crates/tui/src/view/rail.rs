@@ -357,7 +357,7 @@ pub(crate) fn cannot_attach(row: &Row) -> bool {
 fn first_row(app: &App, row: &Row, text: usize) -> Vec<Span<'static>> {
     let number = app
         .rail_state()
-        .number(row.key)
+        .number(&row.id)
         .map(|number| number.to_string())
         .unwrap_or_default();
     let right = if has_x(row) {

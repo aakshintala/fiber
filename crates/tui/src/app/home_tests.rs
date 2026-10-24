@@ -662,7 +662,10 @@ fn a_closing_row_shows_closing_with_no_number() {
                 id,
                 ..
             } => Some((id, word, tone, number)),
-            _ => None,
+            ListLine::Head { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. }
+            | ListLine::More { .. } => None,
         });
     assert_eq!(
         live.next(),
