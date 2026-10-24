@@ -390,6 +390,16 @@ impl Tool for Shell {
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("shell")
     }
+
+    /// The stages the reviewer was not shown read-only, for the one review
+    /// request (`docs/tools.md`, "Shell", "Effects"). The entries are
+    /// cloned under the lock and the lock released before classifying, so
+    /// no filesystem read runs while it is held.
+    fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
+        let parsed = parse(arguments, &self.workspace, self.max_deadline_ms).ok()?;
+        let entries = support::lock(&self.read_only).clone();
+        classify::not_shown_read_only(&parsed.command, &parsed.workdir, &entries)
+    }
 }
 
 /// The call's arguments, checked against the schema before the call runs.
