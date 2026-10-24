@@ -376,9 +376,6 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 /// repository and the trailing tools line stay conditional. Labels
 /// read dim with their figures right-aligned in the text colour; the
 /// bar is 17 cells of `▆` toward the handoff point.
-// debt: session_rows stays inline while panel.rs holds past the 800-line
-// smell; ceiling 1000 lines, upgrade trigger: the next Session-row change
-// moves the Session card behind its own card boundary.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();

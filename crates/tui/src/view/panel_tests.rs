@@ -121,6 +121,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     let mut app = attached(160, 40);
     // The first frame draws the context rows and every figure in
     // docs order.
+    assert_eq!(row_y(&app, 40, "▆"), 3);
     assert_eq!(row_y(&app, 40, "handoff at"), 4);
     assert_eq!(row_y(&app, 40, "then a summary"), 5);
     let first: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
@@ -209,6 +210,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     ));
     let after_status: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(after_status, first);
+    assert_eq!(row_y(&app, 40, "▆"), 3);
     assert_eq!(row_y(&app, 40, "handoff at"), 4);
     assert_eq!(row_y(&app, 40, "then a summary"), 5);
     let drawn = texts(&app, 40);
@@ -243,6 +245,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     ));
     let after_reply: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(after_reply, first);
+    assert_eq!(row_y(&app, 40, "▆"), 3);
     assert_eq!(row_y(&app, 40, "handoff at"), 4);
     assert_eq!(row_y(&app, 40, "then a summary"), 5);
     let drawn = texts(&app, 40);
