@@ -397,6 +397,9 @@ struct Running {
     _watchdog: Watchdog,
     lines: mpsc::Receiver<Value>,
     stderr: mpsc::Receiver<String>,
+    /// The stderr text so far, appended by the drain thread: the
+    /// closed-socket dump reads it while the session still runs.
+    stderr_snapshot: Arc<Mutex<String>>,
     deadline: Deadline,
     /// The session `start` opened, for `connect`.
     id: Option<String>,
@@ -454,11 +457,14 @@ impl Running {
             }
         });
         let (err_tx, stderr) = mpsc::channel();
+        // The snapshot keeps every stderr chunk as it arrives, so the
+        // closed-socket dump reads what was written before the close; the
+        // channel still delivers the whole text once at EOF.
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
         thread::spawn(move || {
-            let mut text = String::new();
-            match std::io::Read::read_to_string(&mut BufReader::new(stderr_pipe), &mut text) {
-                Ok(_) | Err(_) => {}
-            }
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = support::drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
             match err_tx.send(text) {
                 Ok(()) | Err(mpsc::SendError(_)) => {}
             }
@@ -471,6 +477,7 @@ impl Running {
                 _watchdog: watchdog,
                 lines,
                 stderr,
+                stderr_snapshot,
                 deadline: setup.deadline,
                 id: None,
                 taken: Vec::new(),
@@ -2270,7 +2277,8 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
+    let mut child_socket =
+        support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
     subscribe(&child_socket);
     child.release_one();
     assert!(
@@ -2334,6 +2342,12 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    // A close here panics with the dump: the child's own log directory,
+    // the same one read below, plus the root session's stderr snapshot.
+    child_socket.set_diag(support::Diag::new(
+        Arc::clone(&running.stderr_snapshot),
+        sessions_in(&setup.home(), &setup.workspace()).join(child_id),
+    ));
     observed_child.extend(support::until(
         &child_socket,
         "the stopped child exits",
