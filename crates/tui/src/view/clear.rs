@@ -2,15 +2,12 @@
 //! "Clearing"): the title, the dim wait line, and the choice rows,
 //! Enter's focused.
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
-
 use crate::app::App;
 use crate::home::{ClearChoice, Spot};
 use crate::mouse::{Target, TargetId};
-use crate::view::overlay::{self, Place, Row};
+use crate::view::overlay::{self, Place};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 
 #[cfg(test)]
 #[path = "clear_tests.rs"]
@@ -23,16 +20,6 @@ const CHOICES: [(&str, &str, ClearChoice); 2] = [
     ("Esc", "stay", ClearChoice::Stay),
 ];
 
-/// One dim body row.
-fn dim_row(text: String) -> Row {
-    Row {
-        spans: vec![Span::styled(text, Style::new().add_modifier(Modifier::DIM))],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
-
 /// Draws the clear question as the framed `Clear` surface, returning the
 /// slab it drew, or nothing with the question closed.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
@@ -40,32 +27,16 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         return Rect::default();
     };
     let article = if waiting == "question" { "a" } else { "an" };
-    let mut body = vec![
-        dim_row(format!("{name} waits on {article} {waiting}.")),
-        Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        },
-    ];
-    // The choices are short, so each draws as one row: the rows line up
-    // with the choice they click.
-    let labels: Vec<(&str, &str)> = CHOICES
+    let choices: Vec<(&str, &str, TargetId)> = CHOICES
         .iter()
-        .map(|(key, label, _)| (*key, *label))
+        .map(|(key, label, choice)| (*key, *label, TargetId::Home(Spot::Clear(*choice))))
         .collect();
-    body.extend(overlay::choices(&labels, 0, 67));
-    for (row, (_, _, choice)) in body.iter_mut().skip(2).zip(CHOICES.iter()) {
-        row.targets
-            .push((0, u16::MAX, TargetId::Home(Spot::Clear(*choice))));
-    }
-    let framed = overlay::Overlay {
-        title: Some(("Clear".to_owned(), Some(Span::raw("✕")))),
-        close: Some(TargetId::Home(Spot::Clear(ClearChoice::Stay))),
-        body,
-        footer: Some(overlay::hint("click a choice")),
-        prefer: 71,
-    };
-    overlay::draw(buf, area, &framed, Place::Centre, targets)
+    let question = overlay::choice_question(
+        "Clear",
+        format!("{name} waits on {article} {waiting}."),
+        TargetId::Home(Spot::Clear(ClearChoice::Stay)),
+        &choices,
+        "click a choice",
+    );
+    overlay::draw(buf, area, &question, Place::Centre, targets)
 }

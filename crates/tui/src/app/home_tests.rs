@@ -1125,6 +1125,77 @@ fn opening_a_full_session_sends_summary_then_full() {
 }
 
 #[test]
+fn a_screen_coordinate_click_on_a_home_row_opens_it() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::{Pointer, TargetId};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    let mut app = home();
+    app.set_size(160, 48);
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = keys(&app)[0];
+    // A focused ✕ normalizes to its row for drawing (`docs/tui.md`,
+    // "The session list"); clicking the drawn row opens that session.
+    app.focus = Some(TargetId::Home(Spot::Stop(key)));
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let row = targets
+        .iter()
+        .find(|target| target.id == TargetId::Home(Spot::Entry(key)))
+        .copied()
+        .unwrap_or_else(|| panic!("the home row draws a click target"));
+    assert_eq!(
+        buf[(row.rect.x, row.rect.y)].bg,
+        crate::theme::Role::Selection.color(),
+        "Spot::Stop focuses its list row"
+    );
+
+    let col = row.rect.x.saturating_add(1);
+    let row_y = row.rect.y;
+    assert_eq!(
+        crate::mouse::hit(&targets, col, row_y),
+        Some(TargetId::Home(Spot::Entry(key)))
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let press = Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col,
+        row: row_y,
+    };
+    assert_eq!(
+        app.on_mouse(&press, &targets, &mut pointer, true, now),
+        Effect::None
+    );
+    let effect = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            ..press
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let Effect::Send(lines) = effect else {
+        panic!("clicking the home row opens its session");
+    };
+    let subscribe: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
+}
+
+#[test]
 fn a_click_on_a_row_opens_it() {
     let mut app = home();
     linked(&mut app);
