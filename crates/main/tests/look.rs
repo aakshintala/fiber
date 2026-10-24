@@ -624,7 +624,11 @@ fn until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline() 
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-    clock.advance(support::WAITS - Duration::from_millis(100));
+    clock.advance(
+        support::WAITS
+            .checked_sub(Duration::from_millis(100))
+            .unwrap(),
+    );
     let dir = fakes::TempDir::new("hub-never-exits");
     // The test's own process is always alive, so the pid wait can never
     // answer: no child is started for this timeout.
