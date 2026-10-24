@@ -26,6 +26,10 @@ pub mod clock;
 /// (`docs/testing.md`, "Running tests").
 pub mod group;
 
+/// Kernel process identity for socket attribution: the peer process id
+/// and the ancestor walk (`docs/permissions.md`, "Sessions on the sockets").
+pub mod peer;
+
 /// A `git` command with the scrubbed environment: `core.fsmonitor` off,
 /// the lock and terminal-prompt guards pinned, the redirecting variables
 /// removed, and hooks off unless the caller keeps them.
