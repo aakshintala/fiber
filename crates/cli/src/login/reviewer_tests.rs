@@ -664,6 +664,7 @@ fn an_unknown_provider_is_a_usage_error() {
 /// Asks `input` of `choices` on a pipe, returning the pick and the terminal text.
 fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let stdin = std::io::stdin();
     let mut err = Vec::new();
     let pick = prompt_choice(
         name,
@@ -673,6 +674,7 @@ fn ask(name: &str, choices: &ReviewerModels, input: &str) -> (Pick, String) {
         &|| false,
         false,
         &clock,
+        stdin.as_fd(),
     )
     .unwrap();
     (pick, String::from_utf8(err).unwrap())
@@ -730,6 +732,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
     assert_eq!(pick, Pick::Cancelled, "EOF saves nothing");
     let mut err = Vec::new();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let stdin = std::io::stdin();
     let pick = prompt_choice(
         "acme",
         &listed(),
@@ -738,6 +741,7 @@ fn invalid_answers_ask_again_until_a_listed_choice_eof_or_cancel() {
         &|| true,
         false,
         &clock,
+        stdin.as_fd(),
     )
     .unwrap();
     assert_eq!(pick, Pick::Cancelled, "cancellation saves nothing");
@@ -1316,6 +1320,12 @@ impl BufRead for Script {
 /// and the terminal text.
 fn ask_term(choices: &ReviewerModels, steps: Vec<Step>) -> (std::io::Result<Pick>, String) {
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
     let mut err = Vec::new();
     let mut input = Script {
         steps: steps.into_iter().collect(),
@@ -1328,6 +1338,7 @@ fn ask_term(choices: &ReviewerModels, steps: Vec<Step>) -> (std::io::Result<Pick
         &|| false,
         true,
         &clock,
+        slave.as_fd(),
     );
     (pick, String::from_utf8(err).unwrap())
 }
@@ -1354,4 +1365,80 @@ fn an_unexpected_error_surfaces_instead_of_retrying() {
     let (pick, _) = ask_term(&listed(), vec![Step::Fail, Step::Line("1\n")]);
     let error = pick.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Other);
+}
+
+/// An `err` writer that fails the first prompt write and the first retry
+/// message write with `WouldBlock`, then accepts everything: the prompt
+/// must wait through each and complete the whole text.
+struct WouldBlockThenAccept {
+    out: Vec<u8>,
+    prompt_blocked: bool,
+    retry_blocked: bool,
+}
+
+impl Write for WouldBlockThenAccept {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        if !self.prompt_blocked && text.contains("Reviewer, by number or name: ") {
+            self.prompt_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        if !self.retry_blocked && text.contains("is not a listed reviewer") {
+            self.retry_blocked = true;
+            return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_would_block_write_retries_until_the_prompt_completes() {
+    // The first prompt write and the first retry message each block once:
+    // the prompt waits through both and still writes every byte, then the
+    // listed answer lands.
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let (_master, slave_path) = fakes::pty::open().unwrap();
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .unwrap();
+    let mut input = Script {
+        steps: [Step::Line("nope\n"), Step::Line("2\n")]
+            .into_iter()
+            .collect(),
+    };
+    let mut err = WouldBlockThenAccept {
+        out: Vec::new(),
+        prompt_blocked: false,
+        retry_blocked: false,
+    };
+    let pick = prompt_choice(
+        "acme",
+        &listed(),
+        &mut input,
+        &mut err,
+        &|| false,
+        true,
+        &clock,
+        slave.as_fd(),
+    )
+    .unwrap();
+    assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
+    let out = String::from_utf8(err.out).unwrap();
+    assert_eq!(
+        out.matches("Reviewer, by number or name: ").count(),
+        2,
+        "both prompts land whole: {out}"
+    );
+    assert_eq!(
+        out.matches("is not a listed reviewer").count(),
+        1,
+        "the retry message lands whole: {out}"
+    );
 }

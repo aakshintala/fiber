@@ -239,10 +239,6 @@ struct NonblockingStdin {
 }
 
 impl NonblockingStdin {
-    fn new() -> io::Result<Self> {
-        Self::open(io::stdin().as_fd())
-    }
-
     /// `fd` nonblocking until the guard drops: the terminal the prompt
     /// reads, or any fd a test drives, such as a PTY slave.
     fn open(fd: BorrowedFd<'_>) -> io::Result<Self> {
@@ -315,7 +311,9 @@ pub(crate) enum Pick {
 /// tries, on this thread alone: no helper stays blocked on stdin, and the
 /// flags (like the echo, which stays on) are restored on every return.
 /// Never fabricates or saves a model: choosing is the caller's, after the
-/// store.
+/// store. When `terminal` holds, `term` is the descriptor made nonblocking
+/// and polled for reads and writes; otherwise it is ignored.
+#[allow(clippy::too_many_arguments, reason = "one per input the prompt reads")]
 pub(crate) fn prompt_choice(
     name: &str,
     choices: &ReviewerModels,
@@ -324,6 +322,7 @@ pub(crate) fn prompt_choice(
     stopped: &dyn Fn() -> bool,
     terminal: bool,
     clock: &Arc<dyn Clock>,
+    term: BorrowedFd<'_>,
 ) -> io::Result<Pick> {
     if choices.models.is_empty() {
         return Ok(Pick::Cancelled);
@@ -351,7 +350,7 @@ pub(crate) fn prompt_choice(
     }
     // Nonblocking for the stoppable terminal read below; restored when
     // the prompt returns, however it returns. A pipe keeps blocking.
-    let _nonblocking = terminal.then(NonblockingStdin::new).transpose()?;
+    let _nonblocking = terminal.then(|| NonblockingStdin::open(term)).transpose()?;
     loop {
         if stopped() {
             return Ok(Pick::Cancelled);
@@ -374,7 +373,7 @@ pub(crate) fn prompt_choice(
                     Ok(0) => true,
                     Ok(_) => line.ends_with('\n'),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        wait_ready(&io::stdin(), clock)?;
+                        wait_ready(&term, clock)?;
                         continue;
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
