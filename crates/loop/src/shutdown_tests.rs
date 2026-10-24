@@ -26,6 +26,7 @@ use contract::shapes::{ContentPart, Origin, Sender as From, Tokens, Usage};
 use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 use fakes::Deadline;
 use fakes::NoRules;
+use fakes::StubJobs;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -45,7 +46,7 @@ const IDLE: Duration = Duration::from_secs(60);
 /// refuses with `closing` once closed, and `close_extension_starts` sets
 /// the flag under the gate. `hold` parks one `start` at a pause point.
 struct Listed {
-    ids: Mutex<Vec<JobId>>,
+    running: StubJobs,
     stops: Mutex<Sender<JobId>>,
     snapshot_pause: Mutex<Option<(Sender<()>, Receiver<()>)>>,
     order: Mutex<Vec<String>>,
@@ -60,7 +61,7 @@ impl Listed {
     fn new(ids: &[&str]) -> (Arc<Self>, Receiver<JobId>) {
         let (stops, stopped) = mpsc::channel();
         let listed = Arc::new(Self {
-            ids: Mutex::new(ids.iter().map(|id| JobId((*id).into())).collect()),
+            running: StubJobs::new(ids.iter().map(|id| JobId((*id).into()))),
             stops: Mutex::new(stops),
             snapshot_pause: Mutex::new(None),
             order: Mutex::new(Vec::new()),
@@ -75,7 +76,8 @@ impl Listed {
 
     /// Lists `id` as running.
     fn add(&self, id: &str) {
-        self.ids.lock().unwrap().push(JobId(id.into()));
+        self.running
+            .update_running(|ids| ids.push(JobId(id.into())));
     }
 
     /// Parks the next `start` at a pause point: it sends `reached`, then
@@ -102,7 +104,7 @@ impl Listed {
         }
         let job = JobId(id.into());
         self.bound.lock().unwrap().push(job.clone());
-        self.ids.lock().unwrap().push(job.clone());
+        self.running.update_running(|ids| ids.push(job.clone()));
         *self.launched.lock().unwrap() += 1;
         Ok(job)
     }
@@ -156,24 +158,25 @@ impl Listed {
 
     /// Ends `id`: its notice reaches `inbox`, then `running` drops it.
     fn end_with(&self, id: &str, inbox: &Sender<Delivery>, delegate: Option<DelegateFinished>) {
-        let mut ids = self.ids.lock().unwrap();
-        inbox
-            .send(Delivery::Job(JobNotice {
-                completed: JobCompleted {
-                    job_id: JobId(id.into()),
-                    status: Outcome::Cancelled,
-                    error: None,
-                    process: None,
-                    output_tail: None,
+        self.running.update_running(|ids| {
+            inbox
+                .send(Delivery::Job(JobNotice {
+                    completed: JobCompleted {
+                        job_id: JobId(id.into()),
+                        status: Outcome::Cancelled,
+                        error: None,
+                        process: None,
+                        output_tail: None,
 
-                    notice: None,
-                    changed_by: None,
-                },
-                claim: Claim(Box::new(|| Some(Vec::new()))),
-                delegate,
-            }))
-            .unwrap();
-        ids.retain(|listed| listed.0 != id);
+                        notice: None,
+                        changed_by: None,
+                    },
+                    claim: Claim(Box::new(|| Some(Vec::new()))),
+                    delegate,
+                }))
+                .unwrap();
+            ids.retain(|listed| listed.0 != id);
+        });
     }
 
     /// Sends `notice` for `id`, then drops `id` from the running list,
@@ -181,9 +184,10 @@ impl Listed {
     /// the notice already queued, or sees it gone and drains the queued
     /// notice, so it never blocks on `recv` with nothing left to deliver.
     fn send_and_forget(&self, id: &str, inbox: &Sender<Delivery>, notice: JobNotice) {
-        let mut ids = self.ids.lock().unwrap();
-        inbox.send(Delivery::Job(notice)).unwrap();
-        ids.retain(|listed| listed.0 != id);
+        self.running.update_running(|ids| {
+            inbox.send(Delivery::Job(notice)).unwrap();
+            ids.retain(|listed| listed.0 != id);
+        });
     }
 }
 
@@ -212,7 +216,7 @@ impl Jobs for Listed {
 
     fn running(&self) -> Vec<JobId> {
         self.order.lock().unwrap().push("running".into());
-        let ids = self.ids.lock().unwrap().clone();
+        let ids = Jobs::running(&self.running);
         if let Some((reached, release)) = self.snapshot_pause.lock().unwrap().take() {
             reached.send(()).unwrap();
             let _released = release.recv();
