@@ -1091,18 +1091,25 @@ fn cut_for(reviewed: &[Reviewed], id: &ActionId) -> usize {
 /// arguments it runs with.
 pub(crate) fn under_item(prepared: &Prepared, name: &str, workspace: &str) -> Input {
     // The call stays where it ran: the item after it names it, so the
-    // reviewer never counts on it coming last.
+    // reviewer never counts on it coming last. A per-call note, when the
+    // tool sets one, follows the declared effects on its own line, in both
+    // branches, so the cache still keys on the tool definition alone.
     let declared = serde_json::to_string(&prepared.effects.declared).unwrap_or_default();
+    let note = prepared
+        .tool
+        .review_note(&prepared.arguments)
+        .map(|note| format!("\n{note}"))
+        .unwrap_or_default();
     let effects = match &prepared.rewritten {
         Some(changed_by) => {
             let names = changed_by.join(", ");
             let arguments = serde_json::to_string(&prepared.arguments).unwrap_or_default();
             format!(
-                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+                "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
             )
         }
         None => format!(
-            "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}\nWorkspace root: {workspace}"
+            "Call under review: the last tool call above, {name}.\nDeclared effects: {declared}{note}\nWorkspace root: {workspace}"
         ),
     };
     Input::User {

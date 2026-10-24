@@ -21,7 +21,7 @@ fn only_simple(command: &str) -> Simple {
     let mut stages = element.stages;
     match stages.pop().unwrap() {
         Stage::Simple(simple) => simple,
-        Stage::Opaque => panic!("{command:?} parsed opaque"),
+        Stage::Opaque(_) => panic!("{command:?} parsed opaque"),
     }
 }
 
@@ -34,7 +34,7 @@ fn assert_opaque(command: &str) {
     let mut stages = element.stages;
     match stages.pop().unwrap() {
         Stage::Simple(_) => panic!("{command:?} parsed simple"),
-        Stage::Opaque => {}
+        Stage::Opaque(_) => {}
     }
 }
 
@@ -43,7 +43,7 @@ fn first_simple(script: &Script) -> &Simple {
     assert_eq!(element.stages.len(), 1);
     match element.stages.first().unwrap() {
         Stage::Simple(simple) => simple,
-        Stage::Opaque => panic!("stage opaque"),
+        Stage::Opaque(_) => panic!("stage opaque"),
     }
 }
 
@@ -183,11 +183,11 @@ fn a_pipeline_builds_one_element_with_one_stage_per_command() {
     let mut stages = element.stages.iter();
     match stages.next().unwrap() {
         Stage::Simple(first) => assert_eq!(word_cooked(first), ["cat", "README.md"]),
-        Stage::Opaque => panic!("first stage opaque"),
+        Stage::Opaque(_) => panic!("first stage opaque"),
     }
     match stages.next().unwrap() {
         Stage::Simple(second) => assert_eq!(word_cooked(second), ["head", "-50"]),
-        Stage::Opaque => panic!("second stage opaque"),
+        Stage::Opaque(_) => panic!("second stage opaque"),
     }
     let script = parsed("ls | head | tail");
     let element = script.elements.first().unwrap();
@@ -225,7 +225,7 @@ fn lists_build_one_element_per_command_in_source_order() {
                         assert!(!simple.words.is_empty(), "{command:?}");
                         simple.words.first().unwrap().cooked.clone()
                     }
-                    Stage::Opaque => panic!("{command:?} has an opaque stage"),
+                    Stage::Opaque(_) => panic!("{command:?} has an opaque stage"),
                 }
             })
             .collect();
@@ -288,13 +288,13 @@ fn assignments_alone_in_a_pipeline_or_list_stay_visible() {
         Stage::Simple(first) => {
             assert_eq!(first.assignments, [("FOO".to_string(), "1".to_string())])
         }
-        Stage::Opaque => panic!("assignment stage opaque"),
+        Stage::Opaque(_) => panic!("assignment stage opaque"),
     }
     let script = parsed("FOO=1 && ls");
     assert_eq!(script.elements.len(), 2);
     match script.elements.first().unwrap().stages.first().unwrap() {
         Stage::Simple(first) => assert!(!first.assignments.is_empty()),
-        Stage::Opaque => panic!("assignment stage opaque"),
+        Stage::Opaque(_) => panic!("assignment stage opaque"),
     }
 }
 
@@ -378,14 +378,14 @@ fn redirects_wrap_lists_and_pipelines_at_their_own_end() {
             assert_eq!(last.tokens, ["pwd", "2>/dev/null"]);
             assert_eq!(redirect_kinds(last), ["discard"]);
         }
-        Stage::Opaque => panic!("trailing list redirect opaque"),
+        Stage::Opaque(_) => panic!("trailing list redirect opaque"),
     }
     let script = parsed("a | b 2>/dev/null");
     assert_eq!(script.elements.len(), 1);
     assert_eq!(script.elements.first().unwrap().stages.len(), 2);
     match script.elements.first().unwrap().stages.get(1).unwrap() {
         Stage::Simple(last) => assert_eq!(redirect_kinds(last), ["discard"]),
-        Stage::Opaque => panic!("trailing pipe redirect opaque"),
+        Stage::Opaque(_) => panic!("trailing pipe redirect opaque"),
     }
     let script = parsed("2>/dev/null ls && pwd");
     assert_eq!(script.elements.len(), 2);
@@ -397,7 +397,7 @@ fn redirects_wrap_lists_and_pipelines_at_their_own_end() {
             assert_eq!(word_cooked(last), ["head", "-5"]);
             assert_eq!(redirect_kinds(last), ["discard"]);
         }
-        Stage::Opaque => panic!("pipeline redirect opaque"),
+        Stage::Opaque(_) => panic!("pipeline redirect opaque"),
     }
 }
 
@@ -412,12 +412,12 @@ fn a_mid_pipeline_redirect_stays_on_its_stage() {
             assert_eq!(word_cooked(first), ["cargo", "test", "-p", "tui"]);
             assert_eq!(redirect_kinds(first), ["merge"]);
         }
-        Stage::Opaque => panic!("mid-pipeline redirect opaque"),
+        Stage::Opaque(_) => panic!("mid-pipeline redirect opaque"),
     }
     let script = parsed("a 2>/dev/null | b");
     match script.elements.first().unwrap().stages.first().unwrap() {
         Stage::Simple(first) => assert_eq!(redirect_kinds(first), ["discard"]),
-        Stage::Opaque => panic!("mid-pipeline redirect opaque"),
+        Stage::Opaque(_) => panic!("mid-pipeline redirect opaque"),
     }
 }
 
@@ -496,7 +496,7 @@ fn an_unlisted_operand_opaques_only_its_own_element() {
     assert_eq!(script.elements.len(), 2);
     match script.elements.get(1).unwrap().stages.first().unwrap() {
         Stage::Simple(_) => panic!("(cd x) parsed simple"),
-        Stage::Opaque => {}
+        Stage::Opaque(_) => {}
     }
 }
 
@@ -584,7 +584,7 @@ fn a_two_thousand_word_list_parses_without_growing_the_stack() {
         assert_eq!(element.stages.len(), 1);
         match element.stages.first().unwrap() {
             Stage::Simple(simple) => assert_eq!(word_cooked(simple), ["ls"]),
-            Stage::Opaque => panic!("list element opaque"),
+            Stage::Opaque(_) => panic!("list element opaque"),
         }
     }
 }
@@ -674,4 +674,33 @@ fn the_kind_table_lists_every_allowed_named_kind_and_token_once() {
             "unexpected token {token}"
         );
     }
+}
+
+fn stage_texts(script: &Script) -> Vec<String> {
+    script
+        .elements
+        .iter()
+        .flat_map(|element| element.stages.iter())
+        .map(|stage| match stage {
+            Stage::Simple(simple) => simple.text.clone(),
+            Stage::Opaque(text) => text.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_simple_stage_keeps_its_verbatim_source_slice() {
+    assert_eq!(only_simple("ls -la").text, "ls -la");
+    assert_eq!(only_simple("npm   test").text, "npm   test");
+    assert_eq!(only_simple("2>/dev/null ls").text, "2>/dev/null ls");
+    assert_eq!(only_simple("ls 2>/dev/null").text, "ls 2>/dev/null");
+    let script = parsed("ls && pwd 2>/dev/null");
+    assert_eq!(stage_texts(&script), ["ls", "pwd 2>/dev/null"]);
+}
+
+#[test]
+fn an_opaque_stage_keeps_its_verbatim_source_slice() {
+    assert_eq!(stage_texts(&parsed("(ls)")), ["(ls)"]);
+    assert_eq!(stage_texts(&parsed("echo $(x)")), ["echo $(x)"]);
+    assert_eq!(stage_texts(&parsed("ls >f")), ["ls >f"]);
 }

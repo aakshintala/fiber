@@ -26,9 +26,6 @@ use serde_json::json;
 
 use super::{Call, Pause, Script, ScriptError, Scripted};
 
-/// The wall-clock bound on every receive and every wait for a park.
-const WITHIN: Duration = Duration::from_secs(5);
-
 /// A fake clock that forces one wake between `Call::wait` reading `seq` and
 /// taking the guard, then reports when the first wait closure returns.
 struct WakeRaceClock {
@@ -428,40 +425,59 @@ fn a_slow_reply_waits_on_the_clock_before_every_fragment_after_the_first() {
 
     let pause = Duration::from_millis(200);
     assert_eq!(
-        Deadline::after(WITHIN).recv(&received).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&received)
+            .unwrap(),
         text_delta("a")
     );
     let first = clock.origin() + pause;
-    assert!(clock.await_parked(first, fakes::Deadline::after(WITHIN)));
+    assert!(clock.await_parked(first, Deadline::after(fakes::MUST_SUCCEED_WITHIN)));
     assert!(received.try_recv().is_err());
     let mark = clock.advance_when_parked(
         Some(first),
         None,
         Duration::from_millis(199),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    assert!(clock.await_parked_since(&mark, Some(first), fakes::Deadline::after(WITHIN)));
+    assert!(clock.await_parked_since(
+        &mark,
+        Some(first),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
     assert!(received.try_recv().is_err());
     clock.advance_when_parked(
         Some(first),
         None,
         Duration::from_millis(1),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(WITHIN).recv(&received).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&received)
+            .unwrap(),
         text_delta("b")
     );
 
-    assert!(clock.await_parked(first + pause, fakes::Deadline::after(WITHIN)));
+    assert!(clock.await_parked(first + pause, Deadline::after(fakes::MUST_SUCCEED_WITHIN)));
     assert!(received.try_recv().is_err());
-    clock.advance_when_parked(Some(first + pause), None, pause, &Deadline::after(WITHIN));
+    clock.advance_when_parked(
+        Some(first + pause),
+        None,
+        pause,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
     assert_eq!(
-        Deadline::after(WITHIN).recv(&received).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&received)
+            .unwrap(),
         text_delta("c")
     );
     assert_eq!(
-        Deadline::after(WITHIN).recv(&end).unwrap().unwrap().text(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&end)
+            .unwrap()
+            .unwrap()
+            .text(),
         "abc"
     );
 }
@@ -506,10 +522,12 @@ fn a_cancel_during_a_pause_wakes_it_and_returns_cancelled() {
     });
     assert!(clock.await_parked(
         clock.origin() + Duration::from_millis(200),
-        fakes::Deadline::after(WITHIN)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
     call.cancel();
-    let (deltas, result) = Deadline::after(WITHIN).recv(&end).unwrap();
+    let (deltas, result) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&end)
+        .unwrap();
     assert_eq!(deltas, [text_delta("a")]);
     match result {
         Err(CallError::Cancelled { usage }) => assert_eq!(usage.tokens, tokens(9, 0, 0)),
@@ -540,7 +558,7 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     let pause_for_helper = Arc::clone(&pause);
     let clock_for_helper = Arc::clone(&clock);
     thread::spawn(move || {
-        Deadline::after(WITHIN)
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&entered)
             .expect("the first clock wait was entered");
         let guard = pause_for_helper.lock();
@@ -564,15 +582,17 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
 
     let first = fake.origin() + Duration::from_millis(200);
     assert_eq!(
-        Deadline::after(WITHIN).recv(&received).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&received)
+            .unwrap(),
         text_delta("a")
     );
-    let returned_before_lock = Deadline::after(WITHIN)
+    let returned_before_lock = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&observation)
         .expect("the helper acquired the pause mutex");
     if !returned_before_lock {
         call.cancel();
-        let result = Deadline::after(WITHIN)
+        let result = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv(&end)
             .expect("cancellation released the blocked call");
         assert!(
@@ -589,7 +609,7 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     // The wrapper's first wait returned without parking on the pause condvar;
     // this is the call's next wait, which must remain blocked until fake time.
     assert!(
-        fake.await_parked(first, fakes::Deadline::after(WITHIN)),
+        fake.await_parked(first, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "waited for the call to park again at its deadline"
     );
     assert!(received.try_recv().is_err(), "b is not due before 200 ms");
@@ -597,18 +617,24 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
         Some(first),
         None,
         Duration::from_millis(199),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    assert!(fake.await_parked_since(&parked, Some(first), fakes::Deadline::after(WITHIN)));
+    assert!(fake.await_parked_since(
+        &parked,
+        Some(first),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
     assert!(received.try_recv().is_err(), "b is not due before 200 ms");
     fake.advance_when_parked(
         Some(first),
         None,
         Duration::from_millis(1),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert_eq!(
-        Deadline::after(WITHIN).recv(&received).unwrap(),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&received)
+            .unwrap(),
         text_delta("b")
     );
 
@@ -618,15 +644,22 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
         Some(second),
         None,
         Duration::from_millis(100),
-        &Deadline::after(WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
-    assert!(fake.await_parked_since(&parked, Some(second), fakes::Deadline::after(WITHIN)));
+    assert!(fake.await_parked_since(
+        &parked,
+        Some(second),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
     assert!(
         received.try_recv().is_err(),
         "c is not due before its deadline"
     );
     call.cancel();
-    match Deadline::after(WITHIN).recv(&end).unwrap() {
+    match Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&end)
+        .unwrap()
+    {
         Err(CallError::Cancelled { .. }) => {}
         other => panic!("{other:?}"),
     }

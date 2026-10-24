@@ -47,6 +47,9 @@ pub(crate) struct Moved {
 }
 
 impl Moved {
+    // The drive saves member evidence on the run before the move, so only
+    // a test's watchdog still reads the group id.
+    #[cfg(test)]
     pub(crate) fn pgid(&self) -> u32 {
         self.progress.pgid
     }

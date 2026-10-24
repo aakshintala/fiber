@@ -502,7 +502,10 @@ fn a_verdict_needing_two_strip_passes_reads() {
 }
 
 /// A reviewed tool: its effects declare one execution, and it never runs.
-struct ReviewTool;
+/// A set note is the tool's per-call review note.
+struct ReviewTool {
+    note: Option<String>,
+}
 
 impl contract::tool::Tool for ReviewTool {
     fn definition(&self) -> contract::provider::ToolDefinition {
@@ -539,6 +542,10 @@ impl contract::tool::Tool for ReviewTool {
         _: &dyn contract::emit::Emit,
     ) -> contract::tool::Output {
         contract::tool::Output::default()
+    }
+
+    fn review_note(&self, _: &Map<String, Value>) -> Option<String> {
+        self.note.clone()
     }
 }
 
@@ -618,7 +625,7 @@ fn the_effects_item_names_the_call_under_review() {
         Some(Seq(2)),
     );
     let turn = TurnId("t_test".into());
-    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool);
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool { note: None });
     let mut arguments = Map::new();
     arguments.insert("city".into(), Value::String("Paris".into()));
     let effects = contract::tool::Effects {
@@ -693,7 +700,7 @@ fn batch_stage1_build_matches_the_serial_path_byte_for_byte() {
         );
     }
     let turn = TurnId("t_test".into());
-    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool);
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool { note: None });
     let prepareds = ["Paris", "London", "Rome"]
         .iter()
         .map(|city| {
@@ -921,5 +928,64 @@ fn fanout_returns_every_reply_in_request_order() {
             .unwrap_or_else(|_| panic!("reply {} reads", index + 1))
             .text();
         assert_eq!(text, format!("request {}", index + 1));
+    }
+}
+
+#[test]
+fn a_review_note_follows_the_declared_effects_in_both_branches() {
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool {
+        note: Some("Not shown read-only: `npm test`".to_owned()),
+    });
+    for rewritten in [None, Some(vec!["fiber.test/guard".to_owned()])] {
+        let extension = rewritten.is_some();
+        let mut arguments = Map::new();
+        arguments.insert("command".into(), Value::String("ls && npm test".into()));
+        let prepared = crate::before_tool::Prepared {
+            tool: Arc::clone(&tool),
+            arguments,
+            effects: contract::tool::Effects {
+                declared: contract::shapes::DeclaredEffects {
+                    effects: vec![contract::shapes::Effect::Executes],
+                    reversible: true,
+                    paths: None,
+                },
+                subject: None,
+                prefix: None,
+                always_reviewed: false,
+                hosts: None,
+            },
+            rewritten,
+        };
+        let lines = match super::under_item(&prepared, "shell", "/work") {
+            Input::User { text, .. } => text.lines().map(str::to_owned).collect::<Vec<_>>(),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => panic!("the effects item is a user message"),
+        };
+        assert_eq!(
+            lines[0],
+            "Call under review: the last tool call above, shell."
+        );
+        assert!(lines[1].starts_with("Declared effects: "), "{lines:?}");
+        // `docs/tools.md`, "What a tool declares": in the reviewer item
+        // the note is its own line after `Declared effects:` and before
+        // the rest.
+        assert_eq!(lines[2], "Not shown read-only: `npm test`");
+        let mut rest = lines[3..].iter();
+        if extension {
+            assert!(
+                rest.next()
+                    .unwrap()
+                    .starts_with("Extension fiber.test/guard rewrote"),
+                "{lines:?}"
+            );
+        }
+        assert!(
+            rest.next().unwrap().starts_with("Workspace root: "),
+            "{lines:?}"
+        );
+        assert!(rest.next().is_none(), "{lines:?}");
     }
 }

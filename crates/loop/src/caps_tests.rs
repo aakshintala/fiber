@@ -28,6 +28,7 @@ struct Fixed {
     output: Output,
     with_cap_answer: Option<Arc<dyn Tool>>,
     with_cap_calls: Mutex<Vec<usize>>,
+    note: Option<String>,
 }
 
 impl Fixed {
@@ -43,11 +44,18 @@ impl Fixed {
             },
             with_cap_answer: None,
             with_cap_calls: Mutex::new(Vec::new()),
+            note: None,
         }
     }
 
     fn with_cap_calls(&self) -> Vec<usize> {
         self.with_cap_calls.lock().unwrap().clone()
+    }
+
+    fn noted(note: &str) -> Self {
+        let mut fixed = Self::named("shell");
+        fixed.note = Some(note.to_owned());
+        fixed
     }
 }
 
@@ -105,6 +113,10 @@ impl Tool for Fixed {
 
     fn guidelines(&self) -> Option<String> {
         Some("g".to_owned())
+    }
+
+    fn review_note(&self, _arguments: &Map<String, Value>) -> Option<String> {
+        self.note.clone()
     }
 
     fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
@@ -334,4 +346,19 @@ fn a_capped_tool_runs_the_wrapped_tool_with_the_same_asker() {
         &Named,
     );
     assert_eq!(ran.details, Some(json!("a_9")));
+}
+
+#[test]
+fn a_capped_tool_forwards_the_inner_tools_review_note() {
+    let inner = Arc::new(Fixed::noted("Not shown read-only: `npm test`"));
+    let tools = capped(vec![wrap("shell", inner)], &caps(&[("shell", 64)]));
+    assert_eq!(
+        tools[0].1.review_note(&Map::new()),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+    let plain = capped(
+        vec![wrap("plain", tool("plain", Bound::DEFAULT))],
+        &caps(&[("plain", 64)]),
+    );
+    assert_eq!(plain[0].1.review_note(&Map::new()), None);
 }

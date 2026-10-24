@@ -762,6 +762,7 @@ fn reviewer_stage_armed(
     if choices.models.is_empty() {
         return Ok(());
     }
+    let stdin = io::stdin();
     let id = match reviewer::prompt_choice(
         name,
         &choices,
@@ -770,6 +771,7 @@ fn reviewer_stage_armed(
         &|| stopped.load(Ordering::SeqCst),
         terminal,
         clock,
+        stdin.as_fd(),
     )
     .map_err(CliError::Terminal)?
     {

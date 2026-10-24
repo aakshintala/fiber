@@ -60,6 +60,24 @@ struct Script {
     /// `on_line` already returned, so the runner folded the envelope.
     folded_tx: mpsc::Sender<()>,
     folded_rx: Mutex<mpsc::Receiver<()>>,
+    /// The delegate log file production replays after the reap: every
+    /// line this fake delivers is appended here first, as the drain
+    /// appending the child's stdout does in production.
+    output_path: std::path::PathBuf,
+    /// Test-local one-shot gate on watcher-thread delivery, armed only
+    /// by the #3005 regression test: every other test leaves it empty
+    /// and never blocks here.
+    delivery_gate: Mutex<Option<DeliveryGate>>,
+}
+
+/// Holds one watcher-thread delivery of the chosen line before its
+/// fold: the line is already persisted above, so only the claim and
+/// the forward wait. Dropping the sender half releases it, so a failed
+/// test never leaves the watcher parked.
+struct DeliveryGate {
+    seq: u64,
+    parked: mpsc::Sender<u64>,
+    release: mpsc::Receiver<()>,
 }
 
 enum WatchReply {
@@ -79,7 +97,11 @@ enum WatchReply {
 }
 
 impl Script {
-    fn scripted(clock: &Arc<FakeClock>, replies: Vec<WatchReply>) -> Arc<Self> {
+    fn scripted(
+        clock: &Arc<FakeClock>,
+        replies: Vec<WatchReply>,
+        output_path: std::path::PathBuf,
+    ) -> Arc<Self> {
         let (folded_tx, folded_rx) = mpsc::channel();
         Arc::new(Self {
             clock: Arc::clone(clock),
@@ -89,7 +111,64 @@ impl Script {
             replies: Mutex::new(replies.into()),
             folded_tx,
             folded_rx: Mutex::new(folded_rx),
+            output_path,
+            delivery_gate: Mutex::new(None),
         })
+    }
+
+    /// Arms the one-shot watcher-thread delivery gate for `seq`: the
+    /// first delivery of that line parks after persisting it, later
+    /// deliveries pass. Returns the parked signal (carrying the parked
+    /// line's `seq`) and the release half. Only the #3005 regression
+    /// test calls this.
+    fn gate_seq(&self, seq: u64) -> (mpsc::Receiver<u64>, mpsc::Sender<()>) {
+        let (parked_tx, parked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        *self.delivery_gate.lock().unwrap() = Some(DeliveryGate {
+            seq,
+            parked: parked_tx,
+            release: release_rx,
+        });
+        (parked_rx, release_tx)
+    }
+
+    /// Persists a delivered line to the delegate log before its fold,
+    /// as the production drain does for the child's stdout.
+    fn persist(&self, line: &Envelope) {
+        let raw = serde_json::to_string(line).unwrap();
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.output_path)
+            .unwrap();
+        writeln!(file, "{raw}").unwrap();
+    }
+
+    /// Parks the first watcher-thread delivery of the gated line before
+    /// its fold; every other line, and later deliveries of the gated
+    /// line once the gate is spent, pass at once.
+    fn hold(&self, line: &Envelope) {
+        let gated = self
+            .delivery_gate
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|gate| line.seq.is_some_and(|seq| seq.0 == gate.seq));
+        if gated {
+            let gate = self.delivery_gate.lock().unwrap().take().unwrap();
+            let _sent = gate.parked.send(gate.seq);
+            let _released = gate.release.recv();
+        }
+    }
+
+    /// Delivers one line the filter kept: persist first, then the
+    /// test-local gate, then the fold. The file holds the line before
+    /// either path can claim it.
+    fn emit(&self, line: &Envelope, on_line: &mut dyn FnMut(&Envelope)) {
+        self.persist(line);
+        self.hold(line);
+        on_line(line);
     }
 
     fn watch(
@@ -114,7 +193,7 @@ impl Script {
         // stands in for this run's.
         let mut deliver_lines = |lines: &[Envelope]| {
             for line in lines.iter().filter(|line| deliver(line)) {
-                on_line(line);
+                self.emit(line, on_line);
                 if line.kind == "fiber_exited" {
                     break;
                 }
@@ -124,7 +203,7 @@ impl Script {
             None => Err(io::Error::other("refused")),
             Some(WatchReply::Closed(lines)) => {
                 for line in lines.iter().filter(|line| deliver(line)) {
-                    on_line(line);
+                    self.emit(line, on_line);
                 }
                 let _sent = self.folded_tx.send(());
                 Ok(Watched::Closed)
@@ -218,7 +297,8 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
     registry.deliver_to(tx);
     let sessions = dir.path().join("sessions");
     std::fs::create_dir_all(sessions.join("s_child")).unwrap();
-    let script = Script::scripted(&clock, replies);
+    let events = sessions.join("s_child").join("events.jsonl");
+    let script = Script::scripted(&clock, replies, events.clone());
     Rig {
         _dir: dir,
         registry,
@@ -226,7 +306,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         inbox: rx,
         script,
         job: crate::registry::mint_job_id(),
-        events: sessions.join("s_child").join("events.jsonl"),
+        events,
     }
 }
 
@@ -1933,24 +2013,22 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
     let rig = rig(vec![
-        WatchReply::Closed(vec![envelope(1, "turn_completed", serde_json::json!({}))]),
-        WatchReply::Closed(vec![
-            envelope(1, "turn_completed", serde_json::json!({})),
-            envelope(2, "turn_completed", serde_json::json!({})),
-        ]),
+        WatchReply::Closed(Vec::new()),
+        WatchReply::Closed(Vec::new()),
     ]);
-    // Ten bytes: exactly at the cap. Neither the new line, its replay,
-    // nor a backoff wake may stop the delegate for that. Each receive
-    // below must time out: a report here means the cap tripped at the
-    // boundary, and swallowing it would hang the fifo write below on a
-    // dead child (docs/testing.md, "Waits and timeouts": a receive
-    // with a bound, not a sleep).
+    // Ten bytes: exactly at the cap. The empty replies deliver no lines,
+    // so the fake persists nothing while the log sits at the boundary:
+    // neither a backoff wake nor a replay may stop the delegate for
+    // that. Each receive below must time out: a report here means the
+    // cap tripped at the boundary, and swallowing it would hang the fifo
+    // write below on a dead child (docs/testing.md, "Waits and timeouts":
+    // a receive with a bound, not a sleep).
     std::fs::write(&rig.events, "0123456789").unwrap();
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     rig.start(&shell, BOUND, 10);
-    // Calls 1 and 2 are `Closed` with the new line and its replay;
-    // calls 3 and 4 are refused backoff wakes.
+    // Calls 1 and 2 are empty `Closed` replies with nothing to
+    // persist or replay; calls 3 and 4 are refused backoff wakes.
     wait_calls(&rig, 1);
     let mut at = rig.script.calls()[0];
     for (gap, calls) in [(50, 2), (100, 3), (200, 4)] {
@@ -2854,68 +2932,13 @@ fn take_report_with_usages(
     })
 }
 
-/// [`reported`], collecting the `DelegateUsage` deliveries the watcher's
-/// tap forwards ahead of the runner's report: the shared core stashes
-/// each while the take loops past them, until the `Job` notice arrives.
-#[track_caller]
-fn reported_with_usage(rig: &Rig) -> (contract::inbox::JobNotice, Vec<(SessionId, String)>) {
-    reported_with_usage_before(rig, None)
-}
-
-/// The parked forward's gate, shared with the watcher: the test owns
-/// the sender half and releases the park by dropping it, so a failed
-/// test unwinds the sender first and never leaves the watcher parked
-/// (as the `Block` watch reply). Parking forces the order a loaded
-/// machine produces by accident (see #3051): the report lands with
-/// nothing stashed, and the drain collects every line after the
-/// release, instead of racing the watcher's scheduling.
-struct Park {
-    rx: Mutex<mpsc::Receiver<()>>,
-}
-
-impl Park {
-    /// A closed gate: the sender half that releases it, and the shared
-    /// half the forward parks on.
-    fn closed() -> (mpsc::Sender<()>, Arc<Self>) {
-        let (tx, rx) = mpsc::channel();
-        (tx, Arc::new(Self { rx: Mutex::new(rx) }))
-    }
-
-    /// Waits for the release under the plan's bound: expiry names the
-    /// missing release instead of hanging the watcher, and a dropped
-    /// sender (a failed test's unwind) releases at once.
-    fn wait(&self) {
-        match Deadline::after(MUST_SUCCEED_WITHIN).recv(&self.rx.lock().unwrap()) {
-            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!("the report never released the parked forward")
-            }
-        }
-    }
-}
-
-/// The registry's forward behind a release gate: every watcher line
-/// parks until the test drops the sender half, then forwards as usual.
-/// The runner's reap and report never wait on the watcher, so parking
-/// cannot deadlock the report the release waits for.
-fn parked_forward(rig: &Rig, park: &Arc<Park>) -> super::UsageForward {
-    let forward = rig.registry.usage_forward();
-    let park = Arc::clone(park);
-    Arc::new(
-        move |session: SessionId, line: contract::events::UsageRecorded| {
-            park.wait();
-            forward(session, line);
-        },
-    )
-}
-
 /// Collects streamed `DelegateUsage` deliveries until `want` have
 /// arrived, after the run already reported: the watcher's forwards
 /// always follow on the inbox (the tap runs before each offer), so a
 /// Job that precedes them (see #3005) only delays this drain. The
-/// bound is the plan's MUST_SUCCEED_WITHIN, the same bound the parked
-/// forward's release waits on: under saturation the watcher thread can
-/// go unscheduled past the old 3s report deadline (see #3001).
+/// bound is the plan's MUST_SUCCEED_WITHIN: under saturation the
+/// watcher thread can go unscheduled past the old 3s report deadline
+/// (see #3001).
 fn drain_streamed_usages(
     rig: &Rig,
     mut usages: Vec<(SessionId, String)>,
@@ -2951,9 +2974,14 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
     // or not the watcher beat the reap (see #3005).
     let exit = serde_json::to_string(&fiber_exited_line(3, "Done.")).unwrap();
     let shell = format!("printf '%s\\n' '{exit}'");
-    // The forward parks until the report lands: a loaded machine
-    // schedules the watcher after the drain otherwise (see #3051).
-    let (release, park) = Park::closed();
+    // No gate on the forward: the fake persists every delivered line,
+    // so the reap's synchronous file replay recovers the usage even
+    // when the watcher loses the race, and the take below holds the
+    // Job and the streamed line whichever lands first. A park here
+    // would wait for the report from inside the forward while the
+    // report waits out the same bound under load; on expiry the parked
+    // thread dies holding the only claim and the line never arrives
+    // (see #3051).
     let waited = rig
         .start_timeout(
             &shell,
@@ -2961,20 +2989,15 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             1 << 20,
             None,
             None,
-            Some(parked_forward(&rig, &park)),
+            Some(rig.registry.usage_forward()),
         )
         .0;
     let _waited = waited;
-    let (notice, usages) = reported_with_usage(&rig);
-    // Nothing is stashed: every line is still parked behind the
-    // release, which proves the hold before the drain releases it.
-    assert!(usages.is_empty(), "the parked forward holds every line");
-    drop(release);
     // The well-formed line reaches the tap with the delegate's session id;
     // the malformed one never does, and `fiber_exited` still ends watch.
-    // The Job can precede the watcher's forward, so the tap is read
-    // only after the streamed line lands on the inbox.
-    let usages = drain_streamed_usages(&rig, usages, 1);
+    // The tap runs before the inbox offer on the same forward, so a
+    // streamed line the take holds proves the tap saw it first.
+    let (notice, usages) = take_report_with_usages(&rig, 1);
     assert_eq!(seen.lock().unwrap().as_slice(), ["g_1"]);
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].0, SessionId("s_child".into()));
@@ -3230,22 +3253,28 @@ impl TripTap {
 
 #[test]
 fn the_trip_calls_stop_once_on_crossing_and_never_before() {
-    // The socket closes without yielding and the log file below holds
-    // three usage lines crossing the budget: the crossing runs on the
-    // synchronous file-replay path, never on the unjoined watcher
-    // thread, so the sum, the single stop and the three forwards hold
-    // whichever replay wins the claim (see #3005). The reap's replay
-    // runs before the report, so all three lines land first. Streamed
-    // delivery stays covered by the tap tests.
-    let rig = rig(vec![WatchReply::Closed(Vec::new())]);
-    let mut text = String::new();
-    for (seq, generation, cost) in [(1, "g_1", 0.1), (2, "g_2", 0.15), (3, "g_3", 0.1)] {
-        text.push_str(
-            &serde_json::to_string(&usage_envelope(seq, generation, Some(cost))).unwrap(),
-        );
-        text.push('\n');
-    }
-    std::fs::write(&rig.events, text).unwrap();
+    // The socket streams three usage lines crossing the budget, but the
+    // watcher parks on the crossing line before its fold: the first
+    // delivery of seq 2 persists to the log, then waits. The runner,
+    // held past its take until that park, reaps and replays the file
+    // synchronously before the report, so the crossing runs on the
+    // file-replay path while the watcher is still parked (see #3005).
+    // Without the fake's persistence the replay finds nothing and the
+    // trip never fires; with it the parked delivery loses the claim and
+    // nothing forwards twice. Streamed delivery stays covered by the
+    // tap tests.
+    let dir = TempDir::new("fiber-delegate-trip");
+    let fifo = fifo(dir.path(), "release");
+    let shell = format!("read _ < '{}'; exit 0", fifo.display());
+    let rig = rig(vec![WatchReply::Closed(vec![
+        usage_envelope(1, "g_1", Some(0.1)),
+        usage_envelope(2, "g_2", Some(0.15)),
+        usage_envelope(3, "g_3", Some(0.1)),
+    ])]);
+    // One-shot gate on watcher-thread delivery of the crossing line:
+    // the parked signal carries the parked line's `seq`, so holding
+    // any other line fails here instead of tripping later.
+    let (parked_rx, release_tx) = rig.script.gate_seq(2);
     let trip = Arc::new(TripTap {
         sum: Mutex::new(0.0),
         budget: 0.2,
@@ -3256,9 +3285,11 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
     rig.registry.install_usage_tap(Some(Arc::new(move |line| {
         tapped.tap(&line);
     })));
-    let waited = rig
+    // Backstop: kills the group if the test fails before the child exits.
+    let watchdog = Watchdog::matching(&fifo.to_string_lossy());
+    let done = rig
         .start_timeout(
-            "exit 0",
+            &shell,
             BOUND,
             1 << 20,
             None,
@@ -3266,17 +3297,69 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
             Some(rig.registry.usage_forward()),
         )
         .0;
-    let _waited = waited;
-    let (notice, usages) = take_report_with_usages(&rig, 3);
-    // Below the budget nothing trips; the crossing trips once; the line
-    // after never trips again.
+    let _done = done;
+    wait_calls(&rig, 1);
+    // One-shot pause between the result take and the launch decision,
+    // so the runner cannot reach the reap before the watcher parks.
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    super::lock(&super::AFTER_TAKE_RESULT).replace(Box::new(move || {
+        let _sent = reached_tx.send(());
+        let _released = go_rx.recv();
+    }));
+    // Wakes the parked runner into the pause: the clock moves only to
+    // the runner's own park (docs/testing.md, "Waits and timeouts": a
+    // test advances a fake clock only after a signal that the code under
+    // test is waiting on that clock).
+    let at = rig.script.calls()[0];
+    rig.clock.advance_when_parked(
+        Some(at + super::POLL),
+        None,
+        super::POLL,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    // The crossing line persisted and parked before its fold: the first
+    // line already streamed below the budget, so only the replay can
+    // trip the crossing from here.
+    assert_eq!(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&parked_rx)
+            .expect("the watcher parks on the crossing line"),
+        2,
+        "the gate holds the crossing line, not an earlier one"
+    );
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reached_rx)
+        .expect("the runner pauses between the take and the launch");
+    // The child may exit only once the runner is held and the watcher
+    // is parked: the reap's synchronous replay then wins the crossing
+    // claim, and the released runner reports after it.
+    release_fifo(&fifo, b"go\n");
+    go_tx.send(()).expect("the runner resumes to the launch");
+    // The replay runs before the report, so the crossing and the single
+    // stop land here while the watcher is still parked: the file, not
+    // the socket, delivered the crossing line.
+    let (notice, usages) = take_report_with_usages(&rig, 2);
+    assert_eq!(trip.sum(), 0.25);
+    // Releases the watcher: its parked delivery loses the already-won
+    // claim, the last line forwards once, and nothing trips again.
+    release_tx
+        .send(())
+        .expect("the parked watcher takes its release");
+    let usages = drain_streamed_usages(&rig, usages, 3);
+    let mut generations: Vec<&str> = usages
+        .iter()
+        .map(|(_, generation)| generation.as_str())
+        .collect();
+    generations.sort_unstable();
+    assert_eq!(generations, ["g_1", "g_2", "g_3"]);
     assert_eq!(trip.sum(), 0.35);
     assert_eq!(trip.stops(), 1);
-    assert_eq!(usages.len(), 3);
     // The bare shell and the closed socket report no `fiber_exited`,
     // so the job ends without a result; the trip is what this test
     // proves.
     assert_eq!(notice.completed.status, Outcome::Failed);
+    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 #[test]
