@@ -45,12 +45,31 @@ fn allow_rule(setup: &Setup, rule: serde_json::Value) {
 /// The ids of the sessions stored under the workspace, sorted.
 fn stored(setup: &Setup) -> Vec<String> {
     let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
-    let mut ids: Vec<String> = fs::read_dir(&dir)
-        .unwrap()
+    stored_at(&dir).unwrap_or_else(|| panic!("session directory {} does not exist", dir.display()))
+}
+
+/// The stored session ids, or `None` while the first session directory is
+/// still being created.
+fn stored_at(dir: &std::path::Path) -> Option<Vec<String>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => panic!("read session directory {}: {error}", dir.display()),
+    };
+    let mut ids: Vec<String> = entries
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     ids.sort();
-    ids
+    Some(ids)
+}
+
+/// Waits for exactly `count` sessions to be stored before reading their ids.
+fn wait_stored(setup: &Setup, count: usize) -> Vec<String> {
+    let dir = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    fakes::wait_until("the stored session rows", setup.deadline, move || {
+        stored_at(&dir).is_some_and(|ids| ids.len() == count)
+    });
+    stored(setup)
 }
 
 /// The new session's log holds no user text: the clear attached an empty
@@ -127,7 +146,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     scripted(
         &setup,
         json!([
-            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command, "timeout_ms": 600_000}}]},
             {"text": ["done."]},
         ]),
     );
@@ -152,7 +171,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
         !fakes::matching("wait.sh").unwrap().is_empty(),
         "the shell waits on the FIFO"
     );
-    let a = stored(&setup).into_iter().next().unwrap();
+    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
     subscribe(&watch, &a);
     run.write(b"/clear\r");
@@ -177,7 +196,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     until(&watch, "A to exit", |line| line["kind"] == "fiber_exited");
     // `/clear` starts a new session while the old one finishes
     // (`docs/tui.md:1936–1938, 1947–1952`).
-    let ids = stored(&setup);
+    let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();
     assert_empty_conversation(&setup, &b, "run it");
@@ -206,7 +225,7 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
         grid.contents.contains("ready.")
     });
     assert!(old_screen.contents.contains("run it"));
-    let old = stored(&setup).into_iter().next().unwrap();
+    let old = wait_stored(&setup, 1).into_iter().next().unwrap();
 
     // The hub's start checks that workspace still exists. Renaming it
     // makes the terminal's verbatim path refuse without disturbing old.
@@ -253,7 +272,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
     run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("Approval 1 of 1 · run it")
     });
-    let a = stored(&setup).into_iter().next().unwrap();
+    let a = wait_stored(&setup, 1).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
     subscribe(&watch, &a);
     // Esc puts the approval aside behind its badge; the session still
@@ -276,7 +295,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
             .contains("1 approvals waiting · click to reopen")
             && !grid.contents.contains("waits on an approval.")
     });
-    assert_eq!(stored(&setup).len(), 1, "Esc started no session");
+    assert_eq!(wait_stored(&setup, 1).len(), 1, "Esc started no session");
     // Enter clears anyway: the new session attaches on the `start` answer,
     // and the old session leaves at once instead of waiting for the
     // approval's answer, which nobody sends.
@@ -290,7 +309,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
     });
     // Enter starts a fresh session while the old one exits
     // (`docs/tui.md:1954–1960`).
-    let ids = stored(&setup);
+    let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();
     assert_empty_conversation(&setup, &b, "run it");

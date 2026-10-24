@@ -269,6 +269,23 @@ fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
     );
 }
 
+/// Replacing one card preserves unrelated numbers even when the rail has
+/// a gap (`docs/tui.md:362–364`, "The rail").
+#[test]
+fn replacing_a_number_keeps_other_cards_through_a_gap() {
+    let mut app = with(&[A, B, C]);
+    app.on_line(left(B, "exited"));
+    assert_eq!(number(&app, C), Some(3));
+    let new = "s_nnnnnnnnnnnnnnnn";
+    app.rail_state
+        .replace(SessionId(A.to_owned()), SessionId(new.to_owned()));
+    app.on_line(live(D, json!({})));
+    assert_eq!(number(&app, new), Some(1));
+    assert_eq!(number(&app, C), Some(3));
+    assert_eq!(number(&app, D), Some(2));
+    assert_eq!(number(&app, A), None);
+}
+
 /// A replaced session with no number leaves the new id unnumbered
 /// until its row folds, when it takes the smallest free number
 /// (`docs/tui.md:1936–1937, 362–364`).
