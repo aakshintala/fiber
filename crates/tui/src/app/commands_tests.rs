@@ -1603,6 +1603,40 @@ fn an_accepted_unknown_source_import_settles_without_a_report() {
     assert!(app.outbox.pending.is_empty());
 }
 
+/// A waiting `session_status` for `session`, held on `kind` with request
+/// `r_1`.
+fn waiting_status(session: &str, kind: &str) -> Line {
+    old_line(
+        session,
+        "session_status",
+        json!({
+            "name": "fix the parser", "workspace": "/w", "project": "-w",
+            "state": "waiting",
+            "waiting": {"request_id": "r_1", "kind": kind, "summary": "Run it"},
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0, "cache_write": {},
+                "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "fake/m", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    )
+}
+
+/// A `permission_requested` approval for `session`.
+fn approval(session: &str) -> Line {
+    let mut line = old_line(
+        session,
+        "permission_requested",
+        json!({
+            "request_id": "r_1", "effects": ["executes"], "reversible": true,
+            "step": "review", "rule": {"subject": "npm test", "prefix": "npm test"},
+        }),
+    );
+    if let Line::Session(envelope) = &mut line {
+        envelope.action_id = Some(contract::ActionId("a_1".to_owned()));
+    }
+    line
+}
+
 /// A `session_status` for `session` with `workspace`, `model` and
 /// optional `thinking`.
 fn clear_status(session: &str, workspace: &str, model: &str, thinking: Option<&str>) -> Line {
@@ -1976,6 +2010,120 @@ fn clear_close_lost_before_write_names_the_lost_link() {
         .row(&contract::SessionId(SESSION.to_owned()))
         .unwrap_or_else(|| panic!("old row"));
     assert!(old.left.is_none());
+}
+
+#[test]
+fn clear_with_an_approval_wait_opens_the_overlay_first() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert!(app.clear_open());
+    assert_eq!(
+        app.clear_question(),
+        Some(("fix the parser".to_owned(), "approval".to_owned(), false))
+    );
+}
+
+#[test]
+fn clear_with_a_question_wait_names_the_question() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "question"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert!(app.clear_open());
+    assert_eq!(
+        app.clear_question(),
+        Some(("fix the parser".to_owned(), "question".to_owned(), false))
+    );
+}
+
+#[test]
+fn clear_overlay_enter_sends_the_start_then_closes_with_now() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert!(!app.clear_open());
+    let after = accept_start(&mut app, &lines[0]["id"], NEW);
+    let close = after
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the close goes out"));
+    assert_eq!(close["args"], json!({"now": true}));
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+}
+
+#[test]
+fn clear_overlay_esc_stays() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.clear_open());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert_eq!(app.draft(), "/clear");
+}
+
+#[test]
+fn clear_overlay_refused_start_closes_with_one_notice() {
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    let rejected = hub_line(
+        "command_rejected",
+        json!({"command_id": lines[0]["id"], "code": "busy", "message": "Busy."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert!(!app.clear_open());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert_eq!(app.notice(), Some("Busy."));
+}
+
+#[test]
+fn clear_overlay_clicks_do_what_their_keys_do() {
+    use crate::home::{ClearChoice, Spot};
+    let mut app = homed();
+    app.on_line(waiting_status(SESSION, "approval"));
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    let lines = sent(app.home_click(Spot::Clear(ClearChoice::Clear)));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "start");
+    assert!(!app.clear_open());
+    // Staying sends nothing and keeps the old session.
+    assert_eq!(enter(&mut app, "/clear"), Effect::None);
+    assert_eq!(app.home_click(Spot::Clear(ClearChoice::Stay)), Effect::None);
+    assert!(!app.clear_open());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+}
+
+#[test]
+fn clear_late_approval_keeps_the_close_polite() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let lines = sent(enter(&mut app, "/clear"));
+    assert_eq!(lines.len(), 1);
+    // The approval arrives after the dispatch, before its answer.
+    app.on_line(approval(SESSION));
+    let after = accept_start(&mut app, &lines[0]["id"], NEW);
+    let close = after
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the close goes out"));
+    assert_eq!(close["args"], json!({"now": false}));
+    // The old request waits in the shared queue, shown and answerable.
+    assert!(app.queue.open());
 }
 
 #[test]

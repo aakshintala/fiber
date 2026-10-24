@@ -227,6 +227,24 @@ fn launch(app: &mut App, surface: Surface) {
         Surface::Quit => {
             app.quit();
         }
+        Surface::Clear => {
+            app.on_line(session_line(
+                "session_status",
+                json!({
+                    "name": "fix the parser", "workspace": "/w", "project": "-w",
+                    "state": "waiting",
+                    "waiting": {"request_id": "r_1", "kind": "approval",
+                        "summary": "npm test"},
+                    "started": 0, "calls": 0, "since": 0,
+                    "delegates": 0, "jobs": 0, "clients": 0,
+                    "model": "test/model",
+                    "spend": {"tokens": {"input": 1, "output": 2, "cache_read": 0,
+                        "cache_write": {}}, "cost": 0.0, "subscription_cost": 0.0},
+                }),
+                None,
+            ));
+            let _ = app.clear();
+        }
         Surface::Report => app.open_import_report(None, long_names(), Vec::new()),
         Surface::Keymap => {
             app.open_keymap();

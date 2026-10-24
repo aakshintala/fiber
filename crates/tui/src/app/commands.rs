@@ -506,7 +506,7 @@ impl App {
         // ahead of the picker, the chip row and the draft, as their keys
         // run ahead of every other key path.
         let top = self.top_surface();
-        if matches!(top, Surface::Quit | Surface::Report) {
+        if matches!(top, Surface::Quit | Surface::Clear | Surface::Report) {
             return Effect::None;
         }
         // The reviewer setup takes every edit while it is on top: a paste
@@ -752,7 +752,32 @@ impl App {
         let Some(status) = self.panel_state.status().cloned() else {
             return Effect::None;
         };
-        let old = session;
+        // A wait holds the polite close: ask first, in the overlay, and
+        // send nothing yet.
+        if let Some((name, waiting)) = self.clear_wait(&session) {
+            return self.open_clear(session, name, waiting);
+        }
+        self.clear_send(status, session, false)
+    }
+
+    /// The wait holding `session`, if it waits on one: its title and
+    /// kind.
+    fn clear_wait(&self, session: &SessionId) -> Option<(String, String)> {
+        let row = self.home.as_ref()?.sessions.row(session)?;
+        let waiting = row.waiting.as_ref()?;
+        let kind = waiting.split(':').next()?.to_owned();
+        Some((crate::home::title(row), kind))
+    }
+
+    /// Sends the clear `start` for `old` from `status`: `now` stages
+    /// whether its `close` drops the wait. The pending draft is empty,
+    /// so no first prompt goes out.
+    pub(super) fn clear_send(
+        &mut self,
+        status: contract::events::SessionStatus,
+        old: SessionId,
+        now: bool,
+    ) -> Effect {
         let mut overrides = Vec::new();
         if let Some(thinking) = status.thinking.as_deref() {
             overrides.push(format!(
@@ -793,7 +818,7 @@ impl App {
             old,
             command_id: id,
             credential,
-            now: false,
+            now,
         });
         effect
     }
