@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 716
 expression: "super::super::text(&buf)"
 ---
 
@@ -11,4 +12,8 @@ expression: "super::super::text(&buf)"
    then a summary, fresh context
    tokens in / out        500 / 0
    cache hits                  0%
+   cost                     $0.00
+   cost on subscription     $0.00
+   speed, last reply            —
+   turns                        0
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

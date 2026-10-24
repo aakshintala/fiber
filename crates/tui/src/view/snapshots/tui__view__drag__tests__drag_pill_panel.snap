@@ -1,21 +1,22 @@
 ---
 source: crates/tui/src/view/drag_tests.rs
+assertion_line: 208
 expression: "crate::view::text(&buf)"
 ---
   w +            $0.00 · 0 ✓
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ 1 ✓ READY               0s                                                                                                                             /w                                        auto
 ▌ one                                                                                                                                                    test/model
-▌                                                                                                                                                        tokens in / out                          1 / 2
-▌ $0.00                                                                                                                                                  cache hits                                  0%
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ 2 ✓ READY               0s
-▌ two
-▌
-▌ $0.00
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
+▌                                                                                                                                                        ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                            —
+▌ $0.00                                                                                                                                                  handoff at —                                 —
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                            then a summary, fresh context
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                            tokens in / out                          1 / 2
+▌ 2 ✓ READY               0s                                                                                                                             cache hits                                  0%
+▌ two                                                                                                                                                    cost                                     $0.00
+▌                                                                                                                                                        cost on subscription                     $0.00
+▌ $0.00                                                                                                                                                  speed, last reply                            —
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                            turns                                        0
+                                                                                                                                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 

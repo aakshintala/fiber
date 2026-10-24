@@ -1,7 +1,22 @@
 ---
 source: crates/tui/src/view/panel/delegates_tests.rs
+assertion_line: 362
 expression: "crate::view::text(&buf)"
 ---
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                             auto
+
+   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
+   handoff at —                 —
+   then a summary, fresh context
+   tokens in / out              —
+   cache hits                   —
+   cost                         —
+   cost on subscription         —
+   speed, last reply            —
+   turns                        0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates            2 running

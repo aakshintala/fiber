@@ -1093,6 +1093,7 @@ fn expected_card(workspace: &str, text: usize, _panel: u16) -> Vec<String> {
         figure("tokens in / out", "10 / 3"),
         figure("cache hits", "40%"),
         figure("cost", "unknown"),
+        figure("cost on subscription", "$0.00"),
         figure("turns", "1"),
     ]);
     rows

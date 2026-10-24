@@ -351,3 +351,111 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
 }
+
+/// Clicks the cell at `(x, y)`: an SGR press then its release on the
+/// same cell.
+fn click(run: &mut Run, x: u16, y: u16) {
+    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+}
+
+/// The first session id the hub's feed reports: the test's only live
+/// session is the terminal's.
+fn first_session(control: &support::Socket) -> String {
+    control.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_answer(control, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let lines = support::until(control, "the terminal's session on the feed", |line| {
+        line["session_id"].is_string()
+    });
+    lines
+        .iter()
+        .find_map(|line| line["session_id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("a session id in {lines:?}"))
+}
+
+/// The Session card's rows hold still while usage lands: with the first
+/// response held, the card draws every reserved row; the release folds
+/// `usage_recorded`, every card row keeps its y, and a click aimed at
+/// the held frame's coordinates opens the usage breakdown (`#3158`).
+#[test]
+fn session_card_rows_hold_still_while_usage_lands() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    // Hold the first response: the turn starts but nothing folds until
+    // the test releases it.
+    server.hold();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+    );
+    let hub = Arc::new(Mutex::new(None));
+    let (watch, _) = connect_hub(&setup, &hub);
+    let control = support::Socket::connect(setup.deadline, &setup.hub_socket());
+    assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
+    // The terminal's session arrives on the feed once it starts: the
+    // test's only live session.
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first request reaches the server"
+    );
+    let session = first_session(&control);
+    // Subscribe before the release: the full stream carries the turn's
+    // `usage_recorded` envelope.
+    support::subscribe(&control, &session);
+    // The held frame: every Session-card row reserved from the first
+    // frame, none moved by the folds so far.
+    const LABELS: [&str; 6] = [
+        "tokens in / out",
+        "cache hits",
+        "cost",
+        "cost on subscription",
+        "speed, last reply",
+        "turns",
+    ];
+    let before = run.wait_screen("the session card's reserved rows", |grid| {
+        LABELS
+            .iter()
+            .all(|label| grid.rows.iter().any(|row| row.contains(label)))
+    });
+    let ys_before: Vec<u16> = LABELS
+        .iter()
+        .map(|label| find_row(&before.rows, label))
+        .collect();
+    server.release();
+    // The release's `usage_recorded` envelope, however many folds come
+    // first: each line takes what remains of the test's deadline. The
+    // test asserts no speed text and no timestamp span: a same-millisecond
+    // span that leaves the speed reserved is valid.
+    loop {
+        let line = recv(&control, "the usage_recorded envelope");
+        if line["kind"] == json!("usage_recorded") {
+            break;
+        }
+    }
+    // The frame after the fold: the finished turn proves the terminal
+    // rendered past the usage.
+    let after = run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    let ys_after: Vec<u16> = LABELS
+        .iter()
+        .map(|label| find_row(&after.rows, label))
+        .collect();
+    assert_eq!(ys_before, ys_after, "every Session-card row keeps its y");
+    // The held frame's cost coordinates still name the cost row, and a
+    // click there opens the usage breakdown.
+    let y = ys_before[2];
+    let x = locate(&before.rows[y as usize], "cost");
+    click(&mut run, x, y);
+    run.wait_screen("the usage breakdown", |grid| {
+        grid.contents.contains("Usage")
+    });
+    drop((watch, control));
+    quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
+}

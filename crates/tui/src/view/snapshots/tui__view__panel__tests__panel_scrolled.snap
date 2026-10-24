@@ -1,8 +1,23 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
+assertion_line: 965
 expression: "super::super::text(&buf)"
 ---
 
+   tokens in / out              —
+   cache hits                   —
+   cost                         —
+   cost on subscription         —
+   speed, last reply            —
+   turns                        0
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+   plan · tasks
+   line 00
+   line 01
+   line 02
+   line 03
    line 04
    line 05
    line 06
@@ -28,17 +43,3 @@ expression: "super::super::text(&buf)"
    line 26
    line 27
    line 28
-   line 29
-   line 30
-   line 31
-   line 32
-   line 33
-   line 34
-   line 35
-   line 36
-   line 37
-   line 38
-   line 39
-   line 40
-   line 41
-   line 42
