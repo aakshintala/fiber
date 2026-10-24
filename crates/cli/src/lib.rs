@@ -217,16 +217,6 @@ pub fn project_of(
     Ok((sessions, key))
 }
 
-// debt: #923, remove `usage` with the final `Failure`-builder cleanup once no caller remains.
-// The hub-list conversion removed its last caller; later parts remove the builder itself.
-#[allow(
-    dead_code,
-    reason = "kept for the final Failure-builder cleanup; no caller remains"
-)]
-fn usage(message: impl Into<String>) -> Failure {
-    failure(ErrorCode::Usage, message)
-}
-
 fn failed(code: ErrorCode, e: impl Display) -> Failure {
     failure(code, e.to_string())
 }
