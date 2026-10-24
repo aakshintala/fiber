@@ -215,7 +215,10 @@ jobs:
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "$ACTIONLINT_SHA256  $archive" | sha256sum -c -
           tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color
+          # Pinned actionlint 1.7.12 does not know the `queue` key of the
+          # `concurrency` section, which the flake report requires, so only
+          # that unsupported-schema diagnostic is ignored.
+          "$RUNNER_TEMP/actionlint" -color -ignore 'unexpected key "queue" for "concurrency" section'
       - name: cargo-deny advisories, when Cargo.lock changed
         run: |
           if git diff --name-only "$BASE...HEAD" | grep -qx Cargo.lock; then
@@ -241,6 +244,12 @@ jobs:
     timeout-minutes: 35
     env:
       BASE: ${{ needs.select.outputs.base }}
+    # Whether the leg's final list is non-empty; flake_decide downloads
+    # this leg's artifact only when it is true (docs/testing.md,
+    # "Flaky tests").
+    outputs:
+      has_flakes: ${{ steps.has_flakes.outputs.has_flakes }}
+      collection_complete: ${{ steps.collection.outputs.complete }}
     steps: &test-steps
       - *checkout-full
       - *toolchain
@@ -324,15 +333,23 @@ jobs:
       # flake_report job (docs/testing.md, "Flaky tests"). This records the
       # scripts/check run above; the hub_service run below overwrites the
       # JUnit XML, so its list is appended after it. Missing or empty JUnit
-      # XML records nothing; the artifact is uploaded only when the file is
-      # non-empty.
+      # XML records nothing; a malformed file fails this parser, which the
+      # completion marker below reports as incomplete, never as an empty
+      # list. The step itself never fails: its `complete` output carries
+      # the parser's result.
       - name: Record tests that passed on retry
         id: flaky
         if: always()
         env:
-          LIST: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
         run: |
-          scripts/flaky-tests target/nextest/ci/junit.xml > "$LIST"
+          mkdir -p "$(dirname "$LIST")"
+          if scripts/flaky-tests target/nextest/ci/junit.xml > "$LIST" 2>"$RUNNER_TEMP/flaky-error.txt"; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            : > "$LIST"
+          fi
           if [ -s "$LIST" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
@@ -377,28 +394,77 @@ jobs:
             exit 1
           fi
           cargo nextest run -p main --test hub_service --run-ignored only
-      # The hub_service run's tests that passed after a retry, appended to
+      # The hub_service run's tests that passed on retry, appended to
       # the same list for the flake_report job. Linux x86_64 only, like the
       # step above.
       - name: Record hub_service tests that passed on retry
         id: flaky_hub
         if: always() && matrix.runner == 'ubuntu-24.04'
         env:
-          LIST: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
         run: |
-          scripts/flaky-tests target/nextest/ci/junit.xml >> "$LIST"
+          if scripts/flaky-tests target/nextest/ci/junit.xml >> "$LIST" 2>"$RUNNER_TEMP/flaky-hub-error.txt"; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
           if [ -s "$LIST" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
+      # Whether every parser invocation above succeeded. A true marker
+      # with an empty list is a complete empty result; anything else fails
+      # flake_decide closed before any lookup. The marker travels in the
+      # leg's artifact on the two-leg matrix, and in this job's outputs on
+      # the one-leg test_linux matrix, whose list upload stays conditional
+      # on a non-empty list.
+      - name: Mark the collection complete or not
+        id: collection
+        if: always()
+        env:
+          MARKER: ${{ runner.temp }}/flaky/collection-complete-${{ matrix.runner }}.txt
+        run: |
+          mkdir -p "$(dirname "$MARKER")"
+          complete="${{ steps.flaky.outputs.complete }}"
+          if [ "${{ matrix.runner }}" = ubuntu-24.04 ] && [ "${{ steps.flaky_hub.outputs.complete }}" = false ]; then
+            complete=false
+          fi
+          if [ "$complete" = true ]; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+            echo true > "$MARKER"
+          else
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+            echo false > "$MARKER"
+          fi
+      # Every leg uploads its list plus its completion marker, including
+      # an empty list which is a complete empty result, except the
+      # one-leg test_linux matrix, which keeps its conditional upload:
+      # flake_decide reads that leg's marker from its job outputs
+      # (docs/testing.md, "Flaky tests").
       - name: Upload the tests that passed on retry
-        if: always() && (steps.flaky.outputs.found == 'true' || steps.flaky_hub.outputs.found == 'true')
+        if: always() && (matrix.runner != 'ubuntu-24.04' || steps.flaky.outputs.found == 'true' || steps.flaky_hub.outputs.found == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flaky-tests-${{ matrix.runner }}
-          path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
+          path: |
+            ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
+            ${{ runner.temp }}/flaky/collection-complete-${{ matrix.runner }}.txt
           if-no-files-found: ignore
+      # The leg's final list, after both record steps above. flake_decide
+      # downloads this leg's artifact only when this output is true; a
+      # missing artifact then fails that job.
+      - name: Report whether this leg found flakes
+        id: has_flakes
+        if: always()
+        env:
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
+        run: |
+          if [ -s "$LIST" ]; then
+            echo "has_flakes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_flakes=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # Linux arm64 and macOS. The plan decides whether it runs: a draft skips
   # it, so a draft runs Linux x86_64 only, and marking it ready runs all
@@ -419,6 +485,198 @@ jobs:
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
+
+  # Decides what the flake report writes (docs/testing.md, "Flaky tests").
+  # It holds `contents: read` and `issues: read`, checks out the tested
+  # commit with full history and runs no Fiber code beyond
+  # `cargo xtask flake-report`: selection and the reopen/skip/create
+  # decision live in xtask, and the write-only flake_report job below
+  # only carries them out. Not in `ci`'s needs: a flake never fails the
+  # merge.
+  flake_decide:
+    name: Decide flake report actions
+    needs: [select, test_linux, test]
+    if: always() && (fromJSON(needs.select.outputs.jobs).test_linux || fromJSON(needs.select.outputs.jobs).test)
+    runs-on: ubuntu-24.04
+    # No history: checkout, a cold xtask build and paginated API lookups
+    # fit in this bound (docs/ci.md, "Job time limits").
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      has_flakes: ${{ steps.collate.outputs.has_flakes }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # A selected leg that never reported a list proves nothing: a
+      # cancelled or skipped leg fails closed here, before any lookup.
+      - name: Fail closed on a cancelled or skipped selected leg
+        if: always()
+        env:
+          LINUX_SELECTED: ${{ fromJSON(needs.select.outputs.jobs).test_linux }}
+          TEST_SELECTED: ${{ fromJSON(needs.select.outputs.jobs).test }}
+          LINUX_RESULT: ${{ needs.test_linux.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$LINUX_SELECTED" = true ] && { [ "$LINUX_RESULT" = cancelled ] || [ "$LINUX_RESULT" = skipped ]; }; then
+            echo "test_linux was selected but $LINUX_RESULT, so no list can prove there were no flakes"
+            exit 1
+          fi
+          if [ "$TEST_SELECTED" = true ] && { [ "$TEST_RESULT" = cancelled ] || [ "$TEST_RESULT" = skipped ]; }; then
+            echo "test was selected but $TEST_RESULT, so no list can prove there were no flakes"
+            exit 1
+          fi
+      # The one-leg test_linux matrix uploads its list only when
+      # non-empty: download it only when its output says flakes exist,
+      # and a missing artifact then fails the job.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: fromJSON(needs.select.outputs.jobs).test_linux && needs.test_linux.outputs.has_flakes == 'true'
+        with:
+          name: flaky-tests-ubuntu-24.04
+          path: ${{ runner.temp }}/flaky
+      # Each two-leg test matrix leg always uploads its list, including
+      # an empty one: an empty file is a complete empty list, while a
+      # missing artifact fails closed.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: fromJSON(needs.select.outputs.jobs).test
+        with:
+          name: flaky-tests-ubuntu-24.04-arm
+          path: ${{ runner.temp }}/flaky
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: fromJSON(needs.select.outputs.jobs).test
+        with:
+          name: flaky-tests-macos-26
+          path: ${{ runner.temp }}/flaky
+      - name: Collate this run's flake titles
+        id: collate
+        env:
+          FLAKY_DIR: ${{ runner.temp }}/flaky
+          LINUX_SELECTED: ${{ fromJSON(needs.select.outputs.jobs).test_linux }}
+          LINUX_FLAKES: ${{ needs.test_linux.outputs.has_flakes }}
+          LINUX_COMPLETE: ${{ needs.test_linux.outputs.collection_complete }}
+          TEST_SELECTED: ${{ fromJSON(needs.select.outputs.jobs).test }}
+        run: |
+          fail_closed() {
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          # The one-leg matrix reports its marker as a job output: an
+          # incomplete collection fails closed here, before any lookup.
+          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_COMPLETE" != true ]; then
+            fail_closed "test_linux collection is incomplete: no report"
+          fi
+          # Each selected two-leg matrix leg uploads its list plus a true
+          # marker; a missing list, a missing marker or a false marker
+          # fails closed. An empty list with a true marker is a complete
+          # empty result.
+          if [ "$TEST_SELECTED" = true ]; then
+            for runner in ubuntu-24.04-arm macos-26; do
+              list="$FLAKY_DIR/flaky-tests-$runner.txt"
+              marker="$FLAKY_DIR/collection-complete-$runner.txt"
+              [ -f "$list" ] || fail_closed "the flaky-tests-$runner list is missing: no report"
+              [ "$(cat "$marker" 2>/dev/null)" = true ] || fail_closed "the $runner collection is incomplete: no report"
+            done
+          fi
+          if [ "$LINUX_SELECTED" = true ] && [ "$LINUX_FLAKES" = true ]; then
+            [ -f "$FLAKY_DIR/flaky-tests-ubuntu-24.04.txt" ] || fail_closed "the flaky-tests-ubuntu-24.04 list is missing: no report"
+            [ "$(cat "$FLAKY_DIR/collection-complete-ubuntu-24.04.txt" 2>/dev/null)" = true ] || fail_closed "the ubuntu-24.04 collection is incomplete: no report"
+          fi
+          titles=$RUNNER_TEMP/flake-titles.txt
+          : > "$titles"
+          if [ -d "$FLAKY_DIR" ]; then
+            for file in "$FLAKY_DIR"/flaky-tests-*.txt; do
+              [ -f "$file" ] || continue
+              while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                title="Flaky test: ${line%%$'\t'*}"
+                grep -Fxq "$title" "$titles" || printf '%s\n' "$title" >> "$titles"
+              done < "$file"
+            done
+          fi
+          if [ -s "$titles" ]; then
+            echo "has_flakes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_flakes=false" >> "$GITHUB_OUTPUT"
+            echo "No test passed after a retry in this run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.collate.outputs.has_flakes == 'true'
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Install the toolchain
+        if: steps.collate.outputs.has_flakes == 'true'
+        run: rustup toolchain install
+      # Complete exact-title open and closed lookups feed
+      # `cargo xtask flake-report-events`, which selects the unique closed
+      # issue numbers in Rust; the workflow fetches only those event
+      # endpoints, passes the complete raw data back, and `cargo xtask
+      # flake-report --tested-commit` decides one JSON-lines action per
+      # unique title, probing ancestry itself only for each selected
+      # latest fix. A failed lookup arrives as failed/incomplete, never
+      # as an empty list. Repeat titles across runner lists collapse to
+      # one decision.
+      - name: Look up issues and decide the report actions
+        if: steps.collate.outputs.has_flakes == 'true'
+        run: |
+          titles=$RUNNER_TEMP/flake-titles.txt
+          flakes=$(jq -R -s '{flakes: (split("\n") | map(select(length > 0)) | map({title: .}))}' "$titles")
+          open_ok=true
+          open_raw="[]"
+          if ! open_raw=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" 2>/dev/null); then
+            open_ok=false
+            open_raw="[]"
+          fi
+          if ! open_issues=$(printf '%s' "$open_raw" | jq -s 'add // [] | map({number, title} + (if .pull_request == null then {} else {pull_request: true} end))' 2>/dev/null); then
+            open_ok=false
+            open_issues="[]"
+          fi
+          closed_ok=true
+          closed_raw="[]"
+          if ! closed_raw=$(gh api --paginate "repos/$GH_REPO/issues?state=closed&per_page=100" 2>/dev/null); then
+            closed_ok=false
+            closed_raw="[]"
+          fi
+          if ! closed_issues=$(printf '%s' "$closed_raw" | jq -s 'add // [] | map({number, title, closed_at} + (if .pull_request == null then {} else {pull_request: true} end))' 2>/dev/null); then
+            closed_ok=false
+            closed_issues="[]"
+          fi
+          open=$(jq -n --argjson ok "$open_ok" --argjson issues "$open_issues" '{ok: $ok, issues: $issues}')
+          closed=$(jq -n --argjson ok "$closed_ok" --argjson issues "$closed_issues" '{ok: $ok, issues: $issues}')
+          jq -n --argjson flakes "$flakes" --argjson open "$open" --argjson closed "$closed" '{flakes: $flakes.flakes, open: $open, closed: $closed}' > "$RUNNER_TEMP/flake-request-input.json"
+          numbers=$(cargo xtask flake-report-events < "$RUNNER_TEMP/flake-request-input.json") || exit 1
+          events_all="{}"
+          while IFS= read -r number; do
+            [ -n "$number" ] || continue
+            events_ok=true
+            events_raw="[]"
+            if ! events_raw=$(gh api --paginate "repos/$GH_REPO/issues/$number/events" 2>/dev/null); then
+              events_ok=false
+              events_raw="[]"
+            fi
+            if ! events=$(printf '%s' "$events_raw" | jq -s 'add // [] | map({event, id, commit_id, created_at})' 2>/dev/null); then
+              events_ok=false
+              events="[]"
+            fi
+            events_all=$(printf '%s' "$events_all" | jq --arg n "$number" --argjson ok "$events_ok" --argjson e "$events" '. + {($n): {ok: $ok, events: $e}}')
+          done <<< "$numbers"
+          jq -n --argjson flakes "$flakes" --argjson open "$open" --argjson closed "$closed" --argjson events "$events_all" '{flakes: $flakes.flakes, open: $open, closed: $closed, events: $events}' > "$RUNNER_TEMP/flake-input.json"
+          report_data=$RUNNER_TEMP/flake-report-data
+          mkdir -p "$report_data"
+          cargo xtask flake-report --tested-commit "$GITHUB_SHA" < "$RUNNER_TEMP/flake-input.json" > "$report_data/flake-decisions.jsonl"
+          cp "$RUNNER_TEMP"/flaky/flaky-tests-*.txt "$report_data"/ 2>/dev/null || true
+      # One combined artifact carries the decision JSON-lines plus the
+      # selected runner lists the writer checks them against, so the
+      # writer downloads one exact name and lists no artifacts.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.collate.outputs.has_flakes == 'true'
+        with:
+          name: flake-report-data
+          path: ${{ runner.temp }}/flake-report-data
+          if-no-files-found: error
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
@@ -851,16 +1109,24 @@ jobs:
   # Files the flake issues for the tests that passed after a retry
   # (docs/testing.md, "Flaky tests"). It holds `contents: read`,
   # `pull-requests: write` and `issues: write`, checks nothing out and runs
-  # no repository code: the test names come from this run's artifacts and
-  # go to the API by file. It skips repeat titles, stale bases and PR-only
-  # failures. Not in `ci`'s needs: a flake never fails the merge.
+  # no repository code: the test names come from this run's artifacts, the
+  # reopen/skip/create decision comes from flake_decide's JSON-lines
+  # artifact, and both go to the API by file. It skips repeat titles,
+  # stale bases and PR-only failures. One report writes at a time:
+  # `queue: max` serialises runs, and GitHub cancels a new report past
+  # its 100 pending reports (docs/ci.md). Not in `ci`'s needs: a flake
+  # never fails the merge.
   flake_report:
     name: Report flaky tests
-    needs: [test_linux, test]
-    if: always() && (needs.test_linux.result != 'skipped' || needs.test.result != 'skipped')
+    needs: [flake_decide]
+    if: always() && (needs.flake_decide.result == 'failure' || needs.flake_decide.outputs.has_flakes == 'true')
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
     timeout-minutes: 5
+    concurrency:
+      group: flake-report
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       pull-requests: write
@@ -870,29 +1136,40 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      # The test job uploads one artifact per runner only when a test
-      # passed after a retry there; with none, there is nothing to
-      # download, and download-artifact fails on an empty match, so count
-      # first. One API call, no loop (docs/ci.md, "Waiting on CI").
-      - name: Count this run's flake lists
-        id: lists
-        run: |
-          count=$(gh api "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts" \
-            -q '[.artifacts[] | select(.name | startswith("flaky-tests-"))] | length')
-          echo "count=$count" >> "$GITHUB_OUTPUT"
+      # The combined decision artifact is required: without
+      # flake_decide's JSON-lines actions and the runner lists there is
+      # no reopen, skip or create, and no old create path runs as
+      # fallback. The exact-name download fails the job when it is
+      # missing, and no Actions API call lists anything.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: steps.lists.outputs.count != '0'
         with:
-          pattern: flaky-tests-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/flaky
+          name: flake-report-data
+          path: ${{ runner.temp }}/report-data
       - name: File or comment on the flake issues
         if: always()
         env:
           PR: ${{ github.event.pull_request.number }}
+          DECIDE_RESULT: ${{ needs.flake_decide.result }}
+          DECIDE_FLAKES: ${{ needs.flake_decide.outputs.has_flakes }}
+          DECISIONS: ${{ runner.temp }}/report-data/flake-decisions.jsonl
         run: |
-          dir=$RUNNER_TEMP/flaky
-          [ -d "$dir" ] || exit 0
+          # Fail closed before any write: the decision job must have
+          # succeeded with flakes, and its combined artifact must carry
+          # both the JSON-lines decisions and the runner lists. No old
+          # create path runs as fallback.
+          if [ "${DECIDE_RESULT:-}" != success ] || [ "${DECIDE_FLAKES:-}" != true ]; then
+            echo "flake_decide did not decide flakes (result ${DECIDE_RESULT:-missing}, has_flakes ${DECIDE_FLAKES:-missing}): no write" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [ ! -f "${DECISIONS:-}" ]; then
+            echo "the flake-report-data artifact is missing: no write" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          dir=$RUNNER_TEMP/report-data
+          if ! ls "$dir"/flaky-tests-*.txt >/dev/null 2>&1; then
+            echo "flake_decide found flakes but their lists are missing: no write" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           seen=$RUNNER_TEMP/flaky-seen.txt
           : > "$seen"
           base=""
@@ -925,6 +1202,13 @@ jobs:
             if [ -n "$detail" ]; then
               printf "\n\`\`\`\n%s\n\`\`\`" "$detail"
             fi
+          }
+          # The first open issue with exactly this title, never a pull
+          # request. Prints the number or nothing; fails on failed or
+          # incomplete data.
+          open_number() {
+            raw=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" 2>/dev/null) || return 1
+            printf '%s' "$raw" | jq -r -s --arg t "$1" 'add // [] | map(select(.title == $t and .pull_request == null)) | .[0].number // empty' 2>/dev/null || return 1
           }
           for file in "$dir"/flaky-tests-*.txt; do
             [ -f "$file" ] || continue
@@ -971,13 +1255,103 @@ jobs:
                 text="$text (see #$PR)"
               fi
               body=$(flake_body "$text")
-              number=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
-                -q "map(select(.title == \"$title\")) | .[0].number // empty")
-              if [ -n "$number" ]; then
-                gh issue comment "$number" --body "$body"
+              # The complete paginated open lookup: exact title, never a
+              # pull request. Failed or incomplete data files nothing.
+              if number=$(open_number "$title"); then
+                if [ -n "$number" ]; then
+                  gh issue comment "$number" --body "$body"
+                  printf '%s\n' "$title" >> "$seen"
+                  continue
+                fi
               else
-                gh issue create --title "$title" --body "$body"
+                echo "unknown open lookup: the open-issue search for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                printf '%s\n' "$title" >> "$seen"
+                continue
               fi
+              # No open issue: the decision job's one action whose title
+              # exactly equals this run's title. Anything else files
+              # nothing and is noted in the summary.
+              action=$(jq -c --arg t "$title" 'select(.title == $t)' "$DECISIONS" 2>/dev/null || true)
+              action_lines=$(printf '%s' "$action" | grep -c . || true)
+              action_name=""
+              action_issue=""
+              action_source=""
+              if [ "$action_lines" = 1 ]; then
+                action_name=$(printf '%s' "$action" | jq -r '.action // empty' 2>/dev/null || true)
+                action_issue=$(printf '%s' "$action" | jq -r '.issue // empty' 2>/dev/null || true)
+                action_source=$(printf '%s' "$action" | jq -r '.source // empty' 2>/dev/null || true)
+              fi
+              case "$action_name" in
+                reopen)
+                  if ! printf '%s' "$action_issue" | grep -Eq '^[0-9]+$'; then
+                    echo "invalid decision for $title: no write" >> "$GITHUB_STEP_SUMMARY"
+                    printf '%s\n' "$title" >> "$seen"
+                    continue
+                  fi
+                  # Validate only the ruled reopen predicates: not a
+                  # pull request, closed, this run's exact title and the
+                  # flake label.
+                  if ! fetched=$(gh api "repos/$GH_REPO/issues/$action_issue" 2>/dev/null); then
+                    echo "unknown reopen target: issue $action_issue could not be fetched, so $title stays closed" >> "$GITHUB_STEP_SUMMARY"
+                    printf '%s\n' "$title" >> "$seen"
+                    continue
+                  fi
+                  if ! printf '%s' "$fetched" | jq -e --arg t "$title" '.pull_request == null and .state == "closed" and .title == $t and ([.labels[].name] | index("test-only") != null)' >/dev/null 2>&1; then
+                    echo "validation mismatch: issue $action_issue is not a closed test-only issue titled $title, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                    printf '%s\n' "$title" >> "$seen"
+                    continue
+                  fi
+                  # Recheck the open titles immediately before the
+                  # write: another run may have filed since the lookup.
+                  if number=$(open_number "$title"); then
+                    if [ -n "$number" ]; then
+                      echo "an open issue for $title appeared before the reopen, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                      printf '%s\n' "$title" >> "$seen"
+                      continue
+                    fi
+                  else
+                    echo "unknown open lookup: the recheck for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                    printf '%s\n' "$title" >> "$seen"
+                    continue
+                  fi
+                  gh issue reopen "$action_issue"
+                  gh issue comment "$action_issue" --body "$body"
+                  gh issue edit "$action_issue" --add-label needs-triage
+                  ;;
+                file-new)
+                  if number=$(open_number "$title"); then
+                    if [ -n "$number" ]; then
+                      echo "an open issue for $title appeared before the create, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                      printf '%s\n' "$title" >> "$seen"
+                      continue
+                    fi
+                  else
+                    echo "unknown open lookup: the recheck for $title failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                    printf '%s\n' "$title" >> "$seen"
+                    continue
+                  fi
+                  gh issue create --title "$title" --body "$body" --label test-only
+                  ;;
+                stale)
+                  echo "stale fix: $title stays closed: its fix is not in the tested commit" >> "$GITHUB_STEP_SUMMARY"
+                  ;;
+                unknown)
+                  # The decision names the failed lookup: open, closed,
+                  # events or ancestry. Without one, the generic line
+                  # covers decisions written before the source existed.
+                  case "$action_source" in
+                    open | closed | events | ancestry)
+                      echo "unknown $action_source: $title stays closed: the $action_source lookup failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                      ;;
+                    *)
+                      echo "unknown fix: $title stays closed: a lookup failed, so nothing is filed" >> "$GITHUB_STEP_SUMMARY"
+                      ;;
+                  esac
+                  ;;
+                *)
+                  echo "invalid decision for $title: no write" >> "$GITHUB_STEP_SUMMARY"
+                  ;;
+              esac
               printf '%s\n' "$title" >> "$seen"
             done < "$file"
           done

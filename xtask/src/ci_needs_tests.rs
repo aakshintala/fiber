@@ -112,7 +112,7 @@ fn a_fifth_local_report_job_needs_no_builder_edit() {
         "    needs: select\n    runs-on: ubuntu-24.04\n",
         &reports,
     );
-    // The check reads REPORT_JOBS, so only the four real names are exempt:
+    // The check reads REPORT_JOBS, so only the five real names are exempt:
     // the made-up job is a gating job the fixture's ci leaves out of needs.
     let failures = check(&workflow, &small_doc_with_reports(&REPORT_JOBS)).unwrap();
     assert_eq!(failures.len(), 1, "{failures:?}");
@@ -565,7 +565,7 @@ fn a_workflow_whose_only_job_is_ci_is_read() {
         "name: CI\non: push\njobs:\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     let failures = check(&workflow, &small_doc()).unwrap();
-    assert_eq!(failures.len(), 4, "{failures:?}");
+    assert_eq!(failures.len(), REPORT_JOBS.len(), "{failures:?}");
 }
 
 #[test]
