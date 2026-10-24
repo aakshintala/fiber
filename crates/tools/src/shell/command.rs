@@ -147,6 +147,10 @@ pub(crate) fn execute(
 /// A crate-local test entry that supplies the injected probe and fixture
 /// member-query program. No test-only switch reaches the shipped binary.
 #[cfg(test)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors execute with the injected probe and member-query program"
+)]
 fn execute_for_test(
     program: &Path,
     command: &str,
@@ -281,6 +285,7 @@ fn execute_inner(
             | MovePolicy::Terminal
             | MovePolicy::Monitor => None,
         },
+        members: None,
         pgid,
         listing: Some(Box::new(listing)),
         shared,

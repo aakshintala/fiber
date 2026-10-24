@@ -10,7 +10,7 @@ use contract::emit::Emit;
 use contract::tool::Cancel;
 use rustix::process::Signal;
 
-use super::background::{MoveAsk, Step, running_step, wait_deadline};
+use super::background::{GroupMembers, MoveAsk, Step, group_members, running_step, wait_deadline};
 use super::command::{Finished, Kept, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
 use super::output::{JobStream, Shared, lock, stream_output, stream_rest};
@@ -43,6 +43,10 @@ pub(super) struct Run {
     pub(super) stream_carry: Vec<u8>,
     pub(super) timeout_at: Option<Instant>,
     pub(super) move_at: Option<Instant>,
+    /// The member listing's outcome, saved before a shell-exit move so the
+    /// receipt reuses it instead of running `ps` a second time. `None`
+    /// until the drive lists the group.
+    pub(super) members: Option<GroupMembers>,
     pub(super) pgid: u32,
     /// The run's registration in the process-wide list, boxed so the run
     /// stays small. A run whose group was never seen empty drops it; the
@@ -95,7 +99,7 @@ pub(super) fn pump_inner(
     cancel: &dyn Cancel,
     emit: &dyn Emit,
     alive: fn(u32) -> bool,
-    _ps: &Path,
+    ps: &Path,
 ) -> LoopEnd {
     loop {
         let view = view(&progress.shared, cancel);
@@ -151,7 +155,29 @@ pub(super) fn pump_inner(
                         until: after(clock, support::group::DRAIN),
                     };
                 }
-                Step::Move(reason) => return LoopEnd::Move(reason),
+                Step::Move(reason) => {
+                    // A shell exit moves only on member evidence, never on
+                    // a lagging alive probe. The first pass lists the
+                    // group: no rows finishes in the foreground, while a
+                    // listing that names members or never answers is saved
+                    // and the loop re-reads the view, so a timeout or
+                    // cancellation that became due during the listing wins
+                    // before any handoff.
+                    if !matches!(reason, MoveReason::ShellExited { .. }) {
+                        return LoopEnd::Move(reason);
+                    }
+                    if progress.members.is_some() {
+                        return LoopEnd::Move(reason);
+                    }
+                    match group_members(ps, progress.pgid, clock) {
+                        GroupMembers::Empty => {
+                            progress.seen_empty = true;
+                        }
+                        listed @ (GroupMembers::Members(_) | GroupMembers::Unavailable) => {
+                            progress.members = Some(listed);
+                        }
+                    }
+                }
                 Step::Park => park(
                     clock,
                     &progress.shared,

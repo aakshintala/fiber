@@ -19,14 +19,18 @@ use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
 use fakes::kill_pid;
+use fakes::{CancelToken, Recorder};
 use support::cancel::Token;
 
 use super::super::Limit;
 use super::super::command::{Finished, Kept, MoveReason, StopKind};
-use super::super::output::align_char_boundary;
+use super::super::drive::{Phase, Run};
+use super::super::moved::Moved;
+use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_eof};
 use super::{
-    MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail, parse_ps, receipt,
-    shell_sentence, stop_of, terminal_receipt, to_completed, with_spill_line,
+    GroupMembers, MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail,
+    parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
+    with_spill_line,
 };
 
 fn finished(
@@ -146,6 +150,104 @@ fn a_shell_exit_names_members_or_says_the_group_is_still_occupied() {
     assert!(!unnamed.contains("leaving"), "{unnamed}");
 }
 
+/// Hands off a move whose saved listing names members: the receipt reuses
+/// those names instead of running `ps` a second time. The job's own drive
+/// is already settled, so its thread ends on its own.
+fn hand_off_with_saved(
+    dir: &std::path::Path,
+    code: i32,
+    members: GroupMembers,
+) -> (String, String) {
+    let clock = FakeClock::new();
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    {
+        let mut inner = lock(&shared.inner);
+        inner.reaped = true;
+        inner.status = Some(status_of(&format!("exit {code}")));
+    }
+    let moved = Moved {
+        reason: MoveReason::ShellExited { code },
+        bridge: None,
+        progress: Run {
+            phase: Phase::Draining {
+                until: clock.origin(),
+            },
+            stop: None,
+            sent_signal: false,
+            seen_empty: true,
+            stream_carry: Vec::new(),
+            timeout_at: None,
+            move_at: None,
+            members: Some(members),
+            pgid: 99,
+            listing: None,
+            shared,
+            ask: None,
+            job: None,
+            feed: None,
+        },
+        cap: OUTPUT_CAP,
+        spill: None,
+    };
+    let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::new(dir);
+    let clock: Arc<dyn contract::clock::Clock> = clock;
+    let output = take(
+        moved,
+        jobs,
+        clock,
+        "true",
+        Limit {
+            ms: 5_000,
+            monitor: false,
+        },
+        false,
+        &CancelToken::new(),
+        &Recorder::default(),
+        None,
+        None,
+    );
+    let ContentPart::Text { text } = &output.content[0] else {
+        panic!("receipt text");
+    };
+    let contract::jobs::JobRecord::Started(started) = &output.jobs[0] else {
+        panic!("the receipt records the job");
+    };
+    (text.clone(), started.job_id.0.clone())
+}
+
+#[test]
+fn members_listing_moves_at_once_and_names_the_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-members-receipt");
+    let (text, job) = hand_off_with_saved(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
+    );
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, leaving sleep (12), my cmd (34) running, so it moved to the background.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            path = path.display(),
+        )
+    );
+}
+
+#[test]
+fn unavailable_listing_moves_with_unnamed_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-unavailable-receipt");
+    let (text, job) = hand_off_with_saved(dir.path(), 3, GroupMembers::Unavailable);
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, so it moved to the background. Processes are still running in its group.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            path = path.display(),
+        )
+    );
+}
+
 const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A `ps` that runs `script` with `sh`.
@@ -155,7 +257,7 @@ fn fake_ps(dir: &Path, script: &str) -> std::path::PathBuf {
 
 /// Lists group `pgid` with `ps` on a thread of its own, so a listing that
 /// never returns fails the test at its deadline.
-fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<Option<String>> {
+fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<GroupMembers> {
     let ps = ps.to_path_buf();
     let clock = Arc::clone(clock);
     let (tx, rx) = mpsc::channel();
@@ -169,7 +271,7 @@ fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<Option<S
 /// line: `#[track_caller]` cannot cross the closure this replaces, and one
 /// definition line serves three calls.
 #[track_caller]
-fn listed(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> Option<String> {
+fn listed(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> GroupMembers {
     Deadline::after(DEADLINE)
         .recv(&list(ps, pgid, clock))
         .unwrap()
@@ -182,15 +284,21 @@ fn the_group_is_listed_from_ps() {
     let rows = "printf '  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n'";
     let ps = fake_ps(dir.path(), rows);
     assert_eq!(
-        listed(&ps, 99, &clock).as_deref(),
-        Some("sleep (12), my cmd (34)")
+        listed(&ps, 99, &clock),
+        GroupMembers::Members("sleep (12), my cmd (34)".to_owned())
     );
-    assert_eq!(listed(&ps, 8, &clock), None);
+    assert_eq!(listed(&ps, 8, &clock), GroupMembers::Empty);
     let missing = list(&dir.path().join("missing"), 99, &clock);
-    assert_eq!(Deadline::after(DEADLINE).recv(&missing).unwrap(), None);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&missing).unwrap(),
+        GroupMembers::Unavailable
+    );
     let failing = fake_ps(dir.path(), &format!("{rows}; exit 1"));
     let failed = list(&failing, 99, &clock);
-    assert_eq!(Deadline::after(DEADLINE).recv(&failed).unwrap(), None);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&failed).unwrap(),
+        GroupMembers::Unavailable
+    );
 }
 
 #[test]
@@ -221,7 +329,7 @@ fn a_ps_that_closes_its_output_and_hangs_is_killed_at_the_bound() {
         Deadline::after(DEADLINE)
             .recv(&rx)
             .expect("the bound to end it"),
-        None
+        GroupMembers::Unavailable
     );
     assert!(!kill_pid(pid, "0").unwrap(), "the hung ps was not killed");
 }
@@ -246,7 +354,7 @@ fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
         Deadline::after(DEADLINE)
             .recv(&rx)
             .expect("the bound to end it"),
-        None
+        GroupMembers::Unavailable
     );
 }
 
