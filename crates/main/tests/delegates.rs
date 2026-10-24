@@ -2282,9 +2282,19 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .as_str()
         .unwrap()
         .to_owned();
+    let child_wait = support::until(&child_socket, "the child jobs wait is requested", |line| {
+        line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
+    });
+    let child_wait_action = child_wait.last().unwrap()["action_id"].clone();
+    observed_child.extend(child_wait);
+    observed_child.extend(support::until(
+        &child_socket,
+        "the child jobs wait starts",
+        |line| line["kind"] == "tool_call_started" && line["action_id"] == child_wait_action,
+    ));
     assert!(
-        child.await_requests(4, setup.deadline),
-        "the child wait and costly grandchild calls are held"
+        child.await_requests(3, setup.deadline),
+        "the costly grandchild call is held"
     );
     let grandchild_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
