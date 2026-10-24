@@ -1251,14 +1251,15 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
     });
 }
 
-/// A relay whose session closed the connection while its listener is
-/// still bound refuses the unanswered command `closing` and leaves: the
-/// drain never routes into the exiting process's shutdown wait. The
-/// scripted session holds its listener past the connection's close, the
-/// teardown a descheduled session leaves behind for the relay's end to
-/// observe.
+/// A first exit while the exiting socket still accepts re-routes the
+/// unanswered command, and the resumed session's answer reaches the
+/// client: the drain never waits on the exiting process's shutdown, and
+/// the relay still leaves. The scripted session holds its listener past
+/// the connection's close, the teardown a descheduled session leaves
+/// behind, then answers the re-routed command on the resumed
+/// connection.
 #[test]
-fn a_drain_that_sees_the_exiting_socket_refuses_closing_and_leaves() {
+fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     use crate::connection::lock;
     use crate::relay::Relays;
     use std::sync::Mutex;
@@ -1285,7 +1286,9 @@ fn a_drain_that_sees_the_exiting_socket_refuses_closing_and_leaves() {
     let writer = Arc::new(Mutex::new(writer));
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     temp.append("fiber_exited");
+    let socket = temp.dir.join("run").join(SID);
     let (played_tx, played) = mpsc::channel();
+    let (answered_tx, answered) = mpsc::channel();
     let player = thread::spawn(move || {
         let listener =
             Deadline::after(DEADLINE).recv_or_fail(&bound, "the resumed session to bind");
@@ -1306,15 +1309,69 @@ fn a_drain_that_sees_the_exiting_socket_refuses_closing_and_leaves() {
         writeln!(stream, "{}", json!({"kind": "fold_marker", "session_id": SID, "ts": 0, "schema_version": 1, "payload": {}})).unwrap();
         played_tx.send(()).unwrap();
         // Close the relayed connection while the listener stays bound, as
-        // a teardown descheduled mid-close leaves it. The relay's end then
-        // connects back while the log still ends in `fiber_exited`, either
-        // for the drain's probe or for the resume it would wait out:
-        // accepting here holds the window open exactly until the relay's
-        // end has observed the exiting socket, with no sleep.
+        // a teardown descheduled mid-close leaves it. The relay's end
+        // re-routes onto the exiting socket, which never read the
+        // command: take it off the wire, then finish the teardown before
+        // closing, so the next end finds no socket and resumes.
         drop(reader);
         drop(stream);
-        let (probe, _) = listener.accept().unwrap();
-        drop(probe);
+        // The drain's exiting-socket probe connects without a line; the
+        // re-routed command follows on the next connection.
+        let exiting = loop {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut probe = BufReader::new(stream);
+            let mut line = String::new();
+            probe.read_line(&mut line).unwrap();
+            if line.trim().is_empty() {
+                continue;
+            }
+            let first: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                first.get("command").and_then(Value::as_str),
+                Some("subscribe")
+            );
+            let mut line = String::new();
+            probe.read_line(&mut line).unwrap();
+            let rerouted: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(rerouted["id"], "c_next");
+            break probe;
+        };
+        drop(listener);
+        fs::remove_file(&socket).unwrap();
+        drop(exiting);
+        // The resumed session replays the subscription and answers the
+        // re-routed command.
+        let listener =
+            Deadline::after(DEADLINE).recv_or_fail(&bound, "the resumed session to bind again");
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut text = String::new();
+        reader.read_line(&mut text).unwrap();
+        let replay: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(replay["command"], "subscribe");
+        let payload = json!({"command_id": replay["id"], "result": {"last_seq": 41}});
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind": "command_accepted", "ts": 0, "schema_version": 1, "payload": payload})
+        )
+        .unwrap();
+        text.clear();
+        reader.read_line(&mut text).unwrap();
+        let command: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(command["id"], "c_next");
+        let payload = json!({"command_id": "c_next", "result": {}});
+        writeln!(
+            stream,
+            "{}",
+            json!({"kind": "command_accepted", "ts": 0, "schema_version": 1, "payload": payload})
+        )
+        .unwrap();
+        answered_tx.send(()).unwrap();
+        drop(reader);
+        drop(stream);
     });
     let command = json!({"id": "c_next", "command": "reply"})
         .as_object()
@@ -1341,15 +1398,23 @@ fn a_drain_that_sees_the_exiting_socket_refuses_closing_and_leaves() {
         serde_json::from_str::<Value>(&text).unwrap()["kind"],
         "fold_marker"
     );
+    Deadline::after(DEADLINE).recv_or_fail(&answered, "the resumed answer");
+    // The resumed session's replay reopens the stream again before the
+    // re-routed command's answer.
+    text.clear();
+    reader.read_line(&mut text).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["kind"],
+        "stream_reopened"
+    );
+    text.clear();
+    reader.read_line(&mut text).unwrap();
+    let accepted: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert_eq!(accepted["payload"]["command_id"], "c_next");
     crate::testkit::await_true("the relay to leave", move || {
         lock(&relays).entries.is_empty()
     });
-    text.clear();
-    reader.read_line(&mut text).unwrap();
-    let refused: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(refused["kind"], "command_rejected");
-    assert_eq!(refused["payload"]["code"], "closing");
-    assert_eq!(refused["payload"]["command_id"], "c_next");
     player.join().unwrap();
 }
 

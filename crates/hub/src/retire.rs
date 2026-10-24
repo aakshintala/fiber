@@ -370,10 +370,12 @@ enum End {
 /// dropped, never re-routed or answered. After a clean exit (the relay
 /// saw the exited window, or the log ends in `fiber_exited`) each goes
 /// once to the resumed session, in read order, and a command already
-/// handed over once is rejected `closing`, unless the session's socket
-/// still accepts: the exiting process is still tearing down, so routing
-/// there would wait the shutdown out and the relay would never leave,
-/// and each is rejected `closing` instead. After a `rewound` they are
+/// handed over once is rejected `closing`. When the session's socket
+/// still accepts, the exiting process is still tearing down, so each
+/// goes through the plain opener instead of the exiting wait: the relay
+/// leaves at once without waiting the shutdown out, and the closing
+/// connection's end hands the command to the resumed session, which
+/// spends its one re-route there. After a `rewound` they are
 /// dropped. After anything else the session may have run them: each is
 /// rejected `indeterminate` and never re-routed. Then everything queued
 /// unsent is passed on. Drops the entry only in the hold that saw the
@@ -478,20 +480,25 @@ fn reroute_once(
     relays: &Arc<Mutex<Relays>>,
 ) {
     // A socket that still accepts while the log ends in `fiber_exited`
-    // is the exiting process's, still tearing down: routing there would
-    // wait the shutdown out instead of answering, and the relay would
-    // never leave. The session ended without answering, so each command
-    // is rejected `closing` instead.
+    // is the exiting process's, still tearing down: the exiting wait
+    // would wait the shutdown out instead of answering, and the relay
+    // would never leave. Each command goes through the plain opener
+    // instead, without spending its one re-route: the exiting process
+    // never read it, so the closing connection's end hands it to the
+    // resumed session, which spends the re-route there. A resumed
+    // session that also exits without answering still rejects it
+    // `closing` below.
     if held_by_exiting(hub, session) {
-        for (id, _) in &sent {
-            refuse(
-                writer,
-                hub,
-                relays,
+        for (id, line) in sent {
+            crate::relay::route(
+                &CommandId(id),
                 session,
-                &CommandId(id.clone()),
-                &ErrorCode::Closing,
-                ENDED,
+                line,
+                hub,
+                writer,
+                relays,
+                Some(epoch),
+                false,
             );
         }
         return;
