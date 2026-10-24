@@ -10,7 +10,7 @@ use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
 use super::COPY_FAILED;
-use crate::app::{App, Effect, Target};
+use crate::app::{App, Effect, SurfaceId, Target};
 use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
@@ -183,7 +183,10 @@ fn a_press_then_release_selects_nothing() {
     assert_eq!(release(&mut app, at), Effect::None);
     assert_eq!(app.select.span(), None);
     assert!(!app.copied());
-    assert!(app.selection_cells(app.conversation_area()).is_empty());
+    assert!(
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
     // A drag reported on the press's own cell is still a click.
     press(&mut app, at);
     assert_eq!(drag(&mut app, at), Effect::None);
@@ -243,7 +246,7 @@ fn dragging_selects_from_the_press_to_the_pointer() {
     drag(&mut app, right(at, 4));
     let area = app.conversation_area();
     assert_eq!(
-        app.selection_cells(area),
+        app.selection_cells(SurfaceId::Conversation, area),
         [Rect::new(at.0, at.1, 5, 1)],
         "the press's cell to the pointer's"
     );
@@ -305,7 +308,7 @@ fn the_highlight_stays_inside_the_area_and_off_new_below() {
     app.jump(top - 3);
     reply(&mut app, "a_n", "more");
     assert!(app.has_new());
-    let cells = app.selection_cells(area);
+    let cells = app.selection_cells(SurfaceId::Conversation, area);
     assert!(!cells.is_empty());
     for rect in cells {
         assert!(rect.y < area.bottom() - 1, "{rect:?} past {area:?}");
@@ -410,7 +413,7 @@ fn a_selection_starting_inside_a_wide_character_copies_it_whole() {
     assert_eq!(press(&mut app, from), Effect::None);
     assert_eq!(drag(&mut app, to), Effect::None);
     assert_eq!(
-        app.selection_cells(app.conversation_area()),
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area()),
         [Rect::new(base + 2, row, 2, 1)],
         "the second cell of 界 and b"
     );
@@ -1235,7 +1238,7 @@ fn a_selection_with_the_layout_covers_the_pressed_text() {
         Effect::Copy("hello".to_owned())
     );
     let area = app.conversation_area();
-    let cells = app.selection_cells(area);
+    let cells = app.selection_cells(SurfaceId::Conversation, area);
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0], Rect::new(at.0, at.1, 5, 1));
     // The highlight sits on the reply's cells: exactly the five cells
@@ -1271,5 +1274,149 @@ fn a_selection_at_the_area_edge_draws_no_empty_rect() {
     };
     app.select.anchor = Some(edge);
     app.select.head = Some(edge);
-    assert_eq!(app.selection_cells(area), Vec::<Rect>::new());
+    assert_eq!(
+        app.selection_cells(SurfaceId::Conversation, area),
+        Vec::<Rect>::new()
+    );
+}
+
+/// Types `text` into the input box, `\\n` as a line break.
+fn type_draft(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        if ch == '\n' {
+            app.on_edit(crate::keys::Edit::ShiftEnter);
+        } else {
+            app.on_key(Key::Char(ch), now());
+        }
+    }
+}
+
+#[test]
+fn a_drag_in_the_input_box_copies_its_text() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    assert_eq!(press(&mut app, at), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Input));
+    assert_eq!(drag(&mut app, right(at, 4)), Effect::None);
+    assert_eq!(
+        release(&mut app, right(at, 4)),
+        Effect::Copy("zzqx".to_owned())
+    );
+    assert!(app.copied());
+    assert_eq!(app.input().selected_text().as_deref(), Some("zzqx"));
+    // The conversation claims nothing: identical coordinates do not alias.
+    assert!(
+        app.selection_cells(SurfaceId::Conversation, app.conversation_area())
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_drag_starting_in_the_input_box_stays_inside_it() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    assert_eq!(press(&mut app, at), Effect::None);
+    // The pointer leaves the box past its top-right corner: the drag
+    // clamps to the box's edge cell and never spills into the
+    // conversation above.
+    assert_eq!(drag(&mut app, (39, 0)), Effect::None);
+    assert_eq!(release(&mut app, (39, 0)), Effect::Copy("zzqx".to_owned()));
+}
+
+#[test]
+fn a_drag_starting_in_the_conversation_ignores_the_input_box() {
+    let mut app = replied(40, 12, "hello there");
+    type_draft(&mut app, "zzqx");
+    let from = find(&app, "hello");
+    let into_box = find(&app, "zzqx");
+    assert_eq!(press(&mut app, from), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    assert_eq!(drag(&mut app, into_box), Effect::None);
+    let effect = release(&mut app, into_box);
+    assert!(matches!(effect, Effect::Copy(_)), "{effect:?}");
+    assert!(
+        app.selection_cells(SurfaceId::Input, Rect::new(0, 0, 40, 12))
+            .is_empty()
+    );
+}
+
+#[test]
+fn press_then_esc_clears_the_anchor_and_keeps_the_interrupt() {
+    let mut app = attached(40, 10);
+    prompt(&mut app, "go");
+    reply(&mut app, "a_m", "hello there");
+    let at = find(&app, "hello");
+    press(&mut app, at);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    // Esc clears the held press, then still interrupts the running turn.
+    assert!(matches!(app.on_key(Key::Esc, now()), Effect::Send(_)));
+    assert_eq!(app.select.surface(), None);
+    assert_eq!(app.select.span(), None);
+}
+
+#[test]
+fn a_press_on_a_link_anchors_and_a_drag_copies() {
+    let mut app = replied(40, 12, "see [hi](http://example.com) now");
+    let at = find(&app, "hi");
+    assert_eq!(press(&mut app, at), Effect::None);
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    assert_eq!(drag(&mut app, right(at, 1)), Effect::None);
+    assert!(app.select.span().is_some());
+    assert!(matches!(release(&mut app, right(at, 1)), Effect::Copy(_)));
+}
+
+#[test]
+fn a_person_binding_for_end_wins_over_the_line_edit() {
+    let mut app = replied(40, 12, "hello there");
+    // The person moves `jump_to_end` off End and binds End to delete to
+    // the line's start: their binding wins, so End never edits the line
+    // end.
+    let mut user = serde_json::Map::new();
+    user.insert("jump_to_end".to_owned(), json!([]));
+    user.insert("delete_to_line_start".to_owned(), json!("end"));
+    app.set_keys(crate::KeysSetup { user });
+    type_draft(&mut app, "zzqx");
+    let at = find(&app, "zzqx");
+    select(&mut app, at, right(at, 4));
+    assert_eq!(app.input().selected(), Some((0, 4)));
+    let _ = app.on_press(
+        crate::stroke::Stroke {
+            code: crate::stroke::Code::End,
+            mods: crate::stroke::Mods::NONE,
+        },
+        now(),
+    );
+    assert_eq!(app.input().expand(), "");
+}
+
+#[test]
+fn unclaimed_surfaces_highlight_nothing() {
+    // Identical screen coordinates on overlapping surfaces must not
+    // alias: only the claimed surface highlights.
+    let mut app = replied(40, 12, "hello there");
+    let at = find(&app, "hello");
+    select(&mut app, at, right(at, 4));
+    assert_eq!(app.select.surface(), Some(SurfaceId::Conversation));
+    let area = app.conversation_area();
+    for surface in [
+        SurfaceId::Input,
+        SurfaceId::Notices,
+        SurfaceId::Panel,
+        SurfaceId::Rail,
+        SurfaceId::Request,
+        SurfaceId::Swapped,
+        SurfaceId::Overlay,
+        SurfaceId::Home,
+    ] {
+        assert!(
+            app.selection_cells(surface, area).is_empty(),
+            "{surface:?} highlights nothing"
+        );
+    }
+    assert!(
+        !app.selection_cells(SurfaceId::Conversation, area)
+            .is_empty()
+    );
 }

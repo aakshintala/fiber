@@ -3,6 +3,7 @@
 
 use super::{
     Button, Edit, Event, Key, Mouse, MouseKind, Parser, Reply, canon_event, default_event,
+    home_end_edit,
 };
 use crate::stroke::{Code, Mods, Stroke};
 
@@ -1282,4 +1283,22 @@ proptest::proptest! {
 fn a_csi_n_without_the_question_mark_is_no_reply() {
     assert!(feed_all(&[b"\x1b[997;1n"]).is_empty());
     assert!(feed_all(&[b"\x1b[5n"]).is_empty());
+}
+
+#[test]
+fn unshifted_home_and_end_map_to_line_edits() {
+    assert_eq!(home_end_edit(&plain(Code::Home)), Some(Edit::LineStart));
+    assert_eq!(home_end_edit(&plain(Code::End)), Some(Edit::LineEnd));
+}
+
+#[test]
+fn shifted_or_modified_home_and_end_map_to_nothing() {
+    let shift = Mods::SHIFT;
+    let ctrl = Mods::CTRL;
+    assert_eq!(home_end_edit(&modified(Code::Home, shift)), None);
+    assert_eq!(home_end_edit(&modified(Code::End, shift)), None);
+    assert_eq!(home_end_edit(&modified(Code::Home, ctrl)), None);
+    assert_eq!(home_end_edit(&modified(Code::End, ctrl)), None);
+    assert_eq!(home_end_edit(&plain(Code::Left)), None);
+    assert_eq!(home_end_edit(&plain(Code::Up)), None);
 }

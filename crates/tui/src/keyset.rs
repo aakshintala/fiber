@@ -398,6 +398,15 @@ fn resolved(event: Option<crate::keys::Event>) -> Resolved {
 }
 
 impl Keyset {
+    /// Whether the person bound `stroke` in `context` themselves: their
+    /// own binding wins over the input editor's Home/End line edits
+    /// (`docs/tui.md`, "Selection and copy"). Defaults do not count.
+    pub(crate) fn person_bound(&self, stroke: &Stroke, context: Context) -> bool {
+        BINDINGS.iter().zip(self.rows.iter()).any(|(binding, row)| {
+            row.person && binding.contexts.contains(context) && row.keys.contains(stroke)
+        })
+    }
+
     /// What `stroke` means in `context`: (a) the action acting there whose
     /// keys hold it, through its variant's canonical event, except at its
     /// own default's place, which keeps the stroke's own event; (b) else

@@ -199,6 +199,7 @@ pub(crate) fn render(
     // The frame's asks start here: `Screen::draw_with` may render twice,
     // and the loop takes what the drawn frame asked.
     app.motion().clear_wake();
+    app.clear_input_note();
     // The framed slabs start here too: each framed surface notes the slab
     // it draws, so a click outside the overlay on top closes it.
     app.frames().clear();
