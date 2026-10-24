@@ -30,15 +30,7 @@ fn text(deadline: Deadline, client: &Ws) -> Value {
 fn pair(client: &Ws, code: &str) -> String {
     client.text(&json!({"id":"p1","command":"pair","args":{"code":code}}).to_string());
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
-    // docs/invocation.md:1232-1241 promises the `device_changed` announcement but not its
-    // order relative to `command_accepted`, so accept either arrival order.
-    let first = text(deadline, client);
-    let second = text(deadline, client);
-    let (accepted, notice) = if first["kind"] == "command_accepted" {
-        (first, second)
-    } else {
-        (second, first)
-    };
+    let accepted = text(deadline, client);
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "p1");
     let token = accepted["payload"]["result"]["token"]
@@ -46,6 +38,7 @@ fn pair(client: &Ws, code: &str) -> String {
         .unwrap()
         .to_owned();
     assert_eq!(token.len(), 43);
+    let notice = text(deadline, client);
     assert_eq!(notice["kind"], "device_changed");
     assert_eq!(notice["payload"]["change"], "paired");
     token
@@ -129,6 +122,7 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
     );
     assert_eq!(record["paired_at"], record["last_connected_at"]);
     client.text(r#"{"id":"status","command":"status"}"#);
+    // docs/events.md:1388 includes the asker in `status.clients` (docs/testing.md, “Event streams”).
     assert_eq!(
         text(Deadline::after(MUST_SUCCEED_WITHIN), &client)["payload"]["result"]["clients"],
         1

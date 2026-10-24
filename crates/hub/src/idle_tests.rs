@@ -1160,6 +1160,7 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         .position(|line| line["code"] == "hub_stopped")
         .expect("the hub logs its stop");
     assert!(at > 0, "a line comes before the stop");
+    // docs/state.md:288-289 promises the hub's peak_memory line just before hub_stopped.
     assert_eq!(lines[at - 1]["code"], "peak_memory");
     assert_eq!(lines[at - 1]["data"]["peak_kib"], 9);
 }
