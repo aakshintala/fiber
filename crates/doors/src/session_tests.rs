@@ -5508,6 +5508,11 @@ fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_comple
     let client = subscribed_client(&opened);
     gate.conns.mark_stopped();
     drop(client);
+    // The writer learns of the hang-up from a write that fails. The
+    // roster line the hang-up itself queues can land before the peer's
+    // close does (it does on macOS), so a line appended after the drop
+    // returned, with the client's sockets closed, is the one that fails.
+    opened.log.append(&notice(), None, None).unwrap();
     assert!(
         gate.conns
             .wait_while(DEADLINE, |state| state.writers_open() > 0),
