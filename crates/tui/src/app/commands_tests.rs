@@ -1644,6 +1644,34 @@ fn clear_preamble(session: &str, model: &str, credential: &str) -> Line {
     line
 }
 
+/// A `kind` line from `session`, parsed from the hub's side.
+fn old_line(session: &str, kind: &str, payload: Value) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+/// An app with home attached to [`SESSION`], so rows fold.
+fn homed() -> App {
+    let mut app = attached();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app
+}
+
 /// Accepts hub command `id` with a new `session_id`, returning the lines
 /// the acceptance sends, parsed.
 fn accept_start(app: &mut App, id: &Value, session: &str) -> Vec<Value> {
@@ -1846,6 +1874,108 @@ fn clear_twice_before_any_prompt_keeps_the_start_credential() {
             r#"providers."fake".credential=L1"#
         ])
     );
+}
+
+#[test]
+fn clear_start_refused_keeps_the_old_session_with_one_notice() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", Some("high")));
+    let lines = sent(enter(&mut app, "/clear"));
+    let id = lines[0]["id"].clone();
+    // Typing after the dispatch stays: the refusal takes nothing.
+    type_text(&mut app, "more");
+    let rejected = hub_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "busy", "message": "Busy."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert_eq!(app.draft(), "more");
+    assert_eq!(app.notice(), Some("Busy."));
+    // The intent is gone: clearing again dispatches a fresh `start`.
+    app.draft.clear();
+    let again = sent(enter(&mut app, "/clear"));
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0]["command"], "start");
+    assert_ne!(again[0]["id"], lines[0]["id"]);
+}
+
+#[test]
+fn clear_start_lost_before_write_keeps_the_old_session() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let Effect::Send(out) = enter(&mut app, "/clear") else {
+        panic!("the start goes out");
+    };
+    app.write_failed(&out);
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(app.notice().is_some());
+}
+
+#[test]
+fn clear_close_refused_stays_on_the_new_session_with_one_notice() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", Some("high")));
+    let lines = sent(enter(&mut app, "/clear"));
+    let after = accept_start(&mut app, &lines[0]["id"], NEW);
+    let close = after
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("the close goes out"));
+    let rejected = old_line(
+        SESSION,
+        "command_rejected",
+        json!({"command_id": close["id"], "code": "busy", "message": "Busy."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    // The screen stays on the new session; the old one stays a live
+    // row, never marked closing.
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    assert_eq!(app.notice(), Some("Busy."));
+    let home = app.home.as_ref().unwrap_or_else(|| panic!("home"));
+    let old = home
+        .sessions
+        .row(&contract::SessionId(SESSION.to_owned()))
+        .unwrap_or_else(|| panic!("old row"));
+    assert!(old.left.is_none());
+    assert_eq!(
+        old.status.as_ref().map(|status| status.closing),
+        Some(false)
+    );
+}
+
+#[test]
+fn clear_close_lost_before_write_names_the_lost_link() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let lines = sent(enter(&mut app, "/clear"));
+    let after: Vec<String> = app.on_line(hub_line(
+        "command_accepted",
+        json!({"command_id": lines[0]["id"], "result": {"session_id": NEW}}),
+    ));
+    let close = after
+        .iter()
+        .find(|line| line.contains("\"close\""))
+        .unwrap_or_else(|| panic!("the close goes out"))
+        .clone();
+    app.write_failed(&[close]);
+    assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
+    assert_eq!(
+        app.notice(),
+        Some("The link to the old session was lost before its `close` went out.")
+    );
+    let home = app.home.as_ref().unwrap_or_else(|| panic!("home"));
+    let old = home
+        .sessions
+        .row(&contract::SessionId(SESSION.to_owned()))
+        .unwrap_or_else(|| panic!("old row"));
+    assert!(old.left.is_none());
 }
 
 #[test]

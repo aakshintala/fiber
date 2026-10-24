@@ -1146,6 +1146,9 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
+                if self.clear_lost(&id) {
+                    continue;
+                }
                 if self.outbox.is_kept(&id) {
                     continue;
                 }
@@ -1539,6 +1542,9 @@ impl App {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     let code = hub_code(&hub.payload);
+                    if self.clear_rejected(&id, &code, &message) {
+                        return Vec::new();
+                    }
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
@@ -1632,10 +1638,51 @@ impl App {
         }
     }
 
+    /// A refused clear `start`: one notice with its code and message,
+    /// the phase staying attached to the old session, its draft
+    /// untouched, and no `close` sent. True when `id` was the clear
+    /// `start`.
+    fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
+        let Some(pending) = self.clear_pending.take() else {
+            return false;
+        };
+        if pending.command_id != id {
+            self.clear_pending = Some(pending);
+            return false;
+        }
+        self.outbox.answered(id);
+        self.notices.push(code, message.to_owned());
+        true
+    }
+
+    /// A clear line lost before it was written. A lost `start` drops
+    /// its intent, the phase staying attached to the old session for
+    /// the retry; a lost `close` keeps the old session running, named
+    /// by one notice. True when `id` was either.
+    fn clear_lost(&mut self, id: &str) -> bool {
+        if let Some(pending) = self.clear_pending.take() {
+            if pending.command_id == id {
+                self.outbox.answered(id);
+                return true;
+            }
+            self.clear_pending = Some(pending);
+        }
+        if self.clear_close.as_deref() == Some(id) {
+            self.clear_close = None;
+            self.notices.push(
+                "connection_failed",
+                "The link to the old session was lost before its `close` went out.".to_owned(),
+            );
+            return true;
+        }
+        false
+    }
+
     /// A command the terminal sent was rejected: a notice, and its draft
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, code: &str, message: String) {
+        self.clear_close_settled(id);
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
@@ -1692,6 +1739,7 @@ impl App {
         accepted: Option<&CommandAccepted>,
     ) -> Option<(Kind, Draft)> {
         let id = envelope.payload.get("command_id")?.as_str()?;
+        self.clear_close_settled(id);
         let entry = match accepted {
             Some(_) => self.outbox.answered(id),
             // An unparseable accept closes only a pending import: any
@@ -1840,9 +1888,6 @@ impl App {
             "command_accepted" => {
                 let accepted = read!(envelope, CommandAccepted);
                 let sent = self.accepted_settled(envelope, accepted.as_ref());
-                if let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str) {
-                    self.clear_close_settled(id);
-                }
                 if let Some(accepted) = accepted {
                     self.commands_answered(&accepted);
                     changed |= self.offer.file_answered(&accepted);
@@ -1866,7 +1911,6 @@ impl App {
                 {
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
-                    self.clear_close_settled(&id.0);
                     self.refused(&id.0, &rejected.code, rejected.message);
                 }
             }
