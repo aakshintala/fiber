@@ -610,6 +610,101 @@ fn repository_offer_drag_selects_visible_range() {
     );
 }
 
+/// A trailing space the wrap kept still joins with the wrap's space:
+/// the rows the note did not read are spaces the trim dropped, so the
+/// wrapper did not change under the note (`docs/tui.md`, "Selection
+/// and copy").
+#[test]
+fn wrapped_rows_keep_the_join_past_a_trailing_space() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = super::wrapped_texts(&Line::from("aaa bbb ccc "), 5);
+    assert_eq!(
+        rows,
+        [
+            ("aaa".to_owned(), Join::Break),
+            ("bbb".to_owned(), Join::WrapSpace),
+            ("ccc".to_owned(), Join::WrapSpace),
+        ]
+    );
+}
+
+/// The offer's title row names the view: only the body rows read as
+/// selection text, so a drag over the body never copies the title
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn selection_rows_skip_the_title() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = vec![
+        super::Row {
+            line: Line::from("Offer"),
+            spots: Vec::new(),
+            clip: false,
+        },
+        super::Row {
+            line: Line::from("MCP server: db"),
+            spots: Vec::new(),
+            clip: false,
+        },
+    ];
+    let area = Rect::new(10, 5, 80, 24);
+    let noted = super::selection_rows(&rows, 0, area);
+    assert_eq!(
+        noted,
+        vec![crate::app::SpanRow {
+            y: 6,
+            x: 10,
+            end: 90,
+            text: "MCP server: db".to_owned(),
+            join: Join::Break,
+        }]
+    );
+}
+
+/// Rows scrolled out of the offer note nothing: a clipped row past
+/// the top reads as no row, not as its text (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn selection_rows_skip_rows_scrolled_out() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = vec![
+        super::Row {
+            line: Line::from("Offer"),
+            spots: Vec::new(),
+            clip: false,
+        },
+        super::Row {
+            line: Line::from("a clipped row past the offer's top"),
+            spots: Vec::new(),
+            clip: true,
+        },
+        super::Row {
+            line: Line::from("body text"),
+            spots: Vec::new(),
+            clip: false,
+        },
+    ];
+    // One row shows from the second: the clipped row scrolled out
+    // notes nothing, and the body row notes where the draw put it.
+    let area = Rect::new(10, 5, 80, 1);
+    let noted = super::selection_rows(&rows, 2, area);
+    assert_eq!(
+        noted,
+        vec![crate::app::SpanRow {
+            y: 5,
+            x: 10,
+            end: 90,
+            text: "body text".to_owned(),
+            join: Join::Break,
+        }]
+    );
+}
+
 /// A press in the gap past the offer's rows starts no selection, so
 /// the release copies nothing (`docs/tui.md`, "Selection and copy").
 #[test]

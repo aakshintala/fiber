@@ -814,3 +814,22 @@ fn contexts_overlap_on_a_shared_context() {
     assert!(!Contexts::PICKER.overlaps(Contexts::INPUT));
     assert!(!Contexts::PICKER.overlaps(Contexts::OVERLAY));
 }
+
+/// Whether the person bound a stroke themselves: their own row, in
+/// this context, holding this key. Defaults do not count
+/// (`docs/tui.md`, "Selection and copy": their own Home binding wins
+/// over the input editor's line edits).
+#[test]
+fn person_bound_needs_a_person_row_in_this_context_with_this_key() {
+    let entries = &[("delete_to_line_start", json!("home"))];
+    let (keys, notices) = keyset(entries);
+    assert!(notices.is_empty(), "{notices:?}");
+    let home = stroke("home");
+    let enter = stroke("enter");
+    // Their own Home binding in the input box.
+    assert!(keys.person_bound(&home, Context::Input));
+    // A default key is not their binding, even in the input box.
+    assert!(!keys.person_bound(&enter, Context::Input));
+    // Their Home binding is not bound over the overlay.
+    assert!(!keys.person_bound(&home, Context::Overlay));
+}

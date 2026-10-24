@@ -2164,3 +2164,20 @@ fn a_drag_on_a_widget_card_copies_its_text() {
     let effect = report(MouseKind::Release, col + 10, row);
     assert_eq!(effect, Effect::Copy("alpha beta".to_owned()));
 }
+
+/// A cut row copies what it shows without the cut marker, while a
+/// short row keeps a trailing ellipsis it really shows (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn row_text_drops_only_a_filling_cut_marker() {
+    // A short line ending in `…` keeps it: nothing was cut.
+    assert_eq!(
+        super::selection::row_text(&ratatui::text::Line::from("ab…"), 10),
+        "ab…"
+    );
+    // A row filling its columns drops the marker the fit adds.
+    assert_eq!(
+        super::selection::row_text(&ratatui::text::Line::from("abcd…"), 5),
+        "abcd"
+    );
+}

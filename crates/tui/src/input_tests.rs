@@ -956,6 +956,18 @@ fn selected_text_reads_chars_paste_labels_and_image_labels() {
     assert!(!draft.selected_text().unwrap().contains("l1\nl2"));
 }
 
+/// A selection starting past zero copies only its own pieces: the copy
+/// is bounded by the selection's length, not by its end plus its
+/// start (`docs/tui.md`, "Selection and copy").
+#[test]
+fn selected_text_reads_a_mid_draft_selection_only() {
+    let mut draft = typed("abcdef");
+    draft.select_at(2);
+    draft.select_to(5);
+    assert_eq!(draft.selected(), Some((2, 5)));
+    assert_eq!(draft.selected_text().as_deref(), Some("cde"));
+}
+
 /// The selection's highlight rects at `width`: one `(row, start, end)`
 /// per covered row in reading order (`docs/tui.md`, "Selection and
 /// copy": the selection paints over every surface's own rects).
