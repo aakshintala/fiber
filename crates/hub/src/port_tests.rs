@@ -737,6 +737,7 @@ fn a_websocket_sessions_stop_answers_the_count_before_the_close() {
     let ack = text_of(&client, "the stop acknowledgement");
     assert_eq!(ack["kind"], "command_accepted");
     assert_eq!(ack["payload"]["command_id"], "c_stop");
+    // docs/events.md:1389 defines `sessions_stopped` as the sessions that confirmed closed.
     assert_eq!(
         ack["payload"]["result"],
         json!({"sessions_stopped": 1}),

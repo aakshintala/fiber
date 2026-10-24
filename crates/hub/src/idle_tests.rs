@@ -405,6 +405,7 @@ fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
         0
     );
     let (before, last, peak) = last_two(&temp.log());
+    // docs/state.md:288-289 promises `peak_memory` just before each `hub_stopped` at debug.
     assert_eq!(
         (before.as_str(), last.as_str()),
         ("peak_memory", "hub_stopped")
