@@ -976,7 +976,41 @@ jobs:
               if [ -n "$number" ]; then
                 gh issue comment "$number" --body "$body"
               else
-                gh issue create --title "$title" --body "$body"
+                # No open issue: the test keeps one flake issue for its
+                # whole life, so look for the most recently closed one
+                # with that exact title (docs/testing/running.md,
+                # "Flaky tests").
+                closed=$(gh issue list --state closed --search "in:title \"$title\"" --json number,title,closedAt \
+                  -q "map(select(.title == \"$title\")) | max_by(.closedAt) | .number // empty")
+                if [ -z "$closed" ]; then
+                  gh issue create --title "$title" --body "$body"
+                else
+                  # The fix is the merge commit of the pull request that
+                  # closed the issue. An issue closed without one reopens
+                  # on any failure. The compare status says whether the
+                  # tested commit contains the fix: ahead or identical
+                  # means it does.
+                  owner=${GH_REPO%%/*}
+                  repo=${GH_REPO##*/}
+                  fix=$(gh api graphql \
+                    -f query="query { repository(owner: \"$owner\", name: \"$repo\") { issue(number: $closed) { closedByPullRequestsReferences(first: 1) { nodes { mergeCommit { oid } } } } } }" \
+                    -q '.data.repository.issue.closedByPullRequestsReferences.nodes[0].mergeCommit.oid // empty' || true)
+                  holds=yes
+                  if [ -n "$fix" ]; then
+                    status=$(gh api "repos/$GH_REPO/compare/$fix...$GITHUB_SHA" -q .status || true)
+                    case "$status" in
+                      ahead|identical) holds=yes ;;
+                      *) holds=no ;;
+                    esac
+                  fi
+                  if [ "$holds" = yes ]; then
+                    gh issue reopen "$closed"
+                    gh issue comment "$closed" --body "$body"
+                    gh issue edit "$closed" --add-label needs-triage
+                  else
+                    echo "stale fix: $title was fixed by $fix, which $GITHUB_SHA does not contain" >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                fi
               fi
               printf '%s\n' "$title" >> "$seen"
             done < "$file"

@@ -3,13 +3,20 @@
 # job flake_report; docs/testing/running.md, "Flaky tests"). It runs that
 # step's own script, cut from the workflow file, against a stub `gh` that
 # records each write and answers each read from the case's fixture. Every
-# write path is proven: a new issue, a comment on an open issue, and a pull
-# request comment for a failing file the pull request owns. Each body names
+# write path is proven: a new issue, a comment on an open issue, a pull
+# request comment for a failing file the pull request owns, a closed issue
+# reopened with its sighting comment and needs-triage, a stale fix that
+# files nothing, and a closed-without-PR issue reopened. Each body names
 # the tested commit: `tested <sha> = main <base> + head <head>` on a pull
 # request run with two parents, and `tested <sha>` on a push run or a pull
 # request run with one parent. Nothing reaches the GitHub API.
 #
 # Usage: scripts/test-flake-report
+#
+# Cases: a new issue, a comment on an open issue, a pull request comment
+# for a failing file the pull request owns, a closed issue reopened with
+# its sighting comment and needs-triage, a stale tested commit that files
+# nothing, and a closed-without-PR issue reopened on any failure.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -44,8 +51,14 @@ gh() {
     api)
       case "$*" in
         *"/commits/"*) printf '%s\n' "$STUB_PARENTS" ;;
-        *"/compare/"*) printf '%s\n' "$STUB_COMPARE" ;;
+        *"/compare/"*)
+          case "$*" in
+            *".status"*) printf '%s\n' "$STUB_STATUS" ;;
+            *) printf '%s\n' "$STUB_COMPARE" ;;
+          esac
+          ;;
         *"/pulls/"*) printf '%s\n' "$STUB_PR_FILES" ;;
+        *graphql*) printf '%s\n' "$STUB_FIX" ;;
         *) echo "stub gh: unexpected api call: $*" >&2; return 1 ;;
       esac
       ;;
@@ -53,9 +66,26 @@ gh() {
       verb=$2
       shift 2
       case "$verb" in
-        list) printf '%s\n' "$STUB_NUMBER"; return 0 ;;
+        list)
+          case "$*" in
+            *"--state closed"*) printf '%s\n' "$STUB_CLOSED" ;;
+            *) printf '%s\n' "$STUB_NUMBER" ;;
+          esac
+          return 0
+          ;;
         comment) header="comment $1"; shift ;;
         create) header="create" ;;
+        reopen)
+          n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+          printf 'reopen %s\n' "$1" >"$STUB_CALLS/$n"
+          return 0
+          ;;
+        edit)
+          n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
+          [ "$2" = --add-label ] || { echo "stub gh: unexpected edit flag: $2" >&2; return 1; }
+          printf 'label %s %s\n' "$1" "$3" >"$STUB_CALLS/$n"
+          return 0
+          ;;
         *) echo "stub gh: unexpected issue verb: $verb" >&2; return 1 ;;
       esac
       title=""
@@ -87,8 +117,8 @@ title="Flaky test: $name"
 detail='thread fails_once_then_passes panicked at crates/main/tests/flaky_probe.rs:10:9\nfirst attempt'
 fence='```'
 
-# run_case CASE EVENT PR PARENTS COMPARE PR_FILES NUMBER WANT: runs the step
-# on one flake and checks the one write against WANT.
+# run_case CASE EVENT PR PARENTS COMPARE PR_FILES NUMBER CLOSED FIX STATUS
+# WANT: runs the step on one flake and checks the one write against WANT.
 run_case() {
   dir=$tmp/$1
   mkdir -p "$dir/temp/flaky" "$dir/calls"
@@ -98,18 +128,78 @@ run_case() {
     GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
     GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="$3" \
     STUB_PARENTS="$4" STUB_COMPARE="$5" STUB_PR_FILES="$6" STUB_NUMBER="$7" \
+    STUB_CLOSED="$8" STUB_FIX="$9" STUB_STATUS="${10}" \
     STUB_CALLS="$dir/calls" \
     bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
   [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
   writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
   [ "$writes" -eq 1 ] || fail "$1: want one write, got $writes"
   got=$(cat "$dir/calls/0")
-  [ "$got" = "$8" ] || {
+  [ "$got" = "${11}" ] || {
     echo "--- want:" >&2
-    printf '%s\n' "$8" >&2
+    printf '%s\n' "${11}" >&2
     echo "--- got:" >&2
     printf '%s\n' "$got" >&2
     fail "$1: the write differs"
+  }
+}
+
+# run_reopen_case CASE CLOSED FIX STATUS WANT0 WANT1 WANT2: a push run with
+# no open issue whose closed issue reopens: reopen, sighting comment, label.
+run_reopen_case() {
+  dir=$tmp/$1
+  mkdir -p "$dir/temp/flaky" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+  env -i PATH="$PATH" HOME="$dir" \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
+    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
+    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
+    STUB_CLOSED="$2" STUB_FIX="$3" STUB_STATUS="$4" \
+    STUB_CALLS="$dir/calls" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
+  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
+  [ "$writes" -eq 3 ] || fail "$1: want three writes, got $writes"
+  i=0
+  for want in "$5" "$6" "$7"; do
+    got=$(cat "$dir/calls/$i")
+    [ "$got" = "$want" ] || {
+      echo "--- want $i:" >&2
+      printf '%s\n' "$want" >&2
+      echo "--- got $i:" >&2
+      printf '%s\n' "$got" >&2
+      fail "$1: write $i differs"
+    }
+    i=$((i + 1))
+  done
+}
+
+# run_stale_case CASE CLOSED FIX STATUS WANT_SUMMARY: a push run with no
+# open issue whose fix the tested commit misses: no write, and the summary
+# says the fix is stale.
+run_stale_case() {
+  dir=$tmp/$1
+  mkdir -p "$dir/temp/flaky" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+  env -i PATH="$PATH" HOME="$dir" \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
+    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
+    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
+    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
+    STUB_CLOSED="$2" STUB_FIX="$3" STUB_STATUS="$4" \
+    STUB_CALLS="$dir/calls" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
+  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
+  [ "$writes" -eq 0 ] || fail "$1: want no writes, got $writes"
+  got=$(cat "$dir/summary")
+  [ "$got" = "$5" ] || {
+    echo "--- want summary:" >&2
+    printf '%s\n' "$5" >&2
+    echo "--- got summary:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the summary differs"
   }
 }
 
@@ -125,17 +215,33 @@ body() {
 }
 
 # A push run: a new issue, then a comment on the open one.
-run_case push-create push "" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$plain" "$push_tested")")"
-run_case push-comment push "" "" "" "" 7 "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
+run_case push-create push "" "" "" "" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$plain" "$push_tested")")"
+run_case push-comment push "" "" "" "" 7 "" "" "" "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
 
 # A pull request run with two parents, main then the pull request head: a new
 # issue naming the pull request, a comment on the open one, and a comment for
 # a failing file the pull request changed.
-run_case pr-create pull_request 12 "$base $head" "" "other/file.rs" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$pr_tested")")"
-run_case pr-sighting pull_request 12 "$base $head" "" "other/file.rs" 7 "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
-run_case pr-comment pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "" "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
+run_case pr-create pull_request 12 "$base $head" "" "other/file.rs" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$pr_tested")")"
+run_case pr-sighting pull_request 12 "$base $head" "" "other/file.rs" 7 "" "" "" "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
+run_case pr-comment pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "" "" "" "" "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
 # A pull request run whose commit has one parent falls back to the push line.
-run_case pr-one-parent pull_request 12 "$base" "" "other/file.rs" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$push_tested")")"
+run_case pr-one-parent pull_request 12 "$base" "" "other/file.rs" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$push_tested")")"
+
+fix=4444444444444444444444444444444444444444
+sighting=$(printf 'comment 9\n%s' "$(body "$plain" "$push_tested")")
+
+# No open issue but a closed one whose fix the tested commit contains:
+# reopen, comment the sighting, and put needs-triage back on.
+run_reopen_case closed-reopened 9 "$fix" ahead \
+  "reopen 9" "$sighting" "label 9 needs-triage"
+
+# A fix the tested commit misses files nothing and says so in the summary.
+run_stale_case stale-skipped 9 "$fix" diverged \
+  "stale fix: $title was fixed by $fix, which $sha does not contain"
+
+# A closed issue with no closing pull request reopens on any failure.
+run_reopen_case closed-without-pr 9 "" "" \
+  "reopen 9" "$sighting" "label 9 needs-triage"
 
 echo "scripts/test-flake-report: ok"
