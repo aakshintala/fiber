@@ -1863,6 +1863,103 @@ fn ccall_id(id: &str, name: &str, arguments: &Value) -> Value {
         "finish_reason": "tool_calls"}]})
 }
 
+/// The budget copy and every ending in a stopped stream, between raw
+/// identity-selected anchors. Other calls keep their own field checks.
+fn assert_tree_stop(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
+    let turn = lines[lo..hi]
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .unwrap()["turn_id"]
+        .clone();
+    let mut window = vec![lines[lo].clone()];
+    window.extend(
+        lines[lo + 1..hi]
+            .iter()
+            .filter(|line| match line["kind"].as_str().unwrap() {
+                "usage_recorded" => line["payload"]["generation_id"] == "g_cost",
+                "delegate_finished" | "job_completed" => true,
+                "turn_completed" => line["turn_id"] == turn,
+                _ => false,
+            })
+            .cloned(),
+    );
+    window.push(lines[hi].clone());
+    support::assert_set_between(&window, 0, window.len() - 1, expected);
+    let ordered = support::kinds(&window);
+    let usage = ordered
+        .iter()
+        .position(|kind| *kind == "usage_recorded")
+        .unwrap();
+    let turn = ordered
+        .iter()
+        .position(|kind| *kind == "turn_completed")
+        .unwrap();
+    assert!(
+        usage < turn,
+        "the spend precedes the budget end: {ordered:?}"
+    );
+    if expected.contains(&"delegate_finished") {
+        let finish = ordered
+            .iter()
+            .position(|kind| *kind == "delegate_finished")
+            .unwrap();
+        let job = ordered
+            .iter()
+            .position(|kind| *kind == "job_completed")
+            .unwrap();
+        assert!(finish < job, "finish precedes job completion: {ordered:?}");
+    }
+}
+
+#[test]
+fn tree_stop_does_not_order_the_turn_end_against_job_fanout() {
+    let expected = [
+        "usage_recorded",
+        "turn_completed",
+        "delegate_finished",
+        "job_completed",
+    ];
+    for members in [
+        expected,
+        [
+            "usage_recorded",
+            "delegate_finished",
+            "job_completed",
+            "turn_completed",
+        ],
+    ] {
+        let mut kinds = vec!["turn_started"];
+        kinds.extend(members);
+        kinds.push("fiber_exited");
+        let mut lines = support::expected(&kinds);
+        lines[1]["payload"] =
+            json!({"generation_id": "g_cost", "origin_session_id": "s_grandchild"});
+        lines[0]["turn_id"] = json!("t_budget");
+        for line in lines
+            .iter_mut()
+            .filter(|line| line["kind"] == "turn_completed")
+        {
+            line["turn_id"] = json!("t_budget");
+        }
+        assert_tree_stop(&lines, 0, 5, &expected);
+        let mut extra_turn = lines.clone();
+        extra_turn.insert(5, json!({"kind": "turn_completed", "turn_id": "t_notice"}));
+        assert_tree_stop(&extra_turn, 0, 6, &expected);
+        for missing in 1..=4 {
+            let mut broken = lines.clone();
+            broken.remove(missing);
+            assert!(
+                std::panic::catch_unwind(|| assert_tree_stop(&broken, 0, 4, &expected)).is_err()
+            );
+            let mut duplicate = lines.clone();
+            duplicate.insert(missing, lines[missing].clone());
+            assert!(
+                std::panic::catch_unwind(|| assert_tree_stop(&duplicate, 0, 6, &expected)).is_err()
+            );
+        }
+    }
+}
+
 #[test]
 fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let setup = support::Setup::new();
@@ -1972,7 +2069,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         &id,
         &["--model", "pa/m", "--prompt", "scan the tree"],
     );
-    let parked = running.wait_line("the root parked in jobs wait", |line| {
+    let mut parked = running.wait_line("the root parked in jobs wait", |line| {
         line["kind"] == "tool_call_requested" && line["payload"]["name"] == "jobs"
     });
     // The spawn ran first, then the wait the root now parks in.
@@ -1984,6 +2081,40 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
                 && line["payload"]["name"] == "delegate_spawn"),
         "the spawn ran before the wait"
     );
+    let wait_action = parked.last().unwrap()["action_id"].clone();
+    parked.extend(running.wait_line("the root jobs wait starts", |line| {
+        line["kind"] == "tool_call_started" && line["action_id"] == wait_action
+    }));
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the child model call is held"
+    );
+    let live_child = one(&parked, "delegate_started")["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
+    subscribe(&child_socket);
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "the child's spawn review is held"
+    );
+    child.release_one();
+    let mut observed_child = support::until(&child_socket, "the grandchild starts", |line| {
+        line["kind"] == "delegate_started"
+    });
+    let live_grandchild = observed_child.last().unwrap()["payload"]["delegate_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        child.await_requests(4, setup.deadline),
+        "the child wait and costly grandchild calls are held"
+    );
+    let grandchild_socket =
+        support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
+    subscribe(&grandchild_socket);
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
     // ends, the next request is refused, and the turn ends failed.
@@ -2007,6 +2138,17 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
+    observed_child.extend(support::until(
+        &child_socket,
+        "the stopped child exits",
+        |line| line["kind"] == "fiber_exited",
+    ));
+    let observed_grandchild =
+        support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
+            line["kind"] == "fiber_exited"
+        });
+    assert_eq!(observed_child.last().unwrap()["payload"]["exit_code"], 143);
+    assert_eq!(observed_grandchild.last().unwrap()["kind"], "fiber_exited");
     let child_lines = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
             .join(child_id)
@@ -2052,6 +2194,31 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     let grandchild_exited = grandchild_lines.last().unwrap().clone();
     assert_eq!(grandchild_exited["kind"], "fiber_exited");
+    let child_start = child_lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    assert_tree_stop(
+        &child_lines,
+        child_start,
+        child_lines.len() - 1,
+        &[
+            "usage_recorded",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+        ],
+    );
+    let grandchild_start = grandchild_lines
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .unwrap();
+    assert_tree_stop(
+        &grandchild_lines,
+        grandchild_start,
+        grandchild_lines.len() - 1,
+        &["usage_recorded", "turn_completed"],
+    );
     // The grandchild's normal exit after its reply races the stop: it
     // either finished first or was killed with the tree. Either way it
     // is done, and the stalled child above proves the stop itself.
@@ -2073,16 +2240,34 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         late_completed["payload"]["error"]["code"],
         "budget_exceeded"
     );
-    let started: Vec<Value> = before
+    let root_log = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
+    let root_start = root_log
         .iter()
-        .chain(late.iter())
+        .position(|line| line["kind"] == "turn_started")
+        .unwrap();
+    let late_start = root_log
+        .iter()
+        .rposition(|line| line["kind"] == "turn_started")
+        .unwrap();
+    assert_tree_stop(
+        &root_log,
+        root_start,
+        late_start,
+        &[
+            "usage_recorded",
+            "turn_completed",
+            "delegate_finished",
+            "job_completed",
+        ],
+    );
+    let started: Vec<Value> = root_log
+        .iter()
         .filter(|line| line["kind"] == "delegate_started")
         .cloned()
         .collect();
     assert_eq!(started.len(), 1, "no late delegate starts: {started:?}");
-    let ends: Vec<Value> = before
+    let ends: Vec<Value> = root_log
         .iter()
-        .chain(late.iter())
         .filter(|line| line["kind"] == "job_completed")
         .cloned()
         .collect();
