@@ -220,6 +220,129 @@ fn ordered_kinds(lines: &[Value]) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn ordered_projections_set_aside_exactly_the_independent_kinds() {
+    let lines = support::expected(&[
+        "clients",
+        "turn_started",
+        "session_status",
+        "usage_recorded",
+        "attention",
+        "command_accepted",
+        "date_changed",
+        "turn_completed",
+        "job_delta",
+        "unknown_future_kind",
+    ]);
+    let expected = [
+        "turn_started",
+        "usage_recorded",
+        "command_accepted",
+        "turn_completed",
+        "job_delta",
+        "unknown_future_kind",
+    ];
+    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(support::kinds_without_attention(&lines), expected);
+}
+
+#[test]
+fn event_windows_preserve_multiplicity_without_pinning_independent_order() {
+    // Delegate Events promises the anchors, not finish versus copied usage.
+    for members in [
+        ["usage_recorded", "delegate_finished"],
+        ["delegate_finished", "usage_recorded"],
+    ] {
+        for date_position in 0..=4 {
+            let mut lines =
+                support::expected(&["turn_completed", members[0], members[1], "job_completed"]);
+            lines[0]["turn_id"] = json!("t_cancel");
+            lines[3]["payload"] = json!({"job_id": "j_cancel"});
+            lines.insert(date_position, json!({"kind": "date_changed"}));
+            let lo = lines
+                .iter()
+                .position(|line| line["turn_id"] == "t_cancel")
+                .unwrap();
+            let hi = lines
+                .iter()
+                .position(|line| line["payload"]["job_id"] == "j_cancel")
+                .unwrap();
+            assert_eq!(lines[lo]["kind"], "turn_completed");
+            assert_eq!(lines[hi]["kind"], "job_completed");
+            support::assert_set_between(&lines, lo, hi, &["usage_recorded", "delegate_finished"]);
+        }
+    }
+    let empty = support::expected(&["turn_completed", "job_completed"]);
+    support::assert_set_between(&empty, 0, 1, &[]);
+    let repeated = support::expected(&[
+        "turn_completed",
+        "usage_recorded",
+        "usage_recorded",
+        "job_completed",
+    ]);
+    support::assert_set_between(&repeated, 0, 3, &["usage_recorded", "usage_recorded"]);
+}
+
+#[test]
+fn event_windows_reject_missing_extra_duplicate_and_invalid_anchors() {
+    for members in [
+        vec!["delegate_finished"],
+        vec!["usage_recorded", "delegate_finished", "extra"],
+        vec!["usage_recorded", "usage_recorded", "delegate_finished"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(members);
+        kinds.push("job_completed");
+        let lines = support::expected(&kinds);
+        assert!(
+            std::panic::catch_unwind(|| support::assert_set_between(
+                &lines,
+                0,
+                lines.len() - 1,
+                &["usage_recorded", "delegate_finished"]
+            ))
+            .is_err(),
+            "accepted {kinds:?}"
+        );
+    }
+    let lines = support::expected(&["turn_completed", "usage_recorded", "job_completed"]);
+    for (lo, hi) in [
+        (0, 0),
+        (1, 1),
+        (2, 1),
+        (0, 3),
+        (0, 4),
+        (3, 4),
+        (usize::MAX, 0),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| support::assert_set_between(
+                &lines,
+                lo,
+                hi,
+                &["usage_recorded"]
+            ))
+            .is_err(),
+            "accepted anchors {lo}, {hi}"
+        );
+    }
+    // Exact membership is not permission to reverse a promised relation.
+    let reversed = support::expected(&[
+        "fiber_started",
+        "delegate_started",
+        "job_started",
+        "fiber_exited",
+    ]);
+    support::assert_set_between(&reversed, 0, 3, &["job_started", "delegate_started"]);
+    assert!(
+        std::panic::catch_unwind(|| assert_eq!(
+            support::kinds(&reversed[1..3]),
+            ["job_started", "delegate_started"]
+        ))
+        .is_err()
+    );
+}
+
 /// The `job_completed` line for `job`.
 fn ended<'a>(lines: &'a [Value], job: &str) -> &'a Value {
     lines
