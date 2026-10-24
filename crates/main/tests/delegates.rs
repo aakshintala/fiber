@@ -1063,6 +1063,7 @@ fn a_jobs_wait_returns_the_delegate_final_message_with_no_notice_after() {
         let line = lines.iter().find(|line| line["kind"] == kind).unwrap();
         assert_eq!(line["payload"]["job_id"], job_id);
         assert_eq!(line["action_id"], action, "{kind} came as a notice");
+        assert_eq!(one(&lines, kind)["job_id"], job_id, "no duplicate notice");
     }
 }
 
