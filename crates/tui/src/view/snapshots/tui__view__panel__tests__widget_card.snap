@@ -1,11 +1,11 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-assertion_line: 888
 expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                              auto
+
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
    handoff at —                 —

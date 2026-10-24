@@ -373,10 +373,10 @@ fn first_session(control: &support::Socket) -> String {
         .unwrap_or_else(|| panic!("a session id in {lines:?}"))
 }
 
-/// The Session card's rows hold still while usage lands: with the first
-/// response held, the card draws every reserved row; the release folds
-/// `usage_recorded`, every card row keeps its y, and a click aimed at
-/// the held frame's coordinates opens the usage breakdown (`#3158`).
+/// The Session card's Tools row holds still while usage lands: with the
+/// first response held, the row sits below the not-yet-landed figures;
+/// after `usage_recorded` it keeps its y, and a click at the held frame's
+/// coordinates opens Tools (`#3158`).
 #[test]
 fn session_card_rows_hold_still_while_usage_lands() {
     let setup = Setup::new();
@@ -387,7 +387,11 @@ fn session_card_rows_hold_still_while_usage_lands() {
     setup.provider(&server);
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+        &json!({
+            "model": "fake/m",
+            "hub": {"idle_exit_ms": 200},
+            "mcp": {"servers": {"relay": {"command": "/no/such/command"}}}
+        }),
     );
     let hub = Arc::new(Mutex::new(None));
     let (watch, _) = connect_hub(&setup, &hub);
@@ -403,28 +407,23 @@ fn session_card_rows_hold_still_while_usage_lands() {
         "the first request reaches the server"
     );
     let session = first_session(&control);
-    // Subscribe before the release: the full stream carries the turn's
-    // `usage_recorded` envelope.
+    // Subscribe before the release: the full stream carries both the
+    // down-server notice and the turn's `usage_recorded` envelope.
     support::subscribe(&control, &session);
-    // The held frame: every Session-card row reserved from the first
-    // frame, none moved by the folds so far.
-    const LABELS: [&str; 6] = [
-        "tokens in / out",
-        "cache hits",
-        "cost",
-        "cost on subscription",
-        "speed, last reply",
-        "turns",
-    ];
-    let before = run.wait_screen("the session card's reserved rows", |grid| {
-        LABELS
-            .iter()
-            .all(|label| grid.rows.iter().any(|row| row.contains(label)))
+    loop {
+        let line = recv(&control, "the relay's down-server notice");
+        if line["kind"] == json!("mcp_server_failed") && line["payload"]["server"] == json!("relay")
+        {
+            break;
+        }
+    }
+    // The Tools row exists below the reserved figures while the provider
+    // response is held. This remains reachable even on the unfixed card,
+    // where speed and turns have not landed yet.
+    let before = run.wait_screen("the relay down row", |grid| {
+        grid.rows.iter().any(|row| row.contains("relay down"))
     });
-    let ys_before: Vec<u16> = LABELS
-        .iter()
-        .map(|label| find_row(&before.rows, label))
-        .collect();
+    let tools_y_before = find_row(&before.rows, "relay down");
     server.release();
     // The release's `usage_recorded` envelope, however many folds come
     // first: each line takes what remains of the test's deadline. The
@@ -441,19 +440,13 @@ fn session_card_rows_hold_still_while_usage_lands() {
     let after = run.wait_screen("the finished turn", |grid| {
         grid.contents.contains("completed")
     });
-    let ys_after: Vec<u16> = LABELS
-        .iter()
-        .map(|label| find_row(&after.rows, label))
-        .collect();
-    assert_eq!(ys_before, ys_after, "every Session-card row keeps its y");
-    // The held frame's cost coordinates still name the cost row, and a
-    // click there opens the usage breakdown.
-    let y = ys_before[2];
-    let x = locate(&before.rows[y as usize], "cost");
-    click(&mut run, x, y);
-    run.wait_screen("the usage breakdown", |grid| {
-        grid.contents.contains("Usage")
-    });
+    let tools_y_after = find_row(&after.rows, "relay down");
+    assert_eq!(tools_y_before, tools_y_after, "the Tools row keeps its y");
+    // The held frame's coordinates still name the Tools row after usage
+    // lands; clicking them opens the Tools view.
+    let x = locate(&before.rows[tools_y_before as usize], "tools");
+    click(&mut run, x, tools_y_before);
+    run.wait_screen("the Tools view", |grid| grid.contents.contains("Tools"));
     drop((watch, control));
     quit(run);
     let hub = hub.lock().unwrap().take().expect("the starter ran");

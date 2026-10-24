@@ -308,15 +308,7 @@ pub(super) fn fit_spans(spans: Vec<Span<'static>>, text: usize) -> Vec<Span<'sta
 /// target, except the Jobs title, whose `▸` toggles the list.
 fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     match card {
-        Card::Session => {
-            let content = session_rows(app, text);
-            if content.is_empty() {
-                return Vec::new();
-            }
-            // The title row is the first content row, holding the
-            // working-directory slot from the first frame.
-            content
-        }
+        Card::Session => session_rows(app, text),
         Card::ChangedFiles => {
             let content = changed_files_rows(app, text);
             if content.is_empty() {
@@ -370,10 +362,10 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
     }
 }
 /// The Session card's rows at `text` columns in `docs/tui.md` order:
-/// the working-directory title, the model slot, the context bar with
-/// its handoff and explainer rows, then every figure row. Each slot
-/// draws from the first frame; only the branch row outside a
-/// repository and the trailing tools line stay conditional. Labels
+/// the working-directory title, the branch slot, the model slot, the
+/// context bar with its handoff and explainer rows, then every figure
+/// row. Each slot draws from the first frame; the branch text outside
+/// a repository and the trailing tools line stay conditional. Labels
 /// read dim with their figures right-aligned in the text colour; the
 /// bar is 17 cells of `▆` toward the handoff point.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
@@ -390,9 +382,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
         text,
     ));
-    if let Some(row) = branch_row(app) {
-        out.push(row);
-    }
+    out.push(branch_row(app));
     let model = panel
         .model()
         .or_else(|| panel.status().map(|status| status.model.as_str()));
@@ -522,40 +512,15 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             // cost still null counts as zero until it settles
             // (`docs/loop.md`, "Spending budget"). A known billed cost
             // draws whenever known, `$0.00` included.
-            match (status.spend.cost, panel.budget()) {
+            let cost = match (status.spend.cost, panel.budget()) {
                 (Some(cost), Some(budget)) => {
-                    out.push(figure_row(
-                        "cost",
-                        format!("{} of {}", format::money(cost), format::money(budget)),
-                        Some(Spot::Usage),
-                        text,
-                    ));
+                    format!("{} of {}", format::money(cost), format::money(budget))
                 }
-                (None, Some(budget)) => {
-                    out.push(figure_row(
-                        "cost",
-                        format!("unknown of {}", format::money(budget)),
-                        Some(Spot::Usage),
-                        text,
-                    ));
-                }
-                (Some(cost), None) => {
-                    out.push(figure_row(
-                        "cost",
-                        format::money(cost),
-                        Some(Spot::Usage),
-                        text,
-                    ));
-                }
-                (None, None) => {
-                    out.push(figure_row(
-                        "cost",
-                        "unknown".to_owned(),
-                        Some(Spot::Usage),
-                        text,
-                    ));
-                }
-            }
+                (None, Some(budget)) => format!("unknown of {}", format::money(budget)),
+                (Some(cost), None) => format::money(cost),
+                (None, None) => "unknown".to_owned(),
+            };
+            out.push(figure_row("cost", cost, Some(Spot::Usage), text));
             // The subscription sum draws on every frame once a status
             // holds it, `$0.00` included.
             out.push(figure_row(
@@ -566,14 +531,14 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             ));
         }
         None => {
-            out.push(reserved_row("tokens in / out", Some(Spot::Usage), text));
-            out.push(reserved_row("cache hits", Some(Spot::Usage), text));
-            out.push(reserved_row("cost", Some(Spot::Usage), text));
-            out.push(reserved_row(
+            for label in [
+                "tokens in / out",
+                "cache hits",
+                "cost",
                 "cost on subscription",
-                Some(Spot::Usage),
-                text,
-            ));
+            ] {
+                out.push(reserved_row(label, Some(Spot::Usage), text));
+            }
         }
     }
     match panel.speed() {
@@ -723,12 +688,19 @@ fn sides(left: Vec<Span<'static>>, right: Span<'static>, text: usize) -> Line<'s
     Line::from(out)
 }
 
-/// The Session card's branch row: "git" dim and the branch in
-/// secondary. The branch is the last query's answer, else the status's
-/// git. A click runs `git status` (`docs/tui.md`, "Git").
-fn branch_row(app: &App) -> Option<Row> {
-    let branch = branch_text(app)?;
-    Some(Row {
+/// The Session card's branch slot: "git" dim and the branch in
+/// secondary. It stays blank and has no target until a branch is known;
+/// outside a repository the line stays blank (`docs/tui.md`, "Git").
+fn branch_row(app: &App) -> Row {
+    let Some(branch) = branch_text(app) else {
+        return Row {
+            line: Line::from(""),
+            spot: None,
+            tint: None,
+            edge: false,
+        };
+    };
+    Row {
         line: Line::from(vec![
             Span::styled("git", style(Role::Muted)),
             Span::raw("  "),
@@ -737,7 +709,7 @@ fn branch_row(app: &App) -> Option<Row> {
         spot: Some(Spot::Branch),
         tint: None,
         edge: false,
-    })
+    }
 }
 
 /// The branch the Session card and the narrow status line show: the

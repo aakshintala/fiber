@@ -1,9 +1,9 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-assertion_line: 965
 expression: "super::super::text(&buf)"
 ---
 
+   then a summary, fresh context
    tokens in / out              —
    cache hits                   —
    cost                         —
@@ -42,4 +42,3 @@ expression: "super::super::text(&buf)"
    line 25
    line 26
    line 27
-   line 28

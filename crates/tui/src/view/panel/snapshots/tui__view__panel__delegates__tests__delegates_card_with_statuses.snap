@@ -1,11 +1,11 @@
 ---
 source: crates/tui/src/view/panel/delegates_tests.rs
-assertion_line: 819
 expression: "crate::view::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                              auto
+
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
    handoff at —                 —
