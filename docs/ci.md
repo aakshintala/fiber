@@ -150,6 +150,11 @@ the `crates/main/tests` binaries, and a separate job holding only
 `contents: read`, `pull-requests: write` and `issues: write`, which runs no
 Fiber code, files the issue. No other test retries.
 
+The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
+artifact, kept 7 days. It holds only XML this run wrote: the full-suite
+`scripts/check` output after retry handling, uploaded before the focused
+hub_service run overwrites `target/nextest/ci/junit.xml`.
+
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
