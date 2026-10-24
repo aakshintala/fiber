@@ -49,6 +49,7 @@ impl Running {
         stdin: Stdio,
         dir: &std::path::Path,
     ) -> (Self, Option<std::process::ChildStdin>) {
+        fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
         let mut command = setup.fiber(args);
         command.current_dir(dir);
         command.stdin(stdin);

@@ -275,6 +275,7 @@ impl Running {
         args: &[&str],
         stdin: Stdio,
     ) -> (Self, Option<std::process::ChildStdin>) {
+        fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
         let mut command = setup.fiber(args);
         command.stdin(stdin);
         let mut child = command.spawn().unwrap();
@@ -6423,6 +6424,13 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // The model's first turn calls the `go` tool; the second ends the
     // turn, so the prompt ends the session. Reviewer verdicts answer
     // "allow", as the answering helper does.
+    // Held: the delegate is still running when the prompt ends the session.
+    // Built before the parent and shared, so the parent's responder can
+    // wait for the delegate's model call before ending the turn.
+    let child = Arc::new(ProviderServer::start([text_reply(SENTINEL)]).unwrap());
+    child.hold();
+    let deadline = setup.deadline;
+    let waiting = Arc::clone(&child);
     let called = Arc::new(AtomicBool::new(false));
     let parent = ProviderServer::start_responding(move |request: &Request| {
         let text = String::from_utf8_lossy(&request.body);
@@ -6430,14 +6438,15 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
             return text_reply("allow");
         }
         if called.swap(true, Ordering::SeqCst) {
+            assert!(
+                waiting.await_requests(1, deadline),
+                "the delegate called its model"
+            );
             return text_reply("all done");
         }
         support::stream(&[function_call("call_go", "go", &json!({}))])
     })
     .unwrap();
-    // Held: the delegate is still running when the prompt ends the session.
-    let child = ProviderServer::start([text_reply(SENTINEL)]).unwrap();
-    child.hold();
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let running = Running::spawn(&setup, &["ask", "scan the tree"]);
@@ -6447,11 +6456,32 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // `session_status` lines set aside: they carry no position relative
     // to the session's other lines (`docs/testing.md`, "Event streams").
     let kinds = owned_kinds(&lines);
-    let ordered: Vec<&str> = kinds
+    let mut ordered: Vec<&str> = kinds
         .iter()
         .filter(|kind| *kind != "session_status")
         .map(String::as_str)
         .collect();
+    // The cancelled delegate's call writes its usage at once
+    // (`docs/events.md`, "Usage and notices"), but the doc gives that line no
+    // place against `delegate_finished`: pin it once between the turn's end
+    // and the job's, and set it aside from the ordered list.
+    let turn_end = ordered
+        .iter()
+        .position(|kind| *kind == "turn_completed")
+        .expect("no turn_completed");
+    let job_end = ordered
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .expect("no job_completed");
+    let usage: Vec<usize> = (turn_end..job_end)
+        .filter(|at| ordered[*at] == "usage_recorded")
+        .collect();
+    assert_eq!(
+        usage.len(),
+        1,
+        "one usage_recorded after the turn: {ordered:?}"
+    );
+    ordered.remove(usage[0]);
     assert_eq!(
         ordered,
         [
