@@ -336,6 +336,7 @@ the lines that carry it.
 | `extension_unavailable` | tool call | the extension providing the tool died twice | — |
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") | — |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) | — |
+| `from_session` | hub command, driver command | a connection from inside a session is refused the command: an approval `reply`, a `prompt`, `steer` or `reply` to its own session or its delegate, or `pairing_code` (`docs/permissions.md`, "Sessions on the sockets") | — |
 | `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") | condition |
 | `hook_failed` | tool call, turn, handoff, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails") | event |
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
@@ -433,7 +434,7 @@ Notices, for a failure outside any action or a login a person must finish:
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`, `not_found`,
 `unknown_command`, `closing`, `indeterminate`, `cancelled`, `io_failed`, `duplicate_command`, `session_not_found`,
-`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`)
+`message_refused`, `hook_failed`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`, `from_session`)
 are `docs/invocation.md`, "Driver commands".
 
 Codes no table lists — a refusal or driver code the hub names

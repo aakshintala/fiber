@@ -482,7 +482,7 @@ Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`, `indeterminate`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
-`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
+`io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`, `from_session`.
 
 A prompt or steer that a hook refuses is rejected `message_refused`, with the
 hook's reason and extension in the message. One whose blocking hook failed is
@@ -1229,6 +1229,11 @@ to session artifacts.
   (`ssh -L /tmp/fiber-hub.sock:/home/me/.fiber/run/hub host`) and add it as a
   `unix:` address. Only their account can open either end, so being that
   account stays the authentication.
+- **A session-owned process gets no pairing code on the local socket.** The
+  hub refuses `pairing_code` with `from_session` when the kernel walk places
+  the connection inside a session (`docs/permissions.md`, "Sessions on the
+  sockets"). Websocket and port behavior is unchanged: a paired client
+  holding a device token reaches `pairing_code` as before.
 - **Any paired client manages devices, and every change is announced.**
   `pairing_code`, `devices` and `revoke` are answered on the port as on the
   local socket. Limiting them to the hub's machine would stop no one holding a
