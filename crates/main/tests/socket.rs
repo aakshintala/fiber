@@ -800,10 +800,11 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
 #[test]
 fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     let setup = Setup::new_with_fa_root();
-    // The held reply, released after the message is acknowledged, keeps the
-    // turn open after the prompt: the message, sent to the session's own
-    // socket, is delivered and applied at the step boundary, inside the
-    // turn. A standing rule allows the command the step runs without asking.
+    // A standing rule asks about the command the step runs, so the turn
+    // parks on a pending approval: the loop reads its inbox while it waits
+    // for the reply. The message, sent to the session's own socket once the
+    // approval is pending, is taken and queued while the turn is held open,
+    // then applied at the step boundary after the reply allows the call.
     let server = ProviderServer::start([
         support::stream(&[support::function_call(
             "call_1",
@@ -813,13 +814,12 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         support::text_reply("Done."),
     ])
     .unwrap();
-    server.hold();
     setup.provider(&server);
     fs::write(
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "allow", "tool": "shell", "prefix": "true"})
+            json!({"decision": "ask", "tool": "shell", "prefix": "true"})
         ),
     )
     .unwrap();
@@ -849,6 +849,13 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         server.await_requests(1, setup.deadline),
         "the first request is in flight"
     );
+    let mut lines = until_client(setup.deadline, &client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request_id = lines.last().unwrap()["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     send(
         setup.deadline,
         &client,
@@ -856,13 +863,23 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
             r#"{{"id":"c_msg","command":"message","args":{{"from_session_id":"{id}","text":"Tests pass on main."}}}}"#
         ),
     );
-    // The reply stays held until the release, so the message waits for its
-    // answer until the hook runs post-release.
-    server.release();
-    let mut lines = until_client(setup.deadline, &client, "the answer to c_msg", |line| {
-        line["payload"]["command_id"] == "c_msg"
-    });
+    // The take is answered while the turn waits on the approval, so the
+    // queued row proves the message arrived inside the turn: the reply
+    // releases the hold only after it.
+    lines.extend(until_client(
+        setup.deadline,
+        &client,
+        "the answer to c_msg",
+        |line| line["payload"]["command_id"] == "c_msg",
+    ));
     assert_eq!(lines.last().unwrap()["kind"], "command_accepted");
+    send(
+        setup.deadline,
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
     lines.extend(until_client(
         setup.deadline,
         &client,
@@ -871,11 +888,10 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     ));
     // The complete, ordered kinds, setting aside `clients` and
     // `session_status`, which the contract writes on their own trigger,
-    // and the `c_msg` take's own pair, which has no fixed position
-    // relative to `tool_call_completed`: the take races the `true` tool
-    // subprocess (20-run census on this head: 15 takes after the
-    // completion, 5 during it). Per `docs/testing.md`, "Event streams",
-    // the pair is pinned on its own below instead of placed in the order.
+    // and the `c_msg` take's own pair, which lands between
+    // `permission_requested` and `permission_resolved`. Per
+    // `docs/testing.md`, "Event streams", the pair is pinned on its own
+    // below instead of placed in the order.
     let settled: Vec<&Value> = lines
         .iter()
         .filter(|line| !matches!(line["kind"].as_str(), Some("clients" | "session_status")))
@@ -935,6 +951,8 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
             "tool_call_requested",
             "usage_recorded",
             "assistant_message_completed",
+            "permission_requested",
+            "command_accepted",
             "permission_resolved",
             "tool_call_started",
             "tool_call_completed",
@@ -953,9 +971,10 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         .iter()
         .filter(|line| line["kind"] == "command_accepted")
         .collect();
-    assert_eq!(accepts.len(), 2, "{lines:?}");
+    assert_eq!(accepts.len(), 3, "{lines:?}");
     assert_eq!(accepts[0]["payload"]["command_id"], "c_prompt");
     assert_eq!(accepts[1]["payload"]["command_id"], "c_msg");
+    assert_eq!(accepts[2]["payload"]["command_id"], "c_reply");
     assert_eq!(
         lines
             .iter()
