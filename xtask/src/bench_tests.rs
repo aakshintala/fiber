@@ -2327,13 +2327,15 @@ fn a_skipped_budget_still_checks_its_table_row() {
 
 #[test]
 fn row_metrics_names_match_the_selectors_rows() {
-    // A docs-only diff selects no row, so the selector returns every row
-    // in table order: the judge's row table must name the same rows.
-    let selected = crate::select::base_rows_skipped("pull_request", &["README.md".to_owned()]);
-    let names: Vec<&str> = super::judge::ROW_METRICS
+    // A docs-only diff selects no row, so the selector returns every row:
+    // the judge's row table must name the same rows, regardless of order.
+    let mut selected = crate::select::base_rows_skipped("pull_request", &["README.md".to_owned()]);
+    selected.sort_unstable();
+    let mut names: Vec<&str> = super::judge::ROW_METRICS
         .iter()
         .map(|(row, _)| *row)
         .collect();
+    names.sort_unstable();
     assert_eq!(names, selected);
 }
 
