@@ -4168,7 +4168,7 @@ fn read_command(mut theirs: &UnixStream) -> serde_json::Value {
             Ok(0) => panic!("the hub's end closed before the command arrived"),
             Ok(_) => {
                 bytes.extend_from_slice(&byte);
-                if byte == [b'\n'] {
+                if byte == *b"\n" {
                     break;
                 }
             }
@@ -4197,12 +4197,14 @@ fn press(lp: &mut super::super::Loop<ratatui::backend::TestBackend>, bytes: &[u8
             Event::Stroke(stroke) => lp.app.on_press(stroke, now),
             Event::Key(key) => lp.app.on_key(key, now),
             Event::Edit(edit) => lp.app.on_edit(edit),
-            _ => panic!("a typed key parses to a stroke, key or edit"),
+            Event::Mouse(_) | Event::Reply(_) | Event::Focus(_) => {
+                panic!("a typed key parses to a stroke, key or edit")
+            }
         };
-        match effect {
-            Effect::None => {}
-            Effect::Send(lines) => lp.hub.send(&lines, &mut lp.app),
-            _ => panic!("a typed key sends at most its prompt"),
+        if let Effect::Send(lines) = effect {
+            lp.hub.send(&lines, &mut lp.app);
+        } else if !matches!(effect, Effect::None) {
+            panic!("a typed key sends at most its prompt");
         }
     }
 }
@@ -4314,10 +4316,20 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     Deadline::after(DEADLINE)
         .recv(&reader_done)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the reader to end: {err}"));
-    match Deadline::after(DEADLINE).recv(&rx) {
-        Ok(Input::Disconnected) => lp.hub.on_disconnected(&mut lp.app),
-        Ok(_) => panic!("the hang-up reads as a disconnect"),
-        Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
+    // The key may have reached the wait before the clock moved, ending
+    // the wait on the tick, or after, ending it on the key with the tick
+    // still queued: either way the stash and the loss match, so drain to
+    // the disconnect, acking a stray tick.
+    loop {
+        match Deadline::after(DEADLINE).recv(&rx) {
+            Ok(Input::Disconnected) => {
+                lp.hub.on_disconnected(&mut lp.app);
+                break;
+            }
+            Ok(Input::Tick) => lp.tick.ack(),
+            Ok(_) => panic!("the hang-up reads as a disconnect"),
+            Err(error) => panic!("waited {DEADLINE:?} for the disconnect: {error}"),
+        }
     }
     assert_eq!(
         lp.app.banner().as_deref(),
@@ -4332,17 +4344,21 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
         panic!("the stashed key");
     };
     for input in first {
-        match input {
-            Input::Bytes(bytes) => press(&mut lp, &bytes),
-            _ => panic!("the stash holds only the key"),
+        if let Input::Bytes(bytes) = input {
+            press(&mut lp, &bytes);
+        } else {
+            panic!("the stash holds only the key");
         }
     }
     assert_eq!(lp.app.draft(), "x");
-    // Enter while disconnected sends no prompt on the old connection.
+    // Enter while disconnected sends no prompt on the old connection:
+    // the hub's end stays silent, or reads its end when every end but
+    // it has closed.
     press(&mut lp, b"\r");
     let mut byte = [0u8; 1];
     match theirs.read(&mut byte) {
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(0) => {}
         Ok(_) => panic!("Enter wrote on the hung-up stream"),
         Err(error) => panic!("the hub's read failed: {error}"),
     }
@@ -4396,28 +4412,34 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
     let (mut lp, _theirs, tx, rx) = opened();
     let clock = FakeClock::new();
     lp.clock = clock.clone();
+    // The ticker stays idle: its arm only records, and no tick ever
+    // arrives, so the answer below is what the wait receives.
+    let ticker = lp.tick.ticker();
+    let deadline = wait_deadline(&clock);
     let want = vec![replay(1000)];
-    // No ticker runs, so nothing parks on the clock: the worker's
-    // readiness below is the signal the wait holds.
-    let (ready, started) = mpsc::channel();
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("attach-late-answer".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            // The channel is empty, so the receive below unblocks only
-            // after the test sends, which is after the clock moves.
-            ready.send(()).unwrap_or(());
             let result = lp
                 .hub
                 .answer(&rx, "a_1", &mut lp.app, &lp.tick, lp.clock.as_ref(), None);
             done.send((result, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    Deadline::after(DEADLINE)
-        .recv(&started)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the wait to start: {err}"));
+    // The recorded arm proves the wait started at the origin: nothing
+    // moved the clock, so its deadline is the expected one.
+    let wait = Deadline::after(DEADLINE);
+    while ticker.armed() != Some(deadline) {
+        if wait.left().is_zero() {
+            panic!("waited {DEADLINE:?} for the wait to arm its deadline");
+        }
+        std::thread::yield_now();
+    }
     clock.advance(super::super::hub::HISTORY_WAIT);
+    // The channel is empty, so the receive below unblocks only after
+    // this send, which is after the clock moves.
     tx.send(Input::Hub(Line::Session(command_answer("a_1", want))))
         .unwrap_or_else(|err| panic!("send: {err}"));
     let (result, lp) = Deadline::after(DEADLINE)
@@ -4524,13 +4546,105 @@ fn after_a_frame_tick_the_wait_still_ends_at_its_deadline() {
         clock.await_parked(frame, Deadline::after(DEADLINE)),
         "waited {DEADLINE:?} for the ticker to park at the frame's deadline"
     );
-    clock.advance(Duration::from_millis(120));
-    clock.advance(super::super::hub::HISTORY_WAIT - Duration::from_millis(120));
+    let mark = clock.advance_marked(Duration::from_millis(120));
+    // The ack re-arms the wait: the ticker parks at its deadline again
+    // before the clock moves on.
+    let deadline = wait_deadline(&clock);
+    assert!(
+        clock.await_parked_since(&mark, Some(deadline), Deadline::after(DEADLINE)),
+        "waited {DEADLINE:?} for the ticker to park at the wait's deadline again"
+    );
+    clock.advance(
+        super::super::hub::HISTORY_WAIT
+            .checked_sub(Duration::from_millis(120))
+            .expect("within the wait"),
+    );
     let (result, lp, _) = Deadline::after(DEADLINE)
         .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the history wait to end: {err}"));
     assert_eq!(result, Err(super::super::hub::LOST.to_owned()));
     assert!(!lp.hub.has_stream(), "the expired wait hangs up");
+}
+
+/// A blocked hub write ends in its configured timeout, not forever: the
+/// shared helper with a short limit fails a write on a full stream
+/// within [`DEADLINE`]. The write runs on a thread of its own, so a
+/// timeout that never comes fails here instead of hanging the suite.
+#[test]
+fn a_blocked_hub_write_ends_in_its_timeout() {
+    let (mut ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    // Fill the stream's buffer with the reader holding its end and
+    // reading nothing: every further write blocks.
+    ours.set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let chunk = vec![b'x'; 65536];
+    loop {
+        match ours.write_all(&chunk) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("the fill failed: {error}"),
+        }
+    }
+    // Blocking again: without the timeout below this write never ends.
+    ours.set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-write-timeout".to_owned())
+        .spawn(move || {
+            let result = super::super::hub::set_write_timeout(&ours, Duration::from_millis(100))
+                .and_then(|()| crate::link::write_line(&ours, &"x".repeat(65536)));
+            done.send(result.map_err(|error| error.kind()))
+                .unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // An expired send timeout reads back as a blocked write would: the
+    // kernel reports no buffer, never a success.
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(Err(kind))
+            if kind == std::io::ErrorKind::WouldBlock || kind == std::io::ErrorKind::TimedOut => {}
+        Ok(Err(kind)) => panic!("the blocked write failed, but not with its timeout: {kind:?}"),
+        Ok(Ok(())) => panic!("the blocked write succeeded on a full stream"),
+        Err(error) => panic!("waited {DEADLINE:?} for the blocked write to end: {error}"),
+    }
+    drop(theirs);
+}
+
+/// Production adopts the stream with the wait's own bound: `store` sets
+/// the shared 10 s timeout.
+#[test]
+fn store_sets_the_history_waits_write_timeout() {
+    let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let mut hub = Connection::new(super::super::tests::idle_retry());
+    hub.store(ours);
+    assert!(hub.has_stream(), "the stream is adopted");
+    let timeout = hub
+        .stream()
+        .expect("adopted")
+        .write_timeout()
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    assert_eq!(timeout, Some(super::super::hub::HISTORY_WAIT));
+}
+
+/// A write-timeout setup that fails closes the stream without adopting
+/// it: the peer reads the end, and nothing is held.
+#[test]
+fn a_failed_write_timeout_setup_closes_without_adopting() {
+    let (ours, mut theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut hub = Connection::new(super::super::tests::idle_retry());
+    let adopted = hub.store_with(ours, |_| Err(std::io::Error::other("no timeout")));
+    assert!(!adopted, "the failed stream is not adopted");
+    assert!(!hub.has_stream(), "nothing is held");
+    // The failed stream is closed: the peer reads its end at once.
+    let mut byte = [0u8; 1];
+    match theirs.read(&mut byte) {
+        Ok(0) => {}
+        Ok(_) => panic!("nothing was written on the failed stream"),
+        Err(error) => panic!("the peer's read failed: {error}"),
+    }
 }
 
 /// A frame deadline later than the wait's leaves the wait's first: the

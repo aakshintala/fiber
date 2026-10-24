@@ -158,7 +158,7 @@ impl Ticker {
 
     /// The armed deadline, if any: what the loop armed without a thread,
     /// or the frame's current deadline while one runs.
-    fn armed(&self) -> Option<std::time::Instant> {
+    pub(crate) fn armed(&self) -> Option<std::time::Instant> {
         self.lock().at
     }
 
@@ -221,6 +221,13 @@ impl TickThread {
     /// current deadline, what a history wait arms the earlier of.
     pub(crate) fn armed(&self) -> Option<std::time::Instant> {
         self.ticker.armed()
+    }
+
+    /// The ticker, for the test watching a wait arm its deadline on an
+    /// idle thread: the recorded arm proves the wait started.
+    #[cfg(test)]
+    pub(crate) fn ticker(&self) -> Arc<Ticker> {
+        Arc::clone(&self.ticker)
     }
 }
 

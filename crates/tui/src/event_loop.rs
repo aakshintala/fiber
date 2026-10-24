@@ -635,12 +635,23 @@ impl<B: Backend> Loop<B> {
             }
             Input::Connected(stream, hello) => {
                 self.hub.store(stream);
-                let lines = self.app.on_line(Line::Hub(hello));
-                self.hub.send(&lines, &mut self.app);
-                // A `hub_hello` this terminal cannot read leaves it
-                // unconnected: it says so and disconnects.
-                if !self.app.connected() {
-                    self.hub.hang_up();
+                // A stream whose write timeout would not set is shut
+                // down, not adopted: the connection failed, as a refused
+                // connect does. The reader's end of it retries like any
+                // other lost connection.
+                if !self.hub.has_stream() {
+                    self.app.connect_failed(
+                        "Could not set up the hub connection: its write timeout could not be set"
+                            .to_owned(),
+                    );
+                } else {
+                    let lines = self.app.on_line(Line::Hub(hello));
+                    self.hub.send(&lines, &mut self.app);
+                    // A `hub_hello` this terminal cannot read leaves it
+                    // unconnected: it says so and disconnects.
+                    if !self.app.connected() {
+                        self.hub.hang_up();
+                    }
                 }
             }
             Input::ConnectFailed(error) => {
