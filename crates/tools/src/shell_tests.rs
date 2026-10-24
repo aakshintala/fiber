@@ -1147,3 +1147,35 @@ fn a_spill_that_cannot_be_written_keeps_only_its_ends() {
         "the partial file was removed"
     );
 }
+
+fn noted(shell: &Shell, command: &str) -> Option<String> {
+    shell.review_note(&args(command))
+}
+
+#[test]
+fn review_note_names_the_stages_not_shown_read_only() {
+    let dir = fakes::TempDir::new("fiber-shell-review-note");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    assert_eq!(
+        noted(&shell, "ls && npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+    assert_eq!(noted(&shell, "ls && pwd"), None);
+    assert_eq!(noted(&shell, "npm test"), None);
+}
+
+#[test]
+fn review_note_sees_a_reloaded_read_only_entry() {
+    use std::sync::{Arc, Mutex};
+
+    let dir = fakes::TempDir::new("fiber-shell-review-note-reload");
+    let handle = Arc::new(Mutex::new(Vec::new()));
+    let shell =
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_read_only(Arc::clone(&handle));
+    assert_eq!(
+        noted(&shell, "ls && npm test"),
+        Some("Not shown read-only: `npm test`".to_owned())
+    );
+    *handle.lock().unwrap() = vec![("npm".to_owned(), Vec::new())];
+    assert_eq!(noted(&shell, "ls && npm test"), None);
+}

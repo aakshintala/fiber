@@ -112,23 +112,9 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     held("crates/tools/tests/shell.rs", "held by #3112"),
     held("crates/hub/src/idle_tests.rs", "held by #3009"),
     held("crates/hub/src/port_tests.rs", "held by #3009"),
-    held("crates/loop/src/jobs_tests.rs", "held by #3001"),
     held("crates/loop/tests/support/mod.rs", "held by #3001"),
     held("crates/main/tests/delegates.rs", "held by #3001"),
-    held("crates/provider/src/scripted_tests.rs", "held by #3127"),
     held("crates/loop/tests/review_jig.rs", "held by #3172"),
-    held(
-        "crates/loop/src/reload_tests.rs",
-        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
-    ),
-    held(
-        "crates/loop/tests/tool_search.rs",
-        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
-    ),
-    held(
-        "crates/routing/src/connect_tests.rs",
-        "held by #3189; WAIT to MUST_SUCCEED_WITHIN after it lands",
-    ),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.

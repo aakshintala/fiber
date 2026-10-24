@@ -8,14 +8,11 @@
 )]
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use contract::provider::ModelRequest;
 use contract::provider::Provider;
+use fakes::Deadline;
 use serde_json::json;
-
-/// How long a test waits for the quota fetch.
-const WAIT: Duration = Duration::from_secs(5);
 
 /// A Lua provider `qp` whose `quota()` asks `<server>/<label>/<key>` over
 /// HTTP.
@@ -99,13 +96,13 @@ fn connect_fetches_quota_for_its_label() {
             &here,
         )));
     });
-    let provider = fakes::Deadline::after(WAIT)
+    let provider = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&connected)
         .expect("connect ended in time")
         .unwrap();
     let _call = provider.call(&request());
     assert!(
-        server.await_requests(1, fakes::Deadline::after(WAIT)),
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
         "the model call never fetched quota"
     );
     let paths: Vec<String> = server
