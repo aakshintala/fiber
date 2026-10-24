@@ -42,13 +42,17 @@ pub enum Error {
     /// The input reader could not start, so no key would reach the loop.
     #[error(transparent)]
     ReaderStart(#[from] crate::sources::SpawnError),
+    /// The working line's timer could not start, so nothing moving on
+    /// screen would move.
+    #[error("terminal: could not start the terminal's timer: {0}")]
+    TimerStart(#[from] std::io::Error),
 }
 
 impl Error {
     /// The stable code a consumer switches on (`docs/errors.md`, "Registry").
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::ReaderStart(_) => ErrorCode::IoFailed,
+            Self::ReaderStart(_) | Self::TimerStart(_) => ErrorCode::IoFailed,
         }
     }
 }
@@ -65,13 +69,21 @@ pub fn run(
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
 ) -> Result<i32, Error> {
-    run_with(tty, launch, connect, on_attach, clock, Reader::spawn)
+    run_with(
+        tty,
+        launch,
+        connect,
+        on_attach,
+        clock,
+        Reader::spawn,
+        |builder, body| builder.spawn(body),
+    )
 }
 
-/// Runs as [`run`] does, with the input reader's spawn as a function so
-/// tests fail it. A failed spawn returns the failure without entering the
-/// loop: the terminal is restored by the [`term::Guard`] drop on that
-/// return.
+/// Runs as [`run`] does, with the input reader's spawn and the working
+/// line's timer spawn as functions so tests fail them. A failed spawn
+/// returns the failure without entering the loop: the terminal is
+/// restored by the [`term::Guard`] drop on that return.
 pub(crate) fn run_with(
     tty: File,
     launch: Launch,
@@ -79,6 +91,10 @@ pub(crate) fn run_with(
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     spawn_reader: impl FnOnce(&File, Sender<Input>) -> Result<Reader, crate::sources::SpawnError>,
+    spawn_tick: impl FnOnce(
+        std::thread::Builder,
+        Box<dyn FnOnce() + Send + 'static>,
+    ) -> std::io::Result<std::thread::JoinHandle<()>>,
 ) -> Result<i32, Error> {
     // SIGWINCH is caught from before the size is read, so no resize is
     // missed; its thread starts after the first frame.
@@ -242,8 +258,12 @@ pub(crate) fn run_with(
         Arc::clone(&terminal.clock),
     );
     // The tick runs only while something drawn moves: the first frame's
-    // asks arm it, and the loop re-arms it after every frame.
-    terminal.tick.start(Arc::clone(&terminal.clock), tx.clone());
+    // asks arm it, and the loop re-arms it after every frame. Without
+    // the tick nothing moving on screen moves: fail instead of running
+    // still.
+    terminal
+        .tick
+        .start_with(Arc::clone(&terminal.clock), tx.clone(), spawn_tick)?;
     terminal.tick.arm(terminal.app.take_wake());
     spawn_signal(term_signals, tx.clone());
     if let Some(signals) = signals {

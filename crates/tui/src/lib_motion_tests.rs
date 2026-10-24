@@ -124,7 +124,9 @@ fn a_tick_through_the_thread_draws_the_next_frame() {
         .expect("after the origin");
     let shared: Arc<dyn Clock> = clock.clone();
     let (tx, rx) = mpsc::channel();
-    lp.tick.start(shared, tx);
+    lp.tick
+        .start(shared, tx)
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     assert_eq!(step(&mut lp, Input::Resize), None);
     clock.advance_when_parked(
         Some(at),
@@ -152,7 +154,9 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
         .expect("after the origin");
     let shared: Arc<dyn Clock> = clock.clone();
     let (tx, rx) = mpsc::channel();
-    lp.tick.start(shared, tx);
+    lp.tick
+        .start(shared, tx)
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     assert_eq!(step(&mut lp, Input::Resize), None);
     clock.advance_when_parked(
         Some(at),
@@ -205,7 +209,9 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
         .expect("after the origin");
     let shared: Arc<dyn Clock> = clock.clone();
     let (tx, rx) = mpsc::channel();
-    lp.tick.start(shared, tx.clone());
+    lp.tick
+        .start(shared, tx.clone())
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     assert_eq!(step(&mut lp, Input::Resize), None);
     clock.advance_when_parked(
         Some(at),
@@ -351,7 +357,9 @@ fn quitting_stops_the_ticker() {
     let shared: Arc<dyn Clock> = clock.clone();
     lp.clock = clock;
     let (tx, rx) = mpsc::channel();
-    lp.tick.start(shared, tx.clone());
+    lp.tick
+        .start(shared, tx.clone())
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     drop(tx);
     // Quitting first ends the thread, dropping its sender; the loop then
     // sees every sender gone and returns.

@@ -4266,7 +4266,9 @@ fn a_silent_hub_ends_the_history_wait_as_a_lost_connection() {
     let (_reader, reader_done) = spawn_reader(end, feed);
     // The ticker runs on the fake clock, and the fetch waits on a
     // thread of its own, handing the loop back.
-    lp.tick.start(shared, tx.clone());
+    lp.tick
+        .start(shared, tx.clone())
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
     let deadline = wait_deadline(&clock);
     let session = lp.app.session().cloned().expect("attached");
     let (done, finished) = mpsc::channel();
@@ -4372,7 +4374,9 @@ fn start_tick(
     tx: &mpsc::Sender<Input>,
 ) {
     let shared: Arc<dyn Clock> = clock;
-    lp.tick.start(shared, tx.clone());
+    lp.tick
+        .start(shared, tx.clone())
+        .unwrap_or_else(|err| panic!("tick start: {err}"));
 }
 
 /// An answer handled just before the deadline draws: 9.999 s into the
