@@ -96,6 +96,8 @@ codes! {
     HookUnapproved,
     /// `web_fetch` got a status other than 2xx.
     HttpError,
+    /// The hub runs another Fiber version or commit than this terminal.
+    HubVersion,
     /// Fiber cannot tell whether the call completed.
     Indeterminate,
     /// The instruction text passes 10% of the context window.

@@ -1029,10 +1029,16 @@ port each line is one websocket text message, and a client holds one
 websocket for everything it does.
 
 - **The hub speaks first.** Every connection opens with a `hub_hello` line
-  carrying the hub's `schema_version` and Fiber version (`docs/events.md`,
-  "The envelope"). A client that cannot
+  carrying the hub's `schema_version`, its Fiber version and, when the build
+  knows it, its commit (`docs/events.md`, "The envelope"). A client that cannot
   read that version says which one the hub runs and disconnects, as it does
-  for a session ("Processes").
+  for a session ("Processes"). The terminal also compares the hub's Fiber
+  version and commit with its own: when the versions differ, or both carry a
+  commit and the commits differ, it shows one notice per connection naming
+  both, each as `fiber --version` writes it, and saying how to stop the hub:
+  `fiber stop` restarts it on the next launch for a hub on this machine, and
+  `fiber stop --hub <name>` stops a listed hub (`docs/tui.md`, "Notices"). It stays connected when it can read the hub's
+  `schema_version`.
 - **A command with a `session_id` is for that session.** The hub passes it to
   the session's socket and passes back what the session sends, starting the
   session first when it has exited, as "Lifecycle" describes. A session never

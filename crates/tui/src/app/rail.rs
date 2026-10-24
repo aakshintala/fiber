@@ -2,6 +2,7 @@
 //! elapsed times read, and the glue between the app and the rail
 //! (`docs/tui.md`, "The rail"). Drawing lives in `crate::view::rail`.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use contract::events::SessionState;
@@ -49,7 +50,7 @@ pub(crate) enum Spot {
     /// A card, by its row's key: switches to its session.
     Card(u64),
     /// A crashed card's ✕, by its row's key: dismisses it through the
-    /// hub.
+    /// hub. A CANNOT ATTACH card's ✕ hides the card in this terminal.
     Dismiss(u64),
     /// A project header's "+", by its first card's key: home, with that
     /// card's workspace chosen for the next `start`.
@@ -68,8 +69,8 @@ pub(crate) struct RailState {
     /// Only one focus exists: while this is set, [`App::focus`] holds
     /// no rail target (`docs/tui.md`, "The rail"). Every click target
     /// is a focus stop: each card, each project's "+" and "N ✓", each
-    /// crashed card's "×" (`docs/tui.md`, "Moving through the
-    /// conversation").
+    /// crashed or CANNOT ATTACH card's "×" (`docs/tui.md`, "Moving
+    /// through the conversation").
     focus: Option<Spot>,
     /// The stops the rail's focus reached, in order, no two adjacent
     /// alike: Tab walks the earliest drawn stop not yet in it,
@@ -85,6 +86,11 @@ pub(crate) struct RailState {
     /// The `dismiss` commands waiting for their answers: command id and
     /// session.
     dismissing: Vec<(String, SessionId)>,
+    /// The sessions whose CANNOT ATTACH card the person hid with its ✕.
+    /// Never cleared: the hide lasts until the terminal exits, and a card
+    /// for the session shows again only when its status reads or it
+    /// crashes (`docs/tui.md`, "The rail").
+    hidden: BTreeSet<SessionId>,
     /// The request to show when it arrives: the session a switch opened
     /// while it waited, and what it waits on.
     arrival: Option<(SessionId, RequestId)>,
@@ -143,10 +149,20 @@ impl App {
         &self.rail_state
     }
 
-    /// The cards and the launch project, or None without home.
+    /// The cards and the launch project, or None without home. The cards
+    /// are every card except a CANNOT ATTACH card the person hid and that
+    /// has not crashed.
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, Option<&str>)> {
         let home = self.home.as_ref()?;
-        Some((home.sessions.cards(), home.launch_project()))
+        let hidden = &self.rail_state.hidden;
+        Some((
+            home.sessions
+                .cards()
+                .into_iter()
+                .filter(|row| !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id)))
+                .collect(),
+            home.launch_project(),
+        ))
     }
 
     /// Each project's exited sessions, in display order: the count
@@ -200,6 +216,10 @@ impl App {
         let Some(home) = self.home.as_ref() else {
             return;
         };
+        // Numbers cover every card, hidden ones included, so a hidden
+        // card keeps its number for its whole life and a new card takes
+        // the smallest free one (`docs/tui.md`, "The rail"). Only the
+        // drawn cards show.
         self.rail_state.sync(&home.sessions.cards());
         let Some(key) = self.rail_state.reveal else {
             return;
@@ -288,7 +308,7 @@ impl App {
             }
             for card in &group.cards {
                 stops.push(Spot::Card(card.key));
-                if card.left == Some(Left::Crashed) {
+                if crate::view::rail::has_x(card) {
                     stops.push(Spot::Dismiss(card.key));
                 }
             }
@@ -427,7 +447,7 @@ impl App {
     }
 
     /// Delete on the focused stop: the stop question for a card, nothing
-    /// for a crashed card, a "+", an "N ✓" or a ✕.
+    /// for a crashed or CANNOT ATTACH card, a "+", an "N ✓" or a ✕.
     fn stop_focused_card(&mut self) -> Effect {
         match self.rail_state.focus {
             Some(Spot::Card(key)) => self.ask_stop(key),
@@ -731,22 +751,30 @@ impl App {
         Some(Vec::new())
     }
 
-    /// A crashed card's ✕: `dismiss` through the hub, so every client
-    /// agrees (`docs/tui.md`, "The rail"). Nothing goes out with the link
-    /// not up or for a card that is not crashed.
+    /// A card's ✕. A crashed card's goes through the hub as `dismiss`, so
+    /// every client agrees; a CANNOT ATTACH card's hides it in this
+    /// terminal and sends nothing, since `dismiss` drops only a crashed
+    /// session (`docs/tui.md`, "The rail"). Nothing happens with the link
+    /// not up or for any other card.
     fn dismiss_card(&mut self, key: u64) -> Effect {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let Some(session) = self
+        let Some(row) = self
             .home
             .as_ref()
             .and_then(|home| home.sessions.by_key(key))
-            .filter(|row| row.left == Some(Left::Crashed))
-            .map(|row| row.id.clone())
         else {
             return Effect::None;
         };
+        if crate::view::rail::cannot_attach(row) {
+            self.rail_state.hidden.insert(row.id.clone());
+            return Effect::None;
+        }
+        if row.left != Some(Left::Crashed) {
+            return Effect::None;
+        }
+        let session = row.id.clone();
         let id = mint();
         let line = json!({"id": id, "command": "dismiss", "args": {"session": session.0}});
         self.rail_state.dismissing.push((id, session));

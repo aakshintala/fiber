@@ -96,6 +96,7 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
         mode,
         configure,
         env!("CARGO_PKG_VERSION"),
+        option_env!("FIBER_COMMIT"),
         Arc::new(hub::SpawnStarter::new(exe, Arc::clone(&environments))),
         clock,
         environments,

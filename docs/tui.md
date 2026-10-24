@@ -164,8 +164,7 @@ entry bar. A focused chip is drawn as a hovered one ("Mouse and hover").
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
 
-A failed attach says why on home: the session is held, or its schema is too
-new.
+A failed attach says why on home: the session is held, or its status cannot be read ("The session list").
 
 **When a session cannot start,** as on a fresh install with no key, or after
 a person removed the provider they chose, home shows the same lines `fiber doctor` prints for each blocker, each
@@ -273,8 +272,7 @@ adds no rail card, and the row stays under "exited". A ✕ on a live row stops t
 focused live row stops it too, after asking ("Quit"); on an unreadable row it does nothing, and with the link down it opens no question. Backspace never stops a session, whatever the row. Delete on a
 selected exited row deletes that session through the hub, after asking, and
 the question names any session `--cascade` would add (`docs/invocation.md`,
-"Deleting and pruning"). A row whose
-`schema_version` this terminal cannot read says "cannot attach".
+"Deleting and pruning"). A row whose status this terminal cannot read says CANNOT ATTACH and why: "Cannot attach: this session runs Fiber <v>" when the hub runs another Fiber version or commit than this terminal, since a session runs the binary of the hub that started it, with `<v>` as `fiber --version` writes it; otherwise "Cannot attach: its status did not parse". Opening the row shows the same text as a `session_held` notice.
 
 The mouse wheel over the list's rows scrolls the list by three rows,
 leaving the focus where it is.
@@ -325,7 +323,7 @@ cursor. The focused card is lifted: its tint lifted, as hover draws it
 focus, and the foot hint reads "← full screen · ↑↓ move · Enter switch · Delete stop · → or
 Esc back to the session · ⌥1–9 jump". ↑ and ↓ move between cards across the
 project groups, Enter switches to the focused card's session, and → or Esc
-gives focus back to the input box. Delete on a focused live card asks "Stop <name>?" over the conversation ("Quit"), with or without a draft in the box; the draft stays as it was. On a crashed card, a project header's "+" or "N ✓" it does nothing. Typing on a focused rail goes to the draft and keeps the focus on the rail, and Backspace edits the draft and never stops a session; a key that types nothing, Delete by default, is what stops, and a key rebound to a character types it. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
+gives focus back to the input box. Delete on a focused live card asks "Stop <name>?" over the conversation ("Quit"), with or without a draft in the box; the draft stays as it was. On a crashed or CANNOT ATTACH card, a project header's "+" or "N ✓" it does nothing. Typing on a focused rail goes to the draft and keeps the focus on the rail, and Backspace edits the draft and never stops a session; a key that types nothing, Delete by default, is what stops, and a key rebound to a character types it. A second ← widens the rail to home. When the session on screen has exited, it has no card: ← opens home at once, with focus on that session's row under "exited". When
 the rail is hidden, by the person or for width ("Shedding"), one ← from an
 empty input box opens home.
 
@@ -373,6 +371,8 @@ are not on the rail either; their project header counts them.
 A session whose process died stays on the rail as a ✗ CRASHED card until the
 person resumes it, by clicking the card, or dismisses it, with the ✕ that
 replaces its time. Both go through the hub, so every client agrees (`docs/invocation.md`, "The hub").
+
+A CANNOT ATTACH card has the same ✕ in its time's place. It hides the card in this terminal only, until the terminal exits, and sends nothing to the hub, whose `dismiss` drops only a crashed session (`docs/invocation.md`, "The hub"). The card comes back when the session's status can be read again or the session crashes.
 
 #### State glyphs
 
@@ -1218,6 +1218,8 @@ the fold would reach the same line. The composer is unchanged, so a send is
 rejected `not_subscribed` and the draft comes back with that notice.
 Reopening the session subscribes again through the normal open path.
 
+When the hub runs another Fiber version or commit than this terminal, one notice says so on each connection: code `hub_version`, "The hub runs Fiber <hub> (this terminal: <terminal>). `fiber stop` restarts it on the next launch." The same text shows for a remote (listed) hub. (`docs/invocation.md`, "What the hub speaks").
+
 A notice is an event or a condition. An event reports a failure once and
 then fades: it clears 10 seconds after it shows, or when dismissed with
 ✕. A condition reports a state the terminal re-evaluates on its own
@@ -1241,6 +1243,7 @@ and an expiry wakes the loop even with no input.
 | `extension_shadowed` | event | Fades 10 s after it shows. |
 | `history_loading` | condition | History lands for the pending turn. |
 | `hook_failed` | event | Fades 10 s after it shows. |
+| `hub_version` | event | Fades 10 s after it shows. |
 | `instructions_large` | event | Fades 10 s after it shows. |
 | `invalid_arguments` | event | Fades 10 s after it shows. |
 | `io_failed` | event | Fades 10 s after it shows. |

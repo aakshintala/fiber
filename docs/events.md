@@ -76,7 +76,8 @@ never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 is about the hub or names its session in the payload:
 
 - `hub_hello`, the first line on every connection: `payload` holds
-  `fiber_version` (string). The envelope's `schema_version` is the hub's.
+  `fiber_version` (string) and, when the build knows it, `fiber_commit`
+  (string). The envelope's `schema_version` is the hub's.
 - `attention`, when a top-level session needs the person: `payload` holds
   `session_id`, `name` and `workspace` (strings), `reason` (`waiting` or
   `finished`, a closed set) and, with `waiting`, `summary` (string), the line

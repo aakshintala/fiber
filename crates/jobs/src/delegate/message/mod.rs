@@ -549,6 +549,7 @@ impl DelegateMessage {
             | ErrorCode::HistoryLoading
             | ErrorCode::HookUnapproved
             | ErrorCode::HttpError
+            | ErrorCode::HubVersion
             | ErrorCode::Indeterminate
             | ErrorCode::InstructionsLarge
             | ErrorCode::InvalidArguments

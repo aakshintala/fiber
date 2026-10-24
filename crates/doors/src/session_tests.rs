@@ -146,6 +146,9 @@ pub(crate) enum Probe {
     /// A writer saw STOP while the session is stopping and waits instead
     /// of ending.
     WriterParkedAtStop,
+    /// The writer reached past the log's end and reads its next line
+    /// there: after this point a pushed line arrives past the end.
+    WriterPastEnd,
     /// `close` has queued its `STOP` for the printer.
     PrinterStopQueued,
     /// A wait for the driver shells is about to block on one still running.
@@ -813,6 +816,36 @@ fn should_wait_returns_at_once_with_nothing_owed_and_at_the_grace() {
     // The count's width changes nothing: owed is owed.
     assert!(super::conns::should_wait(usize::MAX, before, until));
     assert!(!super::conns::should_wait(usize::MAX, until, until));
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it: taking the cut's ids wakes a wait for owed answers, so the waiter sees the cut instead of the grace.
+#[test]
+fn cut_wakes_a_waiter_for_owed_answers() {
+    reset();
+    let accepted = super::Accepted::new();
+    let reader = thread::current().id();
+    accepted.track(reader);
+    accepted.reserve(&CommandId("c_1".into()));
+    let clock = FakeClock::new();
+    let until = clock.now() + super::GRACE;
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter_clock = Arc::clone(&clock);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            accepted.wait_owed(waiter_clock.as_ref(), until);
+            if let Ok(()) = done_tx.send(()) {}
+        });
+        assert!(
+            clock.await_parked(until, Deadline::after(DEADLINE)),
+            "wait_owed parks while an answer is owed"
+        );
+        accepted.cut(reader);
+        let done = Deadline::after(DEADLINE).recv(&done_rx);
+        // Release the waiter either way, so a failure here leaves no
+        // parked thread for the scope to join forever.
+        accepted.untrack(reader);
+        assert!(done.is_ok(), "a cut wakes the wait for owed answers");
+    });
 }
 
 #[test]
@@ -2290,7 +2323,8 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         | Probe::PrinterStopQueued
         | Probe::MessageLocked
         | Probe::CloseLocked
-        | Probe::WriterParkedAtStop => {}
+        | Probe::WriterParkedAtStop
+        | Probe::WriterPastEnd => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -4017,7 +4051,8 @@ fn message_and_close_race_in_both_lock_orders() {
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
             | Probe::SubscribeAcknowledged
-            | Probe::WriterParkedAtStop => {}
+            | Probe::WriterParkedAtStop
+            | Probe::WriterPastEnd => {}
         }));
         let socket = opened.socket.clone();
         opened
@@ -4104,7 +4139,8 @@ fn message_and_close_race_in_both_lock_orders() {
             | Probe::ShellsWaiting
             | Probe::SubscribeSeeded
             | Probe::SubscribeAcknowledged
-            | Probe::WriterParkedAtStop => {}
+            | Probe::WriterParkedAtStop
+            | Probe::WriterPastEnd => {}
         }));
         let socket = opened.socket.clone();
         opened
@@ -5552,6 +5588,124 @@ fn join_clients_waits_for_a_reader_that_finishes_inside_the_grace() {
     close_within(opened.session, opened.log);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: the quiesce waits for a cut writer's flush, so `fiber_exited` still reaches the connection after the cut.
+#[test]
+fn wait_cut_waits_for_the_cut_flush() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let clock = Arc::clone(&opened.clock);
+    let reader = thread::spawn(|| {});
+    let id = gate
+        .conns
+        .push_reader(reader, Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    gate.conns.note_owed(id, thread::current().id());
+    gate.conns.cut_owed(&gate.session_id, |_| true);
+    gate.conns.push_writer(id, thread::spawn(|| {}));
+    let until = clock.now() + super::GRACE;
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = Arc::clone(&gate);
+    let waiter_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        waiter.conns.wait_cut(waiter_clock.as_ref(), until);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    let parked = clock.await_parked(until, Deadline::after(DEADLINE));
+    // Release the waiter either way, so a failure here leaves no parked
+    // thread behind.
+    gate.conns.note_cut_flushed(id);
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the flush ends the wait for the cut");
+    gate.conns.finish(id);
+    assert!(parked, "wait_cut parks while a cut writer has not flushed");
+    close_within(opened.session, opened.log);
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: a wait whose deadline already passed returns at once instead of waiting out the margin again.
+#[test]
+fn wait_cut_returns_once_the_deadline_passes() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let clock = Arc::clone(&opened.clock);
+    let reader = thread::spawn(|| {});
+    let id = gate
+        .conns
+        .push_reader(reader, Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    gate.conns.note_owed(id, thread::current().id());
+    gate.conns.cut_owed(&gate.session_id, |_| true);
+    gate.conns.push_writer(id, thread::spawn(|| {}));
+    // The deadline is already past: the wait returns without parking, so a
+    // quiesce that reaches it late never waits out the margin again.
+    let until = clock.now();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = Arc::clone(&gate);
+    let waiter_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        waiter.conns.wait_cut(waiter_clock.as_ref(), until);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    let done = Deadline::after(DEADLINE).recv(&done_rx);
+    // Release even a waiter that never returns on its own, so a failure
+    // here leaves no parked thread behind.
+    gate.conns.note_cut_flushed(id);
+    gate.conns.finish(id);
+    assert!(
+        done.is_ok(),
+        "wait_cut returns at once when the deadline already passed"
+    );
+    close_within(opened.session, opened.log);
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: the quiesce waits for the cut's flush through the whole flush margin past the grace, not just to the grace.
+#[test]
+fn settle_answers_waits_for_the_flush_through_the_whole_margin() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let gate = Arc::clone(&opened.session.gate);
+    let clock = Arc::clone(&opened.clock);
+    let reader = thread::current().id();
+    gate.accepted.track(reader);
+    gate.accepted.reserve(&CommandId("c_1".into()));
+    let reading = thread::spawn(|| {});
+    let id = gate
+        .conns
+        .push_reader(reading, Box::new(|| {}), Box::new(|| {}))
+        .expect("the gate is running");
+    gate.conns.note_owed(id, reader);
+    gate.conns.push_writer(id, thread::spawn(|| {}));
+    let until = clock.now() + super::GRACE;
+    let (done_tx, done_rx) = mpsc::channel();
+    let session = opened.session;
+    thread::spawn(move || {
+        session.settle_answers();
+        if let Ok(()) = done_tx.send(session) {}
+    });
+    assert!(
+        clock.await_parked(until, Deadline::after(DEADLINE)),
+        "settle_answers waits for the owed answer"
+    );
+    clock.advance_when_parked(Some(until), None, super::GRACE, &Deadline::after(DEADLINE));
+    // The grace passed with the answer still owed: the session cut it and
+    // now waits the flush margin for the cut writer's flush.
+    let parked = clock.await_parked(until + super::CUT_FLUSH, Deadline::after(DEADLINE));
+    // Release the waiter either way, so a failure here leaves no parked
+    // thread behind.
+    gate.conns.note_cut_flushed(id);
+    let session = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the flush ends settle_answers");
+    gate.conns.finish(id);
+    assert!(
+        parked,
+        "settle_answers waits for the cut flush through the whole margin"
+    );
+    close_within(session, opened.log);
+}
+
 #[test]
 fn quiet_readers_stops_a_reader_and_leaves_its_socket_open() {
     reset();
@@ -5966,5 +6120,126 @@ fn a_stop_before_the_end_ends_the_writer_unless_the_session_is_stopping() {
     );
     flying.opened.log.end_watchers();
     flying.wait_ended();
+    flying.finish();
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it: a cut that reaches the writer while its reader owes nothing flushes nothing, so the later quiesce wait still waits for the real flush.
+#[test]
+fn a_cut_with_nothing_owed_leaves_the_flush_unmarked() {
+    reset();
+    let flying = Flying::start(|_, injector, gate| {
+        injector.push_kept(crate::client::control_line(&gate.session_id, super::CUT, 0));
+    });
+    flying.stop();
+    flying.wait_ended();
+    assert!(
+        flying.out.lines().is_empty(),
+        "a cut with nothing owed writes nothing"
+    );
+    // The skipped cut flushed nothing: marking the connection cut now still
+    // leaves the flush outstanding, so the quiesce wait parks.
+    flying
+        .gate
+        .conns
+        .cut_owed(&flying.gate.session_id, |_| true);
+    flying
+        .gate
+        .conns
+        .push_writer(flying.conn, thread::spawn(|| {}));
+    let clock = Arc::clone(&flying.opened.clock);
+    let until = clock.now() + super::GRACE;
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = Arc::clone(&flying.gate);
+    let waiter_clock = Arc::clone(&clock);
+    thread::spawn(move || {
+        waiter.conns.wait_cut(waiter_clock.as_ref(), until);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    let parked = clock.await_parked(until, Deadline::after(DEADLINE));
+    // Release the waiter either way, so a failure here leaves no parked
+    // thread behind.
+    flying.gate.conns.note_cut_flushed(flying.conn);
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the flush ends the quiesce wait");
+    assert!(
+        parked,
+        "the quiesce wait still waits: a cut with nothing owed flushed nothing"
+    );
+    flying.finish();
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it: past the log's end, a cut line is dropped, never written to the client.
+#[test]
+fn past_end_cut_line_is_dropped() {
+    reset();
+    let flying = Flying::start(|_, _, gate| {
+        gate.accepted.reserve(&CommandId("c_1".into()));
+        gate.conns.mark_stopped();
+    });
+    // The STOP is queued before the log ends, so the writer consumes it
+    // before the end; the log ends while it waits, so the CUT below
+    // arrives past the end.
+    let gate = Arc::clone(&flying.gate);
+    let (past_tx, past_end) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::WriterPastEnd
+            && let Ok(()) = past_tx.send(())
+        {}
+    }));
+    flying.stop();
+    flying.opened.log.end_watchers();
+    Deadline::after(DEADLINE)
+        .recv(&past_end)
+        .expect("the writer reads past the log's end");
+    flying.injector.push_kept(crate::client::control_line(
+        &flying.gate.session_id,
+        super::CUT,
+        0,
+    ));
+    flying.injector.push_kept(flying.answer("c_1"));
+    flying.wait_ended();
+    assert_eq!(
+        read_ids(&flying.out),
+        [("command_accepted".to_owned(), "c_1".to_owned())]
+    );
+    flying.finish();
+}
+
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it: past the log's end, a level line with no switch pending changes nothing and is never written to the client.
+#[test]
+fn past_end_level_line_without_a_switch_changes_nothing() {
+    reset();
+    let flying = Flying::start(|_, _, gate| {
+        gate.accepted.reserve(&CommandId("c_1".into()));
+        gate.conns.mark_stopped();
+    });
+    // The STOP is queued before the log ends, so the writer consumes it
+    // before the end; the log ends while it waits, so the LEVEL below
+    // arrives past the end.
+    let gate = Arc::clone(&flying.gate);
+    let (past_tx, past_end) = mpsc::channel();
+    *lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::WriterPastEnd
+            && let Ok(()) = past_tx.send(())
+        {}
+    }));
+    flying.stop();
+    flying.opened.log.end_watchers();
+    Deadline::after(DEADLINE)
+        .recv(&past_end)
+        .expect("the writer reads past the log's end");
+    // `client::level::LEVEL` is private to the client module; this is its value.
+    flying.injector.push_kept(crate::client::control_line(
+        &flying.gate.session_id,
+        "doors.level",
+        0,
+    ));
+    flying.injector.push_kept(flying.answer("c_1"));
+    flying.wait_ended();
+    assert_eq!(
+        read_ids(&flying.out),
+        [("command_accepted".to_owned(), "c_1".to_owned())]
+    );
     flying.finish();
 }

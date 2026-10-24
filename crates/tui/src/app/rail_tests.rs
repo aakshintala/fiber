@@ -1,7 +1,7 @@
 //! Tests for the rail's state: card numbers, switching, keys and the
 //! wheel.
 
-use super::super::{App, Effect};
+use super::super::{App, Effect, Link};
 use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
@@ -572,15 +572,35 @@ fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
     assert_eq!(click(&mut app, C), Effect::None);
     assert_eq!(
         app.notice(),
-        Some("Cannot attach: this session's schema is newer than this terminal reads.")
+        Some("Cannot attach: its status did not parse.")
     );
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
         if code == "session_held"
-            && text == "Cannot attach: this session's schema is newer than this terminal reads."
+            && text == "Cannot attach: its status did not parse."
     )));
     assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn an_unreadable_card_after_a_differing_hello_names_the_hubs_build() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"fiber_version": "9.9.9", "fiber_commit": "2121f38d1e4f0a9b"})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    app.on_line(live(C, json!({"state": 7})));
+    assert_eq!(click(&mut app, C), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: this session runs Fiber 9.9.9 (2121f38).")
+    );
 }
 
 #[test]
@@ -3350,4 +3370,220 @@ fn a_rebound_shifted_letter_or_space_types_on_the_rail() {
         assert!(!app.quit_open(), "{bound} types");
         assert_eq!(app.draft(), typed, "{bound}");
     }
+}
+
+/// `session`'s status as this terminal cannot read it.
+fn unreadable(app: &mut App, session: &str) {
+    app.on_line(live(session, json!({"state": 7})));
+}
+
+/// A linked app showing `A`, with `B` unreadable and `C` live.
+fn cannot_attach() -> App {
+    let mut app = opened(&[A, B, C], A);
+    unreadable(&mut app, B);
+    app
+}
+
+/// Clicks `session`'s ✕ and returns the effect.
+fn cross_effect(app: &mut App, session: &str) -> Effect {
+    let key = key(app, session);
+    app.on_click(TargetId::Rail(Spot::Dismiss(key)))
+}
+
+#[test]
+fn an_unreadable_card_draws_a_cross_and_a_dismiss_target() {
+    let mut app = cannot_attach();
+    let rows = frame_rows(&app, 200, 40);
+    let card = rows
+        .iter()
+        .find(|row| row.contains("CANNOT ATTACH"))
+        .expect("the CANNOT ATTACH card");
+    assert!(card.contains('✕'), "{card}");
+    let targets = framed(&mut app);
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Dismiss(key(&app, B)))),
+        "the ✕ is a target"
+    );
+}
+
+#[test]
+fn a_live_card_draws_no_cross() {
+    let mut app = opened(&[A, B], A);
+    assert!(carded(&app, A) && carded(&app, B), "both live cards exist");
+    assert!(
+        framed(&mut app)
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "card A drew its stop"
+    );
+    assert!(
+        !frame_rows(&app, 200, 40)
+            .iter()
+            .any(|row| row.contains('✕')),
+        "only crashed and unreadable cards have one"
+    );
+}
+
+/// Focuses the rail and walks down to `session`'s card, then its ✕.
+fn focus_cross(app: &mut App, session: &str) {
+    stroke_press(app, plain(Code::Left));
+    let card = Some(Spot::Card(key(app, session)));
+    for _ in 0..12 {
+        if rail_focus(app) == card {
+            break;
+        }
+        stroke_press(app, plain(Code::Down));
+    }
+    assert_eq!(rail_focus(app), card);
+    stroke_press(app, plain(Code::Down));
+    assert_eq!(rail_focus(app), Some(Spot::Dismiss(key(app, session))));
+}
+
+#[test]
+fn the_walk_reaches_an_unreadable_cards_cross() {
+    // The walk visits the card and its ✕. The doc leaves the stop order
+    // open, so the test asserts the visited stops as a set
+    // (`docs/testing.md`, "A test asserts an order or a count only where
+    // a doc promises it"; `docs/tui.md`, "The rail" draws each card with
+    // its ✕).
+    let mut app = cannot_attach();
+    stroke_press(&mut app, plain(Code::Left));
+    let mut seen = vec![rail_focus(&app).expect("the rail takes focus")];
+    for _ in 0..32 {
+        stroke_press(&mut app, plain(Code::Down));
+        let focus = rail_focus(&app).expect("focus holds at the last stop");
+        if *seen.last().expect("a first stop") == focus {
+            break;
+        }
+        seen.push(focus);
+    }
+    assert!(
+        seen.contains(&Spot::Card(key(&app, B))),
+        "the walk reaches the card: {seen:?}"
+    );
+    assert!(
+        seen.contains(&Spot::Dismiss(key(&app, B))),
+        "the walk reaches its ✕: {seen:?}"
+    );
+}
+
+#[test]
+fn the_cross_hides_the_card_here_and_sends_nothing() {
+    let mut app = cannot_attach();
+    assert_eq!(cross_effect(&mut app, B), Effect::None);
+    assert!(!carded(&app, B));
+    assert!(carded(&app, A) && carded(&app, C));
+    assert!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .is_some(),
+        "home still lists the row"
+    );
+}
+
+#[test]
+fn a_later_unreadable_status_keeps_the_card_hidden() {
+    let mut app = cannot_attach();
+    assert!(carded(&app, B), "the card drew before its ✕");
+    assert_eq!(
+        cross_effect(&mut app, B),
+        Effect::None,
+        "hiding sends nothing"
+    );
+    unreadable(&mut app, B);
+    assert!(!carded(&app, B));
+    assert!(carded(&app, A) && carded(&app, C));
+    assert!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .is_some(),
+        "the later status still reached home"
+    );
+}
+
+#[test]
+fn a_readable_status_brings_the_card_back_with_its_number_kept() {
+    // A card keeps its number for its whole life, hidden or not
+    // (`docs/tui.md`, "The rail"): the hidden card holds 2, so a new
+    // card takes 4, and the card comes back as 2.
+    let mut app = cannot_attach();
+    assert_eq!(number(&app, B), Some(2));
+    cross_effect(&mut app, B);
+    app.on_line(live(D, json!({})));
+    assert_eq!(number(&app, D), Some(4), "the hidden card kept its number");
+    app.on_line(live(B, json!({})));
+    assert_eq!(number(&app, B), Some(2));
+}
+
+#[test]
+fn a_hidden_card_that_crashes_comes_back_and_its_cross_sends_dismiss() {
+    // A crashed card's ✕ dismisses through the hub (`docs/tui.md`, "The
+    // rail"): exactly one `dismiss` line goes out.
+    let mut app = cannot_attach();
+    cross_effect(&mut app, B);
+    app.on_line(left(B, "crashed"));
+    assert!(carded(&app, B));
+    let out = sent(cross_effect(&mut app, B));
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["command"], "dismiss");
+    assert_eq!(out[0]["args"], json!({"session": B}));
+}
+
+#[test]
+fn the_card_stays_hidden_across_a_reconnect() {
+    let mut app = cannot_attach();
+    assert!(carded(&app, B), "the card drew before its ✕");
+    assert_eq!(
+        cross_effect(&mut app, B),
+        Effect::None,
+        "hiding sends nothing"
+    );
+    app.disconnected();
+    app.on_line(hello());
+    assert_eq!(app.outbox.link, Link::Up, "the reconnect hello linked");
+    unreadable(&mut app, B);
+    assert!(!carded(&app, B));
+    assert!(carded(&app, A) && carded(&app, C));
+    assert!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .is_some(),
+        "the later status still reached home"
+    );
+}
+
+#[test]
+fn with_the_link_down_the_cross_hides_nothing() {
+    let mut app = cannot_attach();
+    let stale = key(&app, B);
+    app.disconnected();
+    assert_eq!(
+        app.on_click(TargetId::Rail(Spot::Dismiss(stale))),
+        Effect::None
+    );
+    app.on_line(hello());
+    unreadable(&mut app, B);
+    assert!(carded(&app, B));
+}
+
+#[test]
+fn enter_on_the_focused_cross_hides_the_card_and_clears_focus() {
+    let mut app = cannot_attach();
+    focus_cross(&mut app, B);
+    assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
+    assert!(!carded(&app, B));
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn delete_on_the_focused_cross_does_nothing() {
+    let mut app = cannot_attach();
+    focus_cross(&mut app, B);
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert!(carded(&app, B));
 }

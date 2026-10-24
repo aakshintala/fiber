@@ -251,6 +251,16 @@ fn past_end(
                 return Past::Ended(Ended::Done);
             }
         }
+        // Test-only pause point: the writer reads its next line past the
+        // log's end, so a test that observes it knows a line pushed now
+        // arrives past the end, not before it (`docs/testing.md`,
+        // "Waits and timeouts").
+        #[cfg(test)]
+        if let Some(flight) = flight {
+            flight
+                .gate
+                .note(crate::session::tests::Probe::WriterPastEnd);
+        }
         let line = writing.watcher.recv_after_end();
         match line.kind.as_str() {
             CUT => {}

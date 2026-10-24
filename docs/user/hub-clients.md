@@ -10,7 +10,7 @@ From another machine, either forward that socket over SSH and add it as a `unix:
 
 ## The first exchange
 
-Every connection opens with a [`hub_hello`](../events.md#the-envelope) line carrying the hub's [`schema_version`](../events.md#the-envelope) and Fiber version ([The envelope](../events.md#the-envelope)). On the port, the connection's first command is [`authenticate`](../invocation.md#remote-clients) with its device token, or [`pair`](../invocation.md#remote-clients) with a pairing code ([Remote clients](../invocation.md#remote-clients)). Anything else there is answered [`unauthenticated`](../invocation.md#remote-clients) and the connection closes; a wrong, used, or old pairing code is rejected [`pairing_failed`](../invocation.md#remote-clients).
+Every connection opens with a [`hub_hello`](../events.md#the-envelope) line carrying the hub's [`schema_version`](../events.md#the-envelope), its Fiber version and, when the build knows it, its commit ([The envelope](../events.md#the-envelope)). On the port, the connection's first command is [`authenticate`](../invocation.md#remote-clients) with its device token, or [`pair`](../invocation.md#remote-clients) with a pairing code ([Remote clients](../invocation.md#remote-clients)). Anything else there is answered [`unauthenticated`](../invocation.md#remote-clients) and the connection closes; a wrong, used, or old pairing code is rejected [`pairing_failed`](../invocation.md#remote-clients).
 
 ## Worked example
 
