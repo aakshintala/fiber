@@ -142,8 +142,23 @@ impl App {
     }
 
     /// A `read_file` for a viewer open was rejected: one notice says
-    /// why, and nothing retries. True when `id` was ours.
+    /// why, and nothing retries. A display fetch answers here too: the
+    /// image stays its one line with no notice, and is not asked for
+    /// again in this generation (`docs/tui.md`, "Images"). True when
+    /// `id` was ours.
     pub(in crate::app) fn image_rejected(&mut self, id: &str, message: &str) -> bool {
+        let failed = self
+            .images
+            .display
+            .iter()
+            .find(|(_, fetch)| fetch.command == id)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = failed {
+            if let Some(fetch) = self.images.display.get_mut(&key) {
+                fetch.state = DisplayState::Failed;
+            }
+            return true;
+        }
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };

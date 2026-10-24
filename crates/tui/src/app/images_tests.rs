@@ -561,6 +561,28 @@ fn a_draw_with_the_link_down_asks_nothing() {
 }
 
 #[test]
+fn a_rejected_display_answer_leaves_the_line_with_no_notice() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let targets = drawn(1);
+    app.images_drawn(&targets);
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let id = serde_json::from_str::<Value>(&out.display[0])
+        .ok()
+        .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_default();
+    // The rejection lands on the display fetch: no notice, and the one
+    // line stays.
+    assert!(reject(&mut app, &id, "no such file.").is_empty());
+    assert_eq!(app.notice(), None);
+    assert!(app.take_image_out().display.is_empty());
+    // A failed image is not fetched again in this generation.
+    app.images_drawn(&targets);
+    assert!(app.take_image_out().display.is_empty());
+}
+
+#[test]
 fn a_non_png_draw_asks_for_no_bytes() {
     let mut app = inline_app();
     app.on_line(Line::Session(contract::Envelope {

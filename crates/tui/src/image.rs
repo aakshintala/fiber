@@ -172,6 +172,7 @@ impl Layout {
 }
 
 /// Where an image's line sits.
+#[derive(Clone, Copy)]
 pub(crate) enum Align {
     /// At the ledger's indent, under a call's row.
     Left { indent: u16 },
@@ -186,10 +187,52 @@ pub(crate) enum Align {
 pub(crate) fn rows(part: &Part, layout: &Layout, columns: u16, align: Align, out: &mut Rows) {
     match layout.sizing {
         Sizing::Text => text_rows(part, layout, columns, align, out),
-        // The inline grid arrives next: until then the caption line
-        // holds the image's row.
-        Sizing::Inline { .. } => text_rows(part, layout, columns, align, out),
+        Sizing::Inline { cell } => match align {
+            // Only a PNG under a call's ledger row draws inline: the
+            // prompt bubble and steering images stay their one line.
+            Align::Left { indent } if indent > 0 && part.mime_type == "image/png" => {
+                if let Some(id) = layout.id(&part.session, &part.path) {
+                    inline_rows(part, layout, id, columns, indent, cell, out);
+                } else {
+                    text_rows(part, layout, columns, align, out);
+                }
+            }
+            Align::Left { .. } | Align::Right => text_rows(part, layout, columns, align, out),
+        },
     }
+}
+
+/// Draws `part`'s placeholder grid with `id`, then its caption line: the
+/// grid moves with the text through kitty's Unicode placeholders, and a
+/// click on either opens the viewer (`docs/tui.md`, "Images").
+fn inline_rows(
+    part: &Part,
+    layout: &Layout,
+    id: u32,
+    columns: u16,
+    indent: u16,
+    cell: (u16, u16),
+    out: &mut Rows,
+) {
+    let (cols, rows) = grid(part, columns, cell);
+    let target = Some(Target::Image(id));
+    for row in 0..rows {
+        let mut spans = Vec::with_capacity(usize::from(cols).saturating_add(1));
+        if indent > 0 {
+            spans.push(Span::raw(" ".repeat(usize::from(indent))));
+        }
+        for col in 0..cols {
+            spans.push(crate::graphics::cell(
+                usize::from(row),
+                usize::from(col),
+                crate::look::placeholder_style(id),
+            ));
+        }
+        out.push((Line::from(spans), target));
+    }
+    // The caption reads as the one-line form, so the line stays the same
+    // with inline off.
+    text_rows(part, layout, columns, Align::Left { indent }, out);
 }
 
 /// Draws `part` as its one line, cut to the columns left after its

@@ -267,6 +267,123 @@ fn one_path_in_two_segments_draws_two_ids() {
     assert_eq!(layout.note(&first), one, "refolding keeps the id");
 }
 
+/// A layout sizing inline with `cell`, having noted `part`.
+fn inline_layout(part: &super::Part, cell: (u16, u16)) -> Layout {
+    let mut layout = Layout::default();
+    layout.note(part);
+    layout.sizing = super::Sizing::Inline { cell };
+    layout
+}
+
+#[test]
+fn an_inline_png_draws_placeholders_then_its_caption() {
+    use ratatui::style::Color;
+    // 1280 by 800 at 80 columns with a 10 by 20 cell: 32 by 10
+    // placeholders, then the caption line.
+    let part = sized(1280, 800);
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11);
+    for (at, (line, target)) in rows.iter().enumerate().take(10) {
+        assert_eq!(
+            line.spans.len(),
+            33,
+            "row {at}: the indent and one cell per column"
+        );
+        assert_eq!(line.spans[0].content.as_ref(), "    ");
+        for span in line.spans.iter().skip(1) {
+            assert!(
+                span.content.as_ref().starts_with('\u{10EEEE}'),
+                "row {at}: every grid cell is a placeholder"
+            );
+            assert_eq!(span.style.fg, Some(Color::Indexed(1)));
+        }
+        assert!(matches!(target, Some(Target::Image(1))), "row {at}");
+    }
+    let (caption, target) = &rows[10];
+    assert_eq!(caption.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(target, Some(Target::Image(1))));
+}
+
+#[test]
+fn a_non_png_stays_its_one_line_when_sized_inline() {
+    let jpeg = ContentPart::Image {
+        path: "artifacts/a.jpg".to_owned(),
+        mime_type: "image/jpeg".to_owned(),
+        width: 1280,
+        height: 800,
+    };
+    let part = super::Part::from_content(&session(), &jpeg).expect("the jpeg is kept");
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.jpg · 1280×800");
+}
+
+#[test]
+fn the_bubble_and_steering_stay_one_line_when_sized_inline() {
+    let part = sized(1280, 800);
+    let layout = inline_layout(&part, (10, 20));
+    for align in [Align::Right, Align::Left { indent: 0 }] {
+        let mut out = Rows::default();
+        super::rows(&part, &layout, 80, align, &mut out);
+        let (rows, _) = out.into_parts();
+        assert_eq!(rows.len(), 1, "the bubble and steering stay one line");
+        assert!(
+            rows[0]
+                .0
+                .spans
+                .iter()
+                .all(|span| !span.content.as_ref().starts_with('\u{10EEEE}')),
+            "no placeholders outside a ledger row"
+        );
+    }
+}
+
+#[test]
+fn an_unnoted_part_falls_back_to_its_one_line() {
+    let part = sized(1280, 800);
+    let layout = Layout {
+        sizing: super::Sizing::Inline { cell: (10, 20) },
+        ..Default::default()
+    };
+    let mut out = Rows::default();
+    super::rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+}
+
+#[test]
+fn a_zero_grid_draws_only_its_caption() {
+    let part = sized(0, 800);
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 0×800");
+}
+
 /// A part with `width` by `height` logged pixels.
 fn sized(width: u32, height: u32) -> super::Part {
     super::Part::from_content(&session(), &image("artifacts/a.png", width, height))

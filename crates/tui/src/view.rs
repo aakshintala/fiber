@@ -63,13 +63,32 @@ pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 /// Paints `rect` as the click target under the pointer: each cell takes
 /// its own background 0x14 lighter on each channel where it sits on a
 /// tint, and the hover tint where it has none (`docs/tui.md`, palette,
-/// `hover`).
+/// `hover`). Placeholder cells keep their colours: tinting one would
+/// destroy the image id they carry (`docs/tui.md`, "Images").
 pub(crate) fn lift_hover(buf: &mut Buffer, rect: Rect) {
     let area = buf.area.intersection(rect);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
+            if crate::graphics::is_placeholder(buf[(x, y)].symbol()) {
+                continue;
+            }
             let bg = buf[(x, y)].bg;
             buf[(x, y)].set_bg(crate::theme::hover_bg(bg));
+        }
+    }
+}
+
+/// Paints `rect` with the focus style, leaving placeholder cells alone:
+/// reversing one would destroy the image id its colours carry
+/// (`docs/tui.md`, "Images").
+fn focus_style(buf: &mut Buffer, rect: Rect) {
+    let area = buf.area.intersection(rect);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if crate::graphics::is_placeholder(buf[(x, y)].symbol()) {
+                continue;
+            }
+            buf[(x, y)].set_style(FOCUS_STYLE);
         }
     }
 }
@@ -237,7 +256,7 @@ pub(crate) fn render(
         }
         if let Some(id) = app.focused() {
             for target in targets.iter().filter(|target| target.id == id) {
-                buf.set_style(target.rect, FOCUS_STYLE);
+                focus_style(buf, target.rect);
             }
         }
         return targets;
@@ -431,7 +450,7 @@ pub(crate) fn render(
         // `surface_raised` tint with the hint under them
         // (`docs/tui.md`, "Links").
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, FOCUS_STYLE);
+            focus_style(buf, target.rect);
         }
     }
     targets
