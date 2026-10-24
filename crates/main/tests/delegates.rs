@@ -6467,17 +6467,21 @@ const DELEGATE_COMMAND_DURABLE: &[&str] = &[
 fn subscribed_command_session(
     setup: &support::Setup,
     id: &str,
-) -> (extension_harness::Socket, extension_harness::Running) {
+) -> (
+    extension_harness::Socket,
+    extension_harness::Running,
+    Vec<Value>,
+) {
     let mut running = setup.start_session(id, &[]);
     let client = running.connect(&setup.socket(id));
     send(
         &client,
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
-    until_session(&client, "the subscribe acknowledgement", |line| {
+    let prefix = until_session(&client, "the subscribe acknowledgement", |line| {
         line["kind"] == "command_accepted"
     });
-    (client, running)
+    (client, running, prefix)
 }
 
 /// The socket's `extension_ui` statuses from `extension`.
@@ -6505,7 +6509,7 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let id = doors::mint("s_");
-    let (client, running) = subscribed_command_session(&setup, &id);
+    let (client, running, _prefix) = subscribed_command_session(&setup, &id);
     send(
         &client,
         r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
@@ -6576,6 +6580,90 @@ fn an_extension_delegate_run_writes_the_final_message_where_the_model_never_read
     }
 }
 
+/// The subscribe and reload bound startup; command acceptance can race
+/// replay, while startup and job start retain their own promised order.
+fn assert_command_startup(lines: &[Value], lo: usize, hi: usize) {
+    support::assert_set_between(
+        lines,
+        lo,
+        hi,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "command_accepted",
+            "job_started",
+            "delegate_started",
+            "extension_ui",
+        ],
+    );
+    let window = &lines[lo + 1..hi];
+    assert_eq!(answered(window, "c_go")["kind"], "command_accepted");
+    let ordered: Vec<_> = support::kinds(window)
+        .into_iter()
+        .filter(|kind| *kind != "command_accepted")
+        .collect();
+    let expected = [
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "job_started",
+        "delegate_started",
+        "extension_ui",
+    ];
+    let mut between = expected;
+    between.swap(4, 5);
+    let mut before = expected;
+    before[3..].copy_from_slice(&["extension_ui", "job_started", "delegate_started"]);
+    assert!(
+        [expected.as_slice(), between.as_slice(), before.as_slice()].contains(&ordered.as_slice()),
+        "startup order: {ordered:?}"
+    );
+}
+
+#[test]
+fn startup_acknowledgement_can_join_the_replayed_prefix() {
+    for ui in 3..=5 {
+        for ack in 0..=6 {
+            let mut lines = support::expected(&[
+                "session_started",
+                "fiber_started",
+                "extensions_loaded",
+                "job_started",
+                "delegate_started",
+            ]);
+            lines.insert(ui, json!({"kind": "extension_ui"}));
+            lines.insert(
+                ack,
+                json!({"kind": "command_accepted", "payload": {"command_id": "c_go"}}),
+            );
+            lines.insert(
+                0,
+                json!({"kind": "command_accepted", "payload": {"command_id": "c_sub"}}),
+            );
+            lines.push(json!({"kind": "reloaded"}));
+            assert_command_startup(&lines, 0, 8);
+            let mut missing = lines.clone();
+            missing.remove(ack + 1);
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&missing, 0, 7)).is_err());
+            let mut duplicate = lines.clone();
+            duplicate.insert(ack + 1, lines[ack + 1].clone());
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&duplicate, 0, 9)).is_err());
+            let mut reversed = lines.clone();
+            let job = reversed
+                .iter()
+                .position(|line| line["kind"] == "job_started")
+                .unwrap();
+            let delegate = reversed
+                .iter()
+                .position(|line| line["kind"] == "delegate_started")
+                .unwrap();
+            reversed.swap(job, delegate);
+            assert!(std::panic::catch_unwind(|| assert_command_startup(&reversed, 0, 8)).is_err());
+        }
+    }
+}
+
 #[test]
 fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     let setup = support::Setup::new();
@@ -6594,14 +6682,14 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     providers(&setup, &parent, &child);
     setup.lua("scan", DELEGATE_INIT);
     let id = doors::mint("s_");
-    let (client, running) = subscribed_command_session(&setup, &id);
+    let (client, running, mut stream) = subscribed_command_session(&setup, &id);
     send(
         &client,
         r#"{"id":"c_go","command":"command","args":{"name":"go"}}"#,
     );
-    let mut stream = until_session(&client, "the delegate start", |line| {
+    stream.extend(until_session(&client, "the delegate start", |line| {
         line["kind"] == "extension_ui" && line["payload"].to_string().contains("started:")
-    });
+    }));
     assert!(
         child.await_requests(1, setup.deadline),
         "the delegate child is running"
@@ -6689,33 +6777,36 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         .iter()
         .position(|line| line["kind"] == "job_completed")
         .unwrap();
-    let ordered = cancellation_kinds(&stream, lo, hi);
-    let started_first: [&str; 15] = [
-        "session_started",
-        "fiber_started",
-        "extensions_loaded",
-        "command_accepted",
-        "job_started",
-        "delegate_started",
-        "extension_ui",
-        "reloaded",
-        "command_accepted",
-        "extensions_loaded",
-        "preamble_built",
-        "delegate_finished",
-        "job_completed",
-        "command_accepted",
-        "fiber_exited",
-    ];
-    let mut ui_first = started_first;
-    ui_first.swap(5, 6);
-    let mut ui_before_job = started_first;
-    ui_before_job[4] = "extension_ui";
-    ui_before_job[5] = "job_started";
-    ui_before_job[6] = "delegate_started";
-    assert!(
-        ordered == started_first || ordered == ui_first || ordered == ui_before_job,
-        "unexpected stream: {ordered:?}"
+    let sub = stream
+        .iter()
+        .position(|line| is_answer(line, "c_sub"))
+        .unwrap();
+    let reload = stream
+        .iter()
+        .position(|line| line["kind"] == "reloaded")
+        .unwrap();
+    assert_command_startup(&stream, sub, reload);
+    assert_eq!(
+        answered(&stream[reload..], "c_reload")["kind"],
+        "command_accepted"
+    );
+    assert_eq!(
+        answered(&stream[hi..], "c_close")["kind"],
+        "command_accepted"
+    );
+    let ordered = cancellation_kinds(&stream[reload..], lo - reload, hi - reload);
+    assert_eq!(
+        ordered,
+        [
+            "reloaded",
+            "command_accepted",
+            "extensions_loaded",
+            "preamble_built",
+            "delegate_finished",
+            "job_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
     );
     drop(client);
     let (status, _out, stderr) = running.wait();
