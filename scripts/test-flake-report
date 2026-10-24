@@ -2,23 +2,22 @@
 # The self-test for the flake report's write step (.github/workflows/ci.yml,
 # job flake_report; docs/testing/running.md, "Flaky tests"). It runs that
 # step's own script, cut from the workflow file, against a stub `gh` that
-# records each write and answers each read from the case's fixture. Every
-# write path is proven: a new issue, a comment on an open issue, a pull
-# request comment for a failing file the pull request owns, a closed issue
-# reopened with its sighting comment and needs-triage, a stale fix that
-# files nothing, a closed-without-PR issue reopened, and a failed
-# closing-PR lookup that files nothing. Each body names
-# the tested commit: `tested <sha> = main <base> + head <head>` on a pull
-# request run with two parents, and `tested <sha>` on a push run or a pull
-# request run with one parent. Nothing reaches the GitHub API.
+# records each write and answers each read from the case's fixture, plus a
+# decision artifact the case writes. Every write path is proven: a new
+# issue carrying the test-only label, a comment on an open issue, a pull
+# request comment for a failing file the pull request owns, and a validated
+# reopen with its sighting comment and needs-triage. Every no-write path
+# is proven: stale and unknown actions, the four reopen predicate
+# mismatches, a fetch that fails, a recheck that fails or finds an open
+# issue before reopen or create, a failed open lookup, an invalid or
+# missing decision, and the fail-closed guards on the decision result, the
+# decision artifact and the flake lists. A duplicate title writes once.
+# Each body names the tested commit: `tested <sha> = main <base> + head
+# <head>` on a pull request run with two parents, and `tested <sha>` on a
+# push run or a pull request run with one parent. Nothing reaches the
+# GitHub API.
 #
 # Usage: scripts/test-flake-report
-#
-# Cases: a new issue, a comment on an open issue, a pull request comment
-# for a failing file the pull request owns, a closed issue reopened with
-# its sighting comment and needs-triage, a stale tested commit that files
-# nothing, a closed-without-PR issue reopened on any failure, and a failed
-# closing-PR lookup that files nothing.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -43,26 +42,36 @@ awk '
   }
 ' .github/workflows/ci.yml >"$tmp/step.sh"
 grep -Fq 'flake_body() {' "$tmp/step.sh" || fail "the flake report step's script was not found in .github/workflows/ci.yml"
+grep -Fq 'open_number() {' "$tmp/step.sh" || fail "the flake report step's open lookup was not found in .github/workflows/ci.yml"
 
 # The stub, written ahead of the step so it needs no executable on PATH.
-# A write becomes one file, numbered in order: its first line is `create
-# <title>` or `comment <number>`, the rest is the body exactly.
+# A write becomes one file, numbered in order. A comment file holds
+# `comment <number>` then the body exactly; a create file holds
+# `create <title>`, the body, then `label=<label>`; a reopen file holds
+# `reopen <number>`; a label file holds `label <number> <label>`. The open
+# lookup answers $STUB_OPEN every call, or $STUB_OPEN_FIRST once then
+# $STUB_OPEN_REST; STUB_OPEN_FAIL fails every open call and
+# STUB_OPEN_REST_FAIL fails the calls after the first.
 cat >"$tmp/stub.sh" <<'EOF'
 gh() {
   case "$1" in
     api)
       case "$*" in
         *"/commits/"*) printf '%s\n' "$STUB_PARENTS" ;;
-        *"/compare/"*)
-          case "$*" in
-            *".status"*) printf '%s\n' "$STUB_STATUS" ;;
-            *) printf '%s\n' "$STUB_COMPARE" ;;
-          esac
-          ;;
+        *"/compare/"*) printf '%s\n' "$STUB_COMPARE" ;;
         *"/pulls/"*) printf '%s\n' "$STUB_PR_FILES" ;;
-        *graphql*)
-          if [ -n "${STUB_FIX_FAIL:-}" ]; then return 1; fi
-          printf '%s\n' "$STUB_FIX" ;;
+        *"state=open"*)
+          n=0
+          if [ -f "$STUB_CALLS/../open-calls" ]; then n=$(cat "$STUB_CALLS/../open-calls"); fi
+          echo "$((n + 1))" >"$STUB_CALLS/../open-calls"
+          if [ -n "${STUB_OPEN_FAIL:-}" ]; then return 1; fi
+          if [ "$n" -gt 0 ] && [ -n "${STUB_OPEN_REST_FAIL:-}" ]; then return 1; fi
+          if [ "$n" -gt 0 ] && [ -n "${STUB_OPEN_REST:-}" ]; then printf '%s\n' "$STUB_OPEN_REST"; else printf '%s\n' "${STUB_OPEN_FIRST:-$STUB_OPEN}"; fi
+          ;;
+        *"/issues/"*)
+          if [ -n "${STUB_ISSUE_FAIL:-}" ]; then return 1; fi
+          printf '%s\n' "$STUB_ISSUE"
+          ;;
         *) echo "stub gh: unexpected api call: $*" >&2; return 1 ;;
       esac
       ;;
@@ -70,13 +79,6 @@ gh() {
       verb=$2
       shift 2
       case "$verb" in
-        list)
-          case "$*" in
-            *"--state closed"*) printf '%s\n' "$STUB_CLOSED" ;;
-            *) printf '%s\n' "$STUB_NUMBER" ;;
-          esac
-          return 0
-          ;;
         comment) header="comment $1"; shift ;;
         create) header="create" ;;
         reopen)
@@ -94,17 +96,23 @@ gh() {
       esac
       title=""
       body=""
+      label=""
       while [ $# -gt 0 ]; do
         case "$1" in
           --title) title=$2 ;;
           --body) body=$2 ;;
+          --label) label=$2 ;;
           *) echo "stub gh: unexpected argument: $1" >&2; return 1 ;;
         esac
         shift 2
       done
       [ "$verb" = create ] && header="create $title"
       n=$(find "$STUB_CALLS" -type f | wc -l | tr -d ' ')
-      printf '%s\n%s' "$header" "$body" >"$STUB_CALLS/$n"
+      if [ "$verb" = create ]; then
+        printf '%s\n%s\nlabel=%s' "$header" "$body" "$label" >"$STUB_CALLS/$n"
+      else
+        printf '%s\n%s' "$header" "$body" >"$STUB_CALLS/$n"
+      fi
       ;;
     *) echo "stub gh: unexpected call: $*" >&2; return 1 ;;
   esac
@@ -121,95 +129,6 @@ title="Flaky test: $name"
 detail='thread fails_once_then_passes panicked at crates/main/tests/flaky_probe.rs:10:9\nfirst attempt'
 fence='```'
 
-# run_case CASE EVENT PR PARENTS COMPARE PR_FILES NUMBER CLOSED FIX STATUS
-# WANT: runs the step on one flake and checks the one write against WANT.
-run_case() {
-  dir=$tmp/$1
-  mkdir -p "$dir/temp/flaky" "$dir/calls"
-  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
-  env -i PATH="$PATH" HOME="$dir" \
-    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$2" \
-    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
-    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="$3" \
-    STUB_PARENTS="$4" STUB_COMPARE="$5" STUB_PR_FILES="$6" STUB_NUMBER="$7" \
-    STUB_CLOSED="$8" STUB_FIX="$9" STUB_STATUS="${10}" \
-    STUB_CALLS="$dir/calls" \
-    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
-  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
-  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
-  [ "$writes" -eq 1 ] || fail "$1: want one write, got $writes"
-  got=$(cat "$dir/calls/0")
-  [ "$got" = "${11}" ] || {
-    echo "--- want:" >&2
-    printf '%s\n' "${11}" >&2
-    echo "--- got:" >&2
-    printf '%s\n' "$got" >&2
-    fail "$1: the write differs"
-  }
-}
-
-# run_reopen_case CASE CLOSED FIX STATUS WANT0 WANT1 WANT2: a push run with
-# no open issue whose closed issue reopens. The documented outcomes
-# (docs/testing/running.md, "Flaky tests") are the reopen, the sighting
-# comment and the needs-triage label, in no promised order: each want must
-# appear among the writes, wherever it lands.
-run_reopen_case() {
-  dir=$tmp/$1
-  mkdir -p "$dir/temp/flaky" "$dir/calls"
-  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
-  env -i PATH="$PATH" HOME="$dir" \
-    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
-    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
-    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
-    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
-    STUB_CLOSED="$2" STUB_FIX="$3" STUB_STATUS="$4" \
-    STUB_CALLS="$dir/calls" \
-    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
-  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
-  for want in "$5" "$6" "$7"; do
-    found=no
-    for f in "$dir/calls/"*; do
-      [ -f "$f" ] || continue
-      if [ "$(cat "$f")" = "$want" ]; then found=yes; break; fi
-    done
-    [ "$found" = yes ] || {
-      echo "--- want present:" >&2
-      printf '%s\n' "$want" >&2
-      echo "--- got writes:" >&2
-      for f in "$dir/calls/"*; do [ -f "$f" ] && printf '%s\n' "$(cat "$f")" >&2; done
-      fail "$1: a documented write is missing"
-    }
-  done
-}
-
-# run_stale_case CASE CLOSED FIX STATUS WANT_SUMMARY: a push run with no
-# open issue whose fix the tested commit misses: no write, and the summary
-# says the fix is stale.
-run_stale_case() {
-  dir=$tmp/$1
-  mkdir -p "$dir/temp/flaky" "$dir/calls"
-  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
-  env -i PATH="$PATH" HOME="$dir" \
-    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
-    GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
-    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
-    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
-    STUB_CLOSED="$2" STUB_FIX="$3" STUB_STATUS="$4" \
-    STUB_CALLS="$dir/calls" \
-    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
-  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
-  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
-  [ "$writes" -eq 0 ] || fail "$1: want no writes, got $writes"
-  got=$(cat "$dir/summary")
-  [ "$got" = "$5" ] || {
-    echo "--- want summary:" >&2
-    printf '%s\n' "$5" >&2
-    echo "--- got summary:" >&2
-    printf '%s\n' "$got" >&2
-    fail "$1: the summary differs"
-  }
-}
-
 push_tested="tested $sha"
 pr_tested="tested $sha = main $base + head $head"
 plain="The test \`$name\` passed after a retry on linux: $url."
@@ -221,65 +140,316 @@ body() {
   printf '%s\n%s\n%s\n%s\n%s' "$1" "$2" "$fence" "$detail" "$fence"
 }
 
-# A push run: a new issue, then a comment on the open one.
-run_case push-create push "" "" "" "" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$plain" "$push_tested")")"
-run_case push-comment push "" "" "" "" 7 "" "" "" "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
-
-# A pull request run with two parents, main then the pull request head: a new
-# issue naming the pull request, a comment on the open one, and a comment for
-# a failing file the pull request changed.
-run_case pr-create pull_request 12 "$base $head" "" "other/file.rs" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$pr_tested")")"
-run_case pr-sighting pull_request 12 "$base $head" "" "other/file.rs" 7 "" "" "" "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
-run_case pr-comment pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "" "" "" "" "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
-
-# A pull request run whose commit has one parent falls back to the push line.
-run_case pr-one-parent pull_request 12 "$base" "" "other/file.rs" "" "" "" "" "$(printf 'create %s\n%s' "$title" "$(body "$see_pr" "$push_tested")")"
-
-fix=4444444444444444444444444444444444444444
-sighting=$(printf 'comment 9\n%s' "$(body "$plain" "$push_tested")")
-
-# No open issue but a closed one whose fix the tested commit contains:
-# reopen, comment the sighting, and put needs-triage back on.
-run_reopen_case closed-reopened 9 "$fix" ahead \
-  "reopen 9" "$sighting" "label 9 needs-triage"
-
-# A fix the tested commit misses files nothing and says so in the summary.
-run_stale_case stale-skipped 9 "$fix" diverged \
-  "stale fix: $title was fixed by $fix, which $sha does not contain"
-
-# A closing-pull-request lookup that fails files nothing and says so in
-# the summary: the failure is unknown, not proof the issue closed
-# without a pull request.
-run_unknown_case() {
+# setup_case DIR: the sandbox for one case.
+setup_case() {
   dir=$tmp/$1
   mkdir -p "$dir/temp/flaky" "$dir/calls"
   printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
+}
+
+# run_step DIR EVENT PR PARENTS COMPARE PR_FILES OPEN ISSUE DECISIONS
+# EXTRA...: runs the step and prints its exit code. OPEN is the open-issue
+# list fixture, ISSUE the single-issue fixture, DECISIONS the JSON-lines
+# decision artifact; further VAR=value arguments reach the environment.
+run_step() {
+  dir=$1
+  event=$2
+  pr=$3
+  parents=$4
+  compare=$5
+  pr_files=$6
+  open=$7
+  issue=$8
+  decisions=$9
+  shift 9
+  code=0
+  # shellcheck disable=SC2086
   env -i PATH="$PATH" HOME="$dir" \
-    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME=push \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$event" \
     GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
-    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="" \
-    STUB_PARENTS="" STUB_COMPARE="" STUB_PR_FILES="" STUB_NUMBER="" \
-    STUB_CLOSED="$2" STUB_FIX="" STUB_FIX_FAIL=1 STUB_STATUS="$3" \
-    STUB_CALLS="$dir/calls" \
-    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || fail "$1: the step exited $?"
-  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$1: the step printed to stderr"; }
-  writes=$(find "$dir/calls" -type f | wc -l | tr -d ' ')
-  [ "$writes" -eq 0 ] || fail "$1: want no writes, got $writes"
-  got=$(cat "$dir/summary")
-  [ "$got" = "$4" ] || {
+    GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="$pr" \
+    STUB_PARENTS="$parents" STUB_COMPARE="$compare" STUB_PR_FILES="$pr_files" \
+    STUB_OPEN="$open" STUB_ISSUE="$issue" STUB_CALLS="$dir/calls" \
+    DECIDE_RESULT=success DECIDE_FLAKES=true DECISIONS="$dir/$decisions" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || code=$?
+  [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$dir: the step printed to stderr"; }
+  echo "$code"
+}
+
+writes() {
+  find "$1/calls" -type f ! -name '.*' | wc -l | tr -d ' '
+}
+
+expect_write() {
+  got=$(cat "$1/calls/$2")
+  [ "$got" = "$3" ] || {
+    echo "--- want:" >&2
+    printf '%s\n' "$3" >&2
+    echo "--- got:" >&2
+    printf '%s\n' "$got" >&2
+    fail "$1: the write differs"
+  }
+}
+
+expect_summary() {
+  got=$(cat "$1/summary" 2>/dev/null || true)
+  [ "$got" = "$2" ] || {
     echo "--- want summary:" >&2
-    printf '%s\n' "$4" >&2
+    printf '%s\n' "$2" >&2
     echo "--- got summary:" >&2
     printf '%s\n' "$got" >&2
     fail "$1: the summary differs"
   }
 }
 
-# A closed issue with no closing pull request reopens on any failure.
-run_reopen_case closed-without-pr 9 "" "" \
-  "reopen 9" "$sighting" "label 9 needs-triage"
+expect_exit() {
+  [ "$2" = "$3" ] || fail "$1: want exit $3, got $2"
+}
 
-run_unknown_case lookup-failed 9 ahead \
-  "unknown fix: the lookup for the pull request that closed $title failed, so 9 stays closed"
+expect_writes() {
+  got=$(writes "$1")
+  [ "$got" = "$2" ] || fail "$1: want $2 writes, got $got"
+}
+
+# expect_present DIR WANT: WANT is among the writes, wherever it lands.
+expect_present() {
+  for f in "$1/calls/"*; do
+    [ -f "$f" ] || continue
+    if [ "$(cat "$f")" = "$2" ]; then return 0; fi
+  done
+  echo "--- want present:" >&2
+  printf '%s\n' "$2" >&2
+  echo "--- got writes:" >&2
+  for f in "$1/calls/"*; do [ -f "$f" ] && printf '%s\n' "$(cat "$f")" >&2; done
+  fail "$1: a documented write is missing"
+}
+
+empty_open="[]"
+open7='[{"number": 7, "title": "'"$title"'"}]'
+issue9='{"number": 9, "title": "'"$title"'", "state": "closed", "labels": [{"name": "test-only"}]}'
+decide_new='{"action": "file-new", "title": "'"$title"'"}'
+decide_reopen='{"action": "reopen", "issue": 9, "title": "'"$title"'"}'
+decide_stale='{"action": "stale", "issue": 9, "title": "'"$title"'"}'
+decide_unknown='{"action": "unknown", "title": "'"$title"'"}'
+
+sighting=$(printf 'comment 9\n%s' "$(body "$plain" "$push_tested")")
+
+# A push run: a new issue carrying the test-only label, then a comment on
+# the open one.
+setup_case push-create
+printf '%s\n' "$decide_new" >"$tmp/push-create/decisions.jsonl"
+code=$(run_step "$tmp/push-create" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit push-create "$code" 0
+expect_writes "$tmp/push-create" 1
+expect_write "$tmp/push-create" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
+
+setup_case push-comment
+: >"$tmp/push-comment/decisions.jsonl"
+code=$(run_step "$tmp/push-comment" push "" "" "" "" "$open7" "" decisions.jsonl)
+expect_exit push-comment "$code" 0
+expect_writes "$tmp/push-comment" 1
+expect_write "$tmp/push-comment" 0 "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
+
+# A pull request run with two parents, main then the pull request head: a
+# new issue naming the pull request, a comment on the open one, a comment
+# for a failing file the pull request changed, and nothing but a summary
+# for a failing file main changed since the base.
+setup_case pr-create
+printf '%s\n' "$decide_new" >"$tmp/pr-create/decisions.jsonl"
+code=$(run_step "$tmp/pr-create" pull_request 12 "$base $head" "" "other/file.rs" "$empty_open" "" decisions.jsonl)
+expect_exit pr-create "$code" 0
+expect_writes "$tmp/pr-create" 1
+expect_write "$tmp/pr-create" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$see_pr" "$pr_tested")")"
+
+setup_case pr-sighting
+: >"$tmp/pr-sighting/decisions.jsonl"
+code=$(run_step "$tmp/pr-sighting" pull_request 12 "$base $head" "" "other/file.rs" "$open7" "" decisions.jsonl)
+expect_exit pr-sighting "$code" 0
+expect_writes "$tmp/pr-sighting" 1
+expect_write "$tmp/pr-sighting" 0 "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
+
+setup_case pr-comment
+: >"$tmp/pr-comment/decisions.jsonl"
+code=$(run_step "$tmp/pr-comment" pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "$empty_open" "" decisions.jsonl)
+expect_exit pr-comment "$code" 0
+expect_writes "$tmp/pr-comment" 1
+expect_write "$tmp/pr-comment" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
+
+setup_case pr-stale-base
+: >"$tmp/pr-stale-base/decisions.jsonl"
+code=$(run_step "$tmp/pr-stale-base" pull_request 12 "$base $head" "crates/main/tests/flaky_probe.rs" "other/file.rs" "$empty_open" "" decisions.jsonl)
+expect_exit pr-stale-base "$code" 0
+expect_writes "$tmp/pr-stale-base" 0
+expect_summary "$tmp/pr-stale-base" "stale base: main changed crates/main/tests/flaky_probe.rs since $base"
+
+# A pull request run whose commit has one parent falls back to the push line.
+setup_case pr-one-parent
+printf '%s\n' "$decide_new" >"$tmp/pr-one-parent/decisions.jsonl"
+code=$(run_step "$tmp/pr-one-parent" pull_request 12 "$base" "" "other/file.rs" "$empty_open" "" decisions.jsonl)
+expect_exit pr-one-parent "$code" 0
+expect_writes "$tmp/pr-one-parent" 1
+expect_write "$tmp/pr-one-parent" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$see_pr" "$push_tested")")"
+
+# No open issue and a validated reopen decision: reopen, comment the
+# sighting, and put needs-triage back on, in no promised order.
+setup_case decide-reopen
+printf '%s\n' "$decide_reopen" >"$tmp/decide-reopen/decisions.jsonl"
+code=$(run_step "$tmp/decide-reopen" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl)
+expect_exit decide-reopen "$code" 0
+expect_writes "$tmp/decide-reopen" 3
+expect_present "$tmp/decide-reopen" "reopen 9"
+expect_present "$tmp/decide-reopen" "$sighting"
+expect_present "$tmp/decide-reopen" "label 9 needs-triage"
+
+# Stale and unknown actions file nothing and say so in the summary.
+setup_case decide-stale
+printf '%s\n' "$decide_stale" >"$tmp/decide-stale/decisions.jsonl"
+code=$(run_step "$tmp/decide-stale" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit decide-stale "$code" 0
+expect_writes "$tmp/decide-stale" 0
+expect_summary "$tmp/decide-stale" "stale fix: $title stays closed: its fix is not in the tested commit"
+
+setup_case decide-unknown
+printf '%s\n' "$decide_unknown" >"$tmp/decide-unknown/decisions.jsonl"
+code=$(run_step "$tmp/decide-unknown" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit decide-unknown "$code" 0
+expect_writes "$tmp/decide-unknown" 0
+expect_summary "$tmp/decide-unknown" "unknown fix: $title stays closed: a lookup failed, so nothing is filed"
+
+# Each reopen predicate mismatch files nothing: a pull request, an open
+# issue, another title, and a missing flake label.
+setup_case reopen-is-pr
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-is-pr/decisions.jsonl"
+code=$(run_step "$tmp/reopen-is-pr" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": [{"name": "test-only"}], "pull_request": {}}' decisions.jsonl)
+expect_exit reopen-is-pr "$code" 0
+expect_writes "$tmp/reopen-is-pr" 0
+expect_summary "$tmp/reopen-is-pr" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
+
+setup_case reopen-is-open
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-is-open/decisions.jsonl"
+code=$(run_step "$tmp/reopen-is-open" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "open", "labels": [{"name": "test-only"}]}' decisions.jsonl)
+expect_exit reopen-is-open "$code" 0
+expect_writes "$tmp/reopen-is-open" 0
+expect_summary "$tmp/reopen-is-open" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
+
+setup_case reopen-title-differs
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-title-differs/decisions.jsonl"
+code=$(run_step "$tmp/reopen-title-differs" push "" "" "" "" "$empty_open" '{"number": 9, "title": "Flaky test: other", "state": "closed", "labels": [{"name": "test-only"}]}' decisions.jsonl)
+expect_exit reopen-title-differs "$code" 0
+expect_writes "$tmp/reopen-title-differs" 0
+expect_summary "$tmp/reopen-title-differs" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
+
+setup_case reopen-unlabelled
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-unlabelled/decisions.jsonl"
+code=$(run_step "$tmp/reopen-unlabelled" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": []}' decisions.jsonl)
+expect_exit reopen-unlabelled "$code" 0
+expect_writes "$tmp/reopen-unlabelled" 0
+expect_summary "$tmp/reopen-unlabelled" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
+
+# A reopen target that cannot be fetched stays closed.
+setup_case reopen-fetch-fails
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-fetch-fails/decisions.jsonl"
+code=$(run_step "$tmp/reopen-fetch-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_ISSUE_FAIL=1)
+expect_exit reopen-fetch-fails "$code" 0
+expect_writes "$tmp/reopen-fetch-fails" 0
+expect_summary "$tmp/reopen-fetch-fails" "unknown reopen target: issue 9 could not be fetched, so $title stays closed"
+
+# A recheck that fails files nothing, before reopen and before create.
+setup_case reopen-recheck-fails
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-recheck-fails/decisions.jsonl"
+code=$(run_step "$tmp/reopen-recheck-fails" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl STUB_OPEN_REST_FAIL=1)
+expect_exit reopen-recheck-fails "$code" 0
+expect_writes "$tmp/reopen-recheck-fails" 0
+expect_summary "$tmp/reopen-recheck-fails" "unknown open lookup: the recheck for $title failed, so nothing is filed"
+
+setup_case create-recheck-fails
+printf '%s\n' "$decide_new" >"$tmp/create-recheck-fails/decisions.jsonl"
+code=$(run_step "$tmp/create-recheck-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_OPEN_REST_FAIL=1)
+expect_exit create-recheck-fails "$code" 0
+expect_writes "$tmp/create-recheck-fails" 0
+expect_summary "$tmp/create-recheck-fails" "unknown open lookup: the recheck for $title failed, so nothing is filed"
+
+# An open issue appearing after the first lookup stops the write, before
+# reopen and before create.
+setup_case reopen-open-appears
+printf '%s\n' "$decide_reopen" >"$tmp/reopen-open-appears/decisions.jsonl"
+code=$(run_step "$tmp/reopen-open-appears" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl "STUB_OPEN_REST=$open7")
+expect_exit reopen-open-appears "$code" 0
+expect_writes "$tmp/reopen-open-appears" 0
+expect_summary "$tmp/reopen-open-appears" "an open issue for $title appeared before the reopen, so nothing is filed"
+
+setup_case create-open-appears
+printf '%s\n' "$decide_new" >"$tmp/create-open-appears/decisions.jsonl"
+code=$(run_step "$tmp/create-open-appears" push "" "" "" "" "$empty_open" "" decisions.jsonl "STUB_OPEN_REST=$open7")
+expect_exit create-open-appears "$code" 0
+expect_writes "$tmp/create-open-appears" 0
+expect_summary "$tmp/create-open-appears" "an open issue for $title appeared before the create, so nothing is filed"
+
+# A failed open lookup files nothing.
+setup_case open-lookup-fails
+printf '%s\n' "$decide_new" >"$tmp/open-lookup-fails/decisions.jsonl"
+code=$(run_step "$tmp/open-lookup-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_OPEN_FAIL=1)
+expect_exit open-lookup-fails "$code" 0
+expect_writes "$tmp/open-lookup-fails" 0
+expect_summary "$tmp/open-lookup-fails" "unknown open lookup: the open-issue search for $title failed, so nothing is filed"
+
+# A decision for another title, and a decision with no known action, file
+# nothing.
+setup_case decide-other-title
+printf '%s\n' '{"action": "file-new", "title": "Flaky test: other"}' >"$tmp/decide-other-title/decisions.jsonl"
+code=$(run_step "$tmp/decide-other-title" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit decide-other-title "$code" 0
+expect_writes "$tmp/decide-other-title" 0
+expect_summary "$tmp/decide-other-title" "invalid decision for $title: no write"
+
+setup_case decide-bad-action
+printf '%s\n' '{"action": "comment", "issue": 7, "title": "'"$title"'"}' >"$tmp/decide-bad-action/decisions.jsonl"
+code=$(run_step "$tmp/decide-bad-action" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit decide-bad-action "$code" 0
+expect_writes "$tmp/decide-bad-action" 0
+expect_summary "$tmp/decide-bad-action" "invalid decision for $title: no write"
+
+# The fail-closed guards: a failed decision job, no flakes decided, a
+# missing decision artifact and missing flake lists all exit 1 with no
+# writes.
+setup_case guard-decide-failed
+printf '%s\n' "$decide_new" >"$tmp/guard-decide-failed/decisions.jsonl"
+code=$(run_step "$tmp/guard-decide-failed" push "" "" "" "" "$empty_open" "" decisions.jsonl DECIDE_RESULT=failure)
+expect_exit guard-decide-failed "$code" 1
+expect_writes "$tmp/guard-decide-failed" 0
+expect_summary "$tmp/guard-decide-failed" "flake_decide did not decide flakes (result failure, has_flakes true): no write"
+
+setup_case guard-no-flakes
+printf '%s\n' "$decide_new" >"$tmp/guard-no-flakes/decisions.jsonl"
+code=$(run_step "$tmp/guard-no-flakes" push "" "" "" "" "$empty_open" "" decisions.jsonl DECIDE_FLAKES=false)
+expect_exit guard-no-flakes "$code" 1
+expect_writes "$tmp/guard-no-flakes" 0
+expect_summary "$tmp/guard-no-flakes" "flake_decide did not decide flakes (result success, has_flakes false): no write"
+
+setup_case guard-no-artifact
+code=$(run_step "$tmp/guard-no-artifact" push "" "" "" "" "$empty_open" "" missing.jsonl)
+expect_exit guard-no-artifact "$code" 1
+expect_writes "$tmp/guard-no-artifact" 0
+expect_summary "$tmp/guard-no-artifact" "the flake-decisions artifact is missing: no write"
+
+setup_case guard-no-lists
+printf '%s\n' "$decide_new" >"$tmp/guard-no-lists/decisions.jsonl"
+rm -rf "$tmp/guard-no-lists/temp/flaky"
+code=$(run_step "$tmp/guard-no-lists" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit guard-no-lists "$code" 1
+expect_writes "$tmp/guard-no-lists" 0
+expect_summary "$tmp/guard-no-lists" "flake_decide found flakes but their lists are missing: no write"
+
+# A duplicate title across runner lists writes once.
+setup_case duplicate-title
+printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-linux.txt"
+printf '%s\t%s\n' "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-arm.txt"
+printf '%s\n' "$decide_new" >"$tmp/duplicate-title/decisions.jsonl"
+code=$(run_step "$tmp/duplicate-title" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+expect_exit duplicate-title "$code" 0
+expect_writes "$tmp/duplicate-title" 1
+arm_plain="The test \`$name\` passed after a retry on arm: $url."
+expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
 
 echo "scripts/test-flake-report: ok"

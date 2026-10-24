@@ -31,6 +31,14 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `preserve-order`, `check-docs`, `ci-needs`: the checks
+//! - `flake-report`: reads one JSON object on stdin carrying the flake
+//!   titles, the complete open and closed exact-title issue lookups with
+//!   their completeness, the selected issues' event lists and the
+//!   `merge-base --is-ancestor` results, and prints one JSON object per
+//!   line: `{"action": ..., "issue": ..., "title": ...}` for every unique
+//!   title with no open match (`reopen`, `file-new`, `stale`, `unknown`);
+//!   a complete open match prints nothing
+//!   (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
@@ -47,6 +55,7 @@
 mod bench;
 mod ci_needs;
 mod docs;
+mod flake_report;
 mod logo;
 mod models_dev;
 mod models_dev_table;
@@ -341,6 +350,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             &ci_needs::check(&read(ci_needs::WORKFLOW)?, &read(ci_needs::CI_DOC)?)?,
             "every job but ci and the report jobs is in the ci job's needs",
         ),
+        "flake-report" => {
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let input: Value =
+                serde_json::from_str(&body).map_err(|e| format!("flake-report: {e}"))?;
+            for decision in flake_report::decide(&input)? {
+                println!("{}", decision.line());
+            }
+            Ok(true)
+        }
         "logo-mask" => logo::run(rest),
         "bench-report" => {
             let event = bench::Event::parse(&flag(rest, "--event")?)?;

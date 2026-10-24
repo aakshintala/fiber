@@ -40,7 +40,7 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`, `flake_report`. They run outside the verdict, so their
+`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. They run outside the verdict, so their
 result never decides `CI`. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
@@ -146,9 +146,27 @@ ships. Cargo ignores the setting when it builds the test harness.
 A failed binary-level test retries once. A pass on retry does not fail the
 run: CI opens a flake issue naming the test, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
-the `crates/main/tests` binaries, and a separate job holding only
-`contents: read`, `pull-requests: write` and `issues: write`, which runs no
-Fiber code, files the issue. No other test retries.
+the `crates/main/tests` binaries, and two report jobs file the issue. The
+read-only `flake_decide` job holds only `contents: read` and `issues: read`:
+it downloads each selected test leg's exact `flaky-tests-<runner>.txt`
+artifact, failing closed on a missing artifact or a cancelled or skipped
+selected leg, then looks up the complete open and closed issues, the
+selected issue's events and the fix's ancestry, and runs
+`cargo xtask flake-report` to decide one JSON-lines action per unique test
+title, uploaded as the `flake-decisions` artifact. The write-only
+`flake_report` job holds `contents: read`, `pull-requests: write` and
+`issues: write`, checks nothing out and runs no Fiber code: it guards on
+the decision artifact, comments on the open issue, and otherwise carries
+out the one decided action per title after validating the reopen
+predicates, labelling a new issue `test-only`, and rechecking the open
+titles immediately before the write. One report writes at a time:
+`concurrency.group: flake-report` with `cancel-in-progress: false` and
+`queue: max` serialises runs, and GitHub cancels a new report past its 100
+pending reports; two runs racing to file the same title can still file
+twice, and the recheck keeps that window small. The workflow-level
+concurrency is unchanged: a newer push still cancels an older pull request
+run, which can lose its report, and a later test run reports the flake
+again. No other test retries.
 
 The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
 artifact, kept 7 days. It holds only XML this run wrote: the full-suite
