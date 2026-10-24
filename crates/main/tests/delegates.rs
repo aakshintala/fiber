@@ -343,6 +343,50 @@ fn event_windows_reject_missing_extra_duplicate_and_invalid_anchors() {
     );
 }
 
+/// The cancelled call's usage and finish share a bounded window; the
+/// finish still precedes the job end (`docs/delegates.md`, "Events").
+fn cancellation_kinds(lines: &[Value], lo: usize, hi: usize) -> Vec<&str> {
+    support::assert_set_between(lines, lo, hi, &["usage_recorded", "delegate_finished"]);
+    let mut ordered = support::kinds(&lines[..=lo]);
+    ordered.push("delegate_finished");
+    ordered.extend(support::kinds(&lines[hi..]));
+    ordered
+}
+
+#[test]
+fn cancellation_windows_allow_both_usage_positions_but_require_one_call() {
+    for interior in [
+        vec!["usage_recorded", "delegate_finished"],
+        vec!["delegate_finished", "usage_recorded"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(interior);
+        kinds.extend(["job_completed", "fiber_exited"]);
+        let lines = support::expected(&kinds);
+        assert_eq!(
+            cancellation_kinds(&lines, 0, 3),
+            [
+                "turn_completed",
+                "delegate_finished",
+                "job_completed",
+                "fiber_exited"
+            ]
+        );
+    }
+    for interior in [
+        vec!["delegate_finished"],
+        vec!["delegate_finished", "usage_recorded", "usage_recorded"],
+    ] {
+        let mut kinds = vec!["turn_completed"];
+        kinds.extend(interior);
+        kinds.push("job_completed");
+        let lines = support::expected(&kinds);
+        assert!(
+            std::panic::catch_unwind(|| cancellation_kinds(&lines, 0, lines.len() - 1)).is_err()
+        );
+    }
+}
+
 /// The `job_completed` line for `job`.
 fn ended<'a>(lines: &'a [Value], job: &str) -> &'a Value {
     lines
@@ -6467,10 +6511,17 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // cancelled delegate's unfinished call still settles its
     // `usage_recorded`, copied with the delegate as origin
     // (`docs/events.md`, "Usage and notices").
+    let logged = read_lines(&support::session_dir(&setup, &id).join("events.jsonl"));
+    let lo = logged
+        .iter()
+        .position(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let hi = logged
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
     assert_eq!(
-        durable_kinds(&read_lines(
-            &support::session_dir(&setup, &id).join("events.jsonl")
-        )),
+        cancellation_kinds(&logged, lo, hi),
         [
             "session_started",
             "fiber_started",
@@ -6480,7 +6531,6 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
             "reloaded",
             "extensions_loaded",
             "preamble_built",
-            "usage_recorded",
             "delegate_finished",
             "job_completed",
         ]
@@ -6499,13 +6549,16 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
     // precedes `delegate_started`; `extension_ui` may land before, between,
     // or after them. Those three placements are valid; anything duplicated,
     // missing or otherwise reordered fails.
-    let kinds = owned_kinds(&stream);
-    let ordered: Vec<&str> = kinds
+    let lo = stream
         .iter()
-        .filter(|kind| *kind != "session_status" && *kind != "clients" && *kind != "attention")
-        .map(String::as_str)
-        .collect();
-    let started_first: [&str; 16] = [
+        .position(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let hi = stream
+        .iter()
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let ordered = cancellation_kinds(&stream, lo, hi);
+    let started_first: [&str; 15] = [
         "session_started",
         "fiber_started",
         "extensions_loaded",
@@ -6517,9 +6570,6 @@ fn a_reload_that_disables_the_extension_ends_its_delegate_cancelled() {
         "command_accepted",
         "extensions_loaded",
         "preamble_built",
-        // The cancelled delegate's unfinished call settles here too
-        // (`docs/events.md`, "Usage and notices").
-        "usage_recorded",
         "delegate_finished",
         "job_completed",
         "command_accepted",
@@ -6579,32 +6629,15 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
     // `session_status` lines set aside: they carry no position relative
     // to the session's other lines (`docs/testing.md`, "Event streams").
     let kinds = owned_kinds(&lines);
-    let mut ordered: Vec<&str> = kinds
+    let turn_end = lines
         .iter()
-        .filter(|kind| *kind != "session_status")
-        .map(String::as_str)
-        .collect();
-    // The cancelled delegate's call writes its usage at once
-    // (`docs/events.md`, "Usage and notices"), but the doc gives that line no
-    // place against `delegate_finished`: pin it once between the turn's end
-    // and the job's, and set it aside from the ordered list.
-    let turn_end = ordered
+        .position(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    let job_end = lines
         .iter()
-        .position(|kind| *kind == "turn_completed")
-        .expect("no turn_completed");
-    let job_end = ordered
-        .iter()
-        .position(|kind| *kind == "job_completed")
-        .expect("no job_completed");
-    let usage: Vec<usize> = (turn_end..job_end)
-        .filter(|at| ordered[*at] == "usage_recorded")
-        .collect();
-    assert_eq!(
-        usage.len(),
-        1,
-        "one usage_recorded after the turn: {ordered:?}"
-    );
-    ordered.remove(usage[0]);
+        .position(|line| line["kind"] == "job_completed")
+        .unwrap();
+    let ordered = cancellation_kinds(&lines, turn_end, job_end);
     assert_eq!(
         ordered,
         [
