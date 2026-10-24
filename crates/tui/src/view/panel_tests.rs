@@ -103,7 +103,8 @@ fn row_y(app: &App, width: u16, label: &str) -> usize {
 /// six figures in docs order draw from the first frame, hold the same
 /// rows after the first status and the first timed reply, and the bar
 /// opens the context breakdown's empty state before any figure
-/// (`docs/tui.md`, "The panel").
+/// (`docs/tui.md`, "The panel", Session: every figure row, the context
+/// bar and the two lines under it are drawn from the first frame).
 #[test]
 fn session_card_rows_hold_their_positions_as_figures_land() {
     use crate::app::panel::Spot;
@@ -120,6 +121,8 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     let mut app = attached(160, 40);
     // The first frame draws the context rows and every figure in
     // docs order.
+    assert_eq!(row_y(&app, 40, "handoff at"), 4);
+    assert_eq!(row_y(&app, 40, "then a summary"), 5);
     let first: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(first, vec![6, 7, 8, 9, 10, 11]);
     let drawn = rows(&app, 40);
@@ -240,6 +243,8 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     ));
     let after_reply: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(after_reply, first);
+    assert_eq!(row_y(&app, 40, "handoff at"), 4);
+    assert_eq!(row_y(&app, 40, "then a summary"), 5);
     let drawn = texts(&app, 40);
     assert!(
         drawn
@@ -446,6 +451,10 @@ fn pct_and_bar_floor() {
     );
 }
 
+/// Without a window and a status the bar draws empty: 17 track cells,
+/// the preamble's marker and a dim dash for the size (`docs/tui.md`,
+/// "The panel", Session: the bar is drawn empty until its figures are
+/// known).
 #[test]
 fn context_rows_need_a_window_and_a_status() {
     let mut app = attached(160, 40);
@@ -469,6 +478,9 @@ fn context_rows_need_a_window_and_a_status() {
     );
 }
 
+/// A zero window holds the empty bar: no context share divides by
+/// zero (`docs/tui.md`, "The panel", Session: the bar is drawn empty
+/// until its figures are known).
 #[test]
 fn a_zero_context_window_holds_the_empty_bar() {
     let mut app = attached(160, 40);
@@ -710,6 +722,9 @@ fn the_budget_comparison_counts_billed_spend_only() {
     );
 }
 
+/// Zero turns are known, not unknown: the row draws `0` before the first
+/// turn completes (`docs/tui.md`, "The panel", Session: zero is shown
+/// as zero).
 #[test]
 fn turns_are_zero_until_the_first_turn_completes() {
     let mut app = attached(160, 40);
@@ -1047,6 +1062,8 @@ fn widget_card() {
     insta::assert_snapshot!("widget_card", super::super::text(&buf));
 }
 
+/// A widget row too long for the card is cut with "…" (`docs/tui.md`,
+/// "The panel": a row too long for the card is cut with "…").
 #[test]
 fn widget_rows_are_cut_at_the_text_width() {
     let mut app = attached(160, 40);
@@ -1138,6 +1155,10 @@ fn a_scroll_past_the_end_after_a_resize_is_clamped_when_drawn() {
     assert_eq!(shown.lines().nth(1).unwrap_or_default(), "   line 02");
 }
 
+/// The Changed files card shows the five paths with the most lines
+/// changed, ties by path ascending (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed;
+/// `changed_files_rows`: ties by path ascending).
 #[test]
 fn the_top_five_by_lines_changed_ties_by_path() {
     let mut app = attached(160, 40);
@@ -1177,6 +1198,8 @@ fn the_top_five_by_lines_changed_ties_by_path() {
     );
 }
 
+/// Five paths all show with no "more" row (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed).
 #[test]
 fn exactly_five_paths_all_show() {
     let mut app = attached(160, 40);
@@ -1249,6 +1272,8 @@ fn the_tools_line_is_a_click_target() {
     assert!(line.contains("\u{2717} relay down"), "{line}");
 }
 
+/// One running job shows the Jobs card (`docs/tui.md`, "The panel",
+/// Jobs: one line saying how many run, shown only while a job runs).
 #[test]
 fn one_job_shows_the_card() {
     let mut app = attached(160, 40);
@@ -1269,6 +1294,8 @@ fn one_job_shows_the_card() {
     );
 }
 
+/// The Jobs title line and one row per job are click targets
+/// (`docs/tui.md`, "The panel", Jobs: a click lists them, one row each).
 #[test]
 fn the_jobs_line_and_its_rows_are_targets() {
     use crate::app::panel::Spot;
@@ -1339,6 +1366,9 @@ fn the_jobs_line_and_its_rows_are_targets() {
     );
 }
 
+/// The Changed files card's file rows and title close the target list
+/// after the Session card's targets (`docs/tui.md`, "The panel",
+/// Changed files: the five files with the most lines changed).
 #[test]
 fn changed_files_card() {
     let mut app = attached(160, 40);

@@ -274,6 +274,9 @@ fn model_changed_updates_model_and_thinking() {
     assert_eq!(panel.thinking(), Some("high"));
 }
 
+/// Turns count completions, not starts: a started turn leaves the count
+/// at zero, each completed turn adds one (`docs/tui.md`, "The panel",
+/// Session: output speed and turns).
 #[test]
 fn turns_count_turn_completed() {
     let mut app = attached();
@@ -1356,6 +1359,12 @@ fn mouse(kind: crate::keys::MouseKind, col: u16, row: u16) -> crate::keys::Mouse
     crate::keys::Mouse { kind, col, row }
 }
 
+/// The wheel steps the panel three rows at a time, picked not measured,
+/// clamping down to the rows past the panel's text rows and saturating
+/// up at the top (`docs/tui.md`, "The panel": the panel scrolls when its
+/// cards outgrow the screen; `scroll_panel`: by three rows, picked, not
+/// measured). Offsets count the reserved Session rows (`docs/tui.md`,
+/// "The panel", Session: every row draws from the first frame).
 #[test]
 fn the_wheel_scrolls_the_panel_by_three_and_clamps() {
     use crate::keys::MouseKind;
@@ -1433,6 +1442,10 @@ fn panel_text(app: &App) -> String {
     crate::view::text(&buf)
 }
 
+/// The stored offset clamps to the rows past the panel's text rows
+/// first, so a grown screen moves on the first wheel up (`scroll_panel`;
+/// `docs/tui.md`, "The panel": the panel scrolls when its cards outgrow
+/// the screen).
 #[test]
 fn wheel_up_after_growth_moves_on_the_first_wheel() {
     use crate::keys::MouseKind;
@@ -1466,6 +1479,10 @@ fn wheel_up_after_growth_moves_on_the_first_wheel() {
     );
 }
 
+/// The stored offset clamps to the rows past the panel's text rows
+/// first, so shrunk cards move on the first wheel up (`scroll_panel`;
+/// `docs/tui.md`, "The panel": the panel scrolls when its cards outgrow
+/// the screen).
 #[test]
 fn wheel_up_after_shrinkage_moves_on_the_first_wheel() {
     use crate::keys::MouseKind;

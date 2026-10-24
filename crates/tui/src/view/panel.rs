@@ -376,6 +376,9 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
 /// repository and the trailing tools line stay conditional. Labels
 /// read dim with their figures right-aligned in the text colour; the
 /// bar is 17 cells of `▆` toward the handoff point.
+// debt: session_rows stays inline while panel.rs holds past the 800-line
+// smell; ceiling 1000 lines, upgrade trigger: the next Session-row change
+// moves the Session card behind its own card boundary.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
@@ -435,92 +438,52 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
     // The context bar and the two lines under it draw from the first
     // frame. Figures not known yet show dim dashes, so no row moves
     // when preamble and status folds land (`docs/tui.md`, "The panel").
-    match context {
+    // The handoff line follows the preamble alone; the bar fill, the
+    // size and the share follow the status, with dim dashes until then.
+    let handoff = match panel.trigger_at() {
+        Some(trigger) => format!("handoff at {}", short_tokens(trigger)),
+        None => "handoff at —".to_owned(),
+    };
+    let (fill, size, share) = match context {
         Some((window, context)) => {
             let pct = context.tokens.saturating_mul(100) / window;
-            // The bar: 17 cells toward the handoff point, the marker, and
-            // the context size right-aligned (`docs/tui.md`, "The panel").
-            out.push(Row {
-                line: sides(
-                    bar_spans(context.tokens, window, panel.trigger_at(), 17),
-                    Span::raw(short_tokens(context.tokens)),
-                    text,
-                ),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            });
-            match panel.trigger_at() {
-                Some(trigger) => {
-                    out.push(Row {
-                        line: sides(
-                            vec![Span::styled(
-                                format!("handoff at {}", short_tokens(trigger)),
-                                style(Role::Muted),
-                            )],
-                            Span::styled(format!("{pct}% of window"), style(Role::Muted)),
-                            text,
-                        ),
-                        spot: Some(Spot::Context),
-                        tint: None,
-                        edge: false,
-                    });
-                }
-                None => {
-                    out.push(Row {
-                        line: sides(
-                            vec![Span::styled("handoff at —".to_owned(), style(Role::Muted))],
-                            Span::styled(format!("{pct}% of window"), style(Role::Muted)),
-                            text,
-                        ),
-                        spot: Some(Spot::Context),
-                        tint: None,
-                        edge: false,
-                    });
-                }
-            }
-            out.push(Row {
-                line: Line::styled("then a summary, fresh context", style(Role::Muted)),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            });
+            (
+                bar_spans(context.tokens, window, panel.trigger_at(), 17),
+                Span::raw(short_tokens(context.tokens)),
+                format!("{pct}% of window"),
+            )
         }
-        None => {
-            // The empty bar: 17 cells of track with the handoff marker
-            // once the preamble names it, and a dim dash for the size.
-            out.push(Row {
-                line: sides(
-                    bar_spans(0, 1, panel.trigger_at(), 17),
-                    Span::styled("—", style(Role::Muted)),
-                    text,
-                ),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            });
-            let handoff = match panel.trigger_at() {
-                Some(trigger) => format!("handoff at {}", short_tokens(trigger)),
-                None => "handoff at —".to_owned(),
-            };
-            out.push(Row {
-                line: sides(
-                    vec![Span::styled(handoff, style(Role::Muted))],
-                    Span::styled("—", style(Role::Muted)),
-                    text,
-                ),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            });
-            out.push(Row {
-                line: Line::styled("then a summary, fresh context", style(Role::Muted)),
-                spot: Some(Spot::Context),
-                tint: None,
-                edge: false,
-            });
-        }
-    }
+        // The empty bar: 17 cells of track and a dim dash for the size.
+        None => (
+            bar_spans(0, 1, panel.trigger_at(), 17),
+            Span::styled("—", style(Role::Muted)),
+            "—".to_owned(),
+        ),
+    };
+    // The bar: 17 cells toward the handoff point, the marker, and
+    // the context size right-aligned (`docs/tui.md`, "The panel").
+    out.push(Row {
+        line: sides(fill, size, text),
+        spot: Some(Spot::Context),
+        tint: None,
+        edge: false,
+    });
+    out.push(Row {
+        line: sides(
+            vec![Span::styled(handoff, style(Role::Muted))],
+            Span::styled(share, style(Role::Muted)),
+            text,
+        ),
+        spot: Some(Spot::Context),
+        tint: None,
+        edge: false,
+    });
+    out.push(Row {
+        line: Line::styled("then a summary, fresh context", style(Role::Muted)),
+        spot: Some(Spot::Context),
+        tint: None,
+        edge: false,
+    });
     // Every figure row draws from the first frame: a figure not known
     // yet shows a dim dash, so no row moves when its data arrives
     // (`docs/tui.md`, "The panel").
