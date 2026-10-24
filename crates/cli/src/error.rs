@@ -622,7 +622,8 @@ pub enum CliError {
         /// The global configuration file holding it.
         path: PathBuf,
     },
-    /// A hub directory listing could not be read.
+    /// A hub path could not be read: the devices directory or the
+    /// login-service unit file.
     #[error("reading {}: {source}", .path.display())]
     HubDevicesRead {
         /// The directory or file that could not be read.

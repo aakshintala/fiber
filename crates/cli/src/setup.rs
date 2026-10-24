@@ -637,7 +637,7 @@ fn step_hub(
                 }
             }
         }
-        Err(error) => return Err(CliError::Forwarded(error)),
+        Err(error) => return Err(error),
     }
     Ok(0)
 }
