@@ -1570,7 +1570,7 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
     thread::spawn(move || {
         let clock = FakeClock::new();
         let cancel = CancelToken::new();
-        let ran = super::execute_for_test(
+        let ran = super::execute_inner(
             std::path::Path::new("/bin/sh"),
             "true",
             &work,
@@ -1579,6 +1579,9 @@ fn a_successful_empty_listing_finishes_foreground_when_alive_probe_lags() {
             &cancel,
             &Recorder::default(),
             MovePolicy::Foreground,
+            None,
+            None,
+            None,
             always_alive,
             &ps,
         )
@@ -1658,10 +1661,17 @@ fn a_members_listing_moves_at_once_and_is_saved_for_the_receipt() {
         panic!("a shell that left members moves");
     };
     assert_eq!(code, 3);
-    assert_eq!(
-        progress.members,
-        Some(GroupMembers::Members("sleep (12), my cmd (34)".to_owned()))
-    );
+    // `docs/tools.md` promises the names, not their order: `ps` prints in
+    // its own order, so the test compares the listing as a set.
+    let Some(GroupMembers::Members(names)) = &progress.members else {
+        panic!(
+            "a shell that left members saves them, got {:?}",
+            progress.members
+        );
+    };
+    let mut got: Vec<&str> = names.split(", ").collect();
+    got.sort_unstable();
+    assert_eq!(got, ["my cmd (34)", "sleep (12)"]);
 }
 
 /// A listing that never answers moves the command and saves the failure
@@ -1744,7 +1754,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
             dir.path(),
             "ps",
             &format!(
-                "echo $$ > '{}'\nwhile test ! -e '{}'; do sleep 0.05; done\nexit 0",
+                "echo $$ > '{}'\ni=0\nwhile test ! -e '{}' && test \"$i\" -lt 80; do i=$((i + 1)); sleep 0.05; done\nexit 0",
                 ready.path().display(),
                 release.display(),
             ),
@@ -1766,7 +1776,7 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                 false => Duration::from_secs(1),
             };
             move || {
-                let ran = super::execute_for_test(
+                let ran = super::execute_inner(
                     std::path::Path::new("/bin/sh"),
                     "true",
                     &work,
@@ -1775,6 +1785,9 @@ fn cancel_or_timeout_during_member_listing_wins_before_handoff() {
                     &cancel,
                     &Recorder::default(),
                     MovePolicy::Foreground,
+                    None,
+                    None,
+                    None,
                     always_alive,
                     &ps,
                 )

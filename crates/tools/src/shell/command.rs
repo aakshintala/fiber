@@ -144,31 +144,6 @@ pub(crate) fn execute(
     )
 }
 
-/// A crate-local test entry that supplies the injected probe and fixture
-/// member-query program. No test-only switch reaches the shipped binary.
-#[cfg(test)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "mirrors execute with the injected probe and member-query program"
-)]
-fn execute_for_test(
-    program: &Path,
-    command: &str,
-    workdir: &Path,
-    timeout: Duration,
-    clock: &dyn Clock,
-    cancel: &dyn Cancel,
-    emit: &dyn Emit,
-    policy: MovePolicy,
-    alive: fn(u32) -> bool,
-    ps: &Path,
-) -> Result<Ran, std::io::Error> {
-    execute_inner(
-        program, command, workdir, timeout, clock, cancel, emit, policy, None, None, None, alive,
-        ps,
-    )
-}
-
 /// The execution with the group probe and the member-query program
 /// injected, so a test can force the probe to lag the reap and point the
 /// listing at a fixture. Production passes the real probe and bare `ps`.

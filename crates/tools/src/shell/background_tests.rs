@@ -283,10 +283,14 @@ fn the_group_is_listed_from_ps() {
     let clock = FakeClock::new();
     let rows = "printf '  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n'";
     let ps = fake_ps(dir.path(), rows);
-    assert_eq!(
-        listed(&ps, 99, &clock),
-        GroupMembers::Members("sleep (12), my cmd (34)".to_owned())
-    );
+    // `docs/tools.md` promises the names, not their order: the fixture
+    // prints in row order, so the test compares the listing as a set.
+    let GroupMembers::Members(names) = listed(&ps, 99, &clock) else {
+        panic!("the fixture group lists its members");
+    };
+    let mut got: Vec<&str> = names.split(", ").collect();
+    got.sort_unstable();
+    assert_eq!(got, ["my cmd (34)", "sleep (12)"]);
     assert_eq!(listed(&ps, 8, &clock), GroupMembers::Empty);
     let missing = list(&dir.path().join("missing"), 99, &clock);
     assert_eq!(
