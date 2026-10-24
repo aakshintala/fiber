@@ -328,8 +328,9 @@ public network.
 
 The same job, on every pull request and every push to `main`, checks that
 the `unsafe` table in `docs/code-quality.md` matches the code
-(`cargo xtask unsafe-table`) and that every crate a `Cargo.toml` names is
-listed in `docs/dependencies.md` (`cargo xtask dependency-list`). Each
+(`cargo xtask unsafe-table`) and that every crate from outside the workspace
+that a `Cargo.toml` names is listed in `docs/dependencies.md`
+(`cargo xtask dependency-list`). Each
 compares a doc with the source, so a change to either side can break it,
 and a docs-only diff, which runs no other job, would otherwise skip it.
 
