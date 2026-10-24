@@ -336,7 +336,6 @@ the envelope's `ts`.
 | `workspace` | string | yes | the workspace root |
 | `variables` | object | yes | the environment variables the session runs commands with, without their values: `path` (string, the `PATH`), `names` (array of strings, the other variables' names, sorted) and `source`, `login_shell` when the hub's login-shell capture succeeded, or `inherited` when it failed or for a session `fiber ask` started; a delegate carries its parent's (`docs/invocation.md`, "A session's environment") |
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
-| `supervised` | boolean | no | `true` for a session the hub's `start` started with `supervised`, which a program outside Fiber drives (`docs/permissions.md`, "Supervised sessions") |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
 | `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind, a fork, or a `start` `continues` continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
