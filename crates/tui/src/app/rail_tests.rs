@@ -1,7 +1,7 @@
 //! Tests for the rail's state: card numbers, switching, keys and the
 //! wheel.
 
-use super::super::{App, Effect};
+use super::super::{App, Effect, Link};
 use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
@@ -3410,7 +3410,14 @@ fn an_unreadable_card_draws_a_cross_and_a_dismiss_target() {
 
 #[test]
 fn a_live_card_draws_no_cross() {
-    let app = opened(&[A, B], A);
+    let mut app = opened(&[A, B], A);
+    assert!(carded(&app, A) && carded(&app, B), "both live cards exist");
+    assert!(
+        framed(&mut app)
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "card A drew its stop"
+    );
     assert!(
         !frame_rows(&app, 200, 40)
             .iter()
@@ -3480,9 +3487,22 @@ fn the_cross_hides_the_card_here_and_sends_nothing() {
 #[test]
 fn a_later_unreadable_status_keeps_the_card_hidden() {
     let mut app = cannot_attach();
-    cross_effect(&mut app, B);
+    assert!(carded(&app, B), "the card drew before its ✕");
+    assert_eq!(
+        cross_effect(&mut app, B),
+        Effect::None,
+        "hiding sends nothing"
+    );
     unreadable(&mut app, B);
     assert!(!carded(&app, B));
+    assert!(carded(&app, A) && carded(&app, C));
+    assert!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .is_some(),
+        "the later status still reached home"
+    );
 }
 
 #[test]
@@ -3516,11 +3536,25 @@ fn a_hidden_card_that_crashes_comes_back_and_its_cross_sends_dismiss() {
 #[test]
 fn the_card_stays_hidden_across_a_reconnect() {
     let mut app = cannot_attach();
-    cross_effect(&mut app, B);
+    assert!(carded(&app, B), "the card drew before its ✕");
+    assert_eq!(
+        cross_effect(&mut app, B),
+        Effect::None,
+        "hiding sends nothing"
+    );
     app.disconnected();
     app.on_line(hello());
+    assert_eq!(app.outbox.link, Link::Up, "the reconnect hello linked");
     unreadable(&mut app, B);
     assert!(!carded(&app, B));
+    assert!(carded(&app, A) && carded(&app, C));
+    assert!(
+        app.home
+            .as_ref()
+            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .is_some(),
+        "the later status still reached home"
+    );
 }
 
 #[test]

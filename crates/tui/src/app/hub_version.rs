@@ -10,15 +10,16 @@ use super::{App, hub_string};
 /// the first 7 characters of a nonempty commit in parentheses. Control
 /// characters a hub put in either are dropped, so they never reach a row.
 pub(crate) fn build_text(version: &str, commit: Option<&str>) -> String {
-    let plain = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-    let commit = commit.map(plain).filter(|commit| !commit.is_empty());
+    let commit = commit
+        .map(crate::text::strip_controls)
+        .filter(|commit| !commit.is_empty());
     match commit {
         Some(commit) => format!(
             "{} ({})",
-            plain(version),
+            crate::text::strip_controls(version),
             commit.chars().take(7).collect::<String>()
         ),
-        None => plain(version),
+        None => crate::text::strip_controls(version),
     }
 }
 

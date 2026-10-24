@@ -143,8 +143,14 @@ fn a_hello_with_no_or_an_empty_or_a_non_string_version_pushes_nothing() {
         json!({"fiber_version": 9}),
     ] {
         let mut app = app();
+        // The handler ran first: a differing build is noticed.
+        app.on_line(readable(
+            json!({"fiber_version": "9.9.9", "fiber_commit": SHA}),
+        ));
+        assert_eq!(notices(&app), [NOTICE]);
         app.on_line(readable(payload.clone()));
-        assert!(notices(&app).is_empty(), "{payload}");
+        assert_eq!(app.outbox.link, Link::Up, "{payload}");
+        assert_eq!(notices(&app), [NOTICE], "{payload}");
         assert_eq!(
             app.unreadable_reason(),
             "Cannot attach: its status did not parse"
@@ -156,10 +162,22 @@ fn a_hello_with_no_or_an_empty_or_a_non_string_version_pushes_nothing() {
 fn a_non_string_or_empty_commit_reads_as_absent() {
     for commit in [json!(5), json!("")] {
         let mut app = app();
+        // The handler ran first: a differing build is noticed.
+        app.on_line(readable(
+            json!({"fiber_version": "9.9.9", "fiber_commit": SHA}),
+        ));
+        assert_eq!(notices(&app), [NOTICE]);
+        // The same version with no hub commit compares the version only.
         app.on_line(readable(
             json!({"fiber_version": "0.0.0", "fiber_commit": commit}),
         ));
-        assert!(notices(&app).is_empty(), "{commit}");
+        assert_eq!(app.outbox.link, Link::Up, "{commit}");
+        assert_eq!(notices(&app), [NOTICE], "{commit}");
+        assert_eq!(
+            app.unreadable_reason(),
+            "Cannot attach: its status did not parse",
+            "{commit}"
+        );
     }
 }
 
@@ -167,6 +185,7 @@ fn a_non_string_or_empty_commit_reads_as_absent() {
 fn a_terminal_with_no_home_pushes_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(readable(json!({"fiber_version": "9.9.9"})));
+    assert_eq!(app.outbox.link, Link::Up);
     assert!(notices(&app).is_empty());
 }
 

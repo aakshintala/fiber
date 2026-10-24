@@ -2,6 +2,7 @@
 //! elapsed times read, and the glue between the app and the rail
 //! (`docs/tui.md`, "The rail"). Drawing lives in `crate::view::rail`.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use contract::events::SessionState;
@@ -89,7 +90,7 @@ pub(crate) struct RailState {
     /// Never cleared: the hide lasts until the terminal exits, and a card
     /// for the session shows again only when its status reads or it
     /// crashes (`docs/tui.md`, "The rail").
-    hidden: Vec<SessionId>,
+    hidden: BTreeSet<SessionId>,
     /// The request to show when it arrives: the session a switch opened
     /// while it waited, and what it waits on.
     arrival: Option<(SessionId, RequestId)>,
@@ -142,27 +143,24 @@ impl RailState {
     }
 }
 
-/// The rows that draw as cards: every card except a CANNOT ATTACH card the
-/// person hid and that has not crashed.
-fn visible_cards<'a>(home: &'a super::home::Home, hidden: &[SessionId]) -> Vec<&'a Row> {
-    home.sessions
-        .cards()
-        .into_iter()
-        .filter(|row| !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id)))
-        .collect()
-}
-
 impl App {
     /// The rail's state.
     pub(crate) fn rail_state(&self) -> &RailState {
         &self.rail_state
     }
 
-    /// The cards and the launch project, or None without home.
+    /// The cards and the launch project, or None without home. The cards
+    /// are every card except a CANNOT ATTACH card the person hid and that
+    /// has not crashed.
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, Option<&str>)> {
         let home = self.home.as_ref()?;
+        let hidden = &self.rail_state.hidden;
         Some((
-            visible_cards(home, &self.rail_state.hidden),
+            home.sessions
+                .cards()
+                .into_iter()
+                .filter(|row| !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id)))
+                .collect(),
             home.launch_project(),
         ))
     }
@@ -770,10 +768,7 @@ impl App {
             return Effect::None;
         };
         if crate::view::rail::cannot_attach(row) {
-            if !self.rail_state.hidden.contains(&row.id) {
-                let id = row.id.clone();
-                self.rail_state.hidden.push(id);
-            }
+            self.rail_state.hidden.insert(row.id.clone());
             return Effect::None;
         }
         if row.left != Some(Left::Crashed) {
