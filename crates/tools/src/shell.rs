@@ -43,6 +43,7 @@ mod read_only;
 mod classify;
 mod cwd;
 mod entry;
+mod git;
 mod matches;
 mod syntax;
 mod wrap;

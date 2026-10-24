@@ -223,6 +223,116 @@ const GIT_BLAME: &[Flag] = &[
     flag("--line-porcelain"),
 ];
 
+const GH_PR_VIEW: &[Flag] = &[
+    value("--json"),
+    flag("--comments"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_LIST: &[Flag] = &[
+    value("--state"),
+    value("-s"),
+    value("--author"),
+    value("--assignee"),
+    value("--label"),
+    value("--limit"),
+    value("-L"),
+    value("--base"),
+    value("--head"),
+    value("--search"),
+    value("--json"),
+    flag("--draft"),
+    value("--app"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_DIFF: &[Flag] = &[
+    value("--color"),
+    flag("--name-only"),
+    flag("--patch"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_PR_CHECKS: &[Flag] = &[
+    flag("--watch"),
+    flag("--required"),
+    flag("--fail-fast"),
+    value("--json"),
+    value("--interval"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_ISSUE_LIST: &[Flag] = &[
+    value("--state"),
+    value("-s"),
+    value("--assignee"),
+    value("--author"),
+    value("--label"),
+    value("--limit"),
+    value("-L"),
+    value("--milestone"),
+    value("--search"),
+    value("--json"),
+    value("--app"),
+    value("--repo"),
+    value("-R"),
+];
+
+const GH_REPO_VIEW: &[Flag] = &[value("--json")];
+
+const GH_RUN_LIST: &[Flag] = &[
+    value("--branch"),
+    value("-b"),
+    value("--status"),
+    value("-s"),
+    value("--workflow"),
+    value("-w"),
+    value("--limit"),
+    value("-L"),
+    value("--json"),
+    value("--repo"),
+    value("-R"),
+    value("--event"),
+    value("-e"),
+    value("--user"),
+    value("-u"),
+    value("--created"),
+    value("--commit"),
+    value("-c"),
+];
+
+const GH_RUN_VIEW: &[Flag] = &[
+    flag("--log"),
+    flag("--log-failed"),
+    flag("--exit-status"),
+    flag("--verbose"),
+    flag("-v"),
+    value("--json"),
+    value("--repo"),
+    value("-R"),
+    value("--job"),
+    value("-j"),
+    value("--attempt"),
+    value("-a"),
+];
+
+const fn gh(name: &'static str, flags: &'static [Flag]) -> Command {
+    Command {
+        name,
+        flags,
+        paths: true,
+        pattern: false,
+        pattern_flags: &[],
+        ends_flags: false,
+        prints: false,
+        counts: false,
+    }
+}
+
 /// `printf` under `xargs` only: a direct `printf` stays `executes`, so
 /// this row never reaches `COMMANDS`. It takes no flag of its own and
 /// names no path: every operand after it is a format or an argument.
@@ -463,4 +573,13 @@ pub(super) const COMMANDS: &[Command] = &[
         prints: false,
         counts: false,
     },
+    gh("gh pr view", GH_PR_VIEW),
+    gh("gh pr list", GH_PR_LIST),
+    gh("gh pr diff", GH_PR_DIFF),
+    gh("gh pr checks", GH_PR_CHECKS),
+    gh("gh issue view", GH_PR_VIEW),
+    gh("gh issue list", GH_ISSUE_LIST),
+    gh("gh repo view", GH_REPO_VIEW),
+    gh("gh run list", GH_RUN_LIST),
+    gh("gh run view", GH_RUN_VIEW),
 ];
