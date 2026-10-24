@@ -176,31 +176,31 @@ type AfterFire = dyn Fn(&Result<Reply, CallError>) + Send + Sync;
 
 /// A hook that observes a call without replacing it, firing on every call
 /// or on one 1-based call.
-#[derive(Clone)]
-struct BeforeHook {
+struct Hook<F: ?Sized> {
     at: Option<usize>,
-    fire: Arc<BeforeFire>,
+    fire: Arc<F>,
 }
 
-impl fmt::Debug for BeforeHook {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeforeHook").field("at", &self.at).finish()
+impl<F: ?Sized> Clone for Hook<F> {
+    fn clone(&self) -> Self {
+        Self {
+            at: self.at,
+            fire: Arc::clone(&self.fire),
+        }
     }
 }
 
-/// A hook that observes a call's end without replacing it, firing on every
-/// call or on one 1-based call.
-#[derive(Clone)]
-struct AfterHook {
-    at: Option<usize>,
-    fire: Arc<AfterFire>,
-}
-
-impl fmt::Debug for AfterHook {
+impl<F: ?Sized> fmt::Debug for Hook<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AfterHook").field("at", &self.at).finish()
+        f.debug_struct("Hook").field("at", &self.at).finish()
     }
 }
+
+/// A hook that sees the request: the script still answers the call.
+type BeforeHook = Hook<BeforeFire>;
+
+/// A hook that sees the call's end: the call still returns that end.
+type AfterHook = Hook<AfterFire>;
 
 impl ScriptedProvider {
     /// A provider that answers with `script`, one entry per call.

@@ -870,6 +870,17 @@ impl Provider for AdvanceClock {
     }
 }
 
+/// Fails when a thread already waits on the clock: a raw advance with a
+/// parked thread would wake it early, so the advance must run before any
+/// wait (ruling 6179406086).
+pub(crate) fn assert_no_parked(clock: &FakeClock) {
+    assert!(
+        clock.parked().is_empty(),
+        "Shape 3 advance with a parked thread: {:?}",
+        clock.parked()
+    );
+}
+
 /// The call that advances the clock while it runs.
 struct AdvanceCall {
     inner: Box<dyn ModelCall>,
@@ -881,12 +892,7 @@ struct AdvanceCall {
 impl ModelCall for AdvanceCall {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         if self.first {
-            // No code under test waits on the clock here: the advance runs on the loop thread inside the first model call, before any wait, and the step is stamped before it (ruling 6179406086).
-            assert!(
-                self.clock.parked().is_empty(),
-                "Shape 3 advance with a parked thread: {:?}",
-                self.clock.parked()
-            );
+            assert_no_parked(&self.clock);
             self.clock.advance(self.by);
         }
         self.inner.run(sink)

@@ -217,6 +217,8 @@ fn a_before_call_hook_observes_each_request_before_the_script_pop() {
             .run(&mut |d| deltas.push(d));
         assert!(end.is_ok(), "{end:?}");
     }
+    // The hook sees each request in order, before the script pop
+    // (docs/testing/fakes.md, "Fakes").
     assert_eq!(*seen.lock().unwrap(), ["r0", "r1"]);
     let prompts: Vec<String> = provider
         .requests()
@@ -246,6 +248,7 @@ fn a_before_call_hook_at_the_second_call_fires_only_there() {
             .run(&mut |d| deltas.push(d));
         assert!(end.is_ok(), "{end:?}");
     }
+    // The hook fires only on the numbered call (docs/testing/fakes.md, "Fakes").
     assert_eq!(*seen.lock().unwrap(), ["r1"]);
 }
 
@@ -266,6 +269,7 @@ fn an_after_reply_hook_observes_each_end_and_returns_it_unchanged() {
             .unwrap();
         assert_eq!(got, reply(expected));
     }
+    // The hook sees each end, once per call (docs/testing/fakes.md, "Fakes").
     assert_eq!(ends.lock().unwrap().len(), 2);
     assert_eq!(
         ends.lock().unwrap()[0],
@@ -298,6 +302,7 @@ fn an_after_reply_hook_at_the_second_call_fires_only_there() {
             .unwrap();
         assert_eq!(got, reply(expected));
     }
+    // The hook fires only on the numbered call (docs/testing/fakes.md, "Fakes").
     assert_eq!(fired.lock().unwrap().len(), 1);
 }
 
@@ -328,6 +333,8 @@ fn an_after_reply_hook_observes_script_exhausted_and_the_call_still_fails() {
     };
     assert_eq!(failure.code, ErrorCode::Other("script_exhausted".into()));
     assert!(end.is_err());
+    // The hook sees each end in order, exhausted script included
+    // (docs/testing/fakes.md, "Fakes").
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -355,8 +362,53 @@ fn an_after_reply_hook_passes_a_cancelled_end_through_unchanged() {
             usage: Box::new(usage)
         })
     );
+    // The hook sees the cancelled end once, passing it through unchanged
+    // (docs/testing/fakes.md, "Fakes").
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert!(seen.lock().unwrap()[0].contains("Cancelled"));
+}
+
+#[test]
+fn hook_debug_names_the_hook_and_its_numbered_call() {
+    use super::{AfterHook, BeforeFire, BeforeHook};
+    use std::sync::Arc;
+    let fire: Arc<BeforeFire> = Arc::new(|_: &ModelRequest| {});
+    assert_eq!(
+        format!(
+            "{:?}",
+            BeforeHook {
+                at: Some(2),
+                fire: Arc::clone(&fire),
+            }
+        ),
+        "Hook { at: Some(2) }"
+    );
+    assert_eq!(
+        format!("{:?}", BeforeHook { at: None, fire }),
+        "Hook { at: None }"
+    );
+    let end: Arc<super::AfterFire> =
+        Arc::new(|_: &Result<contract::provider::Reply, CallError>| {});
+    assert_eq!(
+        format!(
+            "{:?}",
+            AfterHook {
+                at: Some(2),
+                fire: Arc::clone(&end),
+            }
+        ),
+        "Hook { at: Some(2) }"
+    );
+    assert_eq!(
+        format!(
+            "{:?}",
+            AfterHook {
+                at: None,
+                fire: end
+            }
+        ),
+        "Hook { at: None }"
+    );
 }
 
 #[test]
