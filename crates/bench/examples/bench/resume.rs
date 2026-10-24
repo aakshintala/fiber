@@ -28,6 +28,7 @@ pub(crate) const WORKLOADS: [Workload; 2] = [
 
 /// A session to resume: its turns, each one reply of `reply_bytes`, with a
 /// `handoff` driver command after each of the first `handoffs` turns.
+#[derive(Clone, Copy)]
 pub(crate) struct Fixture {
     pub(crate) metric: &'static str,
     pub(crate) turns: usize,

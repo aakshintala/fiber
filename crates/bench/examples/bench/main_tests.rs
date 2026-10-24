@@ -267,17 +267,22 @@ fn only_wheel_parses_and_runs_just_the_wheel_workload() {
 fn measure_all_hands_each_workload_its_counts_and_records_them() {
     let parsed = args("--fiber f --out o --runs 5 --timing-runs 3 --paging j").unwrap();
     // The per-call sequence the single-side run makes: every workload's
-    // calls in selection order, each with its run count; the failing
-    // `busy turn` ends its row after one call.
+    // calls in selection order, each with its run count, except a sampled
+    // row's one call per sample; the failing `busy turn` ends its row
+    // after one call.
     let expected: Vec<(Side, &str, u32, u32)> = selected(&parsed)
         .iter()
         .flat_map(|(workload, repeats, runs)| {
-            let calls = if workload.name == "busy turn" {
-                1
+            let (calls, each) = if workload.name == "sessions list" {
+                (*runs, 1)
+            } else if workload.name == "terminal attach" {
+                (2 * *runs, 1)
+            } else if workload.name == "busy turn" {
+                (1, *runs)
             } else {
-                *repeats
+                (*repeats, *runs)
             };
-            (1..=calls).map(|n| (Side::Head, workload.name, n, *runs))
+            (1..=calls).map(move |n| (Side::Head, workload.name, n, each))
         })
         .collect();
     let mut head = Pass::new(Side::Head, parsed);
@@ -348,41 +353,46 @@ fn a_repeated_row_alternates_head_and_base_by_sample() {
 }
 
 #[test]
-fn block_rows_run_the_head_block_then_the_base_block() {
-    // Each block row is its head call then its base call, with no other
-    // row's call between; a mutant interleaving another row fails this.
+fn sampled_rows_alternate_head_and_base_by_sample() {
+    // A repeated row alternates per run, and a sampled row per sample, so
+    // listing's 3 samples and attach's 2 fixtures of 5 interleave. A
+    // mutant running a sampled row's head block then its base block, or
+    // interleaving another row, fails the log below.
     let head = args("--fiber f --out o --runs 5 --timing-runs 3 --only timing").unwrap();
     let base = args("--fiber b --out ob --runs 5 --timing-runs 3 --only timing").unwrap();
     let (forward, back) = (Side::Head, Side::Base);
-    assert_eq!(
-        order(head, Some(base)),
-        [
-            (forward, "session start", 1),
-            (back, "session start", 1),
-            (forward, "session start", 2),
-            (back, "session start", 2),
-            (forward, "session start", 3),
-            (back, "session start", 3),
-            (forward, "terminal first frame", 1),
-            (back, "terminal first frame", 1),
-            (forward, "terminal first frame", 2),
-            (back, "terminal first frame", 2),
-            (forward, "terminal first frame", 3),
-            (back, "terminal first frame", 3),
-            (forward, "session_list", 1),
-            (back, "session_list", 1),
-            (forward, "session_list", 2),
-            (back, "session_list", 2),
-            (forward, "session_list", 3),
-            (back, "session_list", 3),
-            (forward, "sessions list", 1),
-            (back, "sessions list", 1),
-            (forward, "terminal attach", 1),
-            (back, "terminal attach", 1),
-            (forward, "terminal wheel", 1),
-            (back, "terminal wheel", 1),
-        ]
-    );
+    let mut expected = vec![
+        (forward, "session start", 1),
+        (back, "session start", 1),
+        (forward, "session start", 2),
+        (back, "session start", 2),
+        (forward, "session start", 3),
+        (back, "session start", 3),
+        (forward, "terminal first frame", 1),
+        (back, "terminal first frame", 1),
+        (forward, "terminal first frame", 2),
+        (back, "terminal first frame", 2),
+        (forward, "terminal first frame", 3),
+        (back, "terminal first frame", 3),
+        (forward, "session_list", 1),
+        (back, "session_list", 1),
+        (forward, "session_list", 2),
+        (back, "session_list", 2),
+        (forward, "session_list", 3),
+        (back, "session_list", 3),
+    ];
+    // Each sampled row is one call per sample: listing's 3 and attach's
+    // 2 fixtures of 5. Wheel keeps its head block then its base block
+    // until its sessions prepare before timing.
+    for (name, total) in [("sessions list", 3), ("terminal attach", 10)] {
+        for s in 1..=total {
+            expected.push((forward, name, s));
+            expected.push((back, name, s));
+        }
+    }
+    expected.push((forward, "terminal wheel", 1));
+    expected.push((back, "terminal wheel", 1));
+    assert_eq!(order(head, Some(base)), expected);
 }
 
 #[test]
@@ -728,18 +738,21 @@ fn attach_keeps_its_full_count_on_both_sides() {
             Ok(Vec::new())
         },
     );
+    // Each side times one attach per call: 2 fixtures of 5, alternating
+    // head and base, each call carrying a single sample.
     let attach: Vec<(Side, &str, u32, u32)> = log
         .iter()
         .filter(|(_, name, _, _)| *name == "terminal attach")
         .cloned()
         .collect();
-    assert_eq!(
-        attach,
-        [
-            (Side::Head, "terminal attach", 1, 5),
-            (Side::Base, "terminal attach", 1, 5),
-        ]
-    );
+    let mut expected = Vec::new();
+    for s in 1..=10 {
+        expected.push((Side::Head, "terminal attach", s, 1));
+        expected.push((Side::Base, "terminal attach", s, 1));
+    }
+    assert_eq!(attach, expected);
+    assert_eq!(head.metrics["attach_ms"].len(), 10);
+    assert_eq!(base.metrics["attach_ms"].len(), 10);
     assert_eq!(head.metric_runs["attach_ms"], 5);
     assert_eq!(base.metric_runs["attach_ms"], 5);
 }
