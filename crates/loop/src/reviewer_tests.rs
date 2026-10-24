@@ -923,3 +923,118 @@ fn fanout_returns_every_reply_in_request_order() {
         assert_eq!(text, format!("request {}", index + 1));
     }
 }
+
+/// A reviewed tool with a per-call review note, so the effects item names
+/// what the reviewer was not shown read-only.
+struct NotedTool {
+    note: Option<String>,
+}
+
+impl contract::tool::Tool for NotedTool {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "shell".to_owned(),
+            description: "A reviewed tool with a note.".to_owned(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &Map<String, Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Executes],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+
+    fn review_note(&self, _: &Map<String, Value>) -> Option<String> {
+        self.note.clone()
+    }
+}
+
+fn noted_prepared(
+    tool: &Arc<dyn contract::tool::Tool>,
+    rewritten: Option<Vec<String>>,
+) -> crate::before_tool::Prepared {
+    let mut arguments = Map::new();
+    arguments.insert("command".into(), Value::String("ls && npm test".into()));
+    crate::before_tool::Prepared {
+        tool: Arc::clone(tool),
+        arguments,
+        effects: contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Executes],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            hosts: None,
+        },
+        rewritten,
+    }
+}
+
+fn item_lines(item: &Input) -> Vec<String> {
+    match item {
+        Input::User { text, .. } => text.lines().map(str::to_owned).collect(),
+        Input::Assistant { .. }
+        | Input::Reasoning { .. }
+        | Input::ToolCall { .. }
+        | Input::ToolResult { .. }
+        | Input::ToolSearchResult { .. } => panic!("the effects item is a user message"),
+    }
+}
+
+#[test]
+fn a_review_note_follows_the_declared_effects_in_both_branches() {
+    let tool: Arc<dyn contract::tool::Tool> = Arc::new(NotedTool {
+        note: Some("Not shown read-only: `npm test`".to_owned()),
+    });
+    for rewritten in [None, Some(vec!["fiber.test/guard".to_owned()])] {
+        let extension = rewritten.is_some();
+        let prepared = noted_prepared(&tool, rewritten);
+        let lines = item_lines(&super::under_item(&prepared, "shell", "/work"));
+        assert_eq!(
+            lines[0],
+            "Call under review: the last tool call above, shell."
+        );
+        assert!(lines[1].starts_with("Declared effects: "), "{lines:?}");
+        assert_eq!(lines[2], "Not shown read-only: `npm test`");
+        let mut rest = lines[3..].iter();
+        if extension {
+            assert!(
+                rest.next()
+                    .unwrap()
+                    .starts_with("Extension fiber.test/guard rewrote"),
+                "{lines:?}"
+            );
+        }
+        assert!(
+            rest.next().unwrap().starts_with("Workspace root: "),
+            "{lines:?}"
+        );
+        assert!(rest.next().is_none(), "{lines:?}");
+    }
+}

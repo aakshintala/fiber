@@ -83,6 +83,10 @@ impl Tool for Capped {
     fn guidelines(&self) -> Option<String> {
         self.inner.guidelines()
     }
+
+    fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
+        self.inner.review_note(arguments)
+    }
 }
 
 /// The loop's cut for a tool whose declared bound is `declared` under a

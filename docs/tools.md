@@ -38,6 +38,13 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").
+- Optionally: a per-call review note, for what one call needs the reviewer
+  to know beyond its declared effects. The note is part of the one review
+  request, never the system prompt or a tool definition, so the session's
+  cache is untouched (`docs/permissions.md`, "What it is shown"). Only the
+  shell sets one today: when some commands in a call are read-only and
+  others are not, it names the ones that were not
+  (``Not shown read-only: `npm test` ``; "Shell", "Effects").
 - Optionally: how a long result is cut, and its own size cap. By default a
   cut keeps the start; a tool may instead declare how many bytes of the
   start and of the end to keep, as the shell does.

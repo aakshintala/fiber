@@ -168,6 +168,16 @@ pub trait Tool: Send + Sync {
     fn guidelines(&self) -> Option<String> {
         None
     }
+
+    /// A per-call note for the reviewer, if the call needs one beyond its
+    /// declared effects (`docs/tools.md`, "Shell", "Effects"). It is
+    /// part of the one review request, never the system prompt or a tool
+    /// definition, so the session's cache is untouched (`docs/permissions.md`,
+    /// "What it is shown"). The default is none; only the shell sets one
+    /// today.
+    fn review_note(&self, _arguments: &Map<String, Value>) -> Option<String> {
+        None
+    }
 }
 
 /// What a call declares before it runs (`docs/permissions.md`, "Effects" and
