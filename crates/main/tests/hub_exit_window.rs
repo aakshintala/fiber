@@ -112,7 +112,15 @@ impl World {
 
     /// The pids of the session processes running in the workspace now.
     fn session_pids(&self) -> Vec<u32> {
-        let workspace = self.setup.workspace().to_string_lossy().into_owned();
+        // The session's command line carries the physical path; on macOS the
+        // temp directory is reached through the `/var` symlink.
+        let workspace = self
+            .setup
+            .workspace()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         fakes::matching(&format!("--workspace={workspace}")).unwrap()
     }
 
@@ -347,8 +355,7 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
 
     // Crash the session mid-dispatch: the log ends in `turn_completed`,
     // neither `fiber_exited` nor `rewound`.
-    let workspace = world.setup.workspace().to_string_lossy().into_owned();
-    let pids = fakes::matching(&format!("--workspace={workspace}")).unwrap();
+    let pids = world.session_pids();
     assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
     assert!(support::kill_pid(world.setup.deadline, pids[0], "KILL").unwrap());
     drop(writer);
