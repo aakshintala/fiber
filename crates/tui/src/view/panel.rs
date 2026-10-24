@@ -313,18 +313,9 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
             if content.is_empty() {
                 return Vec::new();
             }
-            let mut out = Vec::new();
-            // Without a status the content rows draw with no title, as
-            // the base drew no directory row.
-            if let Some(status) = app.panel_state().status() {
-                out.push(title_row(
-                    &status.workspace,
-                    vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
-                    text,
-                ));
-            }
-            out.extend(content);
-            out
+            // The title row is the first content row, holding the
+            // working-directory slot from the first frame.
+            content
         }
         Card::ChangedFiles => {
             let content = changed_files_rows(app, text);
@@ -378,38 +369,61 @@ fn card_rows(app: &App, card: &Card, text: usize) -> Vec<Row> {
         Card::Widget(at) => widget_rows(app, *at),
     }
 }
-/// The Session card's rows at `text` columns, each left out when its
-/// value is absent (`docs/tui.md`, "The panel"). Labels read dim with
-/// their figures right-aligned in the text colour; the bar is 17 cells
-/// of `▆` toward the handoff point.
+/// The Session card's rows at `text` columns in `docs/tui.md` order:
+/// the working-directory title, the model slot, the context bar with
+/// its handoff and explainer rows, then every figure row. Each slot
+/// draws from the first frame; only the branch row outside a
+/// repository and the trailing tools line stay conditional. Labels
+/// read dim with their figures right-aligned in the text colour; the
+/// bar is 17 cells of `▆` toward the handoff point.
 fn session_rows(app: &App, text: usize) -> Vec<Row> {
     let panel = app.panel_state();
     let mut out = Vec::new();
-    // The title row carries the working directory.
+    // The title row holds the working-directory slot from the first
+    // frame, so no row moves when the first status names it.
+    let workspace = panel
+        .status()
+        .map(|status| status.workspace.as_str())
+        .unwrap_or("");
+    out.push(title_row(
+        workspace,
+        vec![Span::styled(PERMISSION_MODE, style(Role::Attention))],
+        text,
+    ));
     if let Some(row) = branch_row(app) {
         out.push(row);
     }
     let model = panel
         .model()
         .or_else(|| panel.status().map(|status| status.model.as_str()));
-    if let Some(model) = model {
-        // The model in accent, the thinking level right-aligned in
-        // attention. No `∴`: no thinking-state source is held.
-        // debt: show the `∴` while the model thinks; upgrade trigger: a thinking flag on the panel fold.
-        let line = match panel.thinking() {
-            Some(thinking) => sides(
-                vec![Span::styled(model.to_owned(), style(Role::Accent))],
-                Span::styled(thinking.to_owned(), style(Role::Attention)),
-                text,
-            ),
-            None => Line::from(vec![Span::styled(model.to_owned(), style(Role::Accent))]),
-        };
-        out.push(Row {
-            line,
+    // The model slot stays fixed from the first frame: blank until a
+    // preamble names the model, with no placeholder text.
+    match model {
+        Some(model) => {
+            // The model in accent, the thinking level right-aligned in
+            // attention. No `∴`: no thinking-state source is held.
+            // debt: show the `∴` while the model thinks; upgrade trigger: a thinking flag on the panel fold.
+            let line = match panel.thinking() {
+                Some(thinking) => sides(
+                    vec![Span::styled(model.to_owned(), style(Role::Accent))],
+                    Span::styled(thinking.to_owned(), style(Role::Attention)),
+                    text,
+                ),
+                None => Line::from(vec![Span::styled(model.to_owned(), style(Role::Accent))]),
+            };
+            out.push(Row {
+                line,
+                spot: Some(Spot::Model),
+                tint: None,
+                edge: false,
+            });
+        }
+        None => out.push(Row {
+            line: Line::from(""),
             spot: Some(Spot::Model),
             tint: None,
             edge: false,
-        });
+        }),
     }
     let window = panel.window().filter(|window| *window > 0);
     let context = window.and_then(|window| {
@@ -418,120 +432,172 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
             .and_then(|status| status.context.as_ref())
             .map(|context| (window, context))
     });
-    if let Some((window, context)) = context {
-        let pct = context.tokens.saturating_mul(100) / window;
-        // The bar: 17 cells toward the handoff point, the marker, and
-        // the context size right-aligned (`docs/tui.md`, "The panel").
-        out.push(Row {
-            line: sides(
-                bar_spans(context.tokens, window, panel.trigger_at(), 17),
-                Span::raw(short_tokens(context.tokens)),
-                text,
-            ),
-            spot: Some(Spot::Context),
-            tint: None,
-            edge: false,
-        });
-        match panel.trigger_at() {
-            Some(trigger) => {
-                out.push(Row {
-                    line: sides(
-                        vec![Span::styled(
-                            format!("handoff at {}", short_tokens(trigger)),
-                            style(Role::Muted),
-                        )],
-                        Span::styled(format!("{pct}% of window"), style(Role::Muted)),
-                        text,
-                    ),
-                    spot: Some(Spot::Context),
-                    tint: None,
-                    edge: false,
-                });
-                out.push(Row {
-                    line: Line::styled("then a summary, fresh context", style(Role::Muted)),
-                    spot: Some(Spot::Context),
-                    tint: None,
-                    edge: false,
-                });
+    // The context bar and the two lines under it draw from the first
+    // frame. Figures not known yet show dim dashes, so no row moves
+    // when preamble and status folds land (`docs/tui.md`, "The panel").
+    match context {
+        Some((window, context)) => {
+            let pct = context.tokens.saturating_mul(100) / window;
+            // The bar: 17 cells toward the handoff point, the marker, and
+            // the context size right-aligned (`docs/tui.md`, "The panel").
+            out.push(Row {
+                line: sides(
+                    bar_spans(context.tokens, window, panel.trigger_at(), 17),
+                    Span::raw(short_tokens(context.tokens)),
+                    text,
+                ),
+                spot: Some(Spot::Context),
+                tint: None,
+                edge: false,
+            });
+            match panel.trigger_at() {
+                Some(trigger) => {
+                    out.push(Row {
+                        line: sides(
+                            vec![Span::styled(
+                                format!("handoff at {}", short_tokens(trigger)),
+                                style(Role::Muted),
+                            )],
+                            Span::styled(format!("{pct}% of window"), style(Role::Muted)),
+                            text,
+                        ),
+                        spot: Some(Spot::Context),
+                        tint: None,
+                        edge: false,
+                    });
+                }
+                None => {
+                    out.push(Row {
+                        line: sides(
+                            vec![Span::styled("handoff at —".to_owned(), style(Role::Muted))],
+                            Span::styled(format!("{pct}% of window"), style(Role::Muted)),
+                            text,
+                        ),
+                        spot: Some(Spot::Context),
+                        tint: None,
+                        edge: false,
+                    });
+                }
             }
-            None => {
-                out.push(Row {
-                    line: Line::styled(format!("{pct}% of window"), style(Role::Muted)),
-                    spot: Some(Spot::Context),
-                    tint: None,
-                    edge: false,
-                });
-            }
+            out.push(Row {
+                line: Line::styled("then a summary, fresh context", style(Role::Muted)),
+                spot: Some(Spot::Context),
+                tint: None,
+                edge: false,
+            });
+        }
+        None => {
+            // The empty bar: 17 cells of track with the handoff marker
+            // once the preamble names it, and a dim dash for the size.
+            out.push(Row {
+                line: sides(
+                    bar_spans(0, 1, panel.trigger_at(), 17),
+                    Span::styled("—", style(Role::Muted)),
+                    text,
+                ),
+                spot: Some(Spot::Context),
+                tint: None,
+                edge: false,
+            });
+            let handoff = match panel.trigger_at() {
+                Some(trigger) => format!("handoff at {}", short_tokens(trigger)),
+                None => "handoff at —".to_owned(),
+            };
+            out.push(Row {
+                line: sides(
+                    vec![Span::styled(handoff, style(Role::Muted))],
+                    Span::styled("—", style(Role::Muted)),
+                    text,
+                ),
+                spot: Some(Spot::Context),
+                tint: None,
+                edge: false,
+            });
+            out.push(Row {
+                line: Line::styled("then a summary, fresh context", style(Role::Muted)),
+                spot: Some(Spot::Context),
+                tint: None,
+                edge: false,
+            });
         }
     }
-    if let Some(status) = panel.status() {
-        let tokens = &status.spend.tokens;
-        let written = tokens
-            .cache_write
-            .values()
-            .fold(0u64, |sum, n| sum.saturating_add(*n));
-        let inside = tokens
-            .input
-            .saturating_add(tokens.cache_read)
-            .saturating_add(written);
-        out.push(figure_row(
-            "tokens in / out",
-            format!("{} / {}", short_tokens(inside), short_tokens(tokens.output)),
-            Some(Spot::Usage),
-            text,
-        ));
-        if inside > 0 {
-            let hits = tokens
-                .cache_read
-                .saturating_mul(100)
-                .checked_div(inside)
-                .unwrap_or(0);
+    // Every figure row draws from the first frame: a figure not known
+    // yet shows a dim dash, so no row moves when its data arrives
+    // (`docs/tui.md`, "The panel").
+    match panel.status() {
+        Some(status) => {
+            let tokens = &status.spend.tokens;
+            let written = tokens
+                .cache_write
+                .values()
+                .fold(0u64, |sum, n| sum.saturating_add(*n));
+            let inside = tokens
+                .input
+                .saturating_add(tokens.cache_read)
+                .saturating_add(written);
             out.push(figure_row(
-                "cache hits",
-                format!("{hits}%"),
+                "tokens in / out",
+                format!("{} / {}", short_tokens(inside), short_tokens(tokens.output)),
                 Some(Spot::Usage),
                 text,
             ));
-        }
-        // With a budget the cost row always shows spend against it; a
-        // cost still null counts as zero until it settles
-        // (`docs/loop.md`, "Spending budget").
-        match (status.spend.cost, panel.budget()) {
-            (Some(cost), Some(budget)) => {
+            // A cache-hit rate needs input read in: with none read, the
+            // row holds its placeholder rather than a division.
+            if inside > 0 {
+                let hits = tokens
+                    .cache_read
+                    .saturating_mul(100)
+                    .checked_div(inside)
+                    .unwrap_or(0);
                 out.push(figure_row(
-                    "cost",
-                    format!("{} of {}", format::money(cost), format::money(budget)),
+                    "cache hits",
+                    format!("{hits}%"),
                     Some(Spot::Usage),
                     text,
                 ));
+            } else {
+                out.push(reserved_row("cache hits", Some(Spot::Usage), text));
             }
-            (None, Some(budget)) => {
-                out.push(figure_row(
-                    "cost",
-                    format!("unknown of {}", format::money(budget)),
-                    Some(Spot::Usage),
-                    text,
-                ));
+            // With a budget the cost row always shows spend against it; a
+            // cost still null counts as zero until it settles
+            // (`docs/loop.md`, "Spending budget"). A known billed cost
+            // draws whenever known, `$0.00` included.
+            match (status.spend.cost, panel.budget()) {
+                (Some(cost), Some(budget)) => {
+                    out.push(figure_row(
+                        "cost",
+                        format!("{} of {}", format::money(cost), format::money(budget)),
+                        Some(Spot::Usage),
+                        text,
+                    ));
+                }
+                (None, Some(budget)) => {
+                    out.push(figure_row(
+                        "cost",
+                        format!("unknown of {}", format::money(budget)),
+                        Some(Spot::Usage),
+                        text,
+                    ));
+                }
+                (Some(cost), None) => {
+                    out.push(figure_row(
+                        "cost",
+                        format::money(cost),
+                        Some(Spot::Usage),
+                        text,
+                    ));
+                }
+                (None, None) => {
+                    out.push(figure_row(
+                        "cost",
+                        "unknown".to_owned(),
+                        Some(Spot::Usage),
+                        text,
+                    ));
+                }
             }
-            (Some(cost), None) if cost > 0.0 => {
-                out.push(figure_row(
-                    "cost",
-                    format::money(cost),
-                    Some(Spot::Usage),
-                    text,
-                ));
-            }
-            (None, None) => {
-                out.push(figure_row(
-                    "cost",
-                    "unknown".to_owned(),
-                    Some(Spot::Usage),
-                    text,
-                ));
-            }
-            (Some(_), None) => {}
-        }
-        if status.spend.subscription_cost > 0.0 {
+            // The subscription sum draws on every frame once a status
+            // holds it, `$0.00` included.
             out.push(figure_row(
                 "cost on subscription",
                 format::money(status.spend.subscription_cost),
@@ -539,18 +605,32 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
                 text,
             ));
         }
+        None => {
+            out.push(reserved_row("tokens in / out", Some(Spot::Usage), text));
+            out.push(reserved_row("cache hits", Some(Spot::Usage), text));
+            out.push(reserved_row("cost", Some(Spot::Usage), text));
+            out.push(reserved_row(
+                "cost on subscription",
+                Some(Spot::Usage),
+                text,
+            ));
+        }
     }
-    if let Some(speed) = panel.speed() {
-        out.push(figure_row(
-            "speed, last reply",
-            format!("{speed} tokens/s"),
-            None,
-            text,
-        ));
+    match panel.speed() {
+        Some(speed) => {
+            out.push(figure_row(
+                "speed, last reply",
+                format!("{speed} tokens/s"),
+                None,
+                text,
+            ));
+        }
+        // Before the first timed reply the speed is unknown.
+        None => out.push(reserved_row("speed, last reply", None, text)),
     }
-    if panel.turns() > 0 {
-        out.push(figure_row("turns", panel.turns().to_string(), None, text));
-    }
+    // Zero turns are known, not unknown: the row draws `0` before the
+    // first turn completes.
+    out.push(figure_row("turns", panel.turns().to_string(), None, text));
     if !panel.down().is_empty() {
         // One `✗ <server> down` per down server, joined by a space and
         // cut from the left when too long for the card.
@@ -598,6 +678,22 @@ fn figure_row(label: &str, value: String, spot: Option<Spot>, text: usize) -> Ro
         line: sides(
             vec![Span::styled(label.to_owned(), style(Role::Muted))],
             Span::styled(value, style(Role::Text)),
+            text,
+        ),
+        spot,
+        tint: None,
+        edge: false,
+    }
+}
+
+/// A reserved figure row: its plain label dim, a dim dash right-aligned
+/// where the figure goes, holding the row's place until its data
+/// arrives (`docs/tui.md`, "The panel"). Same target as the figure row.
+fn reserved_row(label: &str, spot: Option<Spot>, text: usize) -> Row {
+    Row {
+        line: sides(
+            vec![Span::styled(label.to_owned(), style(Role::Muted))],
+            Span::styled("—", style(Role::Muted)),
             text,
         ),
         spot,

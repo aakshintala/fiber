@@ -407,7 +407,12 @@ The default cards, in order:
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down. Every number has a plain label that says what it
   measures, such as "tokens in / out", "cache hits" or "output speed, last
-  reply", never a bare abbreviation. The handoff marker carries one line saying
+  reply", never a bare abbreviation. Every figure row, the context bar and the
+  two lines under it are drawn from the session's first frame. A figure not
+  known yet, such as the speed before the first timed reply, shows a dim "—",
+  so no row moves when its data arrives. The bar is drawn empty with 17 cells
+  in rule and a dim "—" for context size until its figures are known. Zero is
+  shown as zero. The handoff marker carries one line saying
   what a handoff is: when the context fills, Fiber writes a summary and the
   work continues in a fresh context (`docs/handoff.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
@@ -436,6 +441,7 @@ cut with "…". The cards draw:
   tokens in / out     412k / 18.2k
   cache hits                   91%
   cost                       $4.12
+  cost on subscription       $0.00
   speed, last reply   64 tokens/s
   turns                         12
   tools 31          ✗ github down
