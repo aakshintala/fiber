@@ -211,7 +211,7 @@ fn a_taken_port_is_retried_with_a_fresh_one() {
 }
 
 #[test]
-#[should_panic(expected = "Address already in use")]
+#[should_panic(expected = "attempt 3 of 3")]
 fn a_hub_that_never_gets_a_port_fails_with_the_log() {
     let setup = Setup::new();
     let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
