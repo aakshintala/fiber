@@ -2355,6 +2355,7 @@ fn a_replay_that_cannot_start_is_refused_io_failed() {
     );
 }
 
+/// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn hand_once_takes_an_id_once_until_it_is_forgotten() {
     let order = crate::retire::AckOrder::default();
@@ -2530,6 +2531,7 @@ fn rejection(id: &str, code: &str) -> Value {
     json!({"kind": "command_rejected", "payload": {"command_id": id, "code": code, "message": "m"}})
 }
 
+/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2541,6 +2543,7 @@ fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
     assert_eq!(ended.starter.resumed().len(), 1);
 }
 
+/// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2560,6 +2563,7 @@ fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     assert!(ended.order.hand_once("c_1"), "the answered id is forgotten");
 }
 
+/// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
 #[test]
 fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2574,6 +2578,7 @@ fn a_closing_answer_for_a_command_handed_once_is_forwarded_not_routed() {
     assert!(ended.received_ids().is_empty(), "nothing is delivered");
 }
 
+/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2585,6 +2590,8 @@ fn a_closing_answer_the_first_time_is_routed_to_the_resumed_session() {
     ended.close_session();
 }
 
+/// `docs/invocation.md`, "Lifecycle": after a crash the hub never delivers the command again; it rejects it `indeterminate`, and the client decides whether to send it again.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     let (popped_tx, popped_rx) = std::sync::mpsc::channel();
@@ -2619,6 +2626,8 @@ fn a_crash_rejects_each_sent_command_indeterminate_and_passes_the_unsent_on() {
     );
 }
 
+/// `docs/invocation.md`, "What each command does", "`rewind` starts a new session process": the old session closes with `rewound` and the hub starts the new one; a command for it resumes as for any session ("Lifecycle").
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     let mut ended = Ended::start("rewound", true, &["c_1"], &["c_2"]);
@@ -2636,6 +2645,7 @@ fn after_a_rewind_a_sent_command_gets_no_line_and_only_unsent_ones_pass_on() {
     assert_eq!(ended.order.session_for("c_1"), None, "c_1 left the queue");
 }
 
+/// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
 #[test]
 fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
@@ -2656,6 +2666,7 @@ fn a_gone_entry_with_an_exited_log_drops_everything_and_routes_nothing() {
     assert!(ended.kept.lock().unwrap().is_empty());
 }
 
+/// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
 #[test]
 fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
@@ -2673,6 +2684,7 @@ fn a_client_that_is_gone_while_its_entry_remains_gets_nothing_re_routed() {
     assert_eq!(ended.order.session_for("c_1"), None);
 }
 
+/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1", "c_2"], &[]);
@@ -2700,6 +2712,7 @@ fn a_relay_that_saw_the_exited_window_is_clean_even_when_the_log_moved_on() {
     assert_eq!(ended.received_ids(), ["c_1", "c_2"]);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
 fn an_indeterminate_answer_from_the_session_is_forwarded_and_never_routed() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);

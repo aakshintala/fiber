@@ -1258,6 +1258,7 @@ fn scripted_reopening(level: &str, accepted: bool, last_seq: Option<u64>, path: 
 /// the connection's close, the teardown a descheduled session leaves
 /// behind, then answers the re-routed command on the resumed
 /// connection.
+/// `docs/invocation.md`, "Lifecycle": after a clean exit the hub treats a sent, unanswered command as a `closing` answer and delivers it to the resumed session, once, in read order.
 #[test]
 fn a_first_exit_re_routes_and_the_resumed_session_answers() {
     use crate::connection::lock;

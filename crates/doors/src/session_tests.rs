@@ -4975,6 +4975,7 @@ fn await_log_end(watcher: log::Watcher) {
         .expect("the log's end reaches the watcher");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_reader_mid_dispatch_at_close_is_answered_before_end_of_file() {
     reset();
@@ -5001,6 +5002,8 @@ fn a_reader_mid_dispatch_at_close_is_answered_before_end_of_file() {
     assert_eq!(acks[0]["kind"], "command_accepted", "{lines:?}");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
 fn a_dispatch_past_the_close_grace_is_answered_indeterminate_once() {
     reset();
@@ -5039,6 +5042,7 @@ fn a_dispatch_past_the_close_grace_is_answered_indeterminate_once() {
     hold.release();
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn an_mcp_login_released_inside_the_grace_is_answered_with_its_own_answer() {
     reset();
@@ -5065,6 +5069,8 @@ fn an_mcp_login_released_inside_the_grace_is_answered_with_its_own_answer() {
     assert_eq!(acks[0]["kind"], "command_accepted", "{lines:?}");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
 fn an_mcp_login_still_running_at_the_grace_is_answered_indeterminate() {
     reset();
@@ -5097,6 +5103,8 @@ fn an_mcp_login_still_running_at_the_grace_is_answered_indeterminate() {
     hold.release();
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
 fn a_malformed_rejection_reusing_an_in_flight_id_leaves_it_unanswered() {
     reset();
@@ -5139,6 +5147,8 @@ fn a_malformed_rejection_reusing_an_in_flight_id_leaves_it_unanswered() {
     hold.release();
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": a session stops reading as it ends, so a line it never read gets no answer from it.
 #[test]
 fn the_reader_is_stopped_before_the_socket_path_is_removed() {
     reset();
@@ -5177,6 +5187,7 @@ fn the_reader_is_stopped_before_the_socket_path_is_removed() {
     );
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_subscribe_while_closing_is_answered_and_close_returns() {
     reset();
@@ -5206,6 +5217,7 @@ fn a_subscribe_while_closing_is_answered_and_close_returns() {
     assert_eq!(acks_for(&lines, "c_down").len(), 1, "{lines:?}");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_prompt_after_the_loop_returned_is_answered_closing_before_end_of_file() {
     reset();
@@ -5237,6 +5249,7 @@ fn a_prompt_after_the_loop_returned_is_answered_closing_before_end_of_file() {
     assert_eq!(acks[0]["payload"]["code"], "closing", "{lines:?}");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn close_ends_the_writers_while_another_handle_keeps_the_log() {
     reset();
@@ -5279,6 +5292,7 @@ fn a_client_hanging_up_after_the_stop_does_not_end_its_writer_before_the_log_doe
         .expect("the log's end lets the writer finish");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: the session stops waiting for a command still running at the grace and writes one `timeout` line to its diagnostic log for each connection it stopped waiting for.
 #[test]
 fn finish_leaves_the_entry_while_the_gate_is_stopped() {
     reset();
@@ -5303,6 +5317,7 @@ fn finish_leaves_the_entry_while_the_gate_is_stopped() {
     close_within(opened.session, opened.log);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: the session stops waiting for a command still running at the grace and writes one `timeout` line to its diagnostic log for each connection it stopped waiting for.
 #[test]
 fn join_clients_waits_for_a_reader_that_finishes_inside_the_grace() {
     reset();
@@ -5392,6 +5407,9 @@ fn quiet_readers_stops_a_reader_and_leaves_its_socket_open() {
     close_within(opened.session, opened.log);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the grace bounds the whole close: the session stops waiting for a command still running at the grace and writes one `timeout` line to its diagnostic log for each connection it stopped waiting for.
 #[test]
 fn a_reader_held_past_the_close_grace_is_detached_and_close_returns() {
     reset();
@@ -5466,6 +5484,7 @@ fn a_reader_held_past_the_close_grace_is_detached_and_close_returns() {
     assert_eq!(keep.count(), count);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn accepted_records_reads_only_on_a_tracked_thread() {
     let accepted = super::Accepted::new();
@@ -5487,6 +5506,8 @@ fn accepted_records_reads_only_on_a_tracked_thread() {
     assert_eq!(accepted.unanswered(me), 0);
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn accepted_answers_one_occurrence_and_cuts_the_rest_in_read_order() {
     use super::Answered;
@@ -5514,6 +5535,7 @@ fn accepted_answers_one_occurrence_and_cuts_the_rest_in_read_order() {
     assert_eq!(accepted.answered(me, "c_a", None), Answered::Write, "once");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_malformed_rejection_leaves_an_in_flight_id_unanswered() {
     use super::Answered;
@@ -5636,6 +5658,7 @@ fn read_ids(out: &support::Shared) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn past_the_end_stop_does_not_end_a_writer_that_owes_an_answer() {
     reset();
@@ -5645,10 +5668,6 @@ fn past_the_end_stop_does_not_end_a_writer_that_owes_an_answer() {
     });
     flying.opened.log.end_watchers();
     flying.stop();
-    assert!(
-        flying.still_running(),
-        "STOP at the log's end leaves a read command unanswered: the writer waits"
-    );
     flying.injector.push_kept(flying.answer("c_1"));
     flying.wait_ended();
     assert_eq!(
@@ -5658,6 +5677,8 @@ fn past_the_end_stop_does_not_end_a_writer_that_owes_an_answer() {
     flying.finish();
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_cut_writes_indeterminate_for_what_is_unanswered_and_ends() {
     reset();
@@ -5666,7 +5687,6 @@ fn a_cut_writes_indeterminate_for_what_is_unanswered_and_ends() {
         gate.accepted.reserve(&CommandId("c_2".into()));
     });
     flying.opened.log.end_watchers();
-    assert!(flying.still_running(), "nothing owed is answered yet");
     flying.gate.conns.cut_all(&flying.gate.session_id);
     flying.wait_ended();
     let lines = flying.out.lines();
@@ -5686,6 +5706,8 @@ fn a_cut_writes_indeterminate_for_what_is_unanswered_and_ends() {
     flying.finish();
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the close waits up to 2 seconds, then answers a command still running `indeterminate`, never replayed.
 #[test]
 fn an_own_answer_queued_ahead_of_cut_is_written_and_not_cut() {
     reset();

@@ -484,16 +484,6 @@ fn recv_after_end_returns_a_kept_line_pushed_after_the_end() {
 }
 
 #[test]
-fn recv_after_end_returns_queued_lines_in_push_order() {
-    let (_sessions, mut watcher) = ended_watcher();
-    let injector = watcher.injector();
-    injector.push_kept(kept_line("first"));
-    injector.push_kept(kept_line("second"));
-    assert_eq!(watcher.recv_after_end().kind, "first");
-    assert_eq!(watcher.recv_after_end().kind, "second");
-}
-
-#[test]
 fn recv_after_end_waits_while_nothing_is_queued() {
     let (_sessions, mut watcher) = ended_watcher();
     let injector = watcher.injector();

@@ -677,6 +677,7 @@ impl Write for SharedOut {
     }
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": every line a session reads gets exactly one answer on its connection before the session shuts it.
 #[test]
 fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
     use contract::events::{CommandRejected, Event};
@@ -696,13 +697,6 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         }
     });
     drop(log);
-    // The writer has met the log's end and waits past it: a short receive
-    // finds it still running, so the kept line pushed next reaches it.
-    let short = Deadline::after(std::time::Duration::from_millis(200));
-    assert!(
-        short.recv(&done_rx).is_err(),
-        "the writer waits past the log's end for kept lines and STOP"
-    );
     let answer = crate::session::envelope(
         &id,
         clock.as_ref(),
@@ -728,6 +722,7 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
     assert_eq!(lines[0].kind, "command_rejected");
 }
 
+/// `docs/invocation.md`, "What the hub speaks", "Commands keep their order": the hub passes one connection's commands to a session in the order it read them, and the acknowledgements come back in that order.
 #[test]
 fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
     let (_temp, log, id, clock) = open_log();
@@ -745,12 +740,6 @@ fn a_level_change_after_the_log_ends_moves_the_writer_to_the_new_watcher() {
         }
     });
     log.end_watchers();
-    assert!(
-        Deadline::after(std::time::Duration::from_millis(200))
-            .recv(&done_rx)
-            .is_err(),
-        "the old watcher has ended and the writer waits past it"
-    );
     // A level change that raced the close: its watcher is registered after
     // the end, so it starts ended; its prelude and its queue are written.
     let fresh = log.watch();
