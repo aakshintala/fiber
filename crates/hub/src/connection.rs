@@ -1457,6 +1457,53 @@ pub(crate) fn reject(
     );
 }
 
+/// The session id a kernel argument vector belongs to: the executable is
+/// dropped, the next word is exactly `session`, and one later word is
+/// exactly `--id=s_...` with a valid session id. Anything else names no
+/// session, so a shell's words only add refusals by matching this shape.
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) fn session_argv_id(argv: &[Vec<u8>]) -> Option<SessionId> {
+    let words = argv.get(1..)?;
+    let (command, flags) = words.split_first()?;
+    if command.as_slice() != b"session" {
+        return None;
+    }
+    flags.iter().find_map(|flag| {
+        let id = flag.strip_prefix(b"--id=")?;
+        let id = std::str::from_utf8(id).ok()?;
+        crate::relay::valid_session_id(id).then(|| SessionId(id.to_owned()))
+    })
+}
+
+/// Every session id on the strict ancestors of `peer_pid`: the caller's
+/// own effective uid is read first, and argument vectors only for
+/// ancestors sharing it. A foreign-owned ancestor contributes nothing and
+/// its arguments are never read; an unreadable owner, parent, or
+/// same-owner argument vector names its pid.
+#[allow(dead_code, reason = "wired into the refusal paths next")]
+pub(crate) fn session_owners(
+    peer_pid: u32,
+    read: &impl support::peer::ProcessRead,
+) -> Result<Vec<SessionId>, support::peer::IncompleteWalk> {
+    use support::peer::IncompleteWalk;
+    let current = read
+        .current_euid()
+        .map_err(|_| IncompleteWalk { pid: peer_pid })?;
+    let mut owners = Vec::new();
+    for ancestor in support::peer::ancestors(peer_pid, read)? {
+        if ancestor.euid != current {
+            continue;
+        }
+        let argv = read
+            .argv(ancestor.pid)
+            .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
+        if let Some(id) = session_argv_id(&argv) {
+            owners.push(id);
+        }
+    }
+    Ok(owners)
+}
+
 /// A `command_rejected` payload for `code` and `message`, with `id` when
 /// one was readable: the port answers refusals the same way.
 pub(crate) fn rejection(

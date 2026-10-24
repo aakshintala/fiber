@@ -3186,3 +3186,195 @@ fn refresh_with_an_argument_is_invalid_arguments() {
     assert_eq!(id.as_deref(), Some("c_r"));
     assert_eq!(message, "The arguments do not fit this command.");
 }
+
+/// A scripted process tree for [`session_owners`]: parents and owners by
+/// pid, with unreadable pids and argument vectors that panic when read.
+struct OwnerScript {
+    current: u32,
+    parents: std::collections::HashMap<u32, u32>,
+    euids: std::collections::HashMap<u32, u32>,
+    argvs: std::collections::HashMap<u32, Vec<Vec<u8>>>,
+    unreadable_parent: Vec<u32>,
+    unreadable_euid: Vec<u32>,
+    unreadable_argv: Vec<u32>,
+    argv_read: std::cell::Cell<usize>,
+}
+
+impl support::peer::ProcessRead for OwnerScript {
+    fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+        Ok(self.current)
+    }
+
+    fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        if self.unreadable_euid.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable { pid, what: "euid" });
+        }
+        self.euids
+            .get(&pid)
+            .copied()
+            .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+    }
+
+    fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+        if self.unreadable_parent.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable {
+                pid,
+                what: "parent",
+            });
+        }
+        self.parents
+            .get(&pid)
+            .copied()
+            .ok_or(support::peer::ReadError::Unreadable {
+                pid,
+                what: "parent",
+            })
+    }
+
+    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+        self.argv_read.set(self.argv_read.get() + 1);
+        if self.unreadable_argv.contains(&pid) {
+            return Err(support::peer::ReadError::Unreadable { pid, what: "argv" });
+        }
+        self.argvs
+            .get(&pid)
+            .cloned()
+            .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+    }
+}
+
+fn session_argv(id: &str) -> Vec<Vec<u8>> {
+    [
+        "/path/to/fiber",
+        "session",
+        &format!("--id={id}"),
+        "--workspace=/w",
+    ]
+    .iter()
+    .map(|word| word.as_bytes().to_vec())
+    .collect()
+}
+
+#[test]
+fn session_argv_id_matches_only_the_session_shape() {
+    let id = "s_0123456789abcdef";
+    assert_eq!(
+        session_argv_id(&session_argv(id)),
+        Some(SessionId(id.to_owned()))
+    );
+    // Reordered flags still match: the id is found past any position.
+    let mut reordered = session_argv(id);
+    reordered.swap(2, 3);
+    assert_eq!(session_argv_id(&reordered), Some(SessionId(id.to_owned())));
+    // Nothing else does: another command, a missing or malformed id, or a
+    // flag that merely contains the shape.
+    for argv in [
+        vec![],
+        vec![b"fiber".to_vec()],
+        vec![b"fiber".to_vec(), b"ask".to_vec()],
+        vec![b"fiber".to_vec(), b"session".to_vec()],
+        vec![
+            b"fiber".to_vec(),
+            b"sessionx".to_vec(),
+            b"--id=s_0123456789abcdef".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"session".to_vec(),
+            b"--idx=s_0123456789abcdef".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"session".to_vec(),
+            b"--id=s_SHORT".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"session".to_vec(),
+            b"--id=s_0123456789abcde".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"session".to_vec(),
+            b"--id=s_0123456789abcdef0".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"session".to_vec(),
+            b"--id=s_0123456789ABCDEF".to_vec(),
+        ],
+        vec![
+            b"fiber".to_vec(),
+            b"sh".to_vec(),
+            b"-c".to_vec(),
+            b"session --id=s_0123456789abcdef".to_vec(),
+        ],
+    ] {
+        assert_eq!(session_argv_id(&argv), None, "{argv:?}");
+    }
+}
+
+#[test]
+fn session_owners_skips_foreign_argv_and_names_unreadable_pids() {
+    let id = "s_0123456789abcdef";
+    let read = OwnerScript {
+        current: 1000,
+        parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
+        euids: [(20, 1000), (30, 2000), (1, 1000)].into_iter().collect(),
+        argvs: [(20, session_argv(id)), (1, session_argv(id))]
+            .into_iter()
+            .collect(),
+        unreadable_parent: vec![],
+        unreadable_euid: vec![],
+        unreadable_argv: vec![],
+        argv_read: std::cell::Cell::new(0),
+    };
+    // The foreign-owned ancestor contributes nothing and its arguments are
+    // never read: two same-owner reads, not three.
+    assert_eq!(
+        session_owners(10, &read).unwrap(),
+        [SessionId(id.to_owned()), SessionId(id.to_owned())]
+    );
+    assert_eq!(read.argv_read.get(), 2);
+}
+
+#[test]
+fn session_owners_names_an_unreadable_owner_or_argv() {
+    let base = OwnerScript {
+        current: 1000,
+        parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+        euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+        argvs: [(1, session_argv("s_0123456789abcdef"))]
+            .into_iter()
+            .collect(),
+        unreadable_parent: vec![],
+        unreadable_euid: vec![],
+        unreadable_argv: vec![],
+        argv_read: std::cell::Cell::new(0),
+    };
+    let unreadable = OwnerScript {
+        unreadable_euid: vec![20],
+        ..base
+    };
+    // Cannot use `base` after move; rebuild for each case below.
+    assert_eq!(
+        session_owners(10, &unreadable).unwrap_err(),
+        support::peer::IncompleteWalk { pid: 20 }
+    );
+    let unreadable = OwnerScript {
+        current: 1000,
+        parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+        euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+        argvs: [(1, session_argv("s_0123456789abcdef"))]
+            .into_iter()
+            .collect(),
+        unreadable_parent: vec![],
+        unreadable_euid: vec![],
+        unreadable_argv: vec![20],
+        argv_read: std::cell::Cell::new(0),
+    };
+    assert_eq!(
+        session_owners(10, &unreadable).unwrap_err(),
+        support::peer::IncompleteWalk { pid: 20 }
+    );
+}

@@ -757,3 +757,187 @@ fn until_carries_the_shared_must_succeed_bound() {
         "until's whole-wait bound matches the shared must-succeed bound"
     );
 }
+
+/// Tests for the session-socket attribution boundary: the exact session
+/// argv shape, foreign-owner skipping without argument reads, and the
+/// unreadable pid in an incomplete walk.
+mod attribution_tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test helpers; a failure is the test's"
+    )]
+
+    use std::collections::HashMap;
+
+    use super::super::{session_argv_id, session_owners};
+
+    struct OwnerScript {
+        current: u32,
+        parents: HashMap<u32, u32>,
+        euids: HashMap<u32, u32>,
+        argvs: HashMap<u32, Vec<Vec<u8>>>,
+        unreadable_euid: Vec<u32>,
+        unreadable_argv: Vec<u32>,
+        argv_read: std::cell::Cell<usize>,
+    }
+
+    impl support::peer::ProcessRead for OwnerScript {
+        fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
+            Ok(self.current)
+        }
+
+        fn euid(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            if self.unreadable_euid.contains(&pid) {
+                return Err(support::peer::ReadError::Unreadable { pid, what: "euid" });
+            }
+            self.euids
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "euid" })
+        }
+
+        fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            self.parents
+                .get(&pid)
+                .copied()
+                .ok_or(support::peer::ReadError::Unreadable {
+                    pid,
+                    what: "parent",
+                })
+        }
+
+        fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, support::peer::ReadError> {
+            self.argv_read.set(self.argv_read.get() + 1);
+            if self.unreadable_argv.contains(&pid) {
+                return Err(support::peer::ReadError::Unreadable { pid, what: "argv" });
+            }
+            self.argvs
+                .get(&pid)
+                .cloned()
+                .ok_or(support::peer::ReadError::Unreadable { pid, what: "argv" })
+        }
+    }
+
+    fn session_argv(id: &str) -> Vec<Vec<u8>> {
+        [
+            "/path/to/fiber",
+            "session",
+            &format!("--id={id}"),
+            "--workspace=/w",
+        ]
+        .iter()
+        .map(|word| word.as_bytes().to_vec())
+        .collect()
+    }
+
+    #[test]
+    fn session_argv_id_matches_only_the_session_shape() {
+        let id = "s_0123456789abcdef";
+        assert_eq!(
+            session_argv_id(&session_argv(id)),
+            Some(contract::SessionId(id.to_owned()))
+        );
+        let mut reordered = session_argv(id);
+        reordered.swap(2, 3);
+        assert_eq!(
+            session_argv_id(&reordered),
+            Some(contract::SessionId(id.to_owned()))
+        );
+        for argv in [
+            vec![],
+            vec![b"fiber".to_vec()],
+            vec![b"fiber".to_vec(), b"ask".to_vec()],
+            vec![b"fiber".to_vec(), b"session".to_vec()],
+            vec![
+                b"fiber".to_vec(),
+                b"sessionx".to_vec(),
+                b"--id=s_0123456789abcdef".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"session".to_vec(),
+                b"--idx=s_0123456789abcdef".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"session".to_vec(),
+                b"--id=s_SHORT".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"session".to_vec(),
+                b"--id=s_0123456789abcde".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"session".to_vec(),
+                b"--id=s_0123456789abcdef0".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"session".to_vec(),
+                b"--id=s_0123456789ABCDEF".to_vec(),
+            ],
+            vec![
+                b"fiber".to_vec(),
+                b"sh".to_vec(),
+                b"-c".to_vec(),
+                b"session --id=s_0123456789abcdef".to_vec(),
+            ],
+        ] {
+            assert_eq!(session_argv_id(&argv), None, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn session_owners_skips_foreign_argv_and_names_unreadable_pids() {
+        let id = "s_0123456789abcdef";
+        let read = OwnerScript {
+            current: 1000,
+            parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
+            euids: [(20, 1000), (30, 2000), (1, 1000)].into_iter().collect(),
+            argvs: [(20, session_argv(id)), (1, session_argv(id))]
+                .into_iter()
+                .collect(),
+            unreadable_euid: vec![],
+            unreadable_argv: vec![],
+            argv_read: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            session_owners(10, &read).unwrap(),
+            [
+                contract::SessionId(id.to_owned()),
+                contract::SessionId(id.to_owned())
+            ]
+        );
+        assert_eq!(read.argv_read.get(), 2);
+        let unreadable = OwnerScript {
+            current: 1000,
+            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, session_argv(id))].into_iter().collect(),
+            unreadable_euid: vec![20],
+            unreadable_argv: vec![],
+            argv_read: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            session_owners(10, &unreadable).unwrap_err(),
+            support::peer::IncompleteWalk { pid: 20 }
+        );
+        let unreadable = OwnerScript {
+            current: 1000,
+            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(1, session_argv(id))].into_iter().collect(),
+            unreadable_euid: vec![],
+            unreadable_argv: vec![20],
+            argv_read: std::cell::Cell::new(0),
+        };
+        assert_eq!(
+            session_owners(10, &unreadable).unwrap_err(),
+            support::peer::IncompleteWalk { pid: 20 }
+        );
+    }
+}
