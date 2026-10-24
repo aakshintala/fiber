@@ -90,6 +90,10 @@ is a real child session process, because it is Fiber. The fakes are:
   requests are recorded in call order; a before-call hook sees each request
   before the script pop and an after-reply hook sees each end before it is
   returned, in call order, each firing on every call or on one numbered call
+- a stub jobs fake, `fakes::StubJobs`, for tests that need a controllable
+  ordered running-job list: the list is seeded, replaced or updated under
+  one lock, and every other `Jobs` method is inert, opening, stopping or
+  delivering nothing
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,
