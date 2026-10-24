@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
 use support::{Session, calls_reply, delivery, handoff, paris, shell};
 
@@ -1805,7 +1805,7 @@ fn a_blocked_call_a_hook_rewrote_replays_with_the_rewritten_arguments() {
 /// FIFO, and the exchange's result arrives on `finished` once the hold is
 /// released. Dropping this value without releasing kills the group
 /// through the watchdog. The exchange's finish bound is a carried
-/// wall-clock value stamped at release: the release step carries
+/// wall-clock deadline stamped at release: the release step carries
 /// release plus [`START_BOUND`], so the held start takes none of it.
 struct HeldExchange {
     /// The hold directory, kept alive while the FIFOs are held.
@@ -1816,32 +1816,31 @@ struct HeldExchange {
     group: u32,
     watchdog: Watchdog,
     finished: mpsc::Receiver<std::io::Result<Output>>,
-    /// The carried finish expiry, stamped at release. `None` until
+    /// The carried finish deadline, stamped at release. `None` until
     /// [`HeldExchange::release`] runs, so `finish` waits on the same
     /// value the release step carried.
-    expiry: Option<Instant>,
+    finish_deadline: Option<Deadline>,
 }
 
 impl HeldExchange {
-    /// Writes the release line and stamps the exchange's finish bound
+    /// Writes the release line and stamps the exchange's finish deadline
     /// in the actual release path: release plus [`START_BOUND`].
     /// The test reads the carried value before finishing.
-    fn release(&mut self) -> Instant {
+    fn release(&mut self) -> Deadline {
         self.hold.write_all(b"release\n").unwrap();
-        let expiry = fakes::clock::SystemClock.now() + START_BOUND;
-        self.expiry = Some(expiry);
-        expiry
+        let deadline = Deadline::after(START_BOUND);
+        self.finish_deadline = Some(deadline);
+        deadline
     }
 
-    /// Waits only the remaining time until the carried expiry stamped
+    /// Waits only the remaining time until the carried deadline stamped
     /// by [`HeldExchange::release`]: the carried deadline is the wait's
     /// deadline, so the held start takes none of the exchange's bound.
     /// The wait asserts nothing about speed, it only fails a hung child
     /// by name.
     fn finish(self) -> Output {
-        let expiry = self.expiry.expect("release before finish");
-        let remaining = expiry.saturating_duration_since(fakes::clock::SystemClock.now());
-        let output = match Deadline::after(remaining).recv(&self.finished) {
+        let deadline = self.finish_deadline.expect("release before finish");
+        let output = match deadline.recv(&self.finished) {
             Ok(output) => output.unwrap(),
             Err(_) => {
                 kill_group(self.group, "KILL").unwrap_or(false);
@@ -1916,7 +1915,7 @@ fn spawn_held_jig(dir: &Path, answers: &str, keep_open: bool, args: &[&str]) -> 
         group,
         watchdog,
         finished,
-        expiry: None,
+        finish_deadline: None,
     }
 }
 
@@ -1939,7 +1938,7 @@ fn stalled_start_keeps_the_exchange_deadline_whole() {
     let before_release = fakes::clock::SystemClock.now();
     let deadline = held.release();
     assert!(
-        deadline >= before_release + START_BOUND,
+        deadline.left().saturating_add(before_release.elapsed()) >= START_BOUND,
         "the exchange deadline starts at release"
     );
     let lines = stdout_lines(&held.finish());
