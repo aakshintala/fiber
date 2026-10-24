@@ -14,7 +14,7 @@ use crate::{failed, usage};
 
 /// The longest service name, in bytes. A home whose name is longer is
 /// refused; the socket path limit keeps a real home far below it.
-const NAME_MAX: usize = 240;
+pub(crate) const NAME_MAX: usize = 240;
 
 /// The service manager that runs the hub on this platform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
