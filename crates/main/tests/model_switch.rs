@@ -373,6 +373,14 @@ fn a_model_sent_between_turns_applies_at_the_next_turn_boundary() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -380,7 +388,6 @@ fn a_model_sent_between_turns_applies_at_the_next_turn_boundary() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -486,6 +493,14 @@ fn reasoning_stays_with_the_model_that_produced_it() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -493,7 +508,6 @@ fn reasoning_stays_with_the_model_that_produced_it() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -571,6 +585,14 @@ fn an_unknown_model_is_rejected_and_changes_nothing() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -578,7 +600,6 @@ fn an_unknown_model_is_rejected_and_changes_nothing() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -630,6 +651,14 @@ fn an_unsupported_thinking_level_is_rejected() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -637,7 +666,6 @@ fn an_unsupported_thinking_level_is_rejected() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -695,6 +723,14 @@ fn a_resume_restores_the_switched_model_and_level() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -702,7 +738,6 @@ fn a_resume_restores_the_switched_model_and_level() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -745,6 +780,14 @@ fn a_resume_restores_the_switched_model_and_level() {
     }));
     // The resumed session replays the first session's durable lines to the
     // new subscriber before its own events.
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        second
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&second),
         [
@@ -773,7 +816,6 @@ fn a_resume_restores_the_switched_model_and_level() {
             "fiber_exited",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "turn_started",
             "command_accepted",
@@ -799,6 +841,14 @@ fn a_resume_restores_the_switched_model_and_level() {
     drop(again);
     let (status, stderr) = resumed.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        second
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&second),
         [
@@ -827,7 +877,6 @@ fn a_resume_restores_the_switched_model_and_level() {
             "fiber_exited",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "turn_started",
             "command_accepted",
@@ -990,7 +1039,6 @@ fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1015,6 +1063,14 @@ fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
         ],
     ]
     .concat();
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(kinds(&stream), expected);
     let built = stream
         .iter()
@@ -1181,6 +1237,14 @@ fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1188,7 +1252,6 @@ fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "model_changed",
             "preamble_built",
@@ -1293,6 +1356,14 @@ fn a_command_source_runs_once_across_switches() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1300,7 +1371,6 @@ fn a_command_source_runs_once_across_switches() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "model_changed",
             "command_accepted",
@@ -1374,6 +1444,14 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1381,7 +1459,6 @@ fn a_failed_read_is_rejected_with_its_code_and_read_again_later() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_rejected",
             "command_accepted",
             "model_changed",
@@ -1662,6 +1739,14 @@ fn the_file_a_switch_read_is_denied_after_its_link_moves() {
     drop(client);
     let (status, stderr) = running.wait();
     assert!(status.success(), "stderr: {stderr}");
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1669,7 +1754,6 @@ fn the_file_a_switch_read_is_denied_after_its_link_moves() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "command_accepted",
             "model_changed",
             "preamble_built",
@@ -1851,6 +1935,14 @@ fn a_credential_sent_between_turns_switches_the_label() {
     );
     // The command writes no configuration.
     assert_config_unchanged(&setup, &configs);
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1858,7 +1950,6 @@ fn a_credential_sent_between_turns_switches_the_label() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1965,6 +2056,14 @@ fn a_credential_naming_no_label_is_rejected_and_changes_nothing() {
         Some(fakes::fingerprint("Bearer work-key").as_str())
     );
     assert_config_unchanged(&setup, &configs);
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -1972,7 +2071,6 @@ fn a_credential_naming_no_label_is_rejected_and_changes_nothing() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -2088,6 +2186,14 @@ fn a_credential_switch_changes_no_other_running_session() {
         requests[3].header("authorization"),
         Some(fakes::fingerprint("Bearer work-key").as_str())
     );
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&stream),
         [
@@ -2095,7 +2201,6 @@ fn a_credential_switch_changes_no_other_running_session() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -2125,6 +2230,14 @@ fn a_credential_switch_changes_no_other_running_session() {
             "fiber_exited",
         ]
     );
+    // docs/events.md, "clients": one line for this full connection attaching.
+    assert_eq!(
+        peer_stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1
+    );
     assert_eq!(
         kinds(&peer_stream),
         [
@@ -2132,7 +2245,6 @@ fn a_credential_switch_changes_no_other_running_session() {
             "session_started",
             "fiber_started",
             "extensions_loaded",
-            "clients",
             "preamble_built",
             "opening_message",
             "turn_started",

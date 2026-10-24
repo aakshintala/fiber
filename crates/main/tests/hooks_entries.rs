@@ -244,10 +244,7 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
     // no position against the session's other lines (`docs/testing.md`,
     // "Event streams"); one attach writes exactly one.
     assert_eq!(
-        support::kinds(&lines)
-            .into_iter()
-            .filter(|kind| *kind != "clients")
-            .collect::<Vec<_>>(),
+        support::kinds(&lines),
         [
             "command_accepted",
             "session_started",
@@ -301,9 +298,9 @@ fn the_workspace_survives_a_reload_and_entries_still_run_rooted() {
         ]
     );
     assert_eq!(
-        support::kinds(&lines)
+        lines
             .iter()
-            .filter(|kind| **kind == "clients")
+            .filter(|line| line["kind"] == "clients")
             .count(),
         1
     );

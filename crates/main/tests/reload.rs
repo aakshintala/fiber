@@ -17,16 +17,6 @@ use std::{
 };
 use support::*;
 
-/// The event kinds without `clients`, in arrival order: it is written
-/// whenever a `full` connection attaches or leaves, so where it lands
-/// among the startup events depends on when the subscribe is handled.
-fn kinds_without_clients(stream: &[Value]) -> Vec<&str> {
-    kinds(stream)
-        .into_iter()
-        .filter(|kind| *kind != "clients")
-        .collect()
-}
-
 /// Exactly one `clients` event: the startup subscribe attaches once, and
 /// nothing else connects or leaves during the test.
 fn assert_one_clients(stream: &[Value]) {
@@ -187,12 +177,7 @@ impl Session {
         self.watchdog
             .stand_down(self.setup.deadline.cleanup_phase());
         assert_one_clients(&self.stream);
-        assert_eq!(
-            kinds_without_clients(&self.stream),
-            self.expected,
-            "{:?}",
-            self.stream
-        );
+        assert_eq!(kinds(&self.stream), self.expected, "{:?}", self.stream);
         (self.stream, stderr)
     }
 }
@@ -612,7 +597,7 @@ fn close_now_cancels_a_reload_blocked_in_extension_initialization() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        kinds_without_clients(&session.stream),
+        kinds(&session.stream),
         session.expected,
         "stream mismatch:\n{dump}"
     );

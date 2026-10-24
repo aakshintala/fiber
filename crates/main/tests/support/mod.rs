@@ -1206,30 +1206,43 @@ pub(crate) fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what this test pins (as `tests/session_command.rs`
-/// filters it).
+/// Independently triggered lines have no position in an ordered projection
+/// (`docs/testing.md`, "Event streams"). Fixed counts use the raw lines.
+const UNORDERED_KINDS: &[&str] = &["clients", "session_status", "attention", "date_changed"];
+
+/// The ordered event kinds, setting aside independently triggered lines.
 pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|line| line["kind"] != "session_status")
         .map(|line| line["kind"].as_str().unwrap())
+        .filter(|kind| !UNORDERED_KINDS.contains(kind))
         .collect()
 }
 
-/// The event kinds of `lines`, in order, without `session_status` or
-/// `attention`: an observer thread writes `session_status`, so where it
-/// falls among the loop's own lines is not what this test pins (as
-/// `tests/session_command.rs` filters it), and the hub's `attention` line
-/// derives from that status, so whether it comes and where is not pinned
-/// either.
+/// The ordered event kinds, also setting aside the hub's attention lines.
 pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
+    kinds(lines)
+}
+
+/// Asserts exact multiset membership strictly between identity-selected
+/// anchors. Callers separately assert the anchors and any promised order.
+pub(crate) fn assert_set_between(lines: &[Value], lo: usize, hi: usize, expected: &[&str]) {
+    assert!(lo < hi, "anchors must increase: {lo}, {hi}");
+    assert!(
+        hi < lines.len(),
+        "anchor {hi} outside {} lines",
+        lines.len()
+    );
+    let mut actual = kinds(&lines[lo + 1..hi]);
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(
+        actual,
+        expected,
+        "event window {lo}..{hi}: {:?}",
+        kinds(lines)
+    );
 }
 
 pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
