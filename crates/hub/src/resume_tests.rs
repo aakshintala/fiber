@@ -1320,7 +1320,16 @@ fn a_first_exit_re_routes_and_the_resumed_session_answers() {
         // re-routed command follows on the next connection.
         let exiting = loop {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(DEADLINE)).unwrap();
+            // The peer may already have closed: macOS refuses the timeout
+            // on a dead socket (EINVAL) where Linux allows it. Reading on
+            // without the bound is safe: a closed peer reads EOF at once,
+            // and the loop already skips connections that closed before
+            // sending (`crates/doors/src/sessions_tests.rs` tolerates the
+            // same error the same way).
+            match stream.set_read_timeout(Some(DEADLINE)) {
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+                other => other.unwrap(),
+            }
             let mut probe = BufReader::new(stream);
             let mut line = String::new();
             probe.read_line(&mut line).unwrap();

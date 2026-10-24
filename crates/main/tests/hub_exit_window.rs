@@ -60,7 +60,7 @@ impl World {
     }
 
     fn client(&self) -> Socket {
-        connect_hub(&self.setup, &self.hub).0
+        connect_hub(&self.setup, &self.hub).0.pumped()
     }
 
     /// The path of the receipt `import` reads first.
