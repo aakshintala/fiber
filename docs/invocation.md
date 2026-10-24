@@ -480,7 +480,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `not_found`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `summary_failed`, `closing`,
+`session_held`, `delegate_session`, `summary_failed`, `closing`, `indeterminate`,
 `duplicate_command`, `session_not_found`, `message_refused`, `hook_failed`,
 `io_failed`, `cancelled`, `mcp_prompt_failed`, `authentication_failed`, `config_invalid`, `connection_failed`, `credential_failed`, `credential_missing`, `extension_failed`, `extension_incompatible`, `extension_missing`, `extension_not_found`, `extension_not_installed`, `extension_required_failed`, `extension_unapproved`, `fetch_failed`, `hook_unapproved`, `log_corrupt`, `mcp_required_server_failed`, `mcp_server_unapproved`, `model_ambiguous`, `model_unconfigured`, `no_model`, `session_has_dependents`, `usage`, `version_conflict`.
 
@@ -660,7 +660,20 @@ resumes the session and delivers the command. If that resume fails
 the 5-second shutdown bound, and the client gets `session_held` only once the
 bound has passed. Commands keep their order across that resume ("What the hub
 speaks"). A command after `close` and before `fiber_exited` still gets
-`closing`, except a `close` with `now`, which is accepted and upgrades the close.
+`closing`, except a `close` with `now`, which is accepted and upgrades the close. A line that arrives after the session stops reading, just before `fiber_exited`, is never read: the hub re-routes it after the clean exit, and a direct client reads end of file.
+
+A command the hub sent to a session that then ended without answering it is
+answered by the hub, by how the session ended:
+
+- After a clean exit (the log ends in `fiber_exited`) the session never read
+  the command, so the hub treats it as a `closing` answer and delivers it to
+  the resumed session, in the order the hub read it.
+- A command is delivered once. When the resumed session also ends without
+  answering it, or answers it `closing`, the hub rejects it `closing`.
+- A client that disconnected has its commands dropped, never delivered.
+- After a crash (the log ends in neither `fiber_exited` nor `rewound`) the
+  session may have run the command. The hub never delivers it again: it
+  rejects it `indeterminate`, and the client decides whether to send it again.
 
 **A resume whose workspace is gone and cannot be made again is refused
 `io_failed`.** For a resume that needs a new session process, the hub checks
@@ -1036,11 +1049,24 @@ websocket for everything it does.
   resumed session after a `closing` answer, and the session's
   acknowledgements come back in that order. A command the session answers
   when it ends, such as `shell`, is acknowledged then, so the order holds
-  for acknowledgements as the session sends them.
+  for acknowledgements as the session sends them. The re-route rests on a
+  guarantee on the session's side: every line a session reads gets exactly
+  one answer on its connection before the session shuts it. The answer is
+  the command's own, or `indeterminate` when the close grace cut it. A session
+  stops reading as it ends, so a line it never read gets no answer from it. The
+  close waits up to 2 seconds for the commands it is running; one still
+  running then is answered `indeterminate` and never replayed, and a client
+  that stops reading is cut. The grace bounds the whole close: the session stops
+  waiting for a command still running at the grace, which ends when the
+  process exits, and writes one `timeout` line to its diagnostic log
+  (`docs/state.md`, "What each part holds") for each connection it stopped
+  waiting for. The hub's relay
+  threads read continuously, so the hub never meets that grace.
 - **A session that closes a relayed connection ends that subscription.** When
   a running session closes the connection the hub relays for a client, the hub
   sends that client `stream_closed` (`docs/events.md`) after every line the
-  session sent on it, and keeps no subscription for that session: the client's
+  session sent on it, then rejects each command it sent that the session left
+  unanswered `indeterminate`, and keeps no subscription for that session: the client's
   next command for it is rejected `not_subscribed` until it subscribes again.
   The connection's other sessions are untouched. The hub reads end of file on
   a relayed connection as the session closing it while running only when the

@@ -405,6 +405,10 @@ What is recorded:
   `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested
   measurements, never additive phases.
+- **A session close that stopped waiting for a running command:** one `warn`
+  line with code `timeout` in the session's file, written once for each
+  connection it stopped waiting for (`docs/invocation.md`, "What the hub
+  speaks").
 
 An event inside a running session is recorded in that session's log and
 nowhere else, with one exception: a session or ask process's own diagnostic

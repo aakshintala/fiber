@@ -603,6 +603,30 @@ impl Watcher {
         self.next_line(Wait::Now).unwrap_or(Ok(None))
     }
 
+    /// The next line pushed into this watcher's queue, waiting for one,
+    /// whatever the log's end. For a caller that has seen [`Watcher::recv`]
+    /// return `None`: only kept lines arrive then, and `recv` would return
+    /// `None` again at once. It never re-reads the log and never returns
+    /// the end.
+    pub fn recv_after_end(&mut self) -> Envelope {
+        let mut state = self.queue.lock();
+        loop {
+            if let Some(line) = state.queue.pop_front() {
+                return line;
+            }
+            // Test-only pause point: a caller parks here with nothing
+            // queued, so a test that waits for it knows the call has not
+            // returned (`docs/testing.md`, "Waits and timeouts").
+            #[cfg(test)]
+            parked_after_end::note();
+            state = self
+                .queue
+                .ready
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     /// What [`Watcher::recv`] would return, if it returns before `timeout`
     /// passes with nothing arriving in this watcher's queue; `None` if it
     /// does not. A timeout consumes nothing: the next call carries on. A
@@ -747,3 +771,58 @@ fn pending(state: &State) -> bool {
 #[cfg(test)]
 #[path = "read_tests.rs"]
 mod tests;
+
+/// The test-only park signal for [`Watcher::recv_after_end`]: a race's
+/// pause point no outside seam reaches (`docs/testing.md`, "Waits and
+/// timeouts"). `recv_after_end` notes each time it parks with nothing
+/// queued; a test waits for the note, asserts the call has not returned,
+/// then pushes a line and asserts the positive fact. Unit tests only;
+/// integration tests do not need a seam here.
+#[cfg(test)]
+pub(crate) mod parked_after_end {
+    use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
+    use std::time::Duration;
+
+    /// How long [`wait`] waits for the park before failing the test.
+    const BOUND: Duration = Duration::from_secs(10);
+
+    struct Park {
+        seen: Mutex<bool>,
+        changed: Condvar,
+    }
+
+    static PARK: OnceLock<Park> = OnceLock::new();
+
+    fn park() -> &'static Park {
+        PARK.get_or_init(|| Park {
+            seen: Mutex::new(false),
+            changed: Condvar::new(),
+        })
+    }
+
+    /// Clears the signal between tests.
+    pub(crate) fn clear() {
+        *park().seen.lock().unwrap_or_else(PoisonError::into_inner) = false;
+    }
+
+    /// Notes that a caller parked in `recv_after_end` with nothing queued.
+    pub(crate) fn note() {
+        *park().seen.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        park().changed.notify_all();
+    }
+
+    /// Waits until a caller parked in `recv_after_end` with nothing
+    /// queued, failing the test past the bound.
+    #[track_caller]
+    pub(crate) fn wait() {
+        let guard = park().seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let (guard, _) = park()
+            .changed
+            .wait_timeout_while(guard, BOUND, |seen| !*seen)
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            *guard,
+            "a caller parked in recv_after_end with nothing queued"
+        );
+    }
+}

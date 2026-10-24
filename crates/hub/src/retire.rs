@@ -36,7 +36,7 @@
 //! for answers only a live relay gives, so the order cannot deadlock and
 //! one thread per relay stays.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -88,6 +88,10 @@ pub(crate) struct AckOrder {
 struct Inner {
     pending: HashMap<String, VecDeque<String>>,
     rerouted: HashMap<String, (String, u64)>,
+    /// The ids handed to a resumed session once: a command is re-routed at
+    /// most once. Separate from `rerouted`, which `drop_ids` clears when
+    /// the handover's answer is forwarded.
+    handed: HashSet<String>,
 }
 
 impl AckOrder {
@@ -128,6 +132,18 @@ impl AckOrder {
         lock(&self.inner)
             .rerouted
             .insert(id.to_owned(), (session.to_owned(), epoch));
+    }
+
+    /// Takes `id` for its one re-route: true the first time, false after,
+    /// until the id is answered, refused or dropped.
+    pub(crate) fn hand_once(&self, id: &str) -> bool {
+        lock(&self.inner).handed.insert(id.to_owned())
+    }
+
+    /// Frees `id` for a later re-route: its answer reached the client, it
+    /// was refused, or it was dropped.
+    pub(crate) fn forget_handed(&self, id: &str) {
+        lock(&self.inner).handed.remove(id);
     }
 
     /// Whether `line` is a command the session answers when it ends, such
@@ -180,6 +196,7 @@ impl AckOrder {
                 queued.retain(|queued| *queued != *id);
             }
             inner.rerouted.remove(id);
+            inner.handed.remove(id);
         }
         inner.pending.retain(|_, queued| !queued.is_empty());
         self.changed.notify_all();
@@ -202,6 +219,7 @@ pub(crate) fn refuse(
 ) {
     let order = lock(relays).order.clone();
     crate::connection::reject(writer, hub, Some(id), code, message);
+    order.forget_handed(&id.0);
     if let Some(queued) = order.session_for(&id.0) {
         order.done(&queued, &id.0);
     } else {
@@ -287,6 +305,9 @@ pub(crate) fn forward(
     drop(out);
     if let Some((session, id)) = &ordered {
         order.done(session, id);
+    } else if let Some(ack) = ack {
+        // A command the session answers when it ends is never queued.
+        order.forget_handed(&ack.id);
     }
     written
 }
@@ -316,11 +337,54 @@ pub(crate) fn pass_on(
     pump(session, epoch, kept, hub, writer, relays, false);
 }
 
-/// The thread's end: unanswered commands the session never answered are
-/// dropped, as when a live relay's socket closes, and everything queued is
-/// passed on. Drops the entry only in the hold that saw the queue empty.
-/// A `closing` read after the client disconnected finds no entry: the queue
-/// is cleared and nothing is passed on.
+/// The sentence of the `closing` answer a session gives for a command it
+/// ended without answering: the hub's own `closing` says the same
+/// (`docs/errors.md`, "The shape").
+const ENDED: &str = "The session ended before answering.";
+
+/// The sentence of the `indeterminate` answer for a command a crashed
+/// session left unanswered.
+const MAY_HAVE_RUN: &str = "The session ended before answering; the command may have run.";
+
+/// A command the relay sent and the session never answered: its id and its
+/// line.
+type Sent = Vec<(String, Map<String, Value>)>;
+
+/// How a relay's session ended, for the commands it left unanswered.
+enum End {
+    /// The log ends in `fiber_exited`: the session never read them.
+    Clean,
+    /// The log ends in `rewound`.
+    Rewound,
+    /// The log ends in neither: a command may have run.
+    Crash,
+}
+
+/// The thread's end: the commands the session read from this relay's
+/// connection and never answered are answered by how the session ended
+/// (`docs/invocation.md`, "Lifecycle"). Under the relays lock, which
+/// `route` holds from keeping a command as sent until its write's
+/// outcome, so a command whose write failed is never taken as sent, the
+/// sent commands are taken out of the queue. A client that left, whose
+/// entry is gone or whose connection closed (`client_gone`), has them
+/// dropped, never re-routed or answered. After a clean exit (the relay
+/// saw the exited window, or the log ends in `fiber_exited`) each goes
+/// once to the resumed session, in read order, and a command already
+/// handed over once is rejected `closing`. When the session's socket
+/// still accepts, the exiting process is still tearing down, so each
+/// goes through the plain opener instead of the exiting wait: the relay
+/// leaves at once without waiting the shutdown out, and the closing
+/// connection's end hands the command to the resumed session, which
+/// spends its one re-route there. After a `rewound` they are
+/// dropped. After anything else the session may have run them: each is
+/// rejected `indeterminate` and never re-routed. Then everything queued
+/// unsent is passed on. Drops the entry only in the hold that saw the
+/// queue empty. A `closing` read after the client disconnected finds no
+/// entry: the queue is cleared and nothing is passed on.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the dead relay, its queue, the hub, the client and the relays are one hand-off"
+)]
 pub(crate) fn drain(
     session: &str,
     epoch: u64,
@@ -329,27 +393,142 @@ pub(crate) fn drain(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
+    exiting: bool,
+    client_gone: bool,
 ) {
     #[cfg(test)]
     if let Some(before) = lock(&order.before_drain).take() {
         before();
     }
-    // Under the relays lock, which `route` holds from keeping a command as
-    // sent until its write's outcome: a command whose write failed is
-    // never dropped as sent.
-    let dropped: Vec<(String, String)> = {
-        let _held = lock(relays);
+    let (present, sent): (bool, Sent) = {
+        let held = lock(relays);
+        let present = relay_slot(&held.entries, session, epoch).is_some();
         let mut kept = lock(kept);
-        let dropped = kept
+        let sent = kept
             .iter()
             .filter(|(_, _, sent)| *sent)
-            .map(|(id, _, _)| (session.to_owned(), id.clone()))
+            .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
         kept.retain(|(_, _, sent)| !sent);
-        dropped
+        (present, sent)
     };
-    order.drop_ids(&dropped);
+    if !sent.is_empty() {
+        let ids: Vec<(String, String)> = sent
+            .iter()
+            .map(|(id, _)| (session.to_owned(), id.clone()))
+            .collect();
+        if present && !client_gone {
+            match end(hub, session, exiting) {
+                End::Clean => reroute_once(session, epoch, sent, order, hub, writer, relays),
+                End::Rewound => order.drop_ids(&ids),
+                End::Crash => {
+                    for (id, _) in sent {
+                        refuse(
+                            writer,
+                            hub,
+                            relays,
+                            session,
+                            &CommandId(id),
+                            &ErrorCode::Indeterminate,
+                            MAY_HAVE_RUN,
+                        );
+                    }
+                }
+            }
+        } else {
+            order.drop_ids(&ids);
+        }
+    }
     pump(session, epoch, kept, hub, writer, relays, true);
+}
+
+/// Whether `session`'s socket still accepts while its log ends in
+/// `fiber_exited`: the exiting process has not finished tearing down.
+/// One log lookup and one connection, neither under a lock.
+fn held_by_exiting(hub: &Hub, session: &str) -> bool {
+    if crate::resume::last_kind(&hub.home, &SessionId(session.to_owned())).as_deref()
+        != Some("fiber_exited")
+    {
+        return false;
+    }
+    UnixStream::connect(hub.home.join("run").join(session)).is_ok()
+}
+
+/// How the session ended, by the relay's view and its log's last line.
+/// One log lookup, and none when the relay saw the exited window.
+fn end(hub: &Hub, session: &str, exiting: bool) -> End {
+    if exiting {
+        return End::Clean;
+    }
+    match crate::resume::last_kind(&hub.home, &SessionId(session.to_owned())).as_deref() {
+        Some("fiber_exited") => End::Clean,
+        Some("rewound") => End::Rewound,
+        _ => End::Crash,
+    }
+}
+
+/// Hands each of `sent`, in order, to the resumed session, unless it was
+/// handed over once already: then the hub rejects it `closing`, as the
+/// session would. No lock is held across a route or a refusal.
+fn reroute_once(
+    session: &str,
+    epoch: u64,
+    sent: Sent,
+    order: &Arc<AckOrder>,
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<Relays>>,
+) {
+    // A socket that still accepts while the log ends in `fiber_exited`
+    // is the exiting process's, still tearing down: the exiting wait
+    // would wait the shutdown out instead of answering, and the relay
+    // would never leave. Each command goes through the plain opener
+    // instead, without spending its one re-route: the exiting process
+    // never read it, so the closing connection's end hands it to the
+    // resumed session, which spends the re-route there. A resumed
+    // session that also exits without answering still rejects it
+    // `closing` below.
+    if held_by_exiting(hub, session) {
+        for (id, line) in sent {
+            crate::relay::route(
+                &CommandId(id),
+                session,
+                line,
+                hub,
+                writer,
+                relays,
+                Some(epoch),
+                false,
+            );
+        }
+        return;
+    }
+    for (id, line) in sent {
+        if !order.hand_once(&id) {
+            refuse(
+                writer,
+                hub,
+                relays,
+                session,
+                &CommandId(id),
+                &ErrorCode::Closing,
+                ENDED,
+            );
+        } else if hand_over(order, relays, session, epoch, &id, &line) {
+            crate::relay::route(
+                &CommandId(id),
+                session,
+                line,
+                hub,
+                writer,
+                relays,
+                Some(epoch),
+                true,
+            );
+        } else {
+            order.forget_handed(&id);
+        }
+    }
 }
 
 /// Retires the relay for its first re-route, without dropping its entry:
