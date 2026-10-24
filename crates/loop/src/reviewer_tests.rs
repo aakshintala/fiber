@@ -1279,24 +1279,84 @@ mod supervised {
         session.prompt("go");
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
         let lines = session.lines();
+        // Complete ordered kinds (`docs/testing.md`, "Event streams": the
+        // complete, ordered list of event kinds, so a duplicated, missing or
+        // reordered event fails). The loop log holds only durable lines, so
+        // no independently triggered line is set aside here. Order follows
+        // `docs/loop.md`, "One step" (step_started, the model request,
+        // `tool_call_requested`, the permission decision, the next step,
+        // `turn_completed`), with `permission_resolved` standing where
+        // `tool_call_started` would (`docs/permissions.md`, "What the log
+        // records": resolved lines are written in request order, before any
+        // of that reply's `tool_call_started`) and the deny-then-continue
+        // from `docs/permissions.md`, "Supervised sessions" ("An escalation
+        // is a block at once, and the run carries on") and "What happens on
+        // a block" ("A block is not the end of the turn. ... The turn
+        // continues."). The two `usage_recorded` lines before the resolve
+        // are the reviewer's first pass and its once-more retry
+        // (`docs/permissions.md`, "What happens on a block": a verdict that
+        // cannot be read "is asked for once more with the error attached";
+        // the scripted verdicts here are unreadable one-word replies).
+        assert_eq!(
+            kinds(&lines),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "usage_recorded",
+                "usage_recorded",
+                "permission_resolved",
+                "tool_call_completed",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+            ],
+            "complete ordered kinds"
+        );
         let started = lines
             .iter()
             .find(|line| line.kind == "session_started")
             .expect("a session_started line");
+        // Fixed at start and recorded (`docs/permissions.md`, "Supervised
+        // sessions": "`supervised` is fixed at `start`, recorded on
+        // `session_started`, and kept across a resume").
         assert_eq!(started.payload["supervised"], json!(true));
-        // Nobody was asked: no approval waits on anyone.
+        // Nobody was asked: no approval waits on anyone
+        // (`docs/permissions.md`, "Supervised sessions": "Nothing waits on
+        // a person and no request stays open"; "What the log records": an
+        // escalation where no answer is possible writes no
+        // `permission_requested`, recorded as a `permission_resolved` with
+        // `decided_by: reviewer`).
         assert!(!kinds(&lines).contains(&"permission_requested"));
         assert!(!kinds(&lines).contains(&"notice"));
         let denied = resolved(&lines);
+        // One judged call, one block (`docs/permissions.md`, "Supervised
+        // sessions": "Its own reviewer judges every call. An escalation is
+        // a block at once").
         assert_eq!(denied.len(), 1);
         assert_eq!(denied[0].payload["decision"], json!("deny"));
         assert_eq!(denied[0].payload["decided_by"], json!("reviewer"));
-        // The turn carries on past the block to the model's close.
+        // The turn carries on past the block to the model's close
+        // (`docs/permissions.md`, "What happens on a block": "The refusal
+        // is returned to the model ... The turn continues.").
         let end = lines
             .iter()
             .find(|line| line.kind == "turn_completed")
             .expect("a turn_completed line");
         assert_eq!(end.payload["outcome"], json!("completed"));
+        // Nothing ran: `tool_call_requested` with no `tool_call_started`
+        // means provably never ran (`docs/permissions.md`, "What the log
+        // records", and the `docs/events.md` guarantee it cites).
         assert!(tool.ran().is_empty());
     }
 
@@ -1321,20 +1381,115 @@ mod supervised {
         session.prompt("go");
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
         assert_eq!(resolved(&session.lines()).len(), 1);
+        let first_requests = reviewer.requests().len();
         // The supervisor steers its grant as driver words; the person's own
-        // prompt would arrive the same way.
+        // prompt would arrive the same way (`docs/permissions.md`,
+        // "Supervised sessions": "The reviewer reads the supervisor's
+        // prompts and steers as the person's words").
         session.steer("you may run probe because I asked");
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
         let lines = session.lines();
-        // The retry is judged again, never answered by the steer itself: each
-        // judged call takes a first and a second pass.
-        assert_eq!(reviewer.requests().len(), 4);
+        // Complete ordered kinds (`docs/testing.md`, "Event streams"): the
+        // first turn denies as above, then the steered second turn allows.
+        // The deny-then-allow order is forced by the pause point between
+        // them: the first `session.turn()` completes before the steer is
+        // sent, and the steer completes before the second `session.turn()`.
+        // The allow turn's `permission_resolved` stands where
+        // `tool_call_started` would on a deny (`docs/permissions.md`, "What
+        // the log records"), followed by the run itself
+        // (`docs/loop.md`, "One step": approved calls run, one thread each,
+        // and the turn continues with the results).
+        assert_eq!(
+            kinds(&lines),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "usage_recorded",
+                "usage_recorded",
+                "permission_resolved",
+                "tool_call_completed",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "usage_recorded",
+                "usage_recorded",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+                "step_started",
+                "assistant_message_started",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+            ],
+            "complete ordered kinds"
+        );
+        // The retry is judged again, never answered by the steer itself
+        // (`docs/permissions.md`, "Supervised sessions": the reviewer
+        // "judges the call again when the model retries it"; "The
+        // supervisor never answers an approval").
+        assert!(
+            reviewer.requests().len() > first_requests,
+            "the retry was judged again: {}",
+            reviewer.requests().len()
+        );
+        let requests = reviewer.requests();
+        let (earlier, later) = requests.split_at(first_requests);
+        let reads_grant = |request: &contract::provider::ModelRequest| {
+            request.conversation.iter().any(|input| match input {
+                contract::provider::Input::User { text, .. } => text.contains("you may run probe"),
+                contract::provider::Input::Assistant { .. }
+                | contract::provider::Input::Reasoning { .. }
+                | contract::provider::Input::ToolCall { .. }
+                | contract::provider::Input::ToolResult { .. }
+                | contract::provider::Input::ToolSearchResult { .. } => false,
+            })
+        };
+        // The later passes read the grant as the person's words, while the
+        // earlier ones predate the steer (`docs/permissions.md`, "What it
+        // is shown" and "Supervised sessions": only the person's messages
+        // show what they want, and the steered grant arrives as person
+        // words).
+        assert!(
+            !earlier.iter().any(reads_grant),
+            "the block's reviews predate the grant"
+        );
+        assert!(
+            later.iter().any(reads_grant),
+            "the retry's reviews read the grant"
+        );
         assert!(!kinds(&lines).contains(&"permission_requested"));
         let judged = resolved(&lines);
+        // Two judged calls: the block, then the allowed retry
+        // (`docs/permissions.md`, "Supervised sessions": "Its own reviewer
+        // judges every call. An escalation is a block at once" and "the
+        // model's retry passes").
         assert_eq!(judged.len(), 2);
         assert_eq!(judged[0].payload["decision"], json!("deny"));
         assert_eq!(judged[1].payload["decision"], json!("allow"));
         assert_eq!(judged[1].payload["decided_by"], json!("reviewer"));
+        // The allowed retry ran once (`docs/permissions.md`, "Supervised
+        // sessions": "the model's retry passes"; `docs/loop.md`, "One
+        // step": approved calls run).
         assert_eq!(tool.ran().len(), 1);
     }
 }

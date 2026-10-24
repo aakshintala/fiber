@@ -163,6 +163,7 @@ fn held_with_worktree(
             forked_from: None,
             rewind: None,
             worktree,
+            supervised: false,
         }),
         None,
         None,

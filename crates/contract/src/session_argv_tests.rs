@@ -198,11 +198,17 @@ fn supervised_absent_renders_nothing_and_set_renders_once_after_login_shell() {
         ..SessionArgv::default()
     };
     let argv = rendered(&set.to_argv());
+    // Exactly once when set (`SessionArgv::to_argv` only pushes the flag
+    // when true).
     assert_eq!(argv.iter().filter(|arg| arg == &"--supervised").count(), 1);
     let login_at = argv
         .iter()
         .position(|arg| arg == "--login-shell")
         .expect("login-shell renders");
+    // Order promised by `SessionArgv::to_argv` (`crates/contract/src/session_argv.rs`:
+    // "The order is fixed ... `--login-shell`, `--supervised`, each only
+    // when set"): `to_argv` is the one writer of a session argv, so its
+    // documented order is the contract the test pins.
     assert_eq!(argv[login_at + 1], "--supervised");
 }
 

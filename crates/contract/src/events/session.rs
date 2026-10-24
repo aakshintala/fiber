@@ -49,11 +49,6 @@ pub struct FinalMessage {
     pub text: String,
 }
 
-/// True when the value is false, for fields that stay absent when unset.
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 /// `session_started`: the first line of every session's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStarted {
@@ -79,7 +74,7 @@ pub struct SessionStarted {
     pub worktree: Option<Worktree>,
     /// True when a program drives the session (`docs/permissions.md`,
     /// "Supervised sessions"): fixed at `start`, kept across a resume.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supervised: bool,
 }
 
@@ -374,7 +369,7 @@ pub struct SessionStatus {
     pub parent: Option<SessionId>,
     /// True when a program drives the session (`docs/permissions.md`,
     /// "Supervised sessions"): fixed at `start`, kept across a resume.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supervised: bool,
     /// The model reference in use.
     pub model: String,
