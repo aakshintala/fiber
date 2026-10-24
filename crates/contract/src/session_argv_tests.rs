@@ -37,7 +37,7 @@ fn minimal_value_is_session_id_and_workspace() {
 }
 
 #[test]
-fn full_value_lists_every_field_in_order_with_login_shell_last() {
+fn full_value_lists_every_field_in_order_with_supervised_last() {
     let args = SessionArgv {
         id: SessionId("s_0123456789abcdef".to_owned()),
         workspace: PathBuf::from("/w"),
@@ -55,6 +55,7 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
         delegate_id: Some(JobId("j_cccccccccccccccc".to_owned())),
         depth: Some(2),
         login_shell: true,
+        supervised: true,
     };
     assert_eq!(
         rendered(&args.to_argv()),
@@ -79,13 +80,14 @@ fn full_value_lists_every_field_in_order_with_login_shell_last() {
             "--delegate-id=j_cccccccccccccccc",
             "--depth=2",
             "--login-shell",
+            "--supervised",
         ]
     );
     assert_eq!(
         args.to_argv()
             .last()
             .map(|arg| arg.to_string_lossy().into_owned()),
-        Some("--login-shell".to_owned())
+        Some("--supervised".to_owned())
     );
 }
 
@@ -176,6 +178,32 @@ fn continues_absent_renders_nothing_and_set_renders_once_after_rewound_from() {
         .position(|arg| arg == "--rewound-from=s_aaaaaaaaaaaaaaaa")
         .expect("rewound-from renders");
     assert_eq!(argv[rewound_at + 1], "--continues=s_dddddddddddddddd");
+}
+
+#[test]
+fn supervised_absent_renders_nothing_and_set_renders_once_after_login_shell() {
+    let absent = SessionArgv {
+        login_shell: true,
+        supervised: false,
+        ..SessionArgv::default()
+    };
+    assert!(
+        !rendered(&absent.to_argv())
+            .iter()
+            .any(|arg| arg.starts_with("--supervised"))
+    );
+    let set = SessionArgv {
+        login_shell: true,
+        supervised: true,
+        ..SessionArgv::default()
+    };
+    let argv = rendered(&set.to_argv());
+    assert_eq!(argv.iter().filter(|arg| arg == &"--supervised").count(), 1);
+    let login_at = argv
+        .iter()
+        .position(|arg| arg == "--login-shell")
+        .expect("login-shell renders");
+    assert_eq!(argv[login_at + 1], "--supervised");
 }
 
 #[test]
