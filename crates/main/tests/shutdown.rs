@@ -187,7 +187,7 @@ impl Fiber {
     /// Sends `signal` to `fiber`'s pid alone.
     #[track_caller]
     fn signal(&self, signal: &'static str) {
-        assert!(support::kill_pid(self.deadline, self.child.id(), signal).unwrap());
+        assert!(fakes::kill_pid(self.child.id(), signal).unwrap());
     }
 
     /// Waits for the exit under the test's [`Deadline`], reads the rest of
@@ -227,7 +227,7 @@ impl Fiber {
             }
         }
         assert!(
-            !support::group_alive(deadline, group),
+            !fakes::group_alive(group),
             "fiber left a process in its group"
         );
         std::mem::forget(guard);
@@ -506,7 +506,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
     assert_eq!(ended.lines[job_end]["payload"]["status"], "cancelled");
     assert!(job_end < kinds.len() - 1);
     assert!(
-        !support::group_alive(setup.deadline, job_group),
+        !fakes::group_alive(job_group),
         "the job's group outlived fiber"
     );
     job_watchdog.stand_down(setup.deadline.cleanup_phase());
