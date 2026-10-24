@@ -1408,12 +1408,7 @@ fn a_would_block_write_retries_until_the_prompt_completes() {
     // the prompt waits through both and still writes every byte, then the
     // listed answer lands.
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let (_master, slave_path) = fakes::pty::open().unwrap();
-    let slave = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&slave_path)
-        .unwrap();
+    let (_pipe_read, pipe_write) = nonblocking_pipe();
     let mut input = Script {
         steps: [Step::Line("nope\n"), Step::Line("2\n")]
             .into_iter()
@@ -1433,7 +1428,7 @@ fn a_would_block_write_retries_until_the_prompt_completes() {
         &|| false,
         true,
         &clock,
-        slave.as_fd(),
+        pipe_write.as_fd(),
     )
     .unwrap();
     assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
@@ -1455,12 +1450,7 @@ fn a_would_block_write_retries_until_the_blank_retry_completes() {
     // prompt waits through it and still writes every byte, then the listed
     // answer lands.
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let (_master, slave_path) = fakes::pty::open().unwrap();
-    let slave = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&slave_path)
-        .unwrap();
+    let (_pipe_read, pipe_write) = nonblocking_pipe();
     let mut input = Script {
         steps: [Step::Line("\n"), Step::Line("2\n")].into_iter().collect(),
     };
@@ -1478,7 +1468,7 @@ fn a_would_block_write_retries_until_the_blank_retry_completes() {
         &|| false,
         true,
         &clock,
-        slave.as_fd(),
+        pipe_write.as_fd(),
     )
     .unwrap();
     assert_eq!(pick, Pick::Chosen("org/fast".to_owned()));
@@ -1553,15 +1543,27 @@ fn drain_pipe(read: &mut std::io::PipeReader) {
 /// `WouldBlock`, which must cause another wait instead of spinning or
 /// dropping bytes. Every other `WouldBlock` comes from the really-full
 /// pipe, so a retry always re-derives the park the driver expects.
-struct FillOnceThenForward {
+/// An `err` writer over a pipe that fakes one spurious `WouldBlock`:
+/// the first write attempted while the pipe has room — right after a
+/// writable report — refills the pipe and reports `WouldBlock` anyway,
+/// so the helper must wait again instead of spinning or surfacing the
+/// error. Writes attempted while the pipe is full go through to the
+/// really-full pipe, so every retry re-derives the parked instant from
+/// real pipe state. The refill's many syscalls also delay the worker
+/// past the draining hook's advance, pinning the second park one slice
+/// past the first on every interleaving.
+struct SpuriousReadyThenFull {
     file: fs::File,
-    spurious: Arc<atomic::AtomicBool>,
+    filler: fs::File,
+    faked: bool,
     out: Vec<u8>,
 }
 
-impl Write for FillOnceThenForward {
+impl Write for SpuriousReadyThenFull {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.spurious.swap(false, atomic::Ordering::SeqCst) {
+        if !self.faked && pipe_has_room(&self.file) {
+            self.faked = true;
+            fill_pipe(&mut self.filler);
             return Err(std::io::Error::new(ErrorKind::WouldBlock, "busy"));
         }
         let written = self.file.write(buf)?;
@@ -1574,22 +1576,41 @@ impl Write for FillOnceThenForward {
     }
 }
 
+/// Whether `file`'s pipe currently takes a write without refusing: a
+/// zero-timeout `OUT` poll, so the spurious fake fires only after a
+/// real writable report. Any doubt answers no, leaving the write to
+/// meet the pipe itself.
+fn pipe_has_room(file: &fs::File) -> bool {
+    let mut waiting = [rustix::event::PollFd::new(
+        file,
+        rustix::event::PollFlags::OUT,
+    )];
+    match rustix::event::poll(
+        &mut waiting,
+        Some(&rustix::event::Timespec::try_from(Duration::ZERO).unwrap()),
+    ) {
+        Ok(_) => waiting
+            .first()
+            .is_some_and(|polled| !polled.revents().is_empty()),
+        Err(_) => false,
+    }
+}
+
 #[test]
 fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
     // The first write reports WouldBlock with the pipe full, so the
-    // helper parks; the retry still meets the full pipe, so the helper
-    // parks again instead of spinning or surfacing the error. The next
-    // write still says WouldBlock although room is coming — a spurious
-    // writable report — so the helper parks a third time; draining the
-    // pipe then lets the whole text through in order.
+    // helper parks; the hook drains the pipe, earning the writable
+    // report the retry follows, but that retry still says WouldBlock —
+    // the writer refilled the pipe — so the helper parks again instead
+    // of spinning or surfacing the error; draining again lets the whole
+    // text through in order.
     let clock = fakes::clock::FakeClock::new();
     let start = clock.now();
     let (mut read, write) = nonblocking_pipe();
     let mut fill = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
     fill_pipe(&mut fill);
-    let spurious = Arc::new(atomic::AtomicBool::new(false));
-    let worker_spurious = Arc::clone(&spurious);
     let file = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
+    let filler = fs::File::from(write.as_fd().try_clone_to_owned().unwrap());
     let text: &[u8] = b"Reviewer, by number or name: ";
     let (ids_tx, ids) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
@@ -1598,9 +1619,10 @@ fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
         .name("pipe-write-wait".to_owned())
         .spawn(move || {
             ids_tx.send(thread::current().id()).unwrap_or(());
-            let mut err = FillOnceThenForward {
+            let mut err = SpuriousReadyThenFull {
                 file,
-                spurious: worker_spurious,
+                filler,
+                faked: false,
                 out: Vec::new(),
             };
             let outcome =
@@ -1612,18 +1634,17 @@ fn a_would_block_after_a_wait_waits_again_until_the_write_completes() {
     let id = within.recv_or_fail(&ids, "the write worker reports its thread");
     let first = start + super::POLL_SLICE;
     clock.advance_when_parked_then(Some(first), Some(id), super::POLL_SLICE, &within, || {
-        // No drain: the retry still meets the full pipe and parks again.
+        // Drain, earning the writable report the retry follows.
+        drain_pipe(&mut read);
     });
     let second = first + super::POLL_SLICE;
     clock.advance_when_parked_then(Some(second), Some(id), super::POLL_SLICE, &within, || {
-        // Arm only: the pipe stays full, so this hook cannot wake the
-        // worker early. The next write still says WouldBlock despite the
-        // writable report the drain below will earn: the spurious report
-        // the helper must wait through once more.
-        spurious.store(true, atomic::Ordering::SeqCst);
-    });
-    let third = second + super::POLL_SLICE;
-    clock.advance_when_parked_then(Some(third), Some(id), super::POLL_SLICE, &within, || {
+        // The retry met room yet still said WouldBlock, so the writer
+        // refilled the pipe: draining again is what lets it complete.
+        match fill.write(&[0x78]) {
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+            outcome => panic!("the spurious write refilled the pipe: {outcome:?}"),
+        }
         drain_pipe(&mut read);
     });
     let (outcome, out) = within.recv_or_fail(&done, "the drained write completes");
