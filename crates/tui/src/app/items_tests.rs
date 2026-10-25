@@ -151,6 +151,63 @@ fn delegate_gate_notice_redraw_and_reload_reach_both_screens() {
     assert!(rendered_text(&app).contains("RELOADED-DELEGATE"));
 }
 #[test]
+fn reload_preserves_delegate_selection_notice_before_parent_recount() {
+    struct GatedLoad;
+    impl crate::ext::Load for GatedLoad {
+        fn load(&self) -> (std::rc::Rc<dyn crate::ext::Renderer>, Vec<(String, String)>) {
+            let mut renderer = crate::ext::tests::SessionRenderer::new("replacement");
+            renderer.gated = true;
+            (std::rc::Rc::new(renderer), Vec::new())
+        }
+    }
+    let mut app = home();
+    opened(&mut app);
+    app.use_renderer(std::rc::Rc::new(crate::ext::tests::SessionRenderer::new(
+        "OLD-ROW",
+    )));
+    app.screen.pages_mut().toggle_ledgers();
+    renderer_turn(&mut app, SESSION);
+    assert!(
+        shown(&app).iter().any(|row| row.contains("OLD-ROW")),
+        "parent ledger is open"
+    );
+    start_delegate(&mut app, "j_reload_pending", DELEGATE_A);
+    open(&mut app, "j_reload_pending");
+    renderer_turn(&mut app, DELEGATE_A);
+    assert!(
+        shown(&app).iter().any(|row| row.contains("OLD-ROW")),
+        "delegate ledger is open"
+    );
+    app.on_line(other_line(
+        DELEGATE_A,
+        "extensions_loaded",
+        json!({"extensions":[]}),
+    ));
+    assert!(!app.drawn(&[]), "the old renderer queued no notices");
+    app.home.as_mut().unwrap().launch.extensions = Some(std::sync::Arc::new(GatedLoad));
+    crate::app::commands::run_reload(&mut app, "");
+    // docs/tui.md: the incompatible half reports once, and the post-draw
+    // drain requests a frame immediately, without another input or render.
+    assert!(
+        app.drawn(&[]),
+        "reload recount's selection notice requests immediate redraw"
+    );
+    let notices = app.notices();
+    assert_eq!(notices.iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if code == "extension_incompatible" && text.contains("session-test") && text.contains("not loaded"))).count(), 1);
+    shown(&app);
+    assert!(
+        !app.drawn(&[]),
+        "producer dedup and draining keep delivery exactly once"
+    );
+    app.close_item();
+    shown(&app);
+    assert!(
+        !app.drawn(&[]),
+        "the unseen parent adds no notice after swapping back"
+    );
+}
+
+#[test]
 fn parent_page_pruning_cannot_erase_delegate_failure_before_app_drain() {
     let mut app = home();
     opened(&mut app);
