@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io::{self, Read as _, Seek as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use contract::Envelope;
 
@@ -169,7 +169,7 @@ impl Offsets {
     }
 
     fn lock(&self) -> MutexGuard<'_, Table> {
-        self.table.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.table)
     }
 
     /// Records a complete line of `len` bytes written at the end.

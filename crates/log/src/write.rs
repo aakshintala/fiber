@@ -8,7 +8,7 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 use contract::clock::{Clock, wall_ms};
@@ -436,7 +436,7 @@ impl Log {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.inner)
     }
 }
 
