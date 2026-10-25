@@ -1797,6 +1797,10 @@ fn opening_a_row_by_key_calls_on_attach() {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
+    // The introducing status queues its project's scoped ask.
+    let (reader, scoped) = command(reader, "the scoped command");
+    assert_eq!(scoped["command"], "recent");
+    assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
     feed(
@@ -1867,6 +1871,10 @@ fn an_exit_sends_its_lines_then_quits() {
     assert_eq!(feed["command"], "feed");
     let (reader, recent) = command(reader, "the recent");
     assert_eq!(recent["command"], "recent");
+    // The introducing status queues its project's scoped ask.
+    let (reader, scoped) = command(reader, "the scoped");
+    assert_eq!(scoped["command"], "recent");
+    assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
     let (reader, subscribe) = command(reader, "the subscribe");
@@ -2083,14 +2091,15 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    // All four reads run under one deadline: the far end reads the close
-    // lines the quit question sent.
+    // All five reads run under one deadline: the far end reads the close
+    // lines the quit question sent, with the introducing status's scoped
+    // ask between the recent and the subscribe.
     let hub = BufReader::new(held);
-    let (feed, recent, subscribe, close) =
+    let (feed, recent, scoped, subscribe, close) =
         fakes::within("the close commands", Deadline::after(DEADLINE), move || {
             let mut hub = hub;
             let mut lines = Vec::new();
-            for _ in 0..4 {
+            for _ in 0..5 {
                 let mut line = String::new();
                 hub.read_line(&mut line)
                     .unwrap_or_else(|err| panic!("read: {err}"));
@@ -2103,12 +2112,15 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
             (
                 lines.next().expect("the feed command"),
                 lines.next().expect("the recent command"),
+                lines.next().expect("the scoped command"),
                 lines.next().expect("the subscribe command"),
                 lines.next().expect("the close command"),
             )
         });
     assert_eq!(feed["command"], "feed");
     assert_eq!(recent["command"], "recent");
+    assert_eq!(scoped["command"], "recent");
+    assert_eq!(scoped["args"]["project"], "-w");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["args"]["level"], "summary");
     assert_eq!(close["command"], "close");

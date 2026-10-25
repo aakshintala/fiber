@@ -795,8 +795,9 @@ fn a_stop_ask_is_resent_and_its_refusal_notes_the_row() {
     let lines = parsed(&reconnect(&mut app));
     assert_eq!(
         names(&lines),
-        ["subscribe", "close", "feed", "recent", "sessions"]
+        ["subscribe", "close", "feed", "recent", "recent", "sessions"]
     );
+    assert_eq!(lines[4]["args"]["project"], "-w");
     assert_eq!(lines[1]["id"], stop[1]["id"]);
     fold(
         &mut app,
@@ -825,7 +826,8 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     let delete = parsed(&sent(&mut app, |app| app.on_key(Key::Enter, now)));
     assert_eq!(names(&delete), ["delete"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["feed", "recent", "sessions"]);
+    assert_eq!(names(&lines), ["feed", "recent", "recent", "sessions"]);
+    assert_eq!(lines[2]["args"]["project"], "-w");
     assert_eq!(rows(&app), ["○  old work"]);
     assert_eq!(
         app.home
