@@ -480,6 +480,10 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
     )])
     .unwrap();
+    // Hold the child's response until the test releases it: the request
+    // is recorded first, so `await_requests` signals while the child waits,
+    // and the cache must still equal `old` then.
+    server.hold();
     extensions::plan(
         &setup.home(),
         &extensions::Request::Path(fakes::lua_fixture()),
@@ -544,8 +548,27 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         first.stdout
     );
 
-    // The first run returns without waiting: the list is fresh on the
-    // next run, once the detached child has rewritten the cache and exited.
+    // The first run returns without waiting: the detached child refreshes
+    // in the background. Its request reaching the server is the positive
+    // signal that it ran: an exit wait alone passes when no child was ever
+    // listed, so the file check below would blame a child that never ran.
+    // The held response keeps the child waiting, so the cache must still
+    // equal `old` here and differ only after `release()`.
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the refresh child never requested the model list: saw {} requests for {} (refresh child pids: {:?})",
+        server.requests().len(),
+        file.display(),
+        fakes::matching(&setup.refresh_pattern()),
+    );
+    assert!(
+        std::fs::read(&file).unwrap() == old,
+        "the refresh child rewrote {} while its response was still held",
+        file.display()
+    );
+    server.release();
+    // The list is fresh on the next run, once the detached child has
+    // rewritten the cache and exited.
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert!(
         std::fs::read(&file).unwrap() != old,
