@@ -205,12 +205,20 @@ memory sample, and log bytes are the size of `events.jsonl`, so both are
 exact.
 
 Linux x86_64 gates every pull request, and the backstop on `main` measures
-the same benchmarks. On a pull request the base binary runs the timing
-benchmarks only, and only the rows the diff selects (`docs/ci.md`, "Selection"); head and base
-timings alternate in one harness process, by sample for every timing row, and rows
-the base skips run on the head alone. Memory and exact rows compare against the backstop's
+the same benchmarks. On a pull request the head and base binaries run only
+the rows the diff selects (`docs/ci.md`, "Selection"), alternating head and
+base timings in one harness process, by sample for every timing row; a row
+the diff does not select runs on neither side, and the budgets it feeds
+read skipped. The skipped budgets are the row's timing budgets and the
+memory budgets that ride on a skipped row and cannot be measured alone:
+`Terminal, attaching a 10 MiB session` and `Terminal, memory kept after
+attaching a 10 MiB session` on the `terminal attach` row, and the `paging`
+jig's peak RSS budget on the `paging` row. Memory and exact rows no
+skipped row feeds still run on the head and compare against the backstop's
 stored results for the base commit (`docs/ci.md`, "On every pull request
-that changes code"). Linux arm64 and macOS arm64 are
+that changes code"). The backstop on `main` and the release workflow run
+every gating row, so a break in an unselected row fails there after the
+merge, not on the pull request. Linux arm64 and macOS arm64 are
 measured at each release and reported, never gated: timings differ by about
 20 times between macOS and Linux on I/O, and macOS memory counts system
 frameworks Fiber does not control. Listing with a cold cache is reported,
