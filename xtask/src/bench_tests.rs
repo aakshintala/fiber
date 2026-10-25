@@ -5392,6 +5392,129 @@ fn only_a_merged_base_median_can_move_the_verdict() {
 }
 
 #[test]
+fn memory_budgets_lists_exactly_the_memory_budgets() {
+    // The set decides which rows' first-pass failures stand after a
+    // remeasure, so the merge's `_kib` skip depends on exactly this set.
+    // The memory budgets are the Budgets-table rows whose ceilings read
+    // peak RSS, RssAnon, or within a peak RSS (`docs/performance.md`,
+    // lines 62-65, 73-74, 76 and 79).
+    let budgets = super::memory_budgets();
+    let expected: std::collections::BTreeSet<&str> = [
+        "Session, idle, headless",
+        "Terminal, idle",
+        "Session, busy or resumed",
+        "`web_fetch` converting a 10 MiB HTML page, the download cap",
+        "Terminal, attaching a 10 MiB session",
+        "Session, memory kept after the busy turn",
+        "Terminal, memory kept after attaching a 10 MiB session",
+        "`paging` jig, its session at scale 1 and 160 by 48",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(budgets, expected);
+    assert!(
+        !budgets.contains("Session start, the internal session command to its first line, no hub"),
+        "a timing budget is never memory: {budgets:?}",
+    );
+}
+
+#[test]
+fn is_memory_marks_only_the_memory_checks() {
+    // `docs/performance.md` line 274: an exact or memory budget fails the
+    // pull request from its first run. This predicate decides which rows
+    // those are: the peak RSS rows and the row held within one.
+    assert!(super::is_memory(Check::Memory(&["paging_rss_kib"])));
+    assert!(super::is_memory(Check::Within {
+        row: "Session, busy or resumed",
+        id: "web_fetch_rss_kib",
+    }));
+    assert!(!super::is_memory(Check::Timing("session_start_ms")));
+    assert!(!super::is_memory(Check::Exact {
+        pin: "2 per model request, 2 per tool call",
+        rule: Rule::Fsyncs("fsyncs"),
+    }));
+    assert!(!super::is_memory(Check::PerMib {
+        pin: "50 ms plus 10 ms per MiB of session log",
+        id: "terminal_attach_ms",
+    }));
+    assert!(!super::is_memory(Check::Ratio {
+        pin: "24 times the same run's scale-1 re-count",
+        times: 24.0,
+        small: "paging_width_ms",
+        large: "paging_scale16_width_ms",
+    }));
+}
+
+#[test]
+fn a_memory_first_pass_failure_survives_clean_timing_extras() {
+    // `docs/performance.md` line 274: an exact or memory budget fails the
+    // pull request from its first run. The paging peak RSS stays over its
+    // ceiling while clean extras outvote the width breach, so the merged
+    // verdict keeps the memory failure and drops the timing one.
+    let (mut h, b) = artifact_pair();
+    h = with_paging_counts(h, &[("paging_rss_kib", 3)]);
+    h = with_metric(h, "paging_rss_kib", json!([30000.0, 30000.0, 30000.0]));
+    let (he, be) = clean_extras();
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert!(has(&out.failures, "paging_rss_kib"), "{:?}", out.failures);
+    assert!(!has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn the_remeasure_comment_compares_the_merged_pairs() {
+    // The breached paging row judged with head and base extras: clean
+    // extras outvote the spike on all 7 samples per side, hot head extras
+    // keep it over, and the comment's row shows the merged medians.
+    let (h, b) = artifact_pair();
+    let (he, be) = clean_extras();
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    // Merged head median 98.2, merged base median 97.3: the breach is gone
+    // (`docs/performance.md`, "Measuring" for the 7 samples per side).
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "`paging` jig, slowest re-count at a new width",
+    );
+    assert!(line.contains("98.2 ms"), "{line}");
+    assert!(line.contains("97.3 ms"), "{line}");
+    assert!(line.ends_with("| pass |"), "{line}");
+    // Four hot head extras: the merged head median stays over on all 7.
+    let hot = extra_file(
+        SLOW_MODEL,
+        json!([111.0, 112.0, 113.0, 114.0]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let out = judged_extra(&h, &b, &hot, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "`paging` jig, slowest re-count at a new width",
+    );
+    assert!(line.ends_with("| fail |"), "{line}");
+}
+
+#[test]
+fn unknown_rows_fail_with_the_exact_table_error() {
+    // A budget row no benchmark owns and no "not measured" entry owns
+    // fails with exactly this error and nothing else on a clean pair.
+    let doc = doc_with(
+        "| Session start,",
+        "| Hub start | 5 ms | Linux x86_64 | picked |\n| Session start,",
+    );
+    let out = judge_doc(&doc, &head(), Some(&base()), Event::PullRequest);
+    assert_eq!(
+        out.failures,
+        ["Hub start: a budget row with no benchmark and no \"not measured\" entry in xtask/src/bench.rs"
+            .to_owned()],
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
 fn a_single_provider_request_is_recorded_not_none_recorded() {
     let metric = json!([{
         "workload": "web_fetch", "ms": 2.0, "ops": {},
