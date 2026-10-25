@@ -1052,9 +1052,9 @@ impl Drop for Run {
 /// `hub serve` process to exit, naming `what` on expiry: the socket's
 /// absence alone cannot prove the hub is gone, since the hub removes the
 /// socket before it drops its hub and returns. An empty `hub_home` is an
-/// attached run, which waits on no hub. The poll carries what remains of
-/// the deadline into every listing, and stops at zero, so the wait ends
-/// at the deadline however the listing below behaves. The loop lives in
+/// attached run, which waits on no hub. The socket poll, the single
+/// listing and the pid wait share the one deadline, so the wait ends at
+/// the deadline however each phase behaves. The wait lives in
 /// [`until_hub_exits_with`], so tests pin it with a fake lister.
 #[track_caller]
 pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
@@ -1064,11 +1064,13 @@ pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path
     });
 }
 
-/// [`until_hub_exits`] with the process listing injected: polls
-/// [`hub_gone`] with `list` until true, panicking naming `what` once the
-/// deadline's remainder is zero. A socket-only loop would return while a
-/// listed hub lives; the counting-lister test in `look.rs` pins that the
-/// loop returns only after the hub row vanishes.
+/// [`until_hub_exits`] with the process listing injected: waits for the
+/// socket to go with the shared paced wait, then lists once to find this
+/// run's hub and waits on its pid under the same deadline, panicking
+/// naming `what` on expiry. An empty `home` is an attached run, which
+/// lists nothing and waits on the socket alone. A socket-only wait would
+/// return while a listed hub lives; the one-listing test in `look.rs`
+/// pins that the lister runs once, after the socket is gone.
 pub(crate) fn until_hub_exits_with(
     deadline: Deadline,
     socket: &Path,
@@ -1076,15 +1078,19 @@ pub(crate) fn until_hub_exits_with(
     what: &str,
     list: &mut dyn FnMut() -> String,
 ) {
-    loop {
-        if deadline.left().is_zero() {
-            panic!("waited until the deadline for {what}");
-        }
-        if hub_gone(socket, home, list) {
-            return;
-        }
-        thread::yield_now();
+    let socket = socket.to_path_buf();
+    fakes::wait_until(what, deadline, move || !socket.exists());
+    if home.is_empty() {
+        return;
     }
+    let pids = hub_pids(&list(), home);
+    if pids.is_empty() {
+        return;
+    }
+    assert!(
+        fakes::pids_exit(&pids, deadline),
+        "waited until the deadline for {what}"
+    );
 }
 
 /// Whether the hub is gone: its socket is absent and no listed process

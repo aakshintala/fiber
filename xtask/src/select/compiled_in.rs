@@ -55,6 +55,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/tools/prompt/guidelines.md", "tools"),
     ("providers/codex/tests/quota-two-windows.json", "main"),
     ("extensions/hooks/extension.json", "extensions"),
+    ("extensions/hooks/init.lua", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),
     ("providers/bedrock/providers/bedrock.json", "extensions"),
     ("providers/codex/providers/codex.json", "extensions"),

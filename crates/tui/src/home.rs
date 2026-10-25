@@ -44,6 +44,9 @@ pub(crate) enum Spot {
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
     Quit(QuitChoice),
+    /// A clear choice while the clear question is open: clicking it
+    /// does what its key does.
+    Clear(ClearChoice),
     /// The delete question's ✕: clicking it does what Esc does, keeping
     /// the session.
     Keep,
@@ -66,6 +69,7 @@ impl Spot {
             | Spot::Thinking
             | Spot::Pick(_)
             | Spot::Quit(_)
+            | Spot::Clear(_)
             | Spot::Keep
             | Spot::Question => None,
         }
@@ -83,9 +87,20 @@ impl Spot {
             | Spot::Pick(_)
             | Spot::Keep
             | Spot::Question
-            | Spot::Quit(_) => false,
+            | Spot::Quit(_)
+            | Spot::Clear(_) => false,
         }
     }
+}
+
+/// A clear choice: clearing anyway, or staying. Enter clears with the
+/// staged `now`, Esc stays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClearChoice {
+    /// Enter: clear anyway.
+    Clear,
+    /// Esc, or the title's ✕: stay.
+    Stay,
 }
 
 /// A quit choice: leaving working sessions running, closing them all
@@ -711,11 +726,15 @@ impl Sessions {
     }
 
     /// The feed rows the rail draws as cards: live and crashed, not
-    /// exited, in feed order (`docs/tui.md`, "The rail").
+    /// exited and never closing, in feed order (`docs/tui.md`, "The
+    /// rail"). A closing row has no card and no ⌥N until it exits.
     pub(crate) fn cards(&self) -> Vec<&Row> {
         self.feed
             .iter()
-            .filter(|row| row.left != Some(Left::Exited))
+            .filter(|row| {
+                row.left != Some(Left::Exited)
+                    && !row.status.as_ref().is_some_and(|status| status.closing)
+            })
             .collect()
     }
 

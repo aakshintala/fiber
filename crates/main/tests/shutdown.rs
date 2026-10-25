@@ -138,6 +138,52 @@ impl Setup {
     }
 }
 
+/// How many leading lines of each leftover session log a failure message
+/// carries: paths and lengths are complete, content is a bounded head, so
+/// a large log cannot flood the CI log.
+const LEFTOVER_LOG_HEAD_LINES: usize = 5;
+
+/// How many bytes of that head a failure message carries at most: one JSONL
+/// line can itself be megabytes and is emitted whole, so a line cap alone
+/// does not bound the dump.
+const LEFTOVER_LOG_HEAD_BYTES: usize = 1024;
+
+/// Formats leftover session logs for a failure message: every path, each
+/// file's byte and line counts, and a bounded head of its first lines, cut
+/// to the byte cap at a character boundary. A file that cannot be read
+/// reports its error beside its path, never panicking, so the message still
+/// names every log left behind.
+fn describe_leftover_logs(logs: &[PathBuf]) -> String {
+    logs.iter()
+        .map(|path| match fs::read_to_string(path) {
+            Ok(content) => {
+                let total = content.lines().count();
+                let mut head = content
+                    .lines()
+                    .take(LEFTOVER_LOG_HEAD_LINES)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let marker = if head.len() > LEFTOVER_LOG_HEAD_BYTES {
+                    head.truncate(head.floor_char_boundary(LEFTOVER_LOG_HEAD_BYTES));
+                    format!("\n…[head truncated to {LEFTOVER_LOG_HEAD_BYTES} bytes]")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{} ({} bytes, {} lines):\n{}{}",
+                    path.display(),
+                    content.len(),
+                    total,
+                    head,
+                    marker
+                )
+            }
+            Err(err) => format!("{} (unreadable: {err})", path.display()),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn write(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
@@ -538,7 +584,16 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    // No session log here: a signal before `fiber_started` writes no durable
+    // event (`docs/invocation.md`, "What is written") and a failure before
+    // `fiber_started` has no session log (`docs/errors.md`, "Before a session
+    // exists").
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(server.requests().is_empty());
 }
@@ -655,7 +710,16 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    // No session log here: a signal before `fiber_started` writes no durable
+    // event (`docs/invocation.md`, "What is written") and a failure before
+    // `fiber_started` has no session log (`docs/errors.md`, "Before a session
+    // exists").
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert_early_line(&setup.home(), pid, "SIGTERM", 143);
     assert!(
         setup.session_dirs().is_empty(),
@@ -739,7 +803,16 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
     assert!(ended.lines.is_empty(), "{:?}", ended.lines);
-    assert!(setup.logs().is_empty(), "a session was left behind");
+    // No session log here: a signal before `fiber_started` writes no durable
+    // event (`docs/invocation.md`, "What is written") and a failure before
+    // `fiber_started` has no session log (`docs/errors.md`, "Before a session
+    // exists").
+    let leftover = setup.logs();
+    assert!(
+        leftover.is_empty(),
+        "a session was left behind:\n{}",
+        describe_leftover_logs(&leftover)
+    );
     assert!(
         setup.session_dirs().is_empty(),
         "a session directory was created"
@@ -749,5 +822,147 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
         fs::read_to_string(&marker).unwrap_or_default().trim(),
         "term",
         "the starting server saw SIGTERM"
+    );
+}
+
+/// The leftover-log dump names every path with its lengths and a bounded
+/// head: below, at, and above the line cap, plus a log that cannot be read.
+#[test]
+fn leftover_log_dump_names_paths_with_a_bounded_head() {
+    let root = fakes::TempDir::new("leftover-logs");
+    let write_log = |name: &str, count: usize| -> PathBuf {
+        let path = root.path().join(name).join("events.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let body: String = (1..=count)
+            .map(|n| format!("{{\"kind\":\"event-{n}\"}}\n"))
+            .collect();
+        fs::write(&path, &body).unwrap();
+        path
+    };
+    let over = write_log("s_over", LEFTOVER_LOG_HEAD_LINES + 3);
+    let exact = write_log("s_exact", LEFTOVER_LOG_HEAD_LINES);
+    let under = write_log("s_under", 2);
+    let missing = root.path().join("s_gone").join("events.jsonl");
+
+    let dump =
+        describe_leftover_logs(&[over.clone(), exact.clone(), under.clone(), missing.clone()]);
+
+    for path in [&over, &exact, &under, &missing] {
+        assert!(
+            dump.contains(&path.display().to_string()),
+            "names {path:?}:\n{dump}"
+        );
+    }
+    // The head stops at the cap even when the file holds more.
+    assert!(
+        dump.contains(r#""kind":"event-5""#),
+        "head line kept:\n{dump}"
+    );
+    assert!(
+        !dump.contains(r#""kind":"event-6""#),
+        "beyond the cap cut:\n{dump}"
+    );
+    // Lengths are reported for every readable log.
+    for (path, count) in [
+        (&over, LEFTOVER_LOG_HEAD_LINES + 3),
+        (&exact, LEFTOVER_LOG_HEAD_LINES),
+        (&under, 2),
+    ] {
+        let bytes = fs::metadata(path).unwrap().len();
+        assert!(
+            dump.contains(&format!("{bytes} bytes")),
+            "byte length of {path:?}:\n{dump}"
+        );
+        assert!(
+            dump.contains(&format!("{count} lines")),
+            "line count of {path:?}:\n{dump}"
+        );
+    }
+    // A vanished log still names its path with the read error, no panic.
+    assert!(dump.contains("unreadable"), "read error kept:\n{dump}");
+}
+
+/// The leftover-log dump caps an oversized line by bytes while keeping the
+/// full byte and line counts: a single megabyte-scale JSONL line is emitted
+/// whole without the cap, so it would flood the CI log.
+#[test]
+fn leftover_log_dump_truncates_an_oversized_line_by_bytes() {
+    let root = fakes::TempDir::new("leftover-logs-huge-line");
+    let write_log = |name: &str, body: &str| -> PathBuf {
+        let path = root.path().join(name).join("events.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, body).unwrap();
+        path
+    };
+    // One JSONL line far past the byte cap.
+    let huge = "x".repeat(LEFTOVER_LOG_HEAD_BYTES * 4);
+    let huge_line = format!("{{\"kind\":\"huge\",\"pad\":\"{huge}\"}}\n");
+    let huge_path = write_log("s_huge", &huge_line);
+    let huge_dump = describe_leftover_logs(std::slice::from_ref(&huge_path));
+
+    // Full lengths are kept even though the head is cut.
+    assert!(
+        huge_dump.contains(&format!("{} bytes", huge_line.len())),
+        "full byte length kept:\n{huge_dump}"
+    );
+    assert!(
+        huge_dump.contains("1 lines"),
+        "full line count kept:\n{huge_dump}"
+    );
+    // The head is bounded: the whole line never lands in the dump.
+    assert!(
+        !huge_dump.contains(&huge),
+        "oversized line cut:\n{huge_dump}"
+    );
+    assert!(
+        huge_dump.len() < huge_line.len(),
+        "dump smaller than the log line"
+    );
+    // A head exactly at the cap is kept whole, with no truncation marker:
+    // this pins the `>` against a `>=` flip.
+    let exact = "y".repeat(LEFTOVER_LOG_HEAD_BYTES);
+    let exact_path = write_log("s_exact_bytes", &format!("{exact}\n"));
+    let exact_dump = describe_leftover_logs(std::slice::from_ref(&exact_path));
+    assert!(
+        exact_dump.contains(&exact),
+        "at-cap head kept:\n{exact_dump}"
+    );
+    assert!(
+        !exact_dump.contains("truncated"),
+        "no truncation marker at the cap:\n{exact_dump}"
+    );
+    // One byte below the cap is kept whole, with no truncation marker.
+    let below = "y".repeat(LEFTOVER_LOG_HEAD_BYTES - 1);
+    let below_path = write_log("s_below_bytes", &format!("{below}\n"));
+    let below_dump = describe_leftover_logs(std::slice::from_ref(&below_path));
+    assert!(
+        below_dump.contains(&below),
+        "below-cap head kept:\n{below_dump}"
+    );
+    assert!(
+        !below_dump.contains("truncated"),
+        "no truncation marker below the cap:\n{below_dump}"
+    );
+    // One byte over the cap is cut, keeping the full lengths and marking
+    // the truncation: this pins the boundary from above.
+    let just_over = "z".repeat(LEFTOVER_LOG_HEAD_BYTES + 1);
+    let just_over_line = format!("{just_over}\n");
+    let just_over_path = write_log("s_just_over_bytes", &just_over_line);
+    let just_over_dump = describe_leftover_logs(std::slice::from_ref(&just_over_path));
+    assert!(
+        just_over_dump.contains(&format!("{} bytes", just_over_line.len())),
+        "full byte length kept one over the cap:\n{just_over_dump}"
+    );
+    assert!(
+        just_over_dump.contains("1 lines"),
+        "full line count kept one over the cap:\n{just_over_dump}"
+    );
+    assert!(
+        !just_over_dump.contains(&just_over),
+        "one-over-cap line cut:\n{just_over_dump}"
+    );
+    assert!(
+        just_over_dump.contains("truncated"),
+        "truncation marker one over the cap:\n{just_over_dump}"
     );
 }

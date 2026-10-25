@@ -281,6 +281,25 @@ impl App {
         })
     }
 
+    /// Whether the clear question is open, on home or not: while it is,
+    /// every key goes to it first.
+    pub(crate) fn clear_open(&self) -> bool {
+        self.home
+            .as_ref()
+            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Clear { .. })))
+    }
+
+    /// The clear question, while open: the old session's name, what it
+    /// waits on, and whether Enter staged its `start`.
+    pub(crate) fn clear_question(&self) -> Option<(String, String, bool)> {
+        match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+            Some(Prompt::Clear {
+                name, waiting, now, ..
+            }) => Some((name.clone(), waiting.clone(), *now)),
+            _ => None,
+        }
+    }
+
     /// The session list's scroll offset: what the frame's window
     /// starts at, after clamping it to the rows past the window.
     pub(crate) fn home_list_scroll(&self) -> usize {
@@ -333,11 +352,12 @@ impl App {
             // the question carries its head.
             Some(Prompt::Import) => (Some(import_head()), 0),
             // The quit question draws through the hint below, recomputed
-            // every frame; the close-all and stop questions draw as overlays
-            // from what was fixed when they opened.
+            // every frame; the close-all, stop and clear questions draw
+            // as overlays from what was fixed when they opened.
             Some(Prompt::Quit)
             | Some(Prompt::CloseAll { .. })
             | Some(Prompt::Stop { .. })
+            | Some(Prompt::Clear { .. })
             | None => (None, 0),
         };
         // The foot names each action by its first bound key, leaving
@@ -385,9 +405,14 @@ impl App {
                 }
                 let status = row.status.as_ref();
                 let stop = row.left.is_none() && row.state != State::Unreadable;
+                // A closing row keeps no ⌥N on home, even before the
+                // rail sheds its card.
+                let number = (!row.status.as_ref().is_some_and(|status| status.closing))
+                    .then(|| self.rail_state().number(&row.id))
+                    .flatten();
                 list.push(ListLine::Live {
                     key: row.key,
-                    number: self.rail_state().number(row.key),
+                    number,
                     glyph: self.motion.glyph(row).to_owned(),
                     name: crate::home::title(row),
                     word: crate::view::rail::word(row),
@@ -593,8 +618,11 @@ impl App {
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.left(&exited, how);
                         if after_attach {
-                            home.left_after_attach = Some(exited);
+                            home.left_after_attach = Some(exited.clone());
                         }
+                    }
+                    if how == Left::Exited {
+                        self.rail_state.note_exited(&exited);
                     }
                     Some(Vec::new())
                 }
@@ -842,7 +870,10 @@ impl App {
                 home.questions.prompt().is_some_and(|prompt| {
                     !matches!(
                         prompt,
-                        Prompt::Quit | Prompt::CloseAll { .. } | Prompt::Stop { .. }
+                        Prompt::Quit
+                            | Prompt::CloseAll { .. }
+                            | Prompt::Stop { .. }
+                            | Prompt::Clear { .. }
                     )
                 })
             })
@@ -953,6 +984,9 @@ impl App {
         if let Spot::Quit(choice) = spot {
             return self.quit_click(choice);
         }
+        if let Spot::Clear(choice) = spot {
+            return self.clear_click(choice);
+        }
         match spot {
             Spot::Entry(key) => self.open_row(key),
             Spot::Stop(key) => self.stop_or_ask(key),
@@ -994,7 +1028,7 @@ impl App {
                 }
                 Effect::None
             }
-            Spot::Quit(_) => Effect::None,
+            Spot::Clear(_) | Spot::Quit(_) => Effect::None,
         }
     }
 
@@ -1120,7 +1154,8 @@ impl App {
             | Spot::Pick(_)
             | Spot::Keep
             | Spot::Question
-            | Spot::Quit(_) => None,
+            | Spot::Quit(_)
+            | Spot::Clear(_) => None,
         }
     }
 

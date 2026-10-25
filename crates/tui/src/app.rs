@@ -16,7 +16,7 @@ use contract::events::{
 use contract::shapes::ContentPart;
 use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::approvals::{self, Panel, Queue};
 use crate::ext::{Handle, Renderer};
@@ -189,6 +189,17 @@ enum Pass {
     Until(Seq),
 }
 
+/// A `/clear` whose `start` waits for its answer: the cleared session,
+/// that `start`'s id, the credential state it carries, and whether its
+/// `close` goes with `now`.
+#[derive(Debug, Clone)]
+pub(crate) struct ClearPending {
+    old: SessionId,
+    command_id: String,
+    credential: Option<Option<String>>,
+    now: bool,
+}
+
 /// The terminal's state.
 pub(crate) struct App {
     /// Sessions whose opening passes hold history requests.
@@ -309,6 +320,13 @@ pub(crate) struct App {
     /// layer: each `start` carries them in `overrides`
     /// (`docs/invocation.md`, "Sessions").
     launch_overrides: Vec<String>,
+    /// A `/clear` whose `start` waits for its answer: the cleared
+    /// session, that `start`'s id, the credential its args named, and
+    /// whether its `close` goes with `now`.
+    clear_pending: Option<ClearPending>,
+    /// The `/clear` `close` waiting for its answer: its id, so a lost
+    /// link names it.
+    clear_close: Option<String>,
     /// What moves on screen, and when it next moves (`docs/tui.md`,
     /// "The working line").
     motion: crate::motion::Motion,
@@ -376,6 +394,8 @@ impl App {
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
+            clear_pending: None,
+            clear_close: None,
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),
             reviewer_setup: reviewer_setup::State::default(),
@@ -1136,6 +1156,9 @@ impl App {
                 .ok()
                 .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             {
+                if self.clear_lost(&id) {
+                    continue;
+                }
                 if self.outbox.is_kept(&id) {
                     continue;
                 }
@@ -1551,6 +1574,7 @@ impl App {
                 let Some(id) = command_id else {
                     return Vec::new();
                 };
+                self.clear_close_settled(&id);
                 if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
                     return lines;
                 }
@@ -1567,8 +1591,16 @@ impl App {
                     .map(|id| SessionId(id.to_owned()));
                 match (self.outbox.answered(&id), session) {
                     (Some((Kind::Start, draft)), Some(session)) => {
-                        self.model_picker.start_model = None;
-                        self.started(session, draft)
+                        match self
+                            .clear_pending
+                            .take_if(|pending| pending.command_id == id)
+                        {
+                            Some(pending) => self.clear_started(pending, session),
+                            None => {
+                                self.model_picker.start_model = None;
+                                self.started(session, draft)
+                            }
+                        }
                     }
                     _ => Vec::new(),
                 }
@@ -1577,6 +1609,9 @@ impl App {
                 if let Some(id) = command_id {
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     let code = hub_code(&hub.payload);
+                    if self.clear_rejected(&id, &code, &message) {
+                        return Vec::new();
+                    }
                     if self.image_rejected(&id, &message) {
                         return Vec::new();
                     }
@@ -1631,10 +1666,90 @@ impl App {
         ]
     }
 
+    /// A clear `start` was accepted: the old session's rail number moves
+    /// to the new id before any later row folds, the screen clears to an
+    /// empty conversation, and the old session is sent `close` only now.
+    /// The pending draft is empty, so no first prompt goes out.
+    fn clear_started(&mut self, pending: ClearPending, session: SessionId) -> Vec<String> {
+        self.model_picker.start_model = None;
+        self.rail_state
+            .replace(pending.old.clone(), session.clone());
+        self.panel_state.reset();
+        self.panel_state.carry_clear_credential(pending.credential);
+        self.attached_screen_mut().clear();
+        self.attach(session.clone());
+        let id = mint();
+        let close = session_command(
+            &id,
+            "close",
+            &pending.old,
+            Some(json!({"now": pending.now})),
+        )
+        .to_string();
+        self.outbox
+            .insert(id.clone(), Kind::Command, Draft::default());
+        self.clear_close = Some(id);
+        vec![
+            self.subscribe(&session, Level::Full),
+            self.ask_commands(&session),
+            close,
+        ]
+    }
+
+    /// Forgets a clear `close` once the hub answers it, whatever the
+    /// answer says: the notice already names a refusal, and an accept
+    /// needs no mark.
+    fn clear_close_settled(&mut self, id: &str) {
+        if self.clear_close.as_deref() == Some(id) {
+            self.clear_close = None;
+        }
+    }
+
+    /// A refused clear `start`: one notice with its code and message,
+    /// the phase staying attached to the old session, its draft
+    /// untouched, and no `close` sent. True when `id` was the clear
+    /// `start`.
+    fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
+        let Some(pending) = self.clear_pending.take() else {
+            return false;
+        };
+        if pending.command_id != id {
+            self.clear_pending = Some(pending);
+            return false;
+        }
+        self.outbox.answered(id);
+        self.notices.push(code, message.to_owned());
+        true
+    }
+
+    /// A clear line lost before it was written. A lost `start` drops
+    /// its intent, the phase staying attached to the old session for
+    /// the retry; a lost `close` keeps the old session running, named
+    /// by one notice. True when `id` was either.
+    fn clear_lost(&mut self, id: &str) -> bool {
+        if let Some(pending) = self.clear_pending.take() {
+            if pending.command_id == id {
+                self.outbox.answered(id);
+                return true;
+            }
+            self.clear_pending = Some(pending);
+        }
+        if self.clear_close.as_deref() == Some(id) {
+            self.clear_close = None;
+            self.notices.push(
+                "connection_failed",
+                "The link to the old session was lost before its `close` went out.".to_owned(),
+            );
+            return true;
+        }
+        false
+    }
+
     /// A command the terminal sent was rejected: a notice, and its draft
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, code: &str, message: String) {
+        self.clear_close_settled(id);
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
@@ -1691,6 +1806,7 @@ impl App {
         accepted: Option<&CommandAccepted>,
     ) -> Option<(Kind, Draft)> {
         let id = envelope.payload.get("command_id")?.as_str()?;
+        self.clear_close_settled(id);
         let entry = match accepted {
             Some(_) => self.outbox.answered(id),
             // An unparseable accept closes only a pending import: any
