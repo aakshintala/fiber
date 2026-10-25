@@ -1125,7 +1125,9 @@ fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
     home.install("proc", Some(&tagging("proc", "transform")), &[]);
     home.install("lua", Some(&tagging("lua", "transform")), &[]);
     home.edit_manifest("old", |m| m["api"] = json!(2));
-    home.edit_manifest("proc", |m| m["process"] = json!({"program": "true"}));
+    home.edit_manifest("proc", |m| {
+        m["process"] = json!({"program": "true", "exit_timeout_ms": 0})
+    });
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     assert_eq!(loaded, names(&["lua"]));
