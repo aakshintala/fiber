@@ -1656,7 +1656,7 @@ fn closed_socket_dump_with_diag_shows_lines_stderr_and_log_tail() {
     peer.write_all(b"{\"kind\":\"command_accepted\"}\n")
         .unwrap();
     drop(peer);
-    let mut client = Socket::from(Deadline::after(Duration::from_secs(5)), mine);
+    let mut client = Socket::from(Deadline::after(fakes::MUST_SUCCEED_WITHIN), mine);
     client.set_diag(diag);
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         until(&client, "the stopped child exits", |_| false);
@@ -1690,7 +1690,7 @@ fn closed_socket_dump_with_diag_shows_lines_stderr_and_log_tail() {
 fn until_without_diag_keeps_the_old_closed_message() {
     let (mine, peer) = UnixStream::pair().unwrap();
     drop(peer);
-    let client = Socket::from(Deadline::after(Duration::from_secs(5)), mine);
+    let client = Socket::from(Deadline::after(fakes::MUST_SUCCEED_WITHIN), mine);
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         until(&client, "the stopped child exits", |_| false);
     }))

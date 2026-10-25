@@ -2328,8 +2328,9 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let completed = first.last().unwrap();
     assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
     // The grandchild's spend lands in the root log once, naming the
-    // grandchild: one line per generation id. The spawn lines arrived
-    // before the wait the root parked in.
+    // grandchild: one line per generation id (docs/delegates.md:168-171,
+    // "Streams"). The spawn lines arrived before the wait the root parked
+    // in.
     let before: Vec<Value> = parked.into_iter().chain(first.iter().cloned()).collect();
     let copies: Vec<Value> = before
         .iter()
@@ -2367,7 +2368,8 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     let grandchild_id = child_started["delegate_session_id"].as_str().unwrap();
     assert_eq!(copies[0]["payload"]["origin_session_id"], grandchild_id);
     // The child's own copy names the grandchild too: the relay preserves
-    // the originator.
+    // the originator (docs/delegates.md:168-171, "Streams": the copy keeps
+    // one line per generation_id at each level).
     let relayed: Vec<Value> = child_lines
         .iter()
         .filter(|line| {
@@ -2377,8 +2379,9 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .collect();
     assert_eq!(relayed.len(), 1);
     assert_eq!(relayed[0]["payload"]["origin_session_id"], grandchild_id);
-    // The child ends cancelled by the trip, exactly once; the grandchild
-    // completed on its own before the stop reached it.
+    // The child ends cancelled by the trip, exactly once
+    // (docs/delegates.md:123, "Identity and resume": one job_completed per
+    // run); the grandchild completed on its own before the stop reached it.
     let mut batch: Vec<Value> = first
         .iter()
         .filter(|line| line["kind"] == "job_completed")
