@@ -417,6 +417,8 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `message` | `from_session_id` (string), `parent_session_id` (string, optional), the sender's parent session when it has one, `text` (string) |
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
+| `call` | `call` (string), the call's name as Lua writes it, such as `fiber.tool`; `args` (array), the Lua call's arguments; `request_id` (string, optional), the request answered. Process extensions only, on their own pipe; rejected `invalid_arguments` on an ordinary client connection |
+| `ready` | none, ending the extension's registrations. Process extensions only, on their own pipe; rejected `invalid_arguments` on an ordinary client connection |
 | `job_stop` | `job_id` (string) |
 | `job_input` | `job_id` (string), `text` (string) |
 | `offered_file` | `request_id` (string), the pending offer; `path` (string), exactly one of its items' `files` |
@@ -454,6 +456,8 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. A `shell` that `cancel` stops before its command starts is rejected `cancelled`. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
+| `call` | Sends one process-extension call: a registration, a `host` call or a `state` call, answered with `command_accepted` carrying its return as `result.value`, or `command_rejected` with the `code` and `message` a Lua call raises (`docs/extensions.md`, "Process extensions"). Process extensions only. |
+| `ready` | Ends a process extension's registrations; the startup deadline is met when it arrives (`docs/extensions.md`, "Process extensions"). Process extensions only. |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
 | `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
@@ -594,6 +598,13 @@ answer keys, a typed answer that does not fit its MCP elicitation field
 or with a prefix the request did not offer, or `decisions` whose length is
 not the number of items offered. A global standing rule is added by
 editing the global rules file, never from an approval.
+
+**A process extension answers Fiber's requests with `reply`.** It carries
+`request_id` and exactly one of `result` (any JSON value, what the Lua
+function returns) or `error` (`{ code, message }`, which fails the call as a
+Lua error does). Its `command_accepted` names the reply command's own id, as
+usual, and completes the named pending request (`docs/extensions.md`,
+"Process extensions").
 
 ## Lifecycle
 

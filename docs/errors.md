@@ -393,7 +393,7 @@ the lines that carry it.
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") | — |
 | `switch_pending` | notice | a model or level choice sent while a turn runs: it applies when the turn ends, and the chips hold the old model and level until the session accepts it (`docs/tui.md`, "Notices") | condition |
 | `timeout` | extension call, tool call, job, diagnostic log | a deadline passed | — |
-| `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB | — |
+| `too_large` | extension call, tool call, hub command, driver command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB; or a process call's result would exceed the 64 MiB framing cap after base64 (`docs/extensions.md`, "Process extensions") | — |
 | `tool_error` | tool call, extension call | the tool itself failed, or its effects function errored | — |
 | `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") | — |
 | `unknown_command` | driver command, hub command | a driver or hub command Fiber does not have, or a `command` naming one no extension registered (`docs/invocation.md`, "Driver commands") | — |
