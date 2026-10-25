@@ -211,10 +211,17 @@ fn other_call_answers_still_read_as_their_own_shape() {
 
 #[test]
 fn hello_and_request_read_as_ephemeral_process_kinds() {
-    for reason in ["new", "resume", "fork", "rewind", "handoff"] {
+    for (reason, wire) in [
+        (ExtensionReason::New, "new"),
+        (ExtensionReason::Resume, "resume"),
+        (ExtensionReason::Fork, "fork"),
+        (ExtensionReason::Rewind, "rewind"),
+        (ExtensionReason::Handoff, "handoff"),
+    ] {
+        assert_eq!(serde_json::to_value(reason).unwrap(), wire);
         let event = Event::from_envelope(&envelope(
             "extension_hello",
-            serde_json::json!({"session_id": "s", "reason": reason, "workspace": "/w", "data_dirs": {"machine": "/m", "project": "/p"}, "state": {}}),
+            serde_json::json!({"session_id": "s", "reason": wire, "workspace": "/w", "data_dirs": {"machine": "/m", "project": "/p"}, "state": {}}),
         ))
         .unwrap()
         .unwrap();
@@ -241,18 +248,4 @@ fn hello_and_request_read_as_ephemeral_process_kinds() {
         ))
         .is_err()
     );
-}
-
-#[test]
-fn extension_reasons_list_every_session_start() {
-    let reasons = [
-        ExtensionReason::New,
-        ExtensionReason::Resume,
-        ExtensionReason::Fork,
-        ExtensionReason::Rewind,
-        ExtensionReason::Handoff,
-    ];
-    let words: Vec<String> =
-        serde_json::from_value(serde_json::to_value(reasons).unwrap()).unwrap();
-    assert_eq!(words, vec!["new", "resume", "fork", "rewind", "handoff"]);
 }

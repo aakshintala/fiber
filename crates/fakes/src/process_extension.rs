@@ -101,10 +101,7 @@ impl ProcessFixture {
         let Some(input) = self.input.as_mut() else {
             panic!("the fixture's stdin is already released");
         };
-        if let Err(err) = writeln!(input, "{line}") {
-            panic!("the fixture takes a line: {err}");
-        }
-        if let Err(err) = input.flush() {
+        if let Err(err) = writeln!(input, "{line}").and_then(|()| input.flush()) {
             panic!("the fixture takes a line: {err}");
         }
     }

@@ -60,9 +60,5 @@ fn a_hold_is_acknowledged_then_released_before_the_join() {
 
 #[test]
 fn the_fixture_usage_error_names_its_modes() {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
-    let path = path.join("examples").join("process-extension");
-    warm_up(&path, &["bogus-mode"], 2);
+    warm_up(&super::example_path(), &["bogus-mode"], 2);
 }
