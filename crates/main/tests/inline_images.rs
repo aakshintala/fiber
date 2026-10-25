@@ -65,16 +65,27 @@ fn click_text(run: &mut Run, grid: &Grid, text: &str) {
     click(run, col, row);
 }
 
-/// Scrolls one page up or down.
-fn wheel(run: &mut Run, up: bool) {
+/// Scrolls one step at a time until `done` holds on a complete frame.
+fn wheel_until(run: &mut Run, up: bool, what: &str, done: impl Fn(&Grid) -> bool) -> Grid {
     let event: &[u8] = if up {
         b"\x1b[<64;51;16M"
     } else {
         b"\x1b[<65;51;16M"
     };
-    for _ in 0..10 {
+    let mut grid = run.screen();
+    for _ in 0..40 {
+        if done(&grid) {
+            return grid;
+        }
+        let from = run.output().len();
         run.write(event);
+        run.wait_bytes(from, FRAME_END, "the scroll frame");
+        grid = run.screen();
     }
+    panic!(
+        "did not reach {what} after 40 wheel steps; grid:\n{}",
+        grid.rows.join("\n")
+    );
 }
 
 const FRAME_END: &[u8] = b"\x1b[?2026l";
@@ -161,16 +172,11 @@ fn sessions(setup: &Setup) -> Vec<PathBuf> {
     ids
 }
 
-/// Opens the ledger's `read` call after the terminal emits its scrolled
-/// row. The closed call draws no placeholder until after this click.
-fn open_call(run: &mut Run, from: usize, name: &str) -> usize {
-    let row = run.wait_bytes(from, name.as_bytes(), "the call row");
-    run.wait_bytes(row, FRAME_END, "the call row frame");
-    let grid = run.wait_screen("the ledger call", |grid| {
-        grid.rows.iter().any(|row| row.contains(name))
-    });
+/// Opens the ledger's `read` call on its settled scroll frame. The
+/// closed call draws no placeholder until after this click.
+fn open_call(run: &mut Run, grid: &Grid, name: &str) -> usize {
     let click_from = run.output().len();
-    click_text(run, &grid, name);
+    click_text(run, grid, name);
     run.wait_bytes(click_from, FRAME_END, "the opened call frame");
     click_from
 }
@@ -265,27 +271,28 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
     let caption = caption_of(&path, width, height);
 
     // The turn-finished signal lands with the call off-screen. Scroll
-    // until its caption and placeholder reach the wire, then click it.
-    let from = run.output().len();
-    wheel(&mut run, true);
-    let from = open_call(&mut run, from, "Read 1 file");
+    // until its row is visible on a completed frame, then click it.
+    let grid = wheel_until(&mut run, true, "the ledger call", |grid| {
+        grid.rows.iter().any(|row| row.contains("Read 1 file"))
+    });
+    let from = open_call(&mut run, &grid, "Read 1 file");
     // The opened call emits its placeholder grid before its caption.
     let placeholder = run.wait_bytes(from, PLACEHOLDER, "the placeholder grid");
-    let mut from = run.wait_bytes(placeholder, FRAME_END, "the inline image frame");
+    run.wait_bytes(placeholder, FRAME_END, "the inline image frame");
     run.wait_screen("the inline grid", |grid| grid.contents.contains(&caption));
 
     // Scroll away and back, then resize. Each input follows the prior
     // frame's end; each redraw still places the image without a second
     // transmit.
-    wheel(&mut run, false);
-    run.wait_screen("the scrolled-away grid", |grid| {
+    wheel_until(&mut run, false, "the scrolled-away grid", |grid| {
         !grid.contents.contains(&caption)
     });
-    from = run.wait_bytes(from, FRAME_END, "the scrolled-away frame");
-    wheel(&mut run, true);
+    let from = run.output().len();
+    wheel_until(&mut run, true, "the followed grid", |grid| {
+        grid.contents.contains(&caption)
+    });
     let placeholder = run.wait_bytes(from, PLACEHOLDER, "the followed grid");
     run.wait_bytes(placeholder, FRAME_END, "the followed frame");
-    run.wait_screen("the followed grid", |grid| grid.contents.contains(&caption));
     let resized_from = run.output().len();
     run.resize(80, 24);
     let placeholder = run.wait_bytes(resized_from, PLACEHOLDER, "the recounted grid");
@@ -425,8 +432,10 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     // The opened call draws the image as one line, without placeholders.
     // The turn-finished signal permits scrolling back to its off-screen row.
     let from = run.output().len();
-    wheel(&mut run, true);
-    open_call(&mut run, from, "Read 1 file");
+    let grid = wheel_until(&mut run, true, "the ledger call", |grid| {
+        grid.rows.iter().any(|row| row.contains("Read 1 file"))
+    });
+    open_call(&mut run, &grid, "Read 1 file");
     run.wait_screen("the one line", |grid| {
         grid.rows.iter().any(|row| row.contains(&caption))
     });
