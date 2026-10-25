@@ -1,9 +1,13 @@
 //! Machine-side configuration, supplied by the composition root.
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use contract::SessionId;
 use contract::clock::Clock;
+use contract::commands::hub::PruneExpect;
 use contract::shapes::Failure;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::connection::{Hub, Refused};
@@ -49,6 +53,64 @@ pub trait Machine: Send + Sync {
         text: &str,
         version: &str,
     ) -> Result<(), Failure>;
+    /// Prunes the machine's Fiber home across every project. With
+    /// `dry_run`, selects and answers the preview without removing
+    /// anything; otherwise removes the previewed `expect` items and answers
+    /// what ran. `delete` removes one session through the hub's own delete,
+    /// with the previewed cascade set as `expect`, so a set that changed
+    /// mid-prompt fails that one session without failing the prune.
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::type_complexity,
+        reason = "one seam call carries the whole prune: its flags, the previewed items and the session-delete callback"
+    )]
+    fn prune(
+        &self,
+        home: &Path,
+        older_than: Option<String>,
+        cascade: bool,
+        force: bool,
+        dry_run: bool,
+        expect: Option<PruneExpect>,
+        clock: Arc<dyn Clock>,
+        delete: &mut (
+                 dyn FnMut(&SessionId, bool, Option<&BTreeSet<SessionId>>) -> Result<(), Failure>
+                     + Send
+             ),
+    ) -> Result<PruneOutcome, Failure>;
+}
+
+/// What a `prune` run answers: the preview lines and items, the space
+/// freed, how many items prune tried to remove, and each item that failed
+/// or was skipped. `started` is false for a dry run, which removes
+/// nothing, and true once a confirmed run has computed its selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PruneOutcome {
+    /// The printable preview lines, in print order.
+    pub lines: Vec<String>,
+    /// The previewed items, each named as the dry run names it.
+    pub items: PruneExpect,
+    /// The bytes removed, or the bytes the preview would free.
+    pub freed: u64,
+    /// How many items the confirmed run tried to remove.
+    pub total: usize,
+    /// Each item that failed or was skipped, in removal order.
+    pub failures: Vec<PruneFailure>,
+    /// Whether the run removed anything: false for a dry run.
+    pub started: bool,
+}
+
+/// One prune item that failed or was skipped: what stayed, its code and
+/// why, as the local prune prints them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PruneFailure {
+    /// The item that stayed, named as the dry run names it.
+    pub item: String,
+    /// Why it stayed.
+    pub code: contract::ErrorCode,
+    /// What the client is told.
+    pub message: String,
 }
 
 /// A device-code login owned by one hub connection.
