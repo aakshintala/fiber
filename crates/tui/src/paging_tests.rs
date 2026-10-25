@@ -305,7 +305,7 @@ fn differs(got: &[Row], want: &[Row]) -> Option<String> {
 
 /// Drops every closed page.
 fn drop_all(pages: &mut Pages) {
-    pages.closed.fill(None);
+    pages.residency.drop_all_for_test();
 }
 
 #[test]
@@ -995,7 +995,9 @@ fn texts(rows: &[Row]) -> Vec<String> {
 fn held(pages: &Pages, needle: &str) -> (usize, usize, usize) {
     (
         format!("{:?}", pages.seeds).matches(needle).count(),
-        format!("{:?}", pages.closed).matches(needle).count(),
+        format!("{:?}", pages.residency.slots_for_test())
+            .matches(needle)
+            .count(),
         format!("{:?}", pages.open).matches(needle).count(),
     )
 }
@@ -1038,7 +1040,10 @@ fn open_job_descriptions_survive_step_cuts_and_reload() {
         let completed = page_of_kind(&pages, &lines, "job_completed");
         assert_eq!(completed, started + 1, "pending {pending}");
         assert!(pages.seeds.get(started).is_some_and(|seed| seed.cut));
-        assert!(completed < pages.closed.len(), "the completion page closes");
+        assert!(
+            completed < pages.residency.len(),
+            "the completion page closes"
+        );
     }
 }
 
@@ -1060,7 +1065,11 @@ fn a_confirmed_step_cut_leaves_no_job_text_on_the_closed_page() {
         let mut pages = Pages::new(80);
         for line in &lines {
             pages.apply(line);
-            let started = pages.closed.first().and_then(Option::as_ref);
+            let started = pages
+                .residency
+                .slots_for_test()
+                .first()
+                .and_then(Option::as_ref);
             if let Some(part) = started {
                 let debug = format!("{part:?}");
                 assert!(!debug.contains("step over the line"), "pending {pending}");
@@ -1089,7 +1098,7 @@ fn page_seeds_keep_no_descriptions_of_open_jobs() {
     for line in &stream.lines {
         pages.apply(line);
     }
-    assert!(!pages.closed.is_empty(), "the job crosses a page cut");
+    assert!(pages.residency.len() > 0, "the job crosses a page cut");
     assert_eq!(held(&pages, "active job description"), (0, 0, 1));
     let seeds = format!("{:?}", pages.seeds);
     assert!(!seeds.contains("completed job"), "{seeds}");
@@ -1156,7 +1165,7 @@ fn open_jobs_add_no_seed_text_however_many_cuts_they_cross() {
         for line in &stream.lines {
             pages.apply(line);
         }
-        assert_eq!(pages.closed.len(), cuts, "{cuts} cuts");
+        assert_eq!(pages.residency.len(), cuts, "{cuts} cuts");
         for job in 0..5 {
             let held = held(&pages, &format!("open job {job}"));
             assert_eq!(held, (0, 0, 1), "job {job} over {cuts} cuts");
@@ -1680,7 +1689,7 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     // Exactly the open page's lines wider than the screen are cached, with
     // the rows drawing them takes.
     let width = 20u16;
-    let at = pages.closed.len();
+    let at = pages.residency.len();
     let part = pages.part(at).expect("open page");
     let mut out = Rows::default();
     pages.draw(at, part, &mut out);
@@ -2468,7 +2477,7 @@ fn a_blank_reply_cut_then_the_turn_completes_joins_once_it_draws() {
     // With the page before dropped, the count moves through the index.
     let mut pages = pages_at(&lines[..cut], 40);
     let before = pages.index().pages()[0].rows;
-    pages.closed[0] = None;
+    pages.residency.drop_slot_for_test(0);
     for line in &lines[cut..] {
         pages.apply(line);
     }
@@ -2539,7 +2548,7 @@ fn a_running_turn_with_only_its_bubble_does_not_join() {
     let mut pages = pages_at(&lines, 40);
     assert_eq!(pages.index().pages().len(), 2);
     // The turn drew no piece on the page before the cut.
-    let before = pages.closed[0]
+    let before = pages.residency.slots_for_test()[0]
         .as_ref()
         .and_then(|part| part.turns.last())
         .map(|card| {
@@ -2780,10 +2789,7 @@ fn work_pages(groups: usize, width: u16) -> (Pages, Vec<Envelope>) {
 /// Drops the first half of the closed pages, so both fixtures keep the
 /// same resident share: the open page and the later half stay.
 fn drop_half(pages: &mut Pages) {
-    let half = pages.closed.len() / 2;
-    for part in pages.closed.iter_mut().take(half) {
-        *part = None;
-    }
+    pages.residency.drop_half_for_test();
 }
 
 /// Reloads every dropped page from `lines`, as the frame's loads do.
@@ -3120,7 +3126,7 @@ fn a_batch_held_line_moves_the_revision_before_the_count() {
     for line in &stream.lines {
         pages.apply(line);
     }
-    let open = pages.closed.len();
+    let open = pages.residency.len();
     let revision = pages.index().revision(open);
     let recounts = pages.recounts;
     // The batch's lines change the running turn's cards.
@@ -3380,9 +3386,9 @@ fn call_stream(calls: &[&str]) -> Vec<Envelope> {
 /// Whether each resident call for `action` draws open, in fold order.
 fn call_states(pages: &Pages, action: &str) -> Vec<bool> {
     pages
-        .closed
-        .iter()
-        .flatten()
+        .residency
+        .resident()
+        .map(|(_, part)| part)
         .chain(std::iter::once(&pages.open))
         .flat_map(|part| part.turns.iter())
         .flat_map(Turn::groups)
@@ -3464,9 +3470,9 @@ fn a_ctrl_o_in_the_preview_carries_to_the_fold() {
     preview.carry_opens(&mut fold);
     assert!(fold.fold.ledgers);
     let ledgers: Vec<bool> = fold
-        .closed
-        .iter()
-        .flatten()
+        .residency
+        .resident()
+        .map(|(_, part)| part)
         .chain(std::iter::once(&fold.open))
         .flat_map(|part| part.turns.iter())
         .flat_map(Turn::groups)
@@ -3751,9 +3757,9 @@ fn stale_owed_names_an_uncounted_dropped_page() {
         "an empty conversation owes nothing"
     );
     let mut pages = Pages::new(80);
-    pages.stale.insert(0);
+    pages.residency.stale_mut().insert(0);
     assert!(pages.stale_owed(), "a dropped page waits to be counted");
-    pages.failed.insert(0);
+    pages.residency.failed_mut().insert(0);
     assert!(!pages.stale_owed(), "a failed page is owed nothing");
 }
 
@@ -4079,7 +4085,7 @@ fn dropping_a_page_calls_again_on_reload() {
     // Drop every closed page: the open page stays, and redrawing it
     // hits the hot cache.
     pages.trim(0, 0);
-    let open = pages.closed.len();
+    let open = pages.residency.len();
     assert!(pages.part(open).is_some(), "the open page stays");
     pages.page_text_open_turns(open);
     assert_eq!(calls(), 0, "an undropped page does not call again");
@@ -4105,6 +4111,29 @@ fn dropping_a_page_calls_again_on_reload() {
         fake.per_input.borrow().values().any(|count| *count == 2),
         "a reloaded input called again"
     );
+}
+
+/// Dropping a page and reloading it restores its cards and its rows:
+/// the closed page's part goes `Some` to `None` to `Some`, and the
+/// reloaded page draws what it drew before the drop.
+#[test]
+fn dropping_a_page_reloads_it_with_identical_rows() {
+    let lines = session(3, false);
+    let mut pages = pages_at(&lines, 80);
+    let at = 1;
+    let before = pages.page_text_open(at).expect("page 1 is resident");
+    let resident = pages.resident();
+    assert!(pages.part(at).is_some(), "page 1 holds its cards");
+    pages.trim(0, 0);
+    assert!(pages.part(at).is_none(), "the drop clears the page");
+    reload(&mut pages, &lines);
+    assert!(pages.part(at).is_some(), "the page loads back");
+    assert_eq!(
+        pages.page_text_open(at).expect("reloaded page"),
+        before,
+        "a reloaded page draws its old rows"
+    );
+    assert_eq!(pages.resident(), resident, "every page is resident again");
 }
 
 /// Installing a renderer recounts every page under its lines, and
@@ -4217,7 +4246,7 @@ fn session_gate_recounts_only_matching_residents_and_stales_dropped_pages() {
         .find(|at| pages.part(*at).is_none())
         .expect("fixture drops a page");
     pages.record_halves(&session, std::collections::BTreeMap::new());
-    assert!(pages.stale.contains(&dropped));
+    assert!(pages.residency.stale().contains(&dropped));
     let page = pages.index().pages()[dropped].clone();
     let reload: Vec<_> = lines
         .iter()
@@ -4234,7 +4263,7 @@ fn session_gate_recounts_only_matching_residents_and_stales_dropped_pages() {
             .iter()
             .any(|(line, _)| line.to_string().contains("GATED-ROWS"))
     );
-    assert!(!pages.stale.contains(&dropped));
+    assert!(!pages.residency.stale().contains(&dropped));
 }
 
 #[test]
@@ -4993,14 +5022,14 @@ fn carry_chain_carries_only_shells_below_the_carried_count() {
 fn carry_chain_carries_only_stale_below_the_carried_count() {
     use std::collections::BTreeSet;
     let (mut preview, mut fold, len, _summaries) = carry_edge();
-    preview.stale.insert(0);
-    preview.stale.insert(1);
-    preview.stale.insert(len);
-    fold.stale.insert(1);
+    preview.residency.stale_mut().insert(0);
+    preview.residency.stale_mut().insert(1);
+    preview.residency.stale_mut().insert(len);
+    fold.residency.stale_mut().insert(1);
     preview.carry_chain(&mut fold);
     assert_eq!(
-        fold.stale,
-        BTreeSet::from([0, 1, 1 + len]),
+        fold.residency.stale(),
+        &BTreeSet::from([0, 1, 1 + len]),
         "the carried stale move over and the fold's own shifts past them"
     );
 }
@@ -5017,8 +5046,8 @@ fn carry_chain_carries_only_failed_below_the_carried_count() {
     fold.fail(&SessionId(SESSION.to_owned()), Seq(64));
     preview.carry_chain(&mut fold);
     assert_eq!(
-        fold.failed,
-        BTreeSet::from([0, 1 + len]),
+        fold.residency.failed(),
+        &BTreeSet::from([0, 1 + len]),
         "the carried failure moves over and the fold's own shifts past it"
     );
 }
@@ -5038,12 +5067,12 @@ fn carry_chain_carries_only_residents_below_the_carried_count() {
         preview.part(len).is_some(),
         "the own page at the boundary is resident"
     );
-    fold.resident_set.clear();
-    fold.resident_set.insert(5);
+    fold.residency.resident_set_mut().clear();
+    fold.residency.resident_set_mut().insert(5);
     preview.carry_chain(&mut fold);
     assert_eq!(
-        fold.resident_set,
-        BTreeSet::from([0, 1, 2, 5 + len]),
+        fold.residency.resident_set(),
+        &BTreeSet::from([0, 1, 2, 5 + len]),
         "the carried residents move over and the fold's own shifts past them"
     );
 }
@@ -5058,7 +5087,7 @@ fn carry_chain_carries_only_pins_below_the_carried_count() {
     preview.want(len);
     fold.want(1);
     preview.carry_chain(&mut fold);
-    let mut pinned: Vec<usize> = fold.pins.pages().collect();
+    let mut pinned: Vec<usize> = fold.residency.pins().pages().collect();
     pinned.sort_unstable();
     assert_eq!(
         pinned,
