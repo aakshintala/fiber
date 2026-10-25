@@ -772,9 +772,57 @@ mod attribution_tests {
     use std::collections::HashMap;
 
     use super::super::{
-        Attribution, FromSessionRefusal, from_session_message, session_argv_id, session_owners,
-        unreadable_target_message,
+        Attribution, FromSessionRefusal, attribute_peer, from_session_message, session_argv_id,
+        session_owners, unreadable_target_message,
     };
+
+    fn ask_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "ask", "--prompt=hi"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    fn extension_case_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "extension-case", "casefile"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    /// An `ask` or `extension-case` above the peer owns it without any
+    /// session id: the argv-only predicate recognizes the session host.
+    fn host_walk(argv: Vec<Vec<u8>>) -> OwnerScript {
+        OwnerScript {
+            current: 1000,
+            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(20, argv), (1, vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
+            unreadable_euid: vec![],
+            unreadable_argv: vec![],
+            argv_read: std::cell::Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn ask_argv_on_the_caller_walk_makes_the_peer_owned() {
+        let attribution = attribute_peer(Ok(10), &host_walk(ask_argv()));
+        let Attribution::Local { owners, .. } = attribution else {
+            panic!("an ask descendant is a local owned peer");
+        };
+        assert!(!owners.is_empty(), "an ask argv owns the peer");
+    }
+
+    #[test]
+    fn extension_case_argv_on_the_caller_walk_makes_the_peer_owned() {
+        let attribution = attribute_peer(Ok(10), &host_walk(extension_case_argv()));
+        let Attribution::Local { owners, .. } = attribution else {
+            panic!("an extension-case descendant is a local owned peer");
+        };
+        assert!(!owners.is_empty(), "an extension-case argv owns the peer");
+    }
 
     struct OwnerScript {
         current: u32,
@@ -1067,6 +1115,20 @@ mod refusal_tests {
         .collect()
     }
 
+    fn ask_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "ask", "--prompt=hi"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    fn extension_case_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "extension-case", "casefile"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
     /// The target's walk with no session above it: the target session
     /// itself decides.
     fn plain_target() -> Script {
@@ -1238,6 +1300,42 @@ mod refusal_tests {
             refused(&owned(PEER, OWNED), &message(), &owned_id(), &script).is_none(),
             "a message is never refused"
         );
+    }
+
+    /// The target walk with a session-hosting `ask` above the target: the
+    /// target shares a session process with a caller below that host.
+    fn ask_target() -> Script {
+        const ASK: u32 = 440;
+        Script {
+            current: 1000,
+            parents: [(TARGET_PID, ASK), (ASK, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET_PID, 1000), (ASK, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (ASK, ask_argv()),
+                (TARGET_PID, vec![b"/sbin/init".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn steer_refused_when_the_target_walk_passes_an_ask_host() {
+        let script = ask_target();
+        let refused = refused(&owned(PEER, OWNED), &steer(), &other_id(), &script)
+            .expect("a steer to a target below an ask host is refused");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+    }
+
+    #[test]
+    fn question_reply_refused_when_the_target_walk_passes_an_ask_host() {
+        let script = ask_target();
+        let refused = refused(&owned(PEER, OWNED), &question_reply(), &other_id(), &script)
+            .expect("a reply to a target below an ask host is refused");
+        assert_eq!(refused.code, contract::ErrorCode::FromSession);
     }
 
     #[test]

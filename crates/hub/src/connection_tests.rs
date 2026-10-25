@@ -3745,7 +3745,7 @@ mod session_refusal_tests {
 
     use serde_json::{Value, json};
 
-    use super::{Attribution, Temp};
+    use super::{Attribution, OwnerScript, Temp, attribute_peer};
     use crate::fake::FakeStarter;
     use crate::relay::{Kept, Relay, Replayed};
 
@@ -4400,6 +4400,103 @@ mod session_refusal_tests {
         let entry = held.entries.first().unwrap();
         assert_eq!(entry.session, OTHER);
         assert_eq!(entry.session_pid, Some(std::process::id()));
+    }
+
+    fn ask_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "ask", "--prompt=hi"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    fn extension_case_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "extension-case", "casefile"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    /// The caller walk with a session-hosting `ask` above the peer: the
+    /// argv-only predicate owns the peer without any session id.
+    fn ask_walk() -> OwnerScript {
+        OwnerScript {
+            current: 1000,
+            parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+            euids: [(20, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(20, ask_argv()), (1, vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
+            unreadable_parent: vec![],
+            unreadable_euid: vec![],
+            unreadable_argv: vec![],
+            argv_read: std::cell::Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn ask_argv_on_the_caller_walk_makes_the_peer_owned() {
+        let attribution = attribute_peer(Ok(10), &ask_walk());
+        let Attribution::Local { owners, .. } = attribution else {
+            panic!("an ask descendant is a local owned peer");
+        };
+        assert!(!owners.is_empty(), "an ask argv owns the peer");
+    }
+
+    #[test]
+    fn extension_case_argv_on_the_caller_walk_makes_the_peer_owned() {
+        let mut walk = ask_walk();
+        walk.argvs.insert(20, extension_case_argv());
+        let attribution = attribute_peer(Ok(10), &walk);
+        let Attribution::Local { owners, .. } = attribution else {
+            panic!("an extension-case descendant is a local owned peer");
+        };
+        assert!(!owners.is_empty(), "an extension-case argv owns the peer");
+    }
+
+    /// The target walk with a session-hosting `ask` above the target: the
+    /// target shares a session process with a caller below that host.
+    fn ask_target() -> Script {
+        const ASK: u32 = 440;
+        Script {
+            current: 1000,
+            parents: [(TARGET, ASK), (ASK, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (ASK, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (ASK, ask_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn steer_refused_when_the_target_walk_passes_an_ask_host() {
+        let mut rig = Rig::new(ask_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected", "{line}");
+        assert_eq!(line["payload"]["code"], "from_session", "{line}");
+    }
+
+    #[test]
+    fn question_reply_refused_when_the_target_walk_passes_an_ask_host() {
+        let mut rig = Rig::new(ask_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected", "{line}");
+        assert_eq!(line["payload"]["code"], "from_session", "{line}");
     }
 
     #[test]
