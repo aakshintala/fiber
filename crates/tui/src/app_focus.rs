@@ -24,6 +24,10 @@ impl App {
     /// focus and is drawn again. A chip stays focused behind the model
     /// picker, whose swapped view carries no home targets.
     pub(crate) fn drawn(&mut self, targets: &[Target]) -> bool {
+        // The inline images the frame drew queue their display fetches,
+        // once each however often the frame redraws (`docs/tui.md`,
+        // "Images").
+        self.images_drawn(targets);
         // A renderer's failure falls back to the built-in row and names
         // itself once per extension and slot, so the frame with a new
         // notice draws again with it.

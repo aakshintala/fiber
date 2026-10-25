@@ -1,6 +1,6 @@
 //! Tests for raw mode, the alternate screen and restore, on a pty pair.
 
-use super::{restore, setup, size};
+use super::{pixels, restore, setup, size};
 use crate::pty_watch::{DEADLINE, watch, watched};
 use fakes::Deadline;
 use std::fs::File;
@@ -8,12 +8,13 @@ use std::io::Write;
 
 /// What `setup` writes with hover on: the alternate screen, the title
 /// pushed, bracketed paste, mouse modes 1000, 1002, 1006 and 1003, the
-/// appearance queries, then the two detection queries.
+/// appearance queries, then the two detection queries and the graphics
+/// probe.
 const START_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// What `setup` writes with hover off: no mode 1003.
 const START_NO_HOVER: &[u8] =
-    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
 /// What `restore` writes: kitty's flags popped, bracketed paste and every
 /// mouse mode off, theme reporting off, the title popped, the alternate
 /// screen left, the cursor shown.
@@ -125,6 +126,20 @@ fn size_reads_the_winsize() {
         size(&pair.slave).unwrap_or_else(|err| panic!("size: {err}")),
         (60, 12)
     );
+}
+
+#[test]
+fn pixels_reads_the_terminal_pixel_size() {
+    let pair = open();
+    let winsize = rustix::termios::Winsize {
+        ws_col: 60,
+        ws_row: 12,
+        ws_xpixel: 1200,
+        ws_ypixel: 800,
+    };
+    rustix::termios::tcsetwinsize(&pair.slave, winsize)
+        .unwrap_or_else(|err| panic!("winsize: {err}"));
+    assert_eq!(pixels(&pair.slave), (1200, 800));
 }
 
 /// What `resume` writes before kitty's push: as `setup` without the
@@ -281,4 +296,51 @@ fn restore_resets_the_pointer_shape() {
         .position(|window| window == pop);
     assert!(shape.is_some(), "the restore resets the pointer shape");
     assert!(shape < title, "the shape resets before the title pops");
+}
+
+/// The graphics probe: a one-pixel query image under the probe id.
+const PROBE: &[u8] = b"\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+
+#[test]
+fn setup_sends_the_graphics_probe_with_the_queries() {
+    let pair = open();
+    let frames = watch(&pair.main, vec![PROBE]);
+    setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let start = watched(&frames, "the probe bytes", &Deadline::after(DEADLINE));
+    assert!(
+        start.ends_with(PROBE),
+        "the probe goes out with the queries"
+    );
+    assert!(
+        start.starts_with(START_HOVER),
+        "the probe follows the queries"
+    );
+    restore();
+}
+
+#[test]
+fn cell_divides_the_pixel_size_by_the_cell_counts() {
+    assert_eq!(super::cell((1920, 1080), (80, 24)), (24, 45));
+    assert_eq!(super::cell((160, 48), (80, 24)), (2, 2));
+    assert_eq!(super::cell((160, 48), (80, 25)), (2, 1));
+}
+
+#[test]
+fn cell_falls_back_when_anything_is_zero() {
+    for (pixel, count) in [
+        ((0, 0), (0, 0)),
+        ((1920, 1080), (0, 24)),
+        ((1920, 1080), (80, 0)),
+        ((0, 1080), (80, 24)),
+        ((1920, 0), (80, 24)),
+    ] {
+        assert_eq!(super::cell(pixel, count), (10, 20), "{pixel:?} {count:?}");
+    }
+}
+
+#[test]
+fn cell_never_drops_below_one() {
+    assert_eq!(super::cell((80, 24), (80, 24)), (1, 1));
+    assert_eq!(super::cell((40, 20), (80, 24)), (1, 1));
+    assert_eq!(super::cell((159, 47), (80, 24)), (1, 1));
 }

@@ -30,6 +30,7 @@ mod feedback;
 pub mod files;
 mod focus;
 mod format;
+mod graphics;
 mod helper;
 mod highlight;
 mod home;

@@ -676,3 +676,47 @@ fn remote_keeps_a_flag_named_model_and_drops_the_file_value() {
     );
     assert_eq!(made.thinking, None);
 }
+
+#[test]
+fn inline_images_default_off_and_reads_config() {
+    let dir = fakes::TempDir::new("fiber-launch-inline-images");
+    let workspace = dir.path().to_path_buf();
+    let identity = workspace
+        .canonicalize()
+        .unwrap_or_else(|err| panic!("canonical: {err}"));
+    // The struct default stays off, so existing test literals that end
+    // in `..Default::default()` draw the one-line form.
+    assert!(!tui::Launch::default().inline_images);
+    // Production reads `tui.inline_images`, which the config schema
+    // defaults to on.
+    let plain = config(dir.path(), &workspace, Vec::new());
+    assert!(
+        launch(
+            workspace.clone(),
+            &identity,
+            &plain,
+            tui::ThemeSetting::Follow,
+            dir.path(),
+            None,
+            Vec::new(),
+        )
+        .inline_images
+    );
+    let off = config(
+        dir.path(),
+        &workspace,
+        vec!["tui.inline_images=false".to_owned()],
+    );
+    assert!(
+        !launch(
+            workspace.clone(),
+            &identity,
+            &off,
+            tui::ThemeSetting::Follow,
+            dir.path(),
+            None,
+            Vec::new(),
+        )
+        .inline_images
+    );
+}

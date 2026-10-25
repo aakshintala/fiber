@@ -1710,6 +1710,7 @@ fn identity_group() -> Group {
                         images: vec![crate::image::Part {
                             session: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                             path: "pic.png".to_owned(),
+                            mime_type: "image/png".to_owned(),
                             width: 4,
                             height: 4,
                         }],

@@ -5,7 +5,7 @@
 use std::ops::RangeInclusive;
 
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 
 use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
@@ -383,8 +383,14 @@ impl Look {
             if edge {
                 cell.set_symbol(" ");
             }
-            let dimmed = role_of(cell.fg).is_some_and(|role| self.dim(role));
-            cell.fg = self.resolved(cell.fg);
+            // A placeholder's foreground carries its image's id: resolving
+            // it would quantize or reset the id away (`docs/tui.md`,
+            // "Images").
+            let placeholder = crate::graphics::is_placeholder(cell.symbol());
+            let dimmed = !placeholder && role_of(cell.fg).is_some_and(|role| self.dim(role));
+            if !placeholder {
+                cell.fg = self.resolved(cell.fg);
+            }
             cell.bg = self.resolved(cell.bg);
             if dimmed {
                 cell.modifier.insert(Modifier::DIM);
@@ -415,6 +421,17 @@ impl Look {
         }
         role_of(colour).map_or(colour, |role| self.colour(role))
     }
+}
+
+/// The placeholder cell's style for image `id`: the id in the
+/// foreground colour, which the terminal reads back to place the image
+/// under the text (`docs/tui.md`, "Images"). Only the look names the
+/// colour: drawing code names this helper, never `Color`. The registry
+/// never hands out ids past 255, so every image keeps its own colour;
+/// the saturation stays as a clamp for ids from nowhere else.
+pub(crate) fn placeholder_style(id: u32) -> Style {
+    let id = u8::try_from(id).unwrap_or(u8::MAX);
+    Style::new().fg(Color::Indexed(id))
 }
 
 /// The role `colour` marks, if it is a marker.
