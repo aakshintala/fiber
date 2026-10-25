@@ -37,6 +37,13 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "delete", "args": {"session": "s_1"}}),
         json!({"id": "c", "command": "delete",
             "args": {"session": "s_1", "cascade": true, "expect": ["s_2"]}}),
+        json!({"id": "c", "command": "delete",
+            "args": {"session": "s_1", "dry_run": true}}),
+        json!({"id": "c", "command": "prune", "args": {}}),
+        json!({"id": "c", "command": "prune",
+            "args": {"older_than": "30d", "cascade": true, "force": false, "dry_run": true,
+                "expect": {"sessions": [{"id": "s_9", "cascade": ["s_9"]}],
+                    "worktrees": [], "pinned": [], "diagnostics": []}}}),
         json!({"id": "c", "command": "prompt_history", "args": {"project": "p"}}),
         json!({"id": "c", "command": "prompt_history",
             "args": {"project": "p", "before": 7}}),
@@ -134,6 +141,7 @@ fn delete_without_cascade_writes_no_cascade() {
             session: SessionId("s_1".into()),
             cascade: None,
             expect: None,
+            dry_run: None,
         }),
     };
     assert_eq!(

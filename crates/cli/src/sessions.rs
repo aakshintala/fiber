@@ -170,6 +170,7 @@ fn delete_value(
             session: id.clone(),
             cascade: cascade.then_some(true),
             expect: None,
+            dry_run: None,
         }),
     )
     .map(drop)
