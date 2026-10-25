@@ -335,6 +335,7 @@ pub(crate) struct Pages {
     /// The renderer seam's shared state: the installed renderer, the
     /// pages' caches, and whether the screen reader drops every style.
     pub(crate) ext: crate::ext::Ext,
+    halves: BTreeMap<SessionId, BTreeMap<String, String>>,
 }
 
 impl Pages {
@@ -370,6 +371,7 @@ impl Pages {
             #[cfg(test)]
             recounts: 0,
             ext: crate::ext::Ext::default(),
+            halves: BTreeMap::new(),
         }
     }
 
@@ -879,7 +881,12 @@ impl Pages {
                 }
                 // A dropped page's entries go with it: a reload calls
                 // its renderer again.
-                self.ext.cache.drop_page(at);
+                if let Some(page) = self.index.pages().get(at) {
+                    self.ext.cache.drop_page(crate::ext::cache::PageKey {
+                        session: page.session.clone(),
+                        index: at,
+                    });
+                }
                 self.resident_set.remove(&at);
             }
         }
@@ -978,7 +985,7 @@ impl Pages {
     }
 
     /// Counts every resident page again, and marks every dropped one stale.
-    fn recount(&mut self) {
+    pub(crate) fn recount(&mut self) {
         for at in 0..=self.closed.len() {
             if self.part(at).is_some() {
                 self.count(at);
@@ -988,11 +995,44 @@ impl Pages {
         }
     }
 
-    /// A new renderer was installed: the old lines are gone, so every
-    /// resident page counts again under the new one.
-    pub(crate) fn renderers_changed(&mut self) {
-        self.ext.cache.clear();
-        self.recount();
+    /// Retains the latest complete half map and updates only its session's pages.
+    pub(crate) fn record_halves(&mut self, session: &SessionId, halves: BTreeMap<String, String>) {
+        self.halves.insert(session.clone(), halves);
+        let matching: Vec<_> = self
+            .index
+            .pages()
+            .iter()
+            .enumerate()
+            .filter_map(|(at, page)| (&page.session == session).then_some(at))
+            .collect();
+        for at in matching {
+            if self.part(at).is_some() {
+                self.count(at);
+            } else {
+                self.stale.insert(at);
+            }
+        }
+    }
+
+    /// Records the event without interpreting eligibility in the terminal.
+    pub(crate) fn record_extensions(&mut self, envelope: &Envelope) {
+        if envelope.kind == "extensions_loaded"
+            && let Some(loaded) = envelope
+                .payload
+                .get("extensions")
+                .and_then(serde_json::Value::as_array)
+        {
+            let halves = loaded
+                .iter()
+                .filter_map(|half| {
+                    Some((
+                        half.get("name")?.as_str()?.to_owned(),
+                        half.get("version")?.as_str()?.to_owned(),
+                    ))
+                })
+                .collect();
+            self.record_halves(&envelope.session_id, halves);
+        }
     }
 
     /// Whether the screen reader drops every style from the returned
@@ -1099,6 +1139,8 @@ impl Pages {
         // and the same flag.
         fresh.ext.handle = self.ext.handle;
         fresh.ext.flat = self.ext.flat;
+        fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
+        fresh.halves = self.halves.clone();
         fresh
     }
 
@@ -1851,15 +1893,29 @@ impl Pages {
         // that page's index: the window only drops resident pages, so
         // those entries would leak. It binds a throwaway cache instead,
         // which serves repeats inside the draw and is dropped with it.
+        let session = self
+            .index
+            .pages()
+            .get(page)
+            .map(|page| page.session.clone())
+            .unwrap_or_else(|| SessionId(String::new()));
+        let ctx = crate::ext::SessionCtx {
+            session_id: session.clone(),
+            halves: self.halves.get(&session).cloned(),
+        };
+        let key = crate::ext::cache::PageKey {
+            session,
+            index: page,
+        };
         let seam = if self.part(page).is_none() {
             crate::ext::Ext {
                 handle: self.ext.handle,
-                cache: Arc::new(crate::ext::cache::Cache::default()),
+                cache: Arc::new(self.ext.cache.scratch_sharing_pending()),
                 flat: self.ext.flat,
             }
-            .bind(page)
+            .bind(key, ctx)
         } else {
-            self.ext.bind(page)
+            self.ext.bind(key, ctx)
         };
         let mut out = match mode {
             Draw::Shown => Rows::default(),

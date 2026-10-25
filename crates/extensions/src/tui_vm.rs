@@ -170,9 +170,24 @@ impl TuiVm {
     /// holding the slots it registered. `fiber.slot` works only while the
     /// script runs.
     pub fn load(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, Error> {
-        // A Lua error while loading is a failure to start, not a renderer's
-        // (`docs/errors.md`, `extension_failed` and `hook_failed`).
-        Self::start(name, source, clock).map_err(|error| {
+        Self::load_with_source(name, || Ok(source.to_owned()), clock)
+    }
+
+    /// Reads, compiles and initializes an entry script under one loading
+    /// deadline. Uninterruptible reads and compilation are checked on return;
+    /// timeout takes precedence over their errors.
+    pub fn load_with_source(
+        name: &str,
+        read_source: impl FnOnce() -> Result<String, Error>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, Error> {
+        let at = clock.now().checked_add(LOAD_TIMEOUT);
+        let source = read_source();
+        if at.is_some_and(|at| clock.now() >= at) {
+            return Err(Error::TuiTimeout);
+        }
+        // A Lua error while loading is a failure to start, not a renderer's.
+        Self::start(name, &source?, clock, at).map_err(|error| {
             if let Error::TuiLua(message) = error {
                 Error::Lua {
                     extension: name.to_owned(),
@@ -184,7 +199,12 @@ impl TuiVm {
         })
     }
 
-    fn start(name: &str, source: &str, clock: Arc<dyn Clock>) -> Result<Self, Error> {
+    fn start(
+        name: &str,
+        source: &str,
+        clock: Arc<dyn Clock>,
+        at: Option<std::time::Instant>,
+    ) -> Result<Self, Error> {
         let lua = Lua::new_with(
             // table, string, math, utf8 and coroutine: Lua's safe set, which
             // leaves out debug, less its I/O and module loader. `require` is
@@ -228,11 +248,15 @@ impl TuiVm {
         let script = lua
             .load(source)
             .set_name(format!("={name}"))
-            .into_function()
+            .into_function();
+        if at.is_some_and(|at| clock.now() >= at) {
+            return Err(Error::TuiTimeout);
+        }
+        let thread = lua
+            .create_thread(script.map_err(lua_error)?)
             .map_err(lua_error)?;
-        let thread = lua.create_thread(script).map_err(lua_error)?;
         deadline.arm(&thread).map_err(lua_error)?;
-        deadline.restore(clock.now().checked_add(LOAD_TIMEOUT));
+        deadline.restore(at);
         let ran = resume(&deadline, &thread, (), "the script makes no host call");
         deadline.restore(None);
         loading.set(false);
@@ -262,8 +286,7 @@ impl TuiVm {
     }
 
     /// Each registered slot and its declared timeout, by name.
-    #[cfg(test)]
-    pub(crate) fn slots(&self) -> BTreeMap<String, Duration> {
+    pub fn slots(&self) -> BTreeMap<String, Duration> {
         self.slots
             .iter()
             .map(|(name, slot)| (name.clone(), slot.timeout))

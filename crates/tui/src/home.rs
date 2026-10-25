@@ -245,6 +245,8 @@ pub struct Launch {
     /// (`docs/tui.md`, "Swapped views"); with none, each says it is not
     /// available.
     pub configure: Option<std::sync::Arc<dyn crate::Configure>>,
+    /// Loads terminal-home renderers on the terminal thread.
+    pub extensions: Option<std::sync::Arc<dyn crate::ext::Load>>,
 }
 
 /// One chip on home's chip row.

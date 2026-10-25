@@ -2659,8 +2659,7 @@ built-in rather than drawing the row again.
   instruction hook enforces it.
 - **Loading comes before the first frame.** A replaced layout or input box
   changes the first frame, so the terminal loads its TUI extensions before
-  drawing it ("Performance"). An extension that passes its loading timeout is
-  switched off, and the frame goes ahead without it.
+  drawing it ("Performance"). Reading, compiling and running the entry script share the loading timeout, as on the session side. An extension that passes it is switched off, and the frame goes ahead without it.
 - **The renderer is a trait the terminal defines.** `tui` defines a
   `Renderer` trait, and `main` adapts the `extensions` Lua VM to it, so `tui`
   depends on no crate that holds the VM (`docs/architecture.md`, "The call
@@ -2671,6 +2670,16 @@ built-in rather than drawing the row again.
   width changes, so an unchanged frame
   calls no Lua and scrolling or searching costs what it costs for built-in
   rows. The cache lives with the paging window and is dropped with its pages.
+  The key also includes the page's session and index, the selected extension,
+  and its session-half version when it has one. A change to any of these
+  reruns the renderer; an unrelated session-half change does not. Failures
+  use the same key without width.
+- A range-bound client half stays inert without notice until the session's
+  first `extensions_loaded`. An omitted or out-of-range half stays inert
+  with one `extension_incompatible` notice per TUI extension and session-half
+  version until `/reload`; omission counts as `not loaded`. The notice names
+  the TUI version and the session-half version, or `not loaded`.
+  A client half with no session half, such as a layout or a ledger row for a built-in tool, draws for every session.
 
 Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
 ([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
@@ -2746,6 +2755,7 @@ one tool, the input box, the layout, or one key.
   wins (`docs/configuration.md`). Two extensions binding the same key follow
   the same rule, as `tui.slots."key:<key>"`. This is the rule for commands
   (`docs/extensions.md`, "Commands and screens").
+  The notice comes once for each slot and set of contenders until `/reload`. A `tui.slots."<slot>"` that names none of them picks no winner, and the notice names the setting.
 - **A key the person bound in `keys`** is the person's. An extension that
   binds the same key does not get it, and a notice names the extension.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.

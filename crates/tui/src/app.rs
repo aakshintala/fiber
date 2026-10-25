@@ -863,6 +863,7 @@ impl App {
     /// it loads, so the pages hold the anchor and each load finds the
     /// top again.
     fn land(&mut self, mut fold: Pages, held: bool) {
+        fold.ext.cache.promote();
         // The preview's closed ancestor runs land in the fold front
         // beside the carried opens, under their own sessions, before the
         // swap; the fold still replays the own log only.
@@ -1549,20 +1550,59 @@ impl App {
     fn set_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         if self.handle.get().is_none() {
             self.handle = Handle::create();
-            self.attached_screen_mut().pages_mut().ext.handle = self.handle;
+            self.screen.pages_mut().ext.handle = self.handle;
+            if let Some(stashed) = self
+                .items
+                .open
+                .as_mut()
+                .and_then(|open| open.stashed.as_mut())
+            {
+                stashed.pages_mut().ext.handle = self.handle;
+            }
         }
         self.handle.set(renderer);
     }
 
-    /// Installs the ledger renderer: every page counts again under it.
-    /// No production caller yet: Part 3 adapts the extensions VM to it.
-    #[allow(
-        dead_code,
-        reason = "no production caller until Part 3 adapts the extensions VM"
-    )]
+    /// Installs once, then invalidates every live displayed or folding cache.
     pub(crate) fn use_renderer(&mut self, renderer: Rc<dyn Renderer>) {
         self.set_renderer(renderer);
-        self.attached_screen_mut().pages_mut().renderers_changed();
+        let pages = [
+            Some(self.screen.pages_mut()),
+            self.items
+                .open
+                .as_mut()
+                .and_then(|open| open.stashed.as_mut())
+                .map(|stashed| stashed.pages_mut()),
+            if let Overlay::Folding { fold, .. } = &mut self.overlay {
+                Some(fold.as_mut())
+            } else {
+                None
+            },
+        ];
+        // Owners can share pending/failure state. Clear every cache before
+        // any recount can enqueue notices or memoize failures for this install.
+        for pages in pages.iter().flatten() {
+            pages.ext.cache.clear();
+        }
+        for pages in pages.into_iter().flatten() {
+            pages.recount();
+        }
+    }
+
+    /// Every live fold retains the event so a later swap cannot lose it.
+    fn record_extensions(&mut self, envelope: &Envelope) {
+        self.screen.pages_mut().record_extensions(envelope);
+        if let Some(stashed) = self
+            .items
+            .open
+            .as_mut()
+            .and_then(|open| open.stashed.as_mut())
+        {
+            stashed.pages_mut().record_extensions(envelope);
+        }
+        if let Overlay::Folding { fold, .. } = &mut self.overlay {
+            fold.record_extensions(envelope);
+        }
     }
 
     /// `toggle_ledgers`: closes every ledger when all are open, else opens
@@ -2032,6 +2072,7 @@ impl App {
             // start may change the runnable set, so `turn_started` asks
             // too (`docs/invocation.md`, "What each command does").
             "reloaded" | "extensions_loaded" | "turn_started" => {
+                self.record_extensions(envelope);
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
