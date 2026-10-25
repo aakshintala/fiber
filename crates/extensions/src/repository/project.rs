@@ -35,6 +35,15 @@ pub struct RepositorySet {
     pub(crate) notices: Vec<Notice>,
     pub(crate) holds: Vec<CopyHold>,
     pub(crate) required: Vec<String>,
+    /// Each declared hook's current outcome: approved with its pinned
+    /// mapping, unapproved with its hash, or skipped. Copy failures are
+    /// in `hook_failures`, classified by the repository's `required`.
+    #[allow(dead_code, reason = "the session snapshot reads the hook outcomes")]
+    pub(crate) hooks: BTreeMap<String, super::hooks::HookState>,
+    /// Each approved hook whose copy could not be made, with the
+    /// repository's `required`.
+    #[allow(dead_code, reason = "the session gate reads required copy failures")]
+    pub(crate) hook_failures: Vec<super::hooks::HookFailure>,
 }
 
 impl RepositorySet {
@@ -68,9 +77,11 @@ impl RepositorySet {
             .iter()
             .filter(|item| item.kind == OfferedKind::Extension)
             .collect();
-        // A workspace declaring no extension touches nothing in Fiber home:
-        // no `pinned.json` is loaded or saved, and no `pinned/` is made.
-        if declared.is_empty() {
+        let has_hooks = items.iter().any(|item| item.kind == OfferedKind::Hook);
+        // A workspace declaring neither extensions nor hooks touches nothing
+        // in Fiber home: no `pinned.json` is loaded or saved, and no
+        // `pinned/` is made.
+        if declared.is_empty() && !has_hooks {
             return set;
         }
         let store = Store::new(home, project, Arc::clone(&clock)).fetching(fetch);
@@ -120,6 +131,44 @@ impl RepositorySet {
         let mut staged = std::mem::take(&mut set.staged);
         set.entries.append(&mut staged);
         set.settle();
+        // Hooks run from their pinned copies, never the repository's files.
+        // Each approved hook uses a blocking copy, so a pruned copy is
+        // rebuilt; a copy that cannot be made is that hook's failure only.
+        // Holds join the session's existing holds, keeping one collection.
+        match super::hooks::repository_hooks(home, project, workspace, Arc::clone(&clock), skipped)
+        {
+            Ok((states, holds)) => {
+                for (name, state) in states {
+                    match state {
+                        Ok(state) => {
+                            set.hooks.insert(name, state);
+                        }
+                        Err(failure) => {
+                            // A copy that cannot be made fails only that
+                            // hook: a required one stops the start at the
+                            // gate, any other is skipped with a notice.
+                            if failure.required {
+                                set.hook_failures.push(failure);
+                            } else {
+                                set.notices.push(Notice {
+                                    code: ErrorCode::HookFailed,
+                                    message: format!(
+                                        "The repository's approved copy of `{}` could not be made, so it was not loaded: {}",
+                                        failure.name, failure.error,
+                                    ),
+                                    extension: Some(config::full_name("hooks")),
+                                });
+                            }
+                        }
+                    }
+                }
+                set.holds.extend(holds);
+            }
+            Err(_) => {
+                // Gathering hooks failed: the offer step reports it, so no
+                // second report here, and approved extensions still load.
+            }
+        }
         set
     }
 

@@ -6,6 +6,7 @@
 
 mod content;
 mod declared;
+mod hooks;
 mod offer;
 mod project;
 mod servers;
@@ -18,6 +19,9 @@ mod content_tests;
 #[cfg(test)]
 #[path = "repository/declared_tests.rs"]
 mod declared_tests;
+#[cfg(test)]
+#[path = "repository/hooks_tests.rs"]
+mod hooks_tests;
 #[cfg(test)]
 #[path = "repository/offer_tests.rs"]
 mod offer_tests;
