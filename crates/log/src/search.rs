@@ -14,7 +14,7 @@ use std::fs::{DirEntry, File};
 use std::io::{self, BufRead, BufReader};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use contract::SessionId;
@@ -283,7 +283,7 @@ impl Context<'_> {
     /// workspace waits for that answer.
     fn ours(&self, workspace: &str) -> bool {
         let own = self.scan.own();
-        let mut cache = self.ours.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cache = support::lock(&self.ours);
         if let Some(ours) = cache.get(workspace) {
             return *ours;
         }

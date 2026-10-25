@@ -2,7 +2,7 @@
 //! names.
 
 use super::{App, Effect};
-use crate::home::{Launch, Spot};
+use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
@@ -295,6 +295,19 @@ fn status(session: &str) -> Line {
         .cloned()
         .unwrap_or_default(),
     })
+}
+
+/// A `session_status` for `session` whose hub accepted `close`: the row
+/// stays live until its turn finishes.
+fn closing(session: &str) -> Line {
+    let mut line = status(session);
+    let Line::Session(envelope) = &mut line else {
+        panic!("session line");
+    };
+    envelope
+        .payload
+        .insert("closing".to_owned(), serde_json::Value::Bool(true));
+    line
 }
 
 /// A `turn_started` for `session` with one message.
@@ -652,6 +665,56 @@ fn a_left_with_an_unknown_how_changes_nothing() {
     });
     assert!(app.on_line(left).is_empty());
     assert_eq!(rows(&app), ["✓  fix the parser"]);
+}
+
+/// A live row whose latest status accepted `close` stays on home as a
+/// CLOSING row with no ⌥N, while other live rows keep their start order
+/// and numbers (`docs/tui.md:242–253, 1936–1937`).
+#[test]
+fn a_closing_row_shows_closing_with_no_number() {
+    let mut app = home();
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa"));
+    app.on_line(closing("s_bbbbbbbbbbbbbbbb"));
+    let mut live = app
+        .home_screen()
+        .unwrap_or_else(|| panic!("home screen"))
+        .list
+        .into_iter()
+        .filter_map(|line| match line {
+            ListLine::Live {
+                word,
+                tone,
+                number,
+                id,
+                ..
+            } => Some((id, word, tone, number)),
+            ListLine::Head { .. }
+            | ListLine::ExitedHead { .. }
+            | ListLine::Exited { .. }
+            | ListLine::More { .. } => None,
+        });
+    assert_eq!(
+        live.next(),
+        Some((
+            "s_aaaaaaaaaaaaaaaa".to_owned(),
+            "READY",
+            crate::theme::Role::Muted,
+            Some(1)
+        )),
+        "the live row keeps its number"
+    );
+    assert_eq!(
+        live.next(),
+        Some((
+            "s_bbbbbbbbbbbbbbbb".to_owned(),
+            "CLOSING",
+            crate::theme::Role::Muted,
+            None
+        )),
+        "the closing row reads CLOSING with no number"
+    );
+    assert!(live.next().is_none());
 }
 
 #[test]
@@ -1085,6 +1148,77 @@ fn opening_a_full_session_sends_summary_then_full() {
     assert_eq!(raise["command"], "subscribe");
     assert_eq!(raise["args"]["level"], "full");
     assert_ne!(first[0]["id"], raise["id"]);
+}
+
+#[test]
+fn a_screen_coordinate_click_on_a_home_row_opens_it() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    use crate::mouse::{Pointer, TargetId};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    let mut app = home();
+    app.set_size(160, 48);
+    linked(&mut app);
+    app.on_line(live(
+        "s_aaaaaaaaaaaaaaaa",
+        "fix the parser",
+        "/w",
+        "-w",
+        json!({"state": "idle"}),
+    ));
+    let key = keys(&app)[0];
+    // A focused ✕ normalizes to its row for drawing (`docs/tui.md`,
+    // "The session list"); clicking the drawn row opens that session.
+    app.focus = Some(TargetId::Home(Spot::Stop(key)));
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let row = targets
+        .iter()
+        .find(|target| target.id == TargetId::Home(Spot::Entry(key)))
+        .copied()
+        .unwrap_or_else(|| panic!("the home row draws a click target"));
+    assert_eq!(
+        buf[(row.rect.x, row.rect.y)].bg,
+        crate::theme::Role::Selection.color(),
+        "Spot::Stop focuses its list row"
+    );
+
+    let col = row.rect.x.saturating_add(1);
+    let row_y = row.rect.y;
+    assert_eq!(
+        crate::mouse::hit(&targets, col, row_y),
+        Some(TargetId::Home(Spot::Entry(key)))
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+    let press = Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col,
+        row: row_y,
+    };
+    assert_eq!(
+        app.on_mouse(&press, &targets, &mut pointer, true, now),
+        Effect::None
+    );
+    let effect = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Release,
+            ..press
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let Effect::Send(lines) = effect else {
+        panic!("clicking the home row opens its session");
+    };
+    let subscribe: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(subscribe["command"], "subscribe");
+    assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
 }
 
 #[test]

@@ -9,7 +9,7 @@ use contract::SessionId;
 use contract::events::CommandAccepted;
 use serde_json::json;
 
-use super::{App, Effect, Kind, Link, Phase, Surface, mint, session_command};
+use super::{App, ClearPending, Effect, Kind, Link, Phase, Surface, mint, session_command};
 use crate::editor::Target;
 use crate::import_report::ImportSource;
 use crate::input::Draft;
@@ -243,6 +243,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_import,
     },
     CommandEntry {
+        name: "clear",
+        description: "Starts a fresh session in place, closing the session on screen.",
+        hint: None,
+        run: run_clear,
+    },
+    CommandEntry {
         name: "close",
         description: "Stops the session on screen.",
         hint: Some("[all]"),
@@ -351,6 +357,10 @@ fn run_close(app: &mut App, rest: &str) -> Option<Effect> {
         return Some(app.ask_close_all());
     }
     Some(app.close())
+}
+
+fn run_clear(app: &mut App, _rest: &str) -> Option<Effect> {
+    Some(app.clear())
 }
 
 /// `/feedback`: with no description, asks for one by leaving the draft
@@ -496,7 +506,7 @@ impl App {
         // ahead of the picker, the chip row and the draft, as their keys
         // run ahead of every other key path.
         let top = self.top_surface();
-        if matches!(top, Surface::Quit | Surface::Report) {
+        if matches!(top, Surface::Quit | Surface::Clear | Surface::Report) {
             return Effect::None;
         }
         // The reviewer setup takes every edit while it is on top: a paste
@@ -727,6 +737,102 @@ impl App {
         (Effect::Send(vec![line]), Some(id))
     }
 
+    /// `/clear`: starts a fresh session in the attached session's
+    /// workspace, in place. The `start` carries the old session's model,
+    /// its thinking level when it has one, and its credential label; the
+    /// screen switches only once the hub answers with a `session_id`,
+    /// and the old session is sent `close` only then. The phase stays
+    /// attached to the old session until that answer.
+    pub(super) fn clear(&mut self) -> Effect {
+        if self.clear_pending.is_some() {
+            self.draft.clear();
+            return Effect::None;
+        }
+        let Some((session, _)) = self.command_session() else {
+            return Effect::None;
+        };
+        // With no status folded yet the terminal names nothing: keep
+        // the draft for the retry once the first status lands.
+        let Some(status) = self.panel_state.status().cloned() else {
+            return Effect::None;
+        };
+        // A wait holds the polite close: ask first, in the overlay, and
+        // send nothing yet.
+        if let Some((name, waiting)) = self.clear_wait(&session) {
+            return self.open_clear(session, name, waiting);
+        }
+        self.clear_send(status, session, false)
+    }
+
+    /// The wait holding `session`, if it waits on one: its title and
+    /// kind.
+    fn clear_wait(&self, session: &SessionId) -> Option<(String, String)> {
+        let row = self.home.as_ref()?.sessions.row(session)?;
+        let waiting = row.waiting.as_ref()?;
+        let kind = waiting.split(':').next()?.to_owned();
+        Some((crate::home::title(row), kind))
+    }
+
+    /// Sends the clear `start` for `old` from `status`: `now` stages
+    /// whether its `close` drops the wait. The pending draft is empty,
+    /// so no first prompt goes out.
+    pub(super) fn clear_send(
+        &mut self,
+        status: contract::events::SessionStatus,
+        old: SessionId,
+        now: bool,
+    ) -> Effect {
+        if self.clear_pending.is_some() {
+            return Effect::None;
+        }
+        let mut overrides = Vec::new();
+        if let Some(thinking) = status.thinking.as_deref() {
+            overrides.push(format!(
+                "{}={thinking}",
+                super::model_picker::canonical_thinking_key(&status.model)
+            ));
+        }
+        let credential = self
+            .panel_state
+            .clear_credential()
+            .map(|credential| credential.map(str::to_owned));
+        if let Some(Some(label)) = credential.as_ref() {
+            let provider = status.model.split('/').next().unwrap_or(&status.model);
+            overrides.push(format!("providers.\"{provider}\".credential={label}"));
+        }
+        let mut args = json!({
+            "workspace": status.workspace,
+            "model": status.model,
+            "worktree": false,
+        });
+        if let Some(object) = args.as_object_mut() {
+            if !overrides.is_empty() {
+                object.insert("overrides".to_owned(), json!(overrides));
+            }
+            if self.panel_state.worktree() {
+                object.insert("continues".to_owned(), json!(old.0.clone()));
+            }
+        }
+        let id = mint();
+        self.panel_state.note_start(&args);
+        let line = json!({"id": id, "command": "start", "args": args}).to_string();
+        self.draft.clear();
+        let effect = match self
+            .outbox
+            .send(id.clone(), Kind::Start, Draft::default(), line)
+        {
+            Some(line) => Effect::Send(vec![line]),
+            None => Effect::None,
+        };
+        self.clear_pending = Some(ClearPending {
+            old,
+            command_id: id,
+            credential,
+            now,
+        });
+        effect
+    }
+
     /// `/close`: one `close` with `now`, whether the session is busy or
     /// idle, then home.
     fn close(&mut self) -> Effect {
@@ -844,6 +950,7 @@ impl App {
                 let mut args = self.start_args();
                 // A session-only choice on home rides this `start`.
                 self.with_start_model(&mut args);
+                self.panel_state.note_start(&args);
                 let line = json!({"id": id, "command": "start", "args": args});
                 (Kind::Start, line)
             }
