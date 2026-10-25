@@ -2271,7 +2271,7 @@ fn stepped(login: &Login, width: u16, height: u16) -> (Buffer, Vec<Target>) {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     let mut targets = Vec::new();
-    login.draw_step(area, &mut buf, &mut targets);
+    login.draw(area, &mut buf, &mut targets);
     (buf, targets)
 }
 
@@ -2433,7 +2433,7 @@ fn tiny_areas_never_panic_a_step() {
             for height in 1..=3 {
                 let area = Rect::new(0, 0, width, height);
                 let mut buf = Buffer::empty(area);
-                login.draw_step(area, &mut buf, &mut Vec::new());
+                login.draw(area, &mut buf, &mut Vec::new());
             }
         }
     }
@@ -3510,9 +3510,9 @@ fn the_failed_reason_reads_error() {
 fn notices_fill_only_the_remaining_budget() {
     // Two models with one notice: at a budget of three the notice draws,
     // and at exactly the models' two rows it is clipped away.
-    fn texts(rows: &[overlay::Row]) -> Vec<String> {
+    fn texts(rows: &[(overlay::Row, crate::rows::Join)]) -> Vec<String> {
         rows.iter()
-            .map(|row| {
+            .map(|(row, _)| {
                 row.spans
                     .iter()
                     .map(|span| span.content.to_string())
@@ -3533,5 +3533,39 @@ fn notices_fill_only_the_remaining_budget() {
         texts(&rows),
         ["  1) m1", "  2) m2"],
         "at exactly the budget no notice is added"
+    );
+}
+
+/// The failure head starts its own line: the first failed row breaks,
+/// whatever the later rows join with (`docs/tui.md`, "Selection and
+/// copy").
+#[test]
+fn failed_rows_break_first() {
+    let rows = super::failed_rows(
+        "Login to acme failed: ",
+        "token expired while the browser waited",
+        ".",
+        20,
+    );
+    assert!(rows.len() > 1, "the reason wraps: {}", rows.len());
+    assert_eq!(rows[0].1, crate::rows::Join::Break);
+}
+
+/// With no items the failure message is the whole body: no blank row
+/// leads it (`docs/tui.md`, "Logging in").
+#[test]
+fn a_failed_read_starts_the_body_with_the_message() {
+    let fake = failed_fake("config.json: not JSON");
+    let login = Login::open(&ctx(&fake));
+    let (framed, _) = login.list_framed(Rect::new(0, 0, 80, 24));
+    let first = framed.body.first().expect("a body row");
+    let text: String = first
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("config.json: not JSON"),
+        "the message leads the body: {text:?}"
     );
 }

@@ -120,6 +120,10 @@ pub(crate) struct Notices {
     /// notice and later ones wait for the release ("Notices": a notice that
     /// arrives during a drag waits for the release).
     held_from: Option<usize>,
+    /// While a drag selects, the ids its press found showing: expiry
+    /// waits for the release even for rows already visible, so the
+    /// noted rows a drag reads cannot fade under it (rule R3).
+    held_visible: Vec<usize>,
 }
 
 /// One drawn row: a notice, or the "+N more" row for the rest.
@@ -194,25 +198,29 @@ impl Notices {
             }
         }
         let overlay = self.overlay;
-        self.stack.retain(|notice| {
+        let held = self.held_visible.clone();
+        // Expiry funnels through `drop_where` like every other end, so
+        // a fading row closes a single overlay showing it.
+        self.drop_where(|notice| {
             if kind(&notice.code) != Kind::Event {
-                return true;
+                return false;
+            }
+            if held.contains(&notice.id) {
+                return false;
             }
             let born = notice.born.unwrap_or(now);
-            if now.saturating_duration_since(born) < FADE {
-                return true;
-            }
-            Self::paused(overlay, notice.id)
+            now.saturating_duration_since(born) >= FADE && !Self::paused(overlay, notice.id)
         });
     }
 
     /// Whether `id` waits out its expiry in sweep and wake alike: a
     /// notice visible in the open overlay keeps its row and contributes
-    /// no wake until the close. A held notice needs no pause here: birth
-    /// requires showing, and showing excludes held rows, so a held
-    /// notice is always unborn — the age rule already retains it and it
-    /// contributes no wake. Takes the copied overlay so the sweep's
-    /// `retain` can call it while holding the stack.
+    /// no wake until the close. A notice pushed during a hold needs no
+    /// pause here: birth requires showing, and showing excludes held
+    /// rows, so it is always unborn — the age rule already retains it
+    /// and it contributes no wake. A row showing when the hold began
+    /// pauses through `held_visible` instead. Takes the copied overlay
+    /// so the sweep's `retain` can call it while holding the stack.
     fn paused(overlay: Option<Overlay>, id: usize) -> bool {
         overlay == Some(Overlay::All) || overlay == Some(Overlay::One(id))
     }
@@ -242,6 +250,7 @@ impl Notices {
             .iter()
             .filter(|notice| kind(&notice.code) == Kind::Event)
             .filter(|notice| !Self::paused(self.overlay, notice.id))
+            .filter(|notice| !self.held_visible.contains(&notice.id))
             .filter_map(|notice| notice.born.map(|born| born + FADE))
             .min()
     }
@@ -295,14 +304,20 @@ impl Notices {
     }
 
     /// A drag began: notices pushed from now on wait, kept but not drawn,
-    /// listed or clickable, until [`Notices::release`].
+    /// listed or clickable, until [`Notices::release`]. Rows already
+    /// showing stay showing, but their expiry waits too.
     pub(crate) fn hold(&mut self) {
+        if self.held_from.is_none() {
+            self.held_visible = self.visible_ids();
+        }
         self.held_from.get_or_insert(self.next);
     }
 
-    /// The drag ended: the notices that waited show, oldest first.
+    /// The drag ended: the notices that waited show, oldest first, and
+    /// the shown rows resume expiring on the next sweep.
     pub(crate) fn release(&mut self) {
         self.held_from = None;
+        self.held_visible.clear();
     }
 
     /// The notices that show, oldest first: all but those a drag holds.

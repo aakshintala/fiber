@@ -277,7 +277,13 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
             .then(|| overlay::legend(&[("↑↓", "move"), ("←→", "tabs"), ("Esc", "closes")])),
         prefer: u16::MAX,
     };
-    overlay::draw(buf, area, &framed, Place::Dock, targets)
+    let slab = overlay::draw(buf, area, &framed, Place::Dock, targets);
+    // The overlay's kept body rows read for selection like every
+    // overlay: titles, the key-hint footer and blank gaps never copy
+    // (`docs/tui.md`, "Selection and copy").
+    let joins = vec![crate::rows::Join::Break; framed.body.len()];
+    overlay::note_overlay(app, buf, slab, &framed, area, Place::Dock, &joins);
+    slab
 }
 
 #[cfg(test)]

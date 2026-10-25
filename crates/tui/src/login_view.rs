@@ -13,12 +13,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use crate::app::App;
 use crate::configure::{HostGap, LoginKind, LoginTarget};
 use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::mouse::{Target, TargetId};
+use crate::rows::Join;
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -368,7 +370,48 @@ impl Login {
     /// anything the last action said, at least three body rows before
     /// the window clips them, and the legend footer. A step draws its
     /// own overlay; any other mode draws nothing yet.
+    /// The frame as drawn, without selection noting: tests draw it
+    /// standalone, while production notes through [`draw_noted`].
+    #[cfg(test)]
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) -> Rect {
+        let Some((framed, _)) = self.framed(area) else {
+            return Rect::default();
+        };
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets)
+    }
+
+    /// Draws the list or the open step as [`draw`], and notes the
+    /// overlay's kept body rows for the selection with their copy text
+    /// beside painting its highlight
+    /// (`docs/tui.md`, "Selection and copy").
+    pub(crate) fn draw_noted(
+        &self,
+        app: &App,
+        area: Rect,
+        buf: &mut Buffer,
+        targets: &mut Vec<Target>,
+    ) -> Rect {
+        let Some((framed, joins)) = self.framed(area) else {
+            return Rect::default();
+        };
+        let slab = overlay::draw(buf, area, &framed, overlay::Place::Centre, targets);
+        overlay::note_overlay(
+            app,
+            buf,
+            slab,
+            &framed,
+            area,
+            overlay::Place::Centre,
+            &joins,
+        );
+        slab
+    }
+
+    /// The overlay [`draw`] shows at `area` with each kept body row's
+    /// copy join: the list or the open step's frame, `None` when a step
+    /// draws nothing yet. The frame is what the draw draws, so the
+    /// selection notes the rows the frame kept.
+    fn framed(&self, area: Rect) -> Option<(overlay::Overlay, Vec<Join>)> {
         if matches!(
             self.mode,
             Mode::Waiting(_)
@@ -378,8 +421,14 @@ impl Login {
                 | Mode::Choices(_)
                 | Mode::Ended(_)
         ) {
-            return self.draw_step(area, buf, targets);
+            return self.step_framed(area);
         }
+        Some(self.list_framed(area))
+    }
+
+    /// The provider list's frame at `area` with each body row's copy
+    /// join.
+    fn list_framed(&self, area: Rect) -> (overlay::Overlay, Vec<Join>) {
         let width = overlay::width(u16::MAX, 96, area.width);
         let inner_w = overlay::inner(width);
         // The tags keep one column: the widest tag among the targets
@@ -432,16 +481,28 @@ impl Login {
         }
         let mut choices = choices.into_iter();
         let dim = Style::new().add_modifier(Modifier::DIM);
-        let mut body: Vec<overlay::Row> = Vec::new();
+        // Each kept body row with its copy join: single rows start
+        // their own line, wrapped continuations join with the space
+        // the wrap dropped (`docs/tui.md`, "Selection and copy").
+        let mut body: Vec<(overlay::Row, Join)> = Vec::new();
         for item in &self.items {
             match *item {
-                Item::Heading(Group::Providers) => body.push(text_row("Providers", dim)),
-                Item::Heading(Group::Secrets) => body.push(text_row("Secrets", dim)),
-                Item::Target(_) => body.push(choices.next().unwrap_or_else(blank_row)),
-                Item::Gap => body.push(blank_row()),
-                Item::Note => body.push(text_row(
-                    "No provider is installed, and no installed extension declares a secret.",
-                    dim,
+                Item::Heading(Group::Providers) => {
+                    body.push((text_row("Providers", dim), Join::Break));
+                }
+                Item::Heading(Group::Secrets) => {
+                    body.push((text_row("Secrets", dim), Join::Break));
+                }
+                Item::Target(_) => {
+                    body.push((choices.next().unwrap_or_else(blank_row), Join::Break));
+                }
+                Item::Gap => body.push((blank_row(), Join::Break)),
+                Item::Note => body.push((
+                    text_row(
+                        "No provider is installed, and no installed extension declares a secret.",
+                        dim,
+                    ),
+                    Join::Break,
                 )),
             }
         }
@@ -450,23 +511,21 @@ impl Login {
         // at the preferred width and are never cut sideways.
         if !self.said.is_empty() {
             if !body.is_empty() {
-                body.push(blank_row());
+                body.push((blank_row(), Join::Break));
             }
             for line in &self.said {
-                for row in format::wrap(line, usize::from(inner_w)) {
-                    body.push(text_row(row, Style::new()));
-                }
+                body.extend(wrapped_rows(line, usize::from(inner_w), Style::new()));
             }
         }
         for _ in body.len()..3 {
-            body.push(blank_row());
+            body.push((blank_row(), Join::Break));
         }
         // The footer carries trailing blanks up to the widest of every
         // body row, not only the shown ones, so the overlay's width
         // never depends on which rows the window shows.
         let wide = body
             .iter()
-            .map(|row| {
+            .map(|(row, _)| {
                 row.spans
                     .iter()
                     .map(|span| format::width(&span.content))
@@ -486,18 +545,20 @@ impl Login {
         let shown = shown_body_rows(usize::from(area.height));
         let start = window_start(self.selected, shown, body.len());
         let end = start.saturating_add(shown).min(body.len());
+        let kept: Vec<(overlay::Row, Join)> = body
+            .into_iter()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect();
+        let joins = kept.iter().map(|(_, join)| *join).collect();
         let framed = overlay::Overlay {
             title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
             close: Some(TargetId::View(Spot::Close)),
-            body: body
-                .into_iter()
-                .skip(start)
-                .take(end.saturating_sub(start))
-                .collect(),
+            body: kept.into_iter().map(|(row, _)| row).collect(),
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets)
+        (framed, joins)
     }
 
     /// The target rows' indices in display order.
@@ -1226,23 +1287,25 @@ impl Login {
         self.items.len().max(3)
     }
 
-    /// Draws the open step over `area`: one overlay titled with the
-    /// provider's name, the body exactly the list's row count and the
-    /// footer padded to the shared width, so the overlay never jumps
-    /// between steps. The body is built top to bottom and cut at the
-    /// row count in order; over a short area it is clipped to the body
-    /// budget the list shows there.
-    fn draw_step(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) -> Rect {
-        let Some(name) = self.step_name() else {
-            return Rect::default();
-        };
+    /// The open step's frame at `area` with each kept body row's copy
+    /// join: one overlay titled with the provider's name, the body
+    /// exactly the list's row count and the footer padded to the shared
+    /// width, so the overlay never jumps between steps. The body is
+    /// built top to bottom and cut at the row count in order; over a
+    /// short area it is clipped to the body budget the list shows
+    /// there. `None` when the step draws nothing yet. Each kept row
+    /// carries its copy join: single rows start their own line,
+    /// wrapped continuations join with the space the wrap dropped
+    /// (`docs/tui.md`, "Selection and copy").
+    fn step_framed(&self, area: Rect) -> Option<(overlay::Overlay, Vec<Join>)> {
+        let name = self.step_name()?;
         let content = step_content_width(&name, &self.targets);
         let content_u16 = u16::try_from(content).unwrap_or(u16::MAX);
         let slab_w = overlay::width(content_u16, 96, area.width);
         let inner = usize::from(overlay::inner(slab_w));
         let dim = Style::new().add_modifier(Modifier::DIM);
-        let (content_rows, legend): (Vec<overlay::Row>, overlay::Row) = match &self.mode {
-            Mode::Rows => return Rect::default(),
+        let (content_rows, legend): (Vec<(overlay::Row, Join)>, overlay::Row) = match &self.mode {
+            Mode::Rows => return None,
             Mode::Waiting(waiting) => match &waiting.progress {
                 Progress::Starting => (
                     wrapped_rows(
@@ -1258,9 +1321,9 @@ impl Login {
                         inner,
                         Style::new(),
                     );
-                    rows.push(text_row(
-                        tail(url, inner),
-                        Style::new().fg(Role::Accent.color()),
+                    rows.push((
+                        text_row(tail(url, inner), Style::new().fg(Role::Accent.color())),
+                        Join::Break,
                     ));
                     rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
                     (rows, overlay::legend(&[("y", "copy URL"), ("Esc", "back")]))
@@ -1271,34 +1334,32 @@ impl Login {
                         inner,
                         Style::new(),
                     );
-                    rows.push(text_row(
-                        tail(url, inner),
-                        Style::new().fg(Role::Accent.color()),
+                    rows.push((
+                        text_row(tail(url, inner), Style::new().fg(Role::Accent.color())),
+                        Join::Break,
                     ));
                     rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
                     (rows, overlay::legend(&[("y", "copy URL"), ("Esc", "back")]))
                 }
             },
             Mode::Panel(panel) => {
-                let Some(target) = self.targets.get(panel.target) else {
-                    return Rect::default();
-                };
+                let target = self.targets.get(panel.target)?;
                 if target.kind == LoginKind::Secret {
                     let mut rows =
                         wrapped_rows(&format!("Value for {}:", name), inner, Style::new());
-                    rows.push(dots_row(&panel.key.dots(), inner, true));
+                    rows.push((dots_row(&panel.key.dots(), inner, true), Join::Break));
                     (
                         rows,
                         overlay::legend(&[("Enter", "submit"), ("Esc", "back")]),
                     )
                 } else if panel.focus == Focus::Label {
-                    let mut rows = vec![label_edit_row(&panel.label, inner)];
+                    let mut rows = vec![(label_edit_row(&panel.label, inner), Join::Break)];
                     rows.extend(wrapped_rows(
                         &format!("Key for {name}:"),
                         inner,
                         Style::new(),
                     ));
-                    rows.push(dots_row(&panel.key.dots(), inner, false));
+                    rows.push((dots_row(&panel.key.dots(), inner, false), Join::Break));
                     (
                         rows,
                         overlay::legend(&[
@@ -1316,16 +1377,16 @@ impl Login {
                     };
                     // Cut to one row so a long label never pushes the
                     // key prompt, the dots and the cursor out of the body.
-                    let mut rows = vec![text_row(
-                        format::cut(&format!("Label (--as): {shown}."), inner),
-                        dim,
+                    let mut rows = vec![(
+                        text_row(format::cut(&format!("Label (--as): {shown}."), inner), dim),
+                        Join::Break,
                     )];
                     rows.extend(wrapped_rows(
                         &format!("Key for {name}:"),
                         inner,
                         Style::new(),
                     ));
-                    rows.push(dots_row(&panel.key.dots(), inner, true));
+                    rows.push((dots_row(&panel.key.dots(), inner, true), Join::Break));
                     (
                         rows,
                         overlay::legend(&[
@@ -1372,15 +1433,13 @@ impl Login {
                 overlay::legend(&[("Esc", "back")]),
             ),
             Mode::Host(host) => {
-                let Some(gap) = host.gaps.first() else {
-                    return Rect::default();
-                };
+                let gap = host.gaps.first()?;
                 let prompt = match gap.env.as_deref() {
                     Some(env) => format!("`{}` (`{env}`):", gap.name),
                     None => format!("`{}`:", gap.name),
                 };
                 let mut rows = wrapped_rows(&prompt, inner, Style::new());
-                rows.push(host_edit_row(&host.typed, inner));
+                rows.push((host_edit_row(&host.typed, inner), Join::Break));
                 if let Some(refused) = host.refused.as_deref() {
                     rows.extend(wrapped_rows(refused, inner, Style::new()));
                 }
@@ -1397,7 +1456,7 @@ impl Login {
         let mut body = content_rows;
         body.truncate(kept);
         while body.len() < kept {
-            body.push(blank_row());
+            body.push((blank_row(), Join::Break));
         }
         body.truncate(shown_body_rows(usize::from(area.height)));
         let mut footer = legend;
@@ -1409,14 +1468,15 @@ impl Login {
         footer
             .spans
             .push(Span::raw(" ".repeat(content.saturating_sub(have))));
+        let joins = body.iter().map(|(_, join)| *join).collect();
         let framed = overlay::Overlay {
             title: Some((name, Some(Span::raw("✕")))),
             close: Some(TargetId::View(Spot::Close)),
-            body,
+            body: body.into_iter().map(|(row, _)| row).collect(),
             footer: Some(footer),
             prefer: 96,
         };
-        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out)
+        Some((framed, joins))
     }
 }
 
@@ -1434,10 +1494,10 @@ fn choice_rows(
     inner: usize,
     kept: usize,
     height: usize,
-) -> (Vec<overlay::Row>, overlay::Row) {
+) -> (Vec<(overlay::Row, Join)>, overlay::Row) {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let budget = kept.min(shown_body_rows(height));
-    let mut rows: Vec<overlay::Row> = Vec::new();
+    let mut rows: Vec<(overlay::Row, Join)> = Vec::new();
     // One selectable model row stays visible while the body has room:
     // the stale notice gives up its last row rather than hiding every
     // choice an invisible Enter could still save. At a zero budget
@@ -1445,7 +1505,7 @@ fn choice_rows(
     let reserve = usize::from(!choices.models.is_empty());
     let stale_cap = budget.saturating_sub(reserve);
     if let Some(saved) = choices.selected.as_deref().filter(|_| choices.is_stale()) {
-        for row in wrapped_rows(
+        for pair in wrapped_rows(
             &format!("Saved reviewer `{saved}` is not listed; Enter keeps it."),
             inner,
             dim,
@@ -1453,7 +1513,7 @@ fn choice_rows(
             if rows.len() >= stale_cap {
                 break;
             }
-            rows.push(row);
+            rows.push(pair);
         }
     }
     let room = budget.saturating_sub(rows.len());
@@ -1470,12 +1530,15 @@ fn choice_rows(
         if choices.is_saved(model) {
             label.push_str(" (saved)");
         }
-        rows.push(overlay::Row {
-            spans: vec![Span::raw(label)],
-            right: Vec::new(),
-            targets: vec![(0, u16::MAX, TargetId::View(Spot::Row(index)))],
-            barred: choices.cursor == Some(index),
-        });
+        rows.push((
+            overlay::Row {
+                spans: vec![Span::raw(label)],
+                right: Vec::new(),
+                targets: vec![(0, u16::MAX, TargetId::View(Spot::Row(index)))],
+                barred: choices.cursor == Some(index),
+            },
+            Join::Break,
+        ));
     }
     for notice in &choices.notices {
         if rows.len() >= budget {
@@ -1614,10 +1677,15 @@ fn step_content_width(name: &str, targets: &[LoginTarget]) -> usize {
 }
 
 /// One plain row per wrapped line of `text`.
-fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
-    format::wrap(text, inner.max(1))
+/// `text` wrapped at `inner` columns, each row with its copy join:
+/// the row a line of `text` starts begins its own line, one broken at
+/// a space joins with that space, and one broken inside a word joins
+/// with nothing (`docs/tui.md`, "Selection and copy"). The rows read
+/// as [`format::wrap`] reads them, so the draw keeps its rows.
+fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<(overlay::Row, Join)> {
+    format::wrap_joined(text, inner.max(1))
         .into_iter()
-        .map(|row| text_row(row, style))
+        .map(|(row, join)| (text_row(row, style), join))
         .collect()
 }
 
@@ -1755,8 +1823,10 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
 /// rows, the head and the closing dot plain, the reason in `error`.
 /// Rows past the wrap are the caller's to drop in order. The walk is
 /// the shared `overlay::head_tail_rows` one, so the login failure and
-/// the import report's left-behind rows wrap alike.
-fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay::Row> {
+/// the import report's left-behind rows wrap alike. The head starts its
+/// own line and each wrapped continuation joins with the space the
+/// wrap dropped (`docs/tui.md`, "Selection and copy").
+fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<(overlay::Row, Join)> {
     overlay::head_tail_rows(
         head,
         Style::new(),
@@ -1765,6 +1835,19 @@ fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay
         dot,
         inner,
     )
+    .into_iter()
+    .enumerate()
+    .map(|(at, row)| {
+        (
+            row,
+            if at == 0 {
+                Join::Break
+            } else {
+                Join::WrapSpace
+            },
+        )
+    })
+    .collect()
 }
 
 /// The view's rows for `targets`: a heading over each group that has rows.

@@ -45,6 +45,11 @@ pub(crate) struct Draft {
     pieces: Vec<Piece>,
     /// The cursor: the number of pieces before it.
     cursor: usize,
+    /// The selection's anchor: the piece index where a drag started. The
+    /// selection is the pieces between the anchor and the cursor; `None`
+    /// while nothing is selected. The cursor is the selection's moving
+    /// end.
+    anchor: Option<usize>,
     /// The next paste token's number.
     next: usize,
     /// The draft's serial: a read's result lands only while the box holds
@@ -88,6 +93,7 @@ impl Default for Draft {
         Self {
             pieces: Vec::new(),
             cursor: 0,
+            anchor: None,
             next: 1,
             serial: next_serial(),
         }
@@ -145,16 +151,61 @@ impl Draft {
         }
     }
 
-    /// Inserts `ch` at the cursor. A control character other than a tab
-    /// is not inserted; a line break comes from [`Draft::line_break`].
+    /// The selected piece range, in reading order: `None` while nothing
+    /// is selected. An anchor the cursor never left is no selection.
+    pub(crate) fn selected(&self) -> Option<(usize, usize)> {
+        let anchor = self.anchor?;
+        let (start, end) = (anchor.min(self.cursor), anchor.max(self.cursor));
+        (start < end).then_some((start, end))
+    }
+
+    /// Anchors a mouse selection at piece `at`: the cursor becomes its
+    /// moving end. A press with no drag yet selects nothing.
+    pub(crate) fn select_at(&mut self, at: usize) {
+        let at = at.min(self.pieces.len());
+        self.anchor = Some(at);
+        self.cursor = at;
+    }
+
+    /// Moves the selection's moving end to piece `at`.
+    pub(crate) fn select_to(&mut self, at: usize) {
+        if self.anchor.is_some() {
+            self.cursor = at.min(self.pieces.len());
+        }
+    }
+
+    /// Clears the selection, leaving the cursor where it is. A press in
+    /// the input box anchors at the pressed piece instead, so a click
+    /// places the cursor and a drag selects from there.
+    pub(crate) fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Drops the selected pieces, the cursor at their start. `false`
+    /// while nothing is selected.
+    fn drop_selected(&mut self) -> bool {
+        let Some((start, end)) = self.selected() else {
+            return false;
+        };
+        self.pieces.drain(start..end);
+        self.cursor = start;
+        self.anchor = None;
+        true
+    }
+
+    /// Inserts `ch` at the cursor, replacing the selection first. A
+    /// control character other than a tab is not inserted; a line break
+    /// comes from [`Draft::line_break`].
     pub(crate) fn insert(&mut self, ch: char) {
         if ch == '\t' || crate::text::printable(ch) {
+            self.drop_selected();
             self.put(Piece::Char(ch));
         }
     }
 
-    /// Inserts a line break at the cursor.
+    /// Inserts a line break at the cursor, replacing the selection first.
     pub(crate) fn line_break(&mut self) {
+        self.drop_selected();
         self.put(Piece::Char('\n'));
     }
 
@@ -172,6 +223,7 @@ impl Draft {
         if text.is_empty() {
             return;
         }
+        self.drop_selected();
         if line_count(&text) > PASTE_LINES {
             let number = self.next;
             self.next = self.next.saturating_add(1);
@@ -211,6 +263,7 @@ impl Draft {
     /// [`PASTE_LINES`] lines or fewer, the text replaces the token inline.
     /// The cursor stays beside the same pieces.
     pub(crate) fn set_token(&mut self, number: usize, text: &str) {
+        self.anchor = None;
         let Some(at) = self.pieces.iter().position(
             |piece| matches!(piece, Piece::Paste { number: found, .. } if *found == number),
         ) else {
@@ -231,24 +284,32 @@ impl Draft {
         }
     }
 
-    /// Deletes the piece before the cursor.
+    /// Deletes the selection, else the piece before the cursor.
     pub(crate) fn backspace(&mut self) {
+        if self.drop_selected() {
+            return;
+        }
         if let Some(at) = self.cursor.checked_sub(1) {
             self.pieces.remove(at);
             self.cursor = at;
         }
     }
 
-    /// Deletes the piece after the cursor.
+    /// Deletes the selection, else the piece after the cursor.
     pub(crate) fn delete(&mut self) {
+        if self.drop_selected() {
+            return;
+        }
         if self.cursor < self.pieces.len() {
             self.pieces.remove(self.cursor);
         }
     }
 
     /// Deletes back to the start of the previous word, stopping at the
-    /// line's start unless the cursor is already there.
+    /// line's start unless the cursor is already there. A selection is
+    /// cleared first and the delete runs from the cursor.
     pub(crate) fn delete_word(&mut self) {
+        self.anchor = None;
         let line = self.line_start_at();
         let mut target = self.word_left_at();
         if self.cursor != line {
@@ -259,32 +320,48 @@ impl Draft {
     }
 
     /// Deletes from the start of the cursor's logical line to the
-    /// cursor; at the line's start, nothing.
+    /// cursor; at the line's start, nothing. A selection is cleared
+    /// first and the delete runs from the cursor.
     pub(crate) fn delete_to_line_start(&mut self) {
+        self.anchor = None;
         let line = self.line_start_at();
         self.pieces.drain(line..self.cursor);
         self.cursor = line;
     }
 
-    /// Moves left one piece.
+    /// Moves left one piece; a selection collapses to its start first.
     pub(crate) fn left(&mut self) {
+        if let Some((start, _)) = self.selected() {
+            self.cursor = start;
+            self.anchor = None;
+            return;
+        }
+        self.anchor = None;
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Moves right one piece.
+    /// Moves right one piece; a selection collapses to its end first.
     pub(crate) fn right(&mut self) {
+        if let Some((_, end)) = self.selected() {
+            self.cursor = end;
+            self.anchor = None;
+            return;
+        }
+        self.anchor = None;
         self.cursor = self.cursor.saturating_add(1).min(self.pieces.len());
     }
 
-    /// Moves to the start of the previous word. A token or an image is a
-    /// word alone.
+    /// Moves to the start of the previous word, clearing a selection
+    /// first. A token or an image is a word alone.
     pub(crate) fn word_left(&mut self) {
+        self.anchor = None;
         self.cursor = self.word_left_at();
     }
 
     /// Moves to the end of the next word. A token or an image is a word
     /// alone.
     pub(crate) fn word_right(&mut self) {
+        self.anchor = None;
         let mut at = self.cursor;
         while self.pieces.get(at).is_some_and(Piece::is_gap) {
             at = at.saturating_add(1);
@@ -299,13 +376,27 @@ impl Draft {
         self.cursor = at;
     }
 
-    /// Moves to the start of the logical line.
+    /// Moves to the start of the logical line; a selection collapses to
+    /// its start first.
     pub(crate) fn line_start(&mut self) {
+        if let Some((start, _)) = self.selected() {
+            self.cursor = start;
+            self.anchor = None;
+            return;
+        }
+        self.anchor = None;
         self.cursor = self.line_start_at();
     }
 
-    /// Moves to the end of the logical line.
+    /// Moves to the end of the logical line; a selection collapses to
+    /// its end first.
     pub(crate) fn line_end(&mut self) {
+        if let Some((_, end)) = self.selected() {
+            self.cursor = end;
+            self.anchor = None;
+            return;
+        }
+        self.anchor = None;
         let after = self.pieces.get(self.cursor..).unwrap_or_default();
         let offset = after
             .iter()
@@ -314,9 +405,11 @@ impl Draft {
         self.cursor = self.cursor.saturating_add(offset);
     }
 
-    /// Moves up one wrapped row at `width`, keeping the column where it
-    /// fits. `false` when already on the first row: nothing moved.
+    /// Moves up one wrapped row at `width`, clearing a selection first
+    /// and keeping the column where it fits. `false` when already on the
+    /// first row: nothing moved.
     pub(crate) fn up(&mut self, width: u16) -> bool {
+        self.anchor = None;
         let layout = self.layout(width);
         let Some(&(row, col)) = layout.at.get(self.cursor) else {
             return false;
@@ -330,6 +423,7 @@ impl Draft {
     /// Moves down one wrapped row at `width`, keeping the column where it
     /// fits. `false` when already on the last row: nothing moved.
     pub(crate) fn down(&mut self, width: u16) -> bool {
+        self.anchor = None;
         let layout = self.layout(width);
         let Some(&(row, col)) = layout.at.get(self.cursor) else {
             return false;
@@ -356,8 +450,10 @@ impl Draft {
         }
     }
 
-    /// Inserts the pasted image's base64 at the cursor, as one piece.
+    /// Inserts the pasted image's base64 at the cursor, as one piece,
+    /// replacing the selection first.
     pub(crate) fn insert_image(&mut self, data: Arc<str>) {
+        self.drop_selected();
         self.put(Piece::Image { data });
     }
 
@@ -439,6 +535,7 @@ impl Draft {
         *self = Self {
             pieces,
             cursor,
+            anchor: None,
             next,
             serial: next_serial(),
         };
@@ -452,6 +549,7 @@ impl Draft {
         *self = Self {
             pieces: back.pieces,
             cursor: len,
+            anchor: None,
             next,
             serial: next_serial(),
         };
@@ -496,6 +594,7 @@ impl Draft {
     /// Replaces the pieces in `range` with `text`, typed, the cursor after
     /// it.
     pub(crate) fn replace(&mut self, range: std::ops::Range<usize>, text: &str) {
+        self.anchor = None;
         let start = range.start.min(self.pieces.len());
         let end = range.end.clamp(start, self.pieces.len());
         self.pieces.drain(start..end);
@@ -503,6 +602,36 @@ impl Draft {
         for ch in text.chars() {
             self.put(Piece::Char(ch));
         }
+    }
+
+    /// The visible text of the selected pieces: characters as drawn, a
+    /// paste token as its label and an image as its positional label,
+    /// never a hidden payload or bytes. Line breaks in the text stay
+    /// newlines; wrapped rows join with nothing, since this reads pieces
+    /// rather than rows.
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selected()?;
+        let mut out = String::new();
+        for (at, piece) in self.pieces.iter().enumerate().skip(start).take(end - start) {
+            match piece {
+                Piece::Char(ch) => out.push(*ch),
+                Piece::Paste { label, .. } => out.push_str(label),
+                Piece::Image { .. } => {
+                    let number = self
+                        .pieces
+                        .get(..=at)
+                        .map_or(0, |before| {
+                            before
+                                .iter()
+                                .filter(|piece| matches!(piece, Piece::Image { .. }))
+                                .count()
+                        })
+                        .max(1);
+                    out.push_str(&image_label(number));
+                }
+            }
+        }
+        Some(out)
     }
 
     /// The text to send: every token as its full text, every image as its
@@ -536,6 +665,54 @@ impl Draft {
             .get(self.cursor)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// The selection's highlight rects at `width`, one
+    /// `(row, start_col, end_col)` per covered row in [`Draft::rows`]
+    /// coordinates, in reading order. Empty while nothing is selected.
+    pub(crate) fn selected_rects(&self, width: u16) -> Vec<(usize, u16, u16)> {
+        let Some((start, end)) = self.selected() else {
+            return Vec::new();
+        };
+        let layout = self.layout(width);
+        let first = layout.at.get(start).copied().unwrap_or_default();
+        let last = layout.at.get(end).copied().unwrap_or_default();
+        let mut out = Vec::new();
+        for row in first.0..=last.0 {
+            let s = if row == first.0 { first.1 } else { 0 };
+            let e = if row == last.0 {
+                last.1
+            } else {
+                let w = layout
+                    .rows
+                    .get(row)
+                    .map_or(0, |line| crate::format::width(line));
+                u16::try_from(w).unwrap_or(u16::MAX)
+            };
+            if s < e {
+                out.push((row, s, e));
+            }
+        }
+        out
+    }
+
+    /// The cursor position a click on [`Draft::rows`] cell `row`, `col`
+    /// at `width` lands on: the last position on the row at or before
+    /// the column, else the row's first. `None` past the last row.
+    pub(crate) fn position_at(&self, width: u16, row: usize, col: u16) -> Option<usize> {
+        let layout = self.layout(width);
+        let mut found: Option<usize> = None;
+        for (index, at) in layout.at.iter().enumerate() {
+            if at.0 != row {
+                continue;
+            }
+            if at.1 <= col {
+                found = Some(index);
+            } else {
+                return found.or(Some(index));
+            }
+        }
+        found
     }
 
     /// The cells each paste token's label takes at `width`, in
