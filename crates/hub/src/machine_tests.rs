@@ -7,6 +7,7 @@ use std::thread;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::commands::hub::{PruneExpect, PruneSession};
 use contract::shapes::Failure;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -14,7 +15,8 @@ use serde_json::{Value, json};
 
 use crate::connection::{lock, serve_connection};
 use crate::fake::{FakeMachine, FakeStarter};
-use crate::testkit::{DEADLINE, hub};
+use crate::machine::{PruneFailure, PruneOutcome};
+use crate::testkit::{DEADLINE, hub, id};
 
 fn exchange(machine: Option<Arc<FakeMachine>>, commands: Vec<Value>) -> Vec<Value> {
     let temp = fakes::TempDir::new("hm");
@@ -190,6 +192,7 @@ fn a_hub_without_a_machine_keeps_unknown_command() {
             "configure",
             "read_config",
             "write_config",
+            "prune",
         ]
         .into_iter()
         .map(|n| command(n, json!({})))
@@ -200,4 +203,86 @@ fn a_hub_without_a_machine_keeps_unknown_command() {
         assert_eq!(answer["payload"]["code"], "unknown_command");
     }
     assert!(lock(&machine.calls).is_empty());
+}
+
+#[test]
+fn prune_routes_args_and_maps_every_outcome() {
+    let machine = Arc::new(FakeMachine::default());
+    let preview = PruneExpect {
+        sessions: vec![PruneSession {
+            id: contract::SessionId(id(1)),
+            cascade: vec![contract::SessionId(id(1))],
+        }],
+        worktrees: Vec::new(),
+        pinned: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    lock(&machine.prunes).extend([
+        Ok(PruneOutcome {
+            lines: vec!["session  s_1  41d  1.2 MiB".to_owned()],
+            items: preview,
+            freed: 1048576,
+            total: 0,
+            failures: Vec::new(),
+        }),
+        Ok(PruneOutcome {
+            lines: Vec::new(),
+            items: PruneExpect {
+                sessions: Vec::new(),
+                worktrees: Vec::new(),
+                pinned: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            freed: 7,
+            total: 2,
+            failures: vec![PruneFailure {
+                item: id(2),
+                code: ErrorCode::StaleRequest,
+                message: "changed".to_owned(),
+            }],
+        }),
+        Err(Failure {
+            code: ErrorCode::IoFailed,
+            message: "busy".to_owned(),
+            provider: None,
+            retry_after_ms: None,
+        }),
+    ]);
+    let answers = exchange(
+        Some(machine.clone()),
+        vec![
+            command("prune", json!({"older_than": "30d", "dry_run": true})),
+            command(
+                "prune",
+                json!({"cascade": true, "expect": {"sessions": [{"id": id(1), "cascade": [id(1)]}]}}),
+            ),
+            // Missing `args` reads as `{}`: a confirm with nothing previewed.
+            json!({"id": "m", "command": "prune"}),
+        ],
+    );
+    assert_eq!(answers[0]["kind"], "command_accepted");
+    assert_eq!(
+        answers[0]["payload"]["result"]["would_free"],
+        json!(1048576)
+    );
+    assert_eq!(answers[1]["kind"], "command_accepted");
+    assert_eq!(answers[1]["payload"]["result"]["freed"], json!(7));
+    assert_eq!(answers[1]["payload"]["result"]["total"], json!(2));
+    assert_eq!(
+        answers[1]["payload"]["result"]["failures"],
+        json!([{"item": id(2), "code": "stale_request", "message": "changed"}])
+    );
+    assert_eq!(answers[2]["kind"], "command_rejected");
+    assert_eq!(answers[2]["payload"]["code"], "io_failed");
+    assert_eq!(answers[2]["payload"]["message"], "busy");
+    let calls = lock(&machine.calls);
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0]["prune"]["older_than"], json!("30d"));
+    assert_eq!(calls[0]["prune"]["dry_run"], json!(true));
+    assert!(calls[0]["prune"].get("expect").unwrap().is_null());
+    assert_eq!(
+        calls[1]["prune"]["expect"]["sessions"],
+        json!([{"id": id(1), "cascade": [id(1)]}])
+    );
+    assert_eq!(calls[2]["prune"]["dry_run"], json!(false));
 }

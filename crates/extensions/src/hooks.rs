@@ -375,23 +375,13 @@ impl SessionExtensions {
     /// key by key in normal layer order. The same frozen mapping governs
     /// the hooks VM, `hooks_state` and main's `missing_hooks`.
     pub fn hooks_config(&self, config: &Config) -> Config {
-        if !self.has_repository_hooks && self.hook_snapshots.is_empty() {
-            return config.clone();
-        }
-        let mut filtered = config.clone();
-        let mut hooks = Map::new();
-        for (name, snapshot) in &self.hook_snapshots {
-            hooks.insert(name.clone(), snapshot.entry.clone());
-        }
-        filtered.extensions_mut().set_overlay(
-            &config::full_name("hooks"),
-            Value::Object({
-                let mut outer = Map::new();
-                outer.insert("hooks".to_owned(), Value::Object(hooks));
-                outer
-            }),
-        );
-        filtered
+        filtered_hooks_config(
+            config,
+            self.has_repository_hooks,
+            self.hook_snapshots
+                .iter()
+                .map(|(name, snapshot)| (name.clone(), snapshot.entry.clone())),
+        )
     }
 
     /// The lazy extensions whose VM started: a reload starts these again and
@@ -444,13 +434,11 @@ impl SessionExtensions {
             crate::repository::candidates(found, &repository, &|name: &str| {
                 crate::is_enabled(config, name)
             });
+        session.has_repository_hooks = repository.has_hook_declarations();
         session.notices.extend(repository.notices);
         session.notices.append(&mut candidate_notices);
         session.holds = repository.holds;
         session.required = repository.required;
-        session.has_repository_hooks = !repository.hooks.is_empty()
-            || !repository.hook_failures.is_empty()
-            || repository.hooks_failed;
         for (name, state) in &repository.hooks {
             if let crate::repository::HookState::Approved(snapshot) = state {
                 session
@@ -1651,6 +1639,25 @@ fn notice(code: ErrorCode, message: String, extension: Option<&str>) -> Notice {
     }
 }
 
+/// Replaces only the repository layer with approved mapped entries.
+pub(crate) fn filtered_hooks_config(
+    config: &Config,
+    has_repository_hooks: bool,
+    approved: impl IntoIterator<Item = (String, Value)>,
+) -> Config {
+    let hooks: Map<String, Value> = approved.into_iter().collect();
+    if !has_repository_hooks && hooks.is_empty() {
+        return config.clone();
+    }
+    let mut filtered = config.clone();
+    let mut outer = Map::new();
+    outer.insert("hooks".to_owned(), Value::Object(hooks));
+    filtered
+        .extensions_mut()
+        .set_overlay(&config::full_name("hooks"), Value::Object(outer));
+    filtered
+}
+
 /// What the session owes declared hooks when the `hooks` extension did
 /// not load (`docs/extensions.md`, "Hooks declared in configuration"):
 /// nothing, a notice, or a failed start, so a guard never fails open.
@@ -1665,7 +1672,21 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Err
         return Ok(HooksState::Ready);
     };
     let Value::Object(entries) = declared else {
-        return Ok(HooksState::MissingBlocking);
+        return Ok(HooksState::MissingBlocking { names: Vec::new() });
+    };
+    let missing = || {
+        let mut names: Vec<String> = entries
+            .iter()
+            .filter_map(|(name, entry)| {
+                let blocking = entry.as_object().is_none_or(|entry| {
+                    !entry.contains_key("watch")
+                        && entry.get("on_failure").and_then(Value::as_str) != Some("non-blocking")
+                });
+                blocking.then(|| name.clone())
+            })
+            .collect();
+        names.sort();
+        HooksState::MissingBlocking { names }
     };
     if entries.is_empty() {
         return Ok(HooksState::Ready);
@@ -1674,7 +1695,7 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Err
     let mut hooks = false;
     for entry in entries.values() {
         let Value::Object(entry) = entry else {
-            return Ok(HooksState::MissingBlocking);
+            return Ok(missing());
         };
         if entry.contains_key("watch") {
             continue;
@@ -1694,7 +1715,7 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Err
         return Ok(HooksState::Ready);
     }
     if blocking {
-        return Ok(HooksState::MissingBlocking);
+        return Ok(missing());
     }
     Ok(HooksState::MissingNotice {
         notice: notice(
@@ -1722,7 +1743,10 @@ pub enum HooksState {
     },
     /// Declared-but-unloaded hooks with any `blocking` entry or a missing
     /// or invalid `on_failure`: the start fails with `extension_missing`.
-    MissingBlocking,
+    MissingBlocking {
+        /// Sorted eligible blocking entry names; empty for a nameless declaration.
+        names: Vec<String>,
+    },
 }
 
 #[cfg(test)]

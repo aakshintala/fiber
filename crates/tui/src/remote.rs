@@ -515,6 +515,30 @@ pub(crate) fn client_owned(key: &str) -> bool {
     matches!(first, "keys" | "tui")
 }
 impl Configure for Remote {
+    fn blocking_hooks(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<String>, ConfigureError> {
+        let cancel = Cancel::default();
+        self.call(
+            "blocking_hooks",
+            json!({"workspace":self.workspace_as(workspace)?,"overrides":overrides}),
+            Caller::Worker(&cancel),
+            decode::blocking_hooks,
+        )
+    }
+
+    fn install_hooks(&self, _clock: Arc<dyn Clock>) -> Result<(), ConfigureError> {
+        let cancel = Cancel::default();
+        self.call(
+            "install_hooks",
+            json!({}),
+            Caller::Worker(&cancel),
+            decode::install_hooks,
+        )
+    }
+
     fn install_provider(
         &self,
         workspace: &Path,

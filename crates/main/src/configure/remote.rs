@@ -479,6 +479,26 @@ impl hub::Machine for Seam {
                 }
                 Value::Object(value)
             }
+            "blocking_hooks" => {
+                a.shape(&["workspace"], &["overrides"])?;
+                let workspace = a.workspace()?;
+                let overrides = args
+                    .get("overrides")
+                    .map(|value| {
+                        serde_json::from_value::<Vec<String>>(value.clone()).map_err(|_| invalid())
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let names = self
+                    .blocking_hooks(workspace, &overrides)
+                    .map_err(from_view)?;
+                json!({"names":names})
+            }
+            "install_hooks" => {
+                a.shape(&[], &[])?;
+                self.install_hooks(clock).map_err(from_view)?;
+                json!({})
+            }
             "install_provider" => {
                 a.shape(&["workspace", "provider"], &[])?;
                 let installed = self
@@ -649,6 +669,114 @@ impl hub::Machine for Seam {
         }
         config::write_atomic(path, text.as_bytes(), 0o666)
             .map_err(|error| failure(error.code(), error.to_string()))
+    }
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::type_complexity,
+        reason = "one seam call carries the whole prune: its flags, the previewed items and the session-delete callback"
+    )]
+    fn prune(
+        &self,
+        home: &Path,
+        older_than: Option<String>,
+        cascade: bool,
+        force: bool,
+        dry_run: bool,
+        expect: Option<contract::commands::hub::PruneExpect>,
+        clock: Arc<dyn Clock>,
+        delete: &mut (
+                 dyn FnMut(
+            &contract::SessionId,
+            bool,
+            Option<&std::collections::BTreeSet<contract::SessionId>>,
+        ) -> Result<(), Failure>
+                     + Send
+             ),
+    ) -> Result<hub::PruneOutcome, Failure> {
+        let older_than = match older_than {
+            None => None,
+            Some(text) => match config::parse_duration(&text) {
+                Some(duration) => Some(duration),
+                // Before anything is read: an unreadable duration never
+                // reaches the selection, as locally.
+                None => return Err(invalid()),
+            },
+        };
+        if dry_run {
+            let selection = cli::select_for_hub(
+                home,
+                older_than,
+                cascade,
+                force,
+                clock.wall(),
+                clock.as_ref(),
+            );
+            return Ok(hub::PruneOutcome {
+                lines: selection.lines,
+                items: contract::commands::hub::PruneExpect {
+                    sessions: selection
+                        .sessions
+                        .into_iter()
+                        .map(|session| contract::commands::hub::PruneSession {
+                            id: session.id,
+                            cascade: session.expect.into_iter().collect(),
+                        })
+                        .collect(),
+                    worktrees: selection.worktrees,
+                    pinned: selection.pinned,
+                    diagnostics: selection.diagnostics,
+                },
+                freed: selection.would_free,
+                total: 0,
+                failures: Vec::new(),
+            });
+        }
+        // Without `expect` (`--yes`) there is no preview to confirm:
+        // the confirm removes the current selection, as locally.
+        let want = expect.map(|expect| cli::HubPruneWant {
+            sessions: expect
+                .sessions
+                .into_iter()
+                .map(|session| (session.id, session.cascade.into_iter().collect()))
+                .collect(),
+            worktrees: expect.worktrees.into_iter().collect(),
+            pinned: expect.pinned.into_iter().collect(),
+            diagnostics: expect.diagnostics.into_iter().collect(),
+        });
+        // The hub-supplied callback passes through untouched: no loopback
+        // connection, no hub socket path. The confirm preflights the
+        // exact previewed selection first: any mismatch is `stale_request`
+        // with nothing removed, and the callback runs only after the
+        // preflight succeeds.
+        let removed = cli::remove_for_hub(
+            home,
+            want.as_ref(),
+            older_than,
+            cascade,
+            force,
+            clock.as_ref(),
+            delete,
+        )?;
+        Ok(hub::PruneOutcome {
+            lines: Vec::new(),
+            items: contract::commands::hub::PruneExpect {
+                sessions: Vec::new(),
+                worktrees: Vec::new(),
+                pinned: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            freed: removed.freed,
+            total: removed.total,
+            failures: removed
+                .failures
+                .into_iter()
+                .map(|(item, code, message)| hub::PruneFailure {
+                    item,
+                    code,
+                    message,
+                })
+                .collect(),
+        })
     }
 }
 
