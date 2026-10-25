@@ -13,12 +13,13 @@ use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
 use contract::diag::{DebugLog, Op, ProviderRequest, Timing};
+use support::lock;
 
 pub use memory::peak_kib;
 
@@ -369,10 +370,6 @@ impl DebugLog for Diag {
             Some(request),
         );
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Serializes one line and appends it to `file`, rotating first when due.
