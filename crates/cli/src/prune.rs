@@ -182,9 +182,10 @@ fn prune_run(
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let started = log::started_sessions(home);
     let scope = Scope::Project(workspace);
-    let selected = sessions::select(home, &started, scope, older_than, args.cascade, now);
-    let mut planned = worktrees::select(home, &started, scope, args.force, args.dry_run, now);
-    let pinned_plan = pinned::select(home, &started, scope, clock);
+    let selected = sessions::select_scoped(home, &started, scope, older_than, args.cascade, now);
+    let mut planned =
+        worktrees::select_scoped(home, &started, scope, args.force, args.dry_run, now);
+    let pinned_plan = pinned::select_scoped(home, &started, scope, clock);
     let has_sessions = !selected.deletes.is_empty();
     let has_worktrees = !planned.removals.is_empty();
     let has_pinned = pinned_plan
@@ -386,10 +387,11 @@ pub fn select_for_hub(
     clock: &dyn Clock,
 ) -> HubPruneSelection {
     let started = log::started_sessions(home);
-    let selected = sessions::select(home, &started, Scope::HubWide, older_than, cascade, now);
+    let selected =
+        sessions::select_scoped(home, &started, Scope::HubWide, older_than, cascade, now);
     // The scan holds no locks: the dry run drops each taken lock at once.
-    let planned = worktrees::select(home, &started, Scope::HubWide, force, true, now);
-    let pinned_plan = pinned::select(home, &started, Scope::HubWide, clock);
+    let planned = worktrees::select_scoped(home, &started, Scope::HubWide, force, true, now);
+    let pinned_plan = pinned::select_scoped(home, &started, Scope::HubWide, clock);
     let logs = old_diagnostics(&home.join("logs"), now);
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let lines = listing_lines(
@@ -524,7 +526,8 @@ pub fn remove_for_hub(
             .map(|(path, message)| (path, ErrorCode::IoFailed, message)),
     );
     // Worktrees reselect with their locks held, as the local confirm does.
-    let mut planned = worktrees::select(home, &started_sessions, Scope::HubWide, force, false, now);
+    let mut planned =
+        worktrees::select_scoped(home, &started_sessions, Scope::HubWide, force, false, now);
     let selected: BTreeSet<String> = planned
         .removals
         .iter()
@@ -546,7 +549,7 @@ pub fn remove_for_hub(
     freed += removed_worktrees.freed;
     failures.extend(removed_worktrees.failures);
     // Pinned copies reselect the same way.
-    let mut pinned_plan = pinned::select(home, &started_sessions, Scope::HubWide, clock);
+    let mut pinned_plan = pinned::select_scoped(home, &started_sessions, Scope::HubWide, clock);
     let selected: BTreeSet<String> = pinned_plan
         .removals
         .iter()

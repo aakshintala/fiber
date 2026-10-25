@@ -116,12 +116,33 @@ pub(crate) struct RemovedWorktrees {
     pub(crate) total: usize,
 }
 
-/// Lists the kept worktrees in scope: inside a git repository the
-/// repository's project, outside one every project. Unless `dry_run`,
-/// each one's users' locks are held until the run ends: `--dry-run` drops
-/// each lock at once, so the scan and output hold none. A symlinked entry
-/// is not listed. Dropping the plan releases every kept lock.
+/// The workspace form of the scoped core, kept for the module's tests.
+#[cfg(test)]
 pub(crate) fn select(
+    home: &Path,
+    users: &[log::Started],
+    workspace: &Path,
+    force: bool,
+    dry_run: bool,
+    now: SystemTime,
+) -> Planned {
+    select_scoped(
+        home,
+        users,
+        super::Scope::Project(workspace),
+        force,
+        dry_run,
+        now,
+    )
+}
+
+/// Lists the kept worktrees in scope: inside a git repository the
+/// repository's project, outside one every project, and every project
+/// hub-wide. Unless `dry_run`, each one's users' locks are held until the
+/// run ends: `--dry-run` drops each lock at once, so the scan and output
+/// hold none. A symlinked entry is not listed. Dropping the plan releases
+/// every kept lock.
+pub(crate) fn select_scoped(
     home: &Path,
     users: &[log::Started],
     scope: super::Scope<'_>,
@@ -129,7 +150,7 @@ pub(crate) fn select(
     dry_run: bool,
     now: SystemTime,
 ) -> Planned {
-    let keys = scope_keys(home, scope);
+    let keys = scope_keys_scoped(home, scope);
     let mut planned = Planned {
         rows: Vec::new(),
         removals: Vec::new(),
@@ -383,9 +404,15 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
     planned.removals.iter().map(|removal| removal.bytes).sum()
 }
 
-/// The project keys in scope: the repository's project inside one, every
-/// project under `projects/` outside one, and every project hub-wide.
-pub(super) fn scope_keys(home: &Path, scope: super::Scope<'_>) -> Vec<String> {
+/// The workspace form of the scoped keys, kept for the module's tests.
+#[cfg(test)]
+pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
+    scope_keys_scoped(home, super::Scope::Project(workspace))
+}
+
+/// The scoped keys core behind [`scope_keys`]: as the workspace form, and
+/// every project hub-wide.
+pub(super) fn scope_keys_scoped(home: &Path, scope: super::Scope<'_>) -> Vec<String> {
     if let super::Scope::Project(workspace) = scope {
         let resolved = doors::resolve_project(workspace);
         if resolved.in_repository {

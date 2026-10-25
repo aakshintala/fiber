@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use contract::ErrorCode;
 use contract::clock::Clock;
 
-use super::worktrees::scope_keys;
+use super::worktrees::scope_keys_scoped;
 
 /// A pinned row prune prints.
 pub(super) enum PinnedRow {
@@ -96,19 +96,30 @@ const REDIRECTING_ENV: [&str; 4] = [
     "GIT_INDEX_FILE",
 ];
 
+/// The workspace form of the scoped core, kept for the module's tests.
+#[cfg(test)]
+pub(super) fn select(
+    home: &Path,
+    started: &[log::Started],
+    workspace: &Path,
+    clock: &dyn Clock,
+) -> Plan {
+    select_scoped(home, started, super::Scope::Project(workspace), clock)
+}
+
 /// Lists the pinned copies in scope with no worktree match: inside a git
 /// repository the repository's project, outside one every project, and
 /// hub-wide every project. A copy another project also approved is kept
 /// and not listed, as is a copy no project record names at all. A
 /// per-machine record alone keeps a copy; it never lists one its project
 /// records name.
-pub(super) fn select(
+pub(super) fn select_scoped(
     home: &Path,
     started: &[log::Started],
     scope: super::Scope<'_>,
     clock: &dyn Clock,
 ) -> Plan {
-    select_with(
+    select_with_scoped(
         home,
         started,
         scope,
@@ -118,9 +129,30 @@ pub(super) fn select(
     )
 }
 
+/// The workspace form of the scoped injector, kept for the module's
+/// tests: same injected environment and lister.
+#[cfg(test)]
+fn select_with(
+    home: &Path,
+    started: &[log::Started],
+    workspace: &Path,
+    clock: &dyn Clock,
+    env: &dyn Fn(&str) -> Option<OsString>,
+    list: &dyn Fn(&Path) -> Result<Vec<worktree::Listed>, worktree::Error>,
+) -> Plan {
+    select_with_scoped(
+        home,
+        started,
+        super::Scope::Project(workspace),
+        clock,
+        env,
+        list,
+    )
+}
+
 /// Lists with the environment lookup and the worktree lister injected, so
 /// tests need neither the process environment nor `git`.
-fn select_with(
+fn select_with_scoped(
     home: &Path,
     started: &[log::Started],
     scope: super::Scope<'_>,
@@ -149,7 +181,7 @@ fn select_with(
             };
         }
     };
-    let keys = scope_keys(home, scope);
+    let keys = scope_keys_scoped(home, scope);
     select_candidates(home, started, scope, clock, list, &keys, &kept)
 }
 

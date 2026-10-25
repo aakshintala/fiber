@@ -25,7 +25,6 @@ use serde_json::json;
 
 use super::super::{PruneArgs, prune_run};
 use super::*;
-use crate::prune::Scope;
 
 const HOOK: &str = r#"{"hooks":{"fmt":{"point":"after_tool","command":"scripts/fmt.sh"}}}"#;
 
@@ -285,12 +284,7 @@ fn removable(plan: &Plan) -> Vec<(&str, u64)> {
 /// Scans `home` and selects the pinned plan for `workspace`: every call
 /// stays one line at its site.
 fn plan(home: &Path, workspace: &Path, clock: &dyn contract::clock::Clock) -> Plan {
-    select(
-        home,
-        &log::started_sessions(home),
-        Scope::Project(workspace),
-        clock,
-    )
+    select(home, &log::started_sessions(home), workspace, clock)
 }
 
 #[test]
@@ -483,7 +477,7 @@ fn a_failed_worktree_list_keeps_every_candidate() {
     let plan = select_with(
         &home,
         &log::started_sessions(&home),
-        Scope::Project(&branches.repo),
+        &branches.repo,
         branches.clock.as_ref(),
         &|_| None,
         &list,
@@ -539,7 +533,7 @@ fn an_unreadable_listed_worktree_keeps_every_candidate() {
     let plan = select_with(
         &home,
         &log::started_sessions(&home),
-        Scope::Project(&branches.repo),
+        &branches.repo,
         branches.clock.as_ref(),
         &|_| None,
         &list,
@@ -1284,7 +1278,7 @@ fn a_redirecting_environment_skips_the_pinned_step() {
         let plan = select_with(
             &home,
             &log::started_sessions(&home),
-            Scope::Project(&branches.repo),
+            &branches.repo,
             branches.clock.as_ref(),
             &env,
             &list,

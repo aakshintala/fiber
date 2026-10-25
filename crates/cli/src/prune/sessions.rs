@@ -88,10 +88,31 @@ struct Candidate {
     bytes: u64,
 }
 
+/// The workspace form of [`select_scoped`], kept for the module's tests:
+/// it scopes to its project, as it always has.
+#[cfg(test)]
+pub(crate) fn select(
+    home: &Path,
+    all: &[log::Started],
+    workspace: &Path,
+    older_than: Option<Duration>,
+    cascade: bool,
+    now: SystemTime,
+) -> Selected {
+    select_scoped(
+        home,
+        all,
+        super::Scope::Project(workspace),
+        older_than,
+        cascade,
+        now,
+    )
+}
+
 /// Selects the sessions to delete: the scope filter, then Ruling 6 over
 /// `log::started_sessions`. Without `older_than` no session is deleted
 /// and no session is listed.
-pub(crate) fn select(
+pub(crate) fn select_scoped(
     home: &Path,
     all: &[log::Started],
     scope: super::Scope<'_>,
