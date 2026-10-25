@@ -1969,6 +1969,30 @@ fn reloader_before_run_wires_the_replacement_hooks_when_run_starts() {
 }
 
 #[test]
+fn the_commands_replacer_swaps_the_whole_commands_answer() {
+    use contract::events::CommandInfo;
+    let opened = Opened::open(Vec::new());
+    let command = |name: &str, tag: &str| CommandInfo {
+        extension: false,
+        name: name.into(),
+        description: name.into(),
+        argument_hint: None,
+        tag: tag.into(),
+    };
+    opened
+        .session
+        .commands(vec![command("old", "skill"), command("gone", "template")]);
+    assert_eq!(
+        opened.session.gate.commands(),
+        [command("old", "skill"), command("gone", "template")]
+    );
+    let replacer = opened.session.commands_replacer();
+    replacer(vec![command("newer", "skill")]);
+    assert_eq!(opened.session.gate.commands(), [command("newer", "skill")]);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn run_hands_the_hooks_the_loops_inbox() {
     let opened = Opened::open(Vec::new());
     let (given_tx, given_rx) = mpsc::channel();

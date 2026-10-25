@@ -838,7 +838,16 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     // anywhere, since quitting is taken in any state.
     run.ready();
     run.write(b"say hi\r");
-    let screen = run.wait_screen("the drawn turn", turn_drawn);
+    // A drawn-turn miss carries the hub log: the tail tells whether the
+    // hub was slow or failed to start. The wait still fails with its
+    // screen.
+    let screen = run.wait_screen_reporting("the drawn turn", turn_drawn, || {
+        let tail = support::hub_log_tail(&setup.hub_log());
+        format!(
+            "hub.log tail (last {} lines):\n{tail}",
+            support::HUB_LOG_TAIL
+        )
+    });
     let output = run.output();
     run.write(b"\x03\x03\r");
     let finished = run.wait();

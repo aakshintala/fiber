@@ -147,14 +147,34 @@ pub(crate) fn answer_rows(app: &mut App, rows: Value) -> String {
     id
 }
 
-/// A turn starts on [`SESSION`].
-pub(crate) fn turn_starts(app: &mut App) {
+/// A turn starts on [`SESSION`]: the start changes what the `/` list
+/// may hold, so the terminal asks again at each turn start, and the
+/// answer keeps the given session rows. With the link down the start
+/// sends nothing; with it up it sends that one request and nothing else.
+pub(crate) fn turn_starts_with(app: &mut App, rows: Value) {
     let line = session_line(
         "turn_started",
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "hi"}]}]}),
     );
-    assert!(app.on_line(line).is_empty());
+    let asked = app.on_line(line);
+    assert!(asked.len() <= 1, "{asked:?}");
+    let Some(first) = asked.first() else {
+        return;
+    };
+    let asked: Value = serde_json::from_str(first).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": rows}}),
+    );
+    assert!(app.on_line(answer).is_empty());
+}
+
+/// A turn starts on [`SESSION`], answering the `commands` the start
+/// asks for with no rows.
+pub(crate) fn turn_starts(app: &mut App) {
+    turn_starts_with(app, Value::Array(Vec::new()));
 }
 
 /// The completion panel's rows.

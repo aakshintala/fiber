@@ -1883,9 +1883,16 @@ fn resume_open_replays_the_log_to_the_tail() {
             reader_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The hub: answers commands, then streams the 150 turns / 1,348
-    // envelopes on subscribe and hangs up, so the loop drains and returns.
+    // The hub: drains requests on a read thread while it streams the
+    // 150 turns / 1,348 envelopes on subscribe, answers them in order,
+    // then hangs up, so the loop drains and returns.
     let stream = lines.clone();
+    // Every replayed turn start asks `commands` again: the hub serves
+    // those requests, then hangs up once each has been answered.
+    let replay_turns = lines
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
     // The hub's last step for the stall report: the hub sets each field
@@ -1916,12 +1923,38 @@ fn resume_open_replays_the_log_to_the_tail() {
     // The hub signals when it finishes its writes, so the test waits on
     // the hub's answer instead of the drain window alone.
     let (hub_done_tx, hub_done) = mpsc::channel();
+    // The drain stays ahead of the stream: each replayed turn start asks
+    // `commands` again while the hub still writes, so reading on the
+    // hub's thread would fill the socket and stall both sides. The read
+    // thread queues requests in arrival order; the hub below handles
+    // them in that order once its writes allow.
+    let (queue_tx, queue_rx) = mpsc::channel();
+    let hub_read = hub_end
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let read_step = Arc::clone(&hub_progress);
+    std::thread::Builder::new()
+        .name("resume-hub-read".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(hub_read);
+            let mut text = String::new();
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                if let Ok(mut held) = read_step.lock() {
+                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
+                }
+                queue_tx.send(command).unwrap_or(());
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
     std::thread::Builder::new()
         .name("resume-hub".to_owned())
         .spawn(move || {
-            let mut reader = BufReader::new(hub_end.try_clone().unwrap());
             let mut hub_end = hub_end;
-            let mut text = String::new();
             let mut write = |value: Value| {
                 if let Ok(mut held) = hub_step.lock() {
                     held.writing = true;
@@ -1944,15 +1977,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                 value["payload"] = json!({"command_id": id, "result": result});
                 value
             };
-            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
-                let command: Value = serde_json::from_str(&text).unwrap_or_default();
-                text.clear();
-                if let Ok(mut held) = record.lock() {
-                    held.push(command.clone());
-                }
-                if let Ok(mut held) = hub_step.lock() {
-                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
-                }
+            let mut replaying = false;
+            let mut replay_commands = 0usize;
+            for command in queue_rx {
                 let id = command["id"].clone();
                 match command["command"].as_str() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
@@ -1961,7 +1988,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                         if command["args"]["level"] == "full" {
                             // The raise, released by the first frame: the
                             // last line read ends the preview, so the
-                            // replay folds from its first line.
+                            // replay folds from its first line. The hub
+                            // stays up through the replay: every replayed
+                            // turn start sends `commands` again.
                             let last = stream
                                 .iter()
                                 .filter_map(|envelope| envelope.seq.map(|seq| seq.0))
@@ -1971,7 +2000,7 @@ fn resume_open_replays_the_log_to_the_tail() {
                             for envelope in &stream {
                                 write(serde_json::to_value(envelope).unwrap_or(Value::Null));
                             }
-                            break;
+                            replaying = true;
                         }
                         // The first stage: park until the test releases
                         // it, then answer only. The raise follows the
@@ -1982,6 +2011,14 @@ fn resume_open_replays_the_log_to_the_tail() {
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));
+                        // The replay's turn starts ask again: hang up once
+                        // every one has its answer.
+                        if replaying {
+                            replay_commands += 1;
+                            if replay_commands >= replay_turns {
+                                break;
+                            }
+                        }
                     }
                     Some("history") => {
                         // Parked with the question read: the loop asked
@@ -2003,6 +2040,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                     _ => write(hub_ack(&id, json!({}))),
                 }
             }
+            // The hang-up: shut the read half so the drain thread above
+            // sees EOF and exits, then report the finished writes.
+            hub_end.shutdown(std::net::Shutdown::Both).unwrap_or(());
             hub_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -2109,6 +2149,15 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_default();
     assert_eq!(histories.len(), 1, "{histories:?}");
     assert_eq!(histories[0]["args"], json!({}));
+    // Every turn start the terminal applies asks `commands` again. The
+    // first request loads the session's rows before the log replay.
+    let seen_commands: Vec<Value> = seen.lock().map(|held| held.clone()).unwrap_or_default();
+    let commands: Vec<_> = seen_commands
+        .iter()
+        .filter(|command| command["command"] == "commands")
+        .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(commands.len(), replay_turns + 1, "{commands:?}");
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");
 }

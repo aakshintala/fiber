@@ -55,14 +55,51 @@ pub(super) fn attached(width: u16, height: u16) -> App {
     app
 }
 
+/// Folds a `turn_started` line: the start may change the runnable set,
+/// so the terminal asks `commands` again, answered here with no rows.
+/// Returns every other line the fold sends, such as the search's
+/// `history` fetches.
+fn started(app: &mut App, line: Line) -> Vec<String> {
+    let mut rest = Vec::new();
+    let mut asked = Vec::new();
+    for sent in app.on_line(line) {
+        let value: Value = serde_json::from_str(&sent).expect("a command line");
+        if value["command"] == "commands" {
+            asked.push(value);
+        } else {
+            rest.push(sent);
+        }
+    }
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": asked[0]["id"], "result": {"commands": []}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    assert!(app.on_line(answer).is_empty());
+    rest
+}
+
 /// A turn started by `prompt`; it runs until done.
 fn prompt(app: &mut App, text: &str) {
-    app.on_line(line(
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
-            "content": [{"type": "text", "text": text}]}]}),
-        None,
-    ));
+    started(
+        app,
+        line(
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": text}]}]}),
+            None,
+        ),
+    );
 }
 
 /// A reply `text` from message `action`.
@@ -178,14 +215,17 @@ pub(super) fn text_turn(
     app: &mut App,
     replies: &[&str],
 ) {
-    app.on_line(numbered(
-        log,
-        seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
-            "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+    started(
+        &mut *app,
+        numbered(
+            log,
+            seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": "go"}]}]}),
+            None,
+        ),
+    );
     for reply in replies {
         app.on_line(numbered(
             log,
@@ -584,14 +624,17 @@ fn a_page_over_256_lines_is_fetched_in_chunks() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     for line in 0..300 {
         let text = if line == 290 {
             "a needle here".to_owned()
@@ -771,14 +814,17 @@ fn a_match_in_a_closed_section_counts_from_its_section_line() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -1005,14 +1051,17 @@ fn live_output_rescans_the_open_page() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -1039,14 +1088,17 @@ fn an_equal_length_reply_change_rescans_the_open_page() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(line(
         "assistant_message_delta",
         json!({"text": "cat"}),
@@ -1160,14 +1212,17 @@ fn the_cap_stops_the_scan_at_10000() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     for _ in 0..2 {
         app.on_line(numbered(
             &mut log,
@@ -1268,14 +1323,17 @@ fn a_dropped_pages_usage_change_refetches_it() {
             "tokens": {"input": tokens, "cache_read": 0, "cache_write": {}, "output": 40},
             "input_bytes": 0, "cost": null})
     };
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -1356,14 +1414,17 @@ fn the_current_falls_to_the_next_match_when_its_line_is_gone() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(line(
         "assistant_message_delta",
         json!({"text": "alpha needle"}),
@@ -1556,14 +1617,17 @@ fn a_match_in_a_closed_ledger_expands_it_when_current() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -1608,14 +1672,17 @@ fn a_match_in_a_closed_call_detail_opens_its_group_and_call() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -1669,14 +1736,17 @@ fn an_expansion_clears_the_selection() {
     let mut app = attached(40, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -2026,14 +2096,17 @@ fn a_match_on_the_last_row_marks_it_when_that_row_is_on_top() {
     let mut log = Vec::new();
     let mut seq = 0u64;
     // A running turn: its last row is the reply, not a completed marker.
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -2165,14 +2238,19 @@ fn page_group_with(
                     id: String,
                     text: Option<&str>,
                     out: &mut Vec<String>| {
-        out.extend(app.on_line(numbered(
-            log,
-            seq,
-            "turn_started",
-            json!({"input": [{"type": "message", "source": "driver",
-                "content": [{"type": "text", "text": "go"}]}]}),
-            None,
-        )));
+        // The turn asks `commands` again: answer with no rows so `out`
+        // holds only the search's own fetches.
+        out.extend(started(
+            &mut *app,
+            numbered(
+                log,
+                seq,
+                "turn_started",
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": "go"}]}]}),
+                None,
+            ),
+        ));
         out.extend(app.on_line(numbered(log, seq, "step_started", json!({}), None)));
         let message = format!("a_g{group:02}{id}");
         out.extend(app.on_line(numbered(
@@ -3009,14 +3087,17 @@ fn pinned_search_app(
     let mut app = attached(60, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     app.on_line(numbered(
         &mut log,
         &mut seq,
@@ -3177,14 +3258,17 @@ fn no_pin_no_offset() {
     let mut app = attached(60, 10);
     let mut log = Vec::new();
     let mut seq = 0u64;
-    app.on_line(numbered(
-        &mut log,
-        &mut seq,
-        "turn_started",
-        json!({"input": [{"type": "message", "source": "driver",
+    started(
+        &mut app,
+        numbered(
+            &mut log,
+            &mut seq,
+            "turn_started",
+            json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
-        None,
-    ));
+            None,
+        ),
+    );
     let filler: Vec<String> = (1..=4).map(|n| format!("filler {n}")).collect();
     for line in filler {
         app.on_line(numbered(

@@ -16,12 +16,13 @@ mod support;
 
 use std::fs;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
 use support::{
-    SessionGuard, Setup, Socket, TRUECOLOUR, close_session, connect_hub, recv, start_session,
-    subscribe, until, write_json,
+    SessionGuard, Setup, Socket, TRUECOLOUR, close_session, connect_hub, connect_hub_within, recv,
+    start_session, subscribe, until, write_json,
 };
 
 /// The standing-ask tint in truecolour.
@@ -576,4 +577,44 @@ fn two_sessions_approvals_share_one_queue_and_esc_steps_then_badges() {
     guard.wait_gone();
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
+}
+
+/// A hub that cannot start reports its exit status and its `hub.log` tail
+/// through the connect wait: the configuration is broken, so the hub the
+/// wait starts exits at once and the socket never binds.
+#[test]
+fn hub_start_failure_reports_status_and_log_tail() {
+    let setup = Setup::new();
+    let marker = "hub-start-marker-2664";
+    let logs = setup.home().join("logs");
+    fs::create_dir_all(&logs).unwrap();
+    fs::write(logs.join("hub.log"), format!("{marker}\n")).unwrap();
+    fs::write(setup.home().join("config.json"), "{invalid-2664").unwrap();
+    let hub = Arc::new(Mutex::new(None));
+    // The connect's five-second bind wait spans ten seconds here, three
+    // short of this wait, so its `did not bind` error arrives before this
+    // wait's own timeout.
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        connect_hub_within(&setup, &hub, Duration::from_secs(13))
+    }));
+    let message = failed
+        .err()
+        .and_then(|panic| panic.downcast::<String>().ok().map(|boxed| *boxed))
+        .expect("a hub that cannot start fails the connect wait");
+    assert!(
+        message.contains("for the hub to start and say hub_hello"),
+        "the failure keeps the connect wait's message: {message}"
+    );
+    assert!(
+        message.contains("did not bind"),
+        "the failure is the connect's bind error, not another failure: {message}"
+    );
+    assert!(
+        message.contains("exited (exit status: 1)"),
+        "the failure names the hub child's exit status: {message}"
+    );
+    assert!(
+        message.contains(marker),
+        "the failure shows the hub.log tail: {message}"
+    );
 }
