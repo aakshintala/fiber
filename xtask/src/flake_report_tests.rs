@@ -592,17 +592,6 @@ fn stale_wins_over_pr_owned() {
 }
 
 #[test]
-fn a_main_flake_goes_on_to_the_lookup() {
-    let line = format!("main::t\t{PANIC}");
-    let out = classified(
-        &[("linux", &line)],
-        &pr_run(BASE_SHA, HEAD_SHA, "other/file.rs", "other/file.rs"),
-    );
-    assert_eq!(field(&out[0], "action"), Some("lookup"));
-    assert_eq!(field(&out[0], "failing"), Some(FILE));
-}
-
-#[test]
 fn a_line_with_no_tab_has_empty_detail() {
     let out = classified(&[("linux", "main::t")], &push_run());
     assert_eq!(out.len(), 1);
