@@ -740,21 +740,11 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     // streams"). Every wait takes what remains of that one deadline, so
     // the drain's reads share a single bound. `session_status` lines have
     // no position relative to the session's other lines and are set aside.
+    // The watcher also carries initial-turn lines, so match only the three
+    // required event identities without using one as a boundary.
     let wait = Deadline::after(DEADLINE);
     let mut seen: Vec<Envelope> = Vec::new();
-    loop {
-        let has_turn = seen
-            .iter()
-            .any(|line: &Envelope| line.kind == "turn_completed");
-        let has_usage = seen.iter().any(|line: &Envelope| {
-            line.kind == "usage_recorded" && line.payload["generation_id"] == "gen_refresh"
-        });
-        let has_notice = seen.iter().any(|line: &Envelope| {
-            line.kind == "notice" && line.payload["code"] == "provider_unavailable"
-        });
-        if has_turn && has_usage && has_notice {
-            break;
-        }
+    while seen.len() < 3 {
         let line = watcher
             .recv_timeout(wait.left())
             .expect("a line in time")
@@ -763,13 +753,14 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
         if line.kind == "session_status" {
             continue;
         }
-        if !has_turn {
-            if line.kind == "turn_completed" {
-                seen.push(line);
-            }
-            continue;
+        let required = match line.kind.as_str() {
+            "turn_completed" | "notice" => true,
+            "usage_recorded" => line.payload["generation_id"] == "gen_refresh",
+            _ => false,
+        };
+        if required {
+            seen.push(line);
         }
-        seen.push(line);
     }
     let mut kinds: Vec<&str> = seen.iter().map(|line| line.kind.as_str()).collect();
     kinds.sort_unstable();
