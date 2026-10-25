@@ -112,6 +112,7 @@ fn started_before(
                 worktree,
                 content.as_ref(),
                 None,
+                false,
             );
             done_tx.send(outcome).unwrap_or(());
         })
@@ -139,6 +140,7 @@ fn started_with_continues(hub: Hub, workspace: String, continues: Option<Session
                 false,
                 None,
                 continues.as_ref(),
+                false,
             );
             done_tx.send(outcome).unwrap_or(());
         })
@@ -171,6 +173,7 @@ fn a_start_admitted_before_the_store_binds_then_the_next_is_refused() {
         false,
         None,
         None,
+        false,
     ) else {
         panic!("the start admitted before the store binds");
     };
@@ -188,6 +191,7 @@ fn a_start_admitted_before_the_store_binds_then_the_next_is_refused() {
         false,
         None,
         None,
+        false,
     ) else {
         panic!("the start after the store is refused");
     };
@@ -346,6 +350,7 @@ fn a_start_that_times_out_kills_its_starter() {
         false,
         None,
         None,
+        false,
     ) else {
         panic!("the start that binds nothing is rejected");
     };
@@ -408,6 +413,7 @@ impl crate::Starter for FailStarter {
         _overrides: &[&str],
         _worktree: bool,
         _continues: Option<&SessionId>,
+        _supervised: bool,
     ) -> io::Result<Box<dyn crate::Started>> {
         Err(io::Error::other(self.message.clone()))
     }
@@ -583,6 +589,7 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
                 false,
                 Some(&content),
                 None,
+                false,
             );
             done_tx.send(outcome).unwrap_or(());
         })

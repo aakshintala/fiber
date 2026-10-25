@@ -340,6 +340,7 @@ the envelope's `ts`.
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional) and `note` (string) |
 | `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind, a fork, or a `start` `continues` continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `supervised` | boolean | no | true when a program drives the session (`docs/permissions.md`, "Supervised sessions"): fixed at `start`, kept across a resume; absent means false |
 
 #### `rewound`
 
@@ -450,6 +451,7 @@ sent the latest.
 | `workspace` | string | yes | the workspace path |
 | `project` | string | yes | the project's key (`docs/state.md`, "Projects") |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
+| `supervised` | boolean | no | true when a program drives the session (`docs/permissions.md`, "Supervised sessions"): fixed at `start`, kept across a resume; absent means false |
 | `model` | string | yes | the model reference in use |
 | `thinking` | string | no | the thinking level in use, as on `preamble_built`; absent when there is none |
 | `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |

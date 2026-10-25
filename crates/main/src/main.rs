@@ -747,6 +747,7 @@ fn ask_new(
         fiber,
         None,
         None,
+        false,
     )
 }
 
@@ -773,9 +774,10 @@ fn ask_permissions(
 
 /// Finishes a loop, however it started: the budget, whether a person may
 /// answer an approval, and the reviewer every session gets, so a change to
-/// the chain is made once. `answerable` is false only for one-turn
-/// `fiber ask`, new or resumed; the session command serves clients that may
-/// answer (`docs/permissions.md`, "Headless").
+/// the chain is made once. The effective answerability is `answerable`
+/// without `supervised`: false for one-turn `fiber ask` and for supervised
+/// sessions, new or resumed; the session command serves clients that may
+/// answer (`docs/permissions.md`, "Headless", "Supervised sessions").
 #[allow(
     clippy::too_many_arguments,
     reason = "one hand-off of the loop's end: budget, answerability, reviewer, retry and cancel"
@@ -786,19 +788,22 @@ fn finish(
     idle: Option<Duration>,
     warm: Option<u32>,
     answerable: bool,
+    supervised: bool,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
     retry: r#loop::Retry,
     cancel: Arc<r#loop::TurnCancel>,
     slot: &mut Option<r#loop::Summary>,
 ) -> Result<(), Failure> {
+    let answerable = crate::session_command::effective_answerable(answerable, supervised);
     looped
         .map(|looped| {
             looped
                 .budget(budget)
                 .idle_exit(idle)
                 // Only one-turn `fiber ask` is not answerable, and it exits
-                // when its run ends: it never warms.
+                // when its run ends: it never warms. A supervised session
+                // never warms either: nothing may answer it.
                 .warm(warm.filter(|_| answerable))
                 .answerable(answerable)
                 .reviewer(reviewer, limits)

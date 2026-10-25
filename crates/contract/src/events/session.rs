@@ -72,6 +72,10 @@ pub struct SessionStarted {
     /// that continues a rewind, a fork, or a `start` `continues` records the same worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<Worktree>,
+    /// True when a program drives the session (`docs/permissions.md`,
+    /// "Supervised sessions"): fixed at `start`, kept across a resume.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supervised: bool,
 }
 
 /// A session's environment variables, without their values.
@@ -363,6 +367,10 @@ pub struct SessionStatus {
     /// On a delegate, the parent's `session_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<SessionId>,
+    /// True when a program drives the session (`docs/permissions.md`,
+    /// "Supervised sessions"): fixed at `start`, kept across a resume.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supervised: bool,
     /// The model reference in use.
     pub model: String,
     /// The thinking level in use, as on `preamble_built`; absent when there is none.

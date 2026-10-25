@@ -54,6 +54,7 @@ fn status(name: &str) -> SessionStatus {
         project: "p".into(),
         clients: 0,
         closing: false,
+        supervised: false,
     }
 }
 

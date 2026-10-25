@@ -81,6 +81,9 @@ impl Loop {
                 forked_from: Some(start.from),
                 rewind,
                 worktree: start.worktree,
+                // A rewind or fork starts a new session: it is never a
+                // supervised resume of the old one.
+                supervised: false,
             }),
             None,
             None,

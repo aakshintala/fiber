@@ -66,7 +66,7 @@ impl Temp {
 fn start(starter: &FakeStarter, n: u64) -> SessionId {
     let id = SessionId(testkit::id(n));
     starter
-        .start(&id, Path::new("/w"), None, &[], false, None)
+        .start(&id, Path::new("/w"), None, &[], false, None, false)
         .unwrap();
     id
 }
@@ -292,7 +292,15 @@ fn a_session_started_mid_scan_is_shut_down_by_the_rescan() {
         // The starter binds fully before the scan resumes: the rescan
         // finds a running session, not a half-bound one.
         for_hook
-            .start(&second_for_hook, Path::new("/w"), None, &[], false, None)
+            .start(
+                &second_for_hook,
+                Path::new("/w"),
+                None,
+                &[],
+                false,
+                None,
+                false,
+            )
             .unwrap();
     }));
     let outcome = join(stop_async(&hub));
