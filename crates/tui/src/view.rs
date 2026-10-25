@@ -18,6 +18,7 @@ use crate::text::to_u16;
 
 pub(crate) mod banner;
 pub(crate) mod chrome;
+mod clear;
 mod completions;
 mod drag;
 mod history;
@@ -117,6 +118,8 @@ pub(crate) fn frame_of(app: &App, frame: Surface) -> Rect {
     let mut targets = Vec::new();
     if frame == Surface::Quit {
         quit::draw(app, area, &mut buf, &mut targets)
+    } else if frame == Surface::Clear {
+        clear::draw(app, area, &mut buf, &mut targets)
     } else if frame == Surface::Notice {
         notice_rows::overlay(app, area, &mut buf, &mut targets)
     } else {
@@ -142,6 +145,9 @@ fn draw_framed(
         } else if surface == Surface::Quit {
             let slab = quit::draw(app, area, buf, targets);
             app.frames().note(Surface::Quit, slab);
+        } else if surface == Surface::Clear {
+            let slab = clear::draw(app, area, buf, targets);
+            app.frames().note(Surface::Clear, slab);
         }
     }
 }

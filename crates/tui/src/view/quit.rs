@@ -3,15 +3,12 @@
 //! conversation column with a session attached, and over home's area on
 //! home, in the overlay frame.
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
-
 use crate::app::App;
 use crate::home::{QuitChoice, Spot, close_all_count, quit_count};
 use crate::mouse::{Target, TargetId};
-use crate::view::overlay::{self, Place, Row};
+use crate::view::overlay::{self, Place};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 
 /// The quit choices: leaving working sessions running, closing them all
 /// now, or staying, each beside the click it takes.
@@ -34,16 +31,6 @@ const STOP_CHOICES: [(&str, &str, QuitChoice); 2] = [
     ("Enter", "stop", QuitChoice::CloseAll),
     ("Esc", "cancel", QuitChoice::Stay),
 ];
-
-/// One dim body row.
-fn dim_row(text: String) -> Row {
-    Row {
-        spans: vec![Span::styled(text, Style::new().add_modifier(Modifier::DIM))],
-        right: Vec::new(),
-        targets: Vec::new(),
-        barred: false,
-    }
-}
 
 /// Draws the quit question over `area`: the title, the count of working
 /// sessions, the three choices with Enter's focused, and what the mouse
@@ -133,34 +120,18 @@ fn draw_question(
     choices: &[(&str, &str, QuitChoice)],
     footer: &str,
 ) -> Rect {
-    let mut body = vec![
-        dim_row(count),
-        Row {
-            spans: Vec::new(),
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        },
-    ];
-    // The choices are short, so each draws as one row: the rows line up
-    // with the choice they click.
-    let labels: Vec<(&str, &str)> = choices
+    let choices: Vec<(&str, &str, TargetId)> = choices
         .iter()
-        .map(|(key, label, _)| (*key, *label))
+        .map(|(key, label, choice)| (*key, *label, TargetId::Home(Spot::Quit(*choice))))
         .collect();
-    body.extend(overlay::choices(&labels, 0, 67));
-    for (row, (_, _, choice)) in body.iter_mut().skip(2).zip(choices.iter()) {
-        row.targets
-            .push((0, u16::MAX, TargetId::Home(Spot::Quit(*choice))));
-    }
-    let framed = overlay::Overlay {
-        title: Some((title.to_owned(), Some(Span::raw("✕")))),
-        close: Some(TargetId::Home(Spot::Quit(QuitChoice::Stay))),
-        body,
-        footer: Some(overlay::hint(footer)),
-        prefer: 71,
-    };
-    overlay::draw(buf, area, &framed, Place::Centre, targets)
+    let question = overlay::choice_question(
+        title,
+        count,
+        TargetId::Home(Spot::Quit(QuitChoice::Stay)),
+        &choices,
+        footer,
+    );
+    overlay::draw(buf, area, &question, Place::Centre, targets)
 }
 
 #[cfg(test)]

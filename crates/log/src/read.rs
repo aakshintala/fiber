@@ -387,7 +387,7 @@ enum End {
 
 impl Queue {
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        support::lock(&self.state)
     }
 
     /// Hands the watcher `line` without ever blocking the writer. A watcher
@@ -802,12 +802,12 @@ pub(crate) mod parked_after_end {
 
     /// Clears the signal between tests.
     pub(crate) fn clear() {
-        *park().seen.lock().unwrap_or_else(PoisonError::into_inner) = false;
+        *support::lock(&park().seen) = false;
     }
 
     /// Notes that a caller parked in `recv_after_end` with nothing queued.
     pub(crate) fn note() {
-        *park().seen.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        *support::lock(&park().seen) = true;
         park().changed.notify_all();
     }
 
@@ -815,7 +815,7 @@ pub(crate) mod parked_after_end {
     /// queued, failing the test past the bound.
     #[track_caller]
     pub(crate) fn wait() {
-        let guard = park().seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let guard = support::lock(&park().seen);
         let (guard, _) = park()
             .changed
             .wait_timeout_while(guard, BOUND, |seen| !*seen)

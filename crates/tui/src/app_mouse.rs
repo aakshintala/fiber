@@ -244,10 +244,10 @@ impl App {
         if order.contains(&Surface::ReviewerSetup) {
             return;
         }
-        // The quit question and the notice overlay have nothing to
-        // scroll, and their frames cover the rows beneath: the wheel
-        // over a frame is theirs and moves nothing.
-        if [Surface::Quit, Surface::Notice]
+        // The quit and clear questions and the notice overlay have
+        // nothing to scroll, and their frames cover the rows beneath:
+        // the wheel over a frame is theirs and moves nothing.
+        if [Surface::Quit, Surface::Clear, Surface::Notice]
             .into_iter()
             .any(|frame| order.contains(&frame) && crate::view::frame_of(self, frame).contains(at))
         {

@@ -249,7 +249,8 @@ list is one row tall, it shows the focused row's first line.
   on, in full: "approval: shell cargo publish --dry-run", "question: 2 of 3
   answered".
 - **A session closing after `/clear`** stays a live row, its word "CLOSING",
-  dim, until it exits ("Slash commands").
+  dim, until it exits ("Slash commands"). The row gets that state from
+  `session_status.closing`.
 - **The project's exited sessions** follow under a dim "exited · N": up to
   three, the most recent first, each one dim row: ○, the name, and at the
   right the id, turns, spend and age ("3h ago"). When there are more, a last
@@ -1904,6 +1905,7 @@ later release still applies.
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
+| `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |
 | `/feedback <description>`, `/bug <description>` | Writes a feedback report with the description, version, platform, doctor output and the diagnostics of the session on screen, and prints its path and the issue link. With no session on screen, the diagnostics are the hub's lines only. A session this machine holds no diagnostic lines for, such as one on a remote hub, still gets its id, the instruction to export its log privately and the hub's lines, with a notice that this machine has no diagnostic lines for it. The report is the one `fiber feedback` writes (`docs/invocation.md`, "Commands and flags"). |
 | `/quit`, `/exit` | Quits ("Quit"). |
@@ -1934,7 +1936,15 @@ on screen (its worktree included), with that session's model, thinking level
 and credential label, and switches the screen to it with an empty
 conversation. The new session builds its own prompt cache; nothing in the old
 session's prefix changes. The new session takes the old one's card on the
-rail, keeping its number.
+rail, keeping its number. The terminal keeps the old session on screen until
+the hub answers with the new session's id. It sends the old session's workspace
+path unchanged.
+
+Before the session has built its first prompt, its credential label is the one
+its `start` named; with none named, the new session picks its credential as any
+new session does. When the hub refuses or fails the `start`, the screen stays
+on the session it shows, a notice gives the start's code and message, and no
+`close` is sent.
 
 The old session is sent `close` without `now` (`docs/invocation.md`, "What
 each command does"): it takes no more prompts, finishes the turn and the jobs
@@ -1948,7 +1958,8 @@ When the old session waits on an approval or a question, a `close` without
 ("Look", "Overlays"): the title "Clear", then "review #688 waits on an
 approval." dim, then two choices, "Enter" to clear anyway and "Esc" to stay,
 with Enter's focused. Clearing anyway sends `close` with `now`, which drops
-the wait.
+the wait. A wait that begins after `/clear` asked nothing keeps the close
+polite: the old session's request waits in the queue for an answer.
 
 ### Logging in
 
