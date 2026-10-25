@@ -737,6 +737,11 @@ fn a_watch_entry_is_not_registered_and_names_the_entry() {
     );
     assert!(loaded_names(&run).contains(&HOOKS_NAME.to_owned()));
 
+    // Session fixtures assert the complete ordered durable stream
+    // (`docs/extensions.md`, "Testing an extension"); positions follow
+    // `docs/events.md`, "Identity and ordering", "Session and turn",
+    // "Actions" and "Extensions". The missing timeout must yield an
+    // entry/field notice (`docs/extensions.md`, "Hooks declared in configuration").
     // The watch entry missing `timeout` left its notice and never ran;
     // the hook entry ran.
     let notices = run.all("notice");

@@ -1,4 +1,5 @@
 {
+  "name": "Watcher runs once for its matching event (docs/extensions.md: Hooks declared in configuration, Testing an extension; docs/events.md: Session and turn, Extensions)",
   "script": {
     "steps": [
       {
