@@ -40,8 +40,10 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. They run outside the verdict, so their
-result never decides `CI`. The docs check fails when any other job is
+`backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `stress`. They run outside the verdict, so their
+result never decides `CI`. The `stress` job is a pilot exemption: its
+result never decides `CI`, and it joins the `ci` job's `needs` when the
+owner makes it required. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
 
@@ -144,7 +146,8 @@ the `fiber` binary that binary-level tests start behaves like the one that
 ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
-run: CI opens a flake issue naming the test, or comments on the open one
+run, except for a test the pull request touched (below): CI opens a flake
+issue naming the test, or comments on the open one
 (`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
@@ -157,8 +160,12 @@ up the complete open and closed issues, asks
 fetches only those endpoints, and runs
 `cargo xtask flake-report --tested-commit` to decide one JSON-lines action
 per unique test title, probing ancestry itself only for each selected
-latest fix. It uploads one combined `flake-report-data` artifact carrying
-the decision lines plus the selected runner lists. The write-only
+latest fix. It then runs `cargo xtask flake-classify`, which reads the
+runner lists and the two file lists git diffs from the merge base, and
+writes one classification line per unique test title: a stale base, a
+file the pull request owns, or the issue lookup. It uploads one combined
+`flake-report-data` artifact carrying the decision lines plus the
+classification lines. The write-only
 `flake_report` job holds `contents: read`, `pull-requests: write` and
 `issues: write`, checks nothing out and runs no Fiber code: it downloads
 only that exact combined artifact, with no Actions API call and no added
@@ -177,6 +184,24 @@ concurrency is unchanged: a newer push still cancels an older pull request
 run, which can lose its report, and a later test run reports the flake
 again. No other test retries.
 
+A test the pull request adds or changes runs 30 times under the `stress`
+profile, which never retries; 100 times when the pull request fixes a
+flaky test. One failure fails the run. The retry above applies only to
+tests the pull request did not touch.
+
+Pending owner ruling (#3190): the number of copies run at once.
+
+The `stress` job runs on a ready pull request on Linux x86_64 beside the
+test jobs and builds from the same restored cache. The tests it runs are
+the test functions the diff adds or changes, found by
+`cargo xtask stress-plan` with the same test-file rules as the red-commit
+check, and a diff that touches no test function skips the run. The count
+is read from the linked issue's labels. The job is not in `ci`'s `needs`,
+so a failure there stops no merge during the pilot. It writes its wall
+time, runner minutes and selected tests to its job summary. A touched
+test still gets nextest's one retry but a pass on that retry fails the
+test job (`cargo xtask touched-retries`).
+
 The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
 artifact, kept 7 days. It holds only XML this run wrote: the full-suite
 `scripts/check` output after retry handling, uploaded before the focused
@@ -186,7 +211,7 @@ On Linux x86_64 alone:
 
 - `cargo fmt --check`
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
-- no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check) and each test file another open pull request holds; it reports each site by file path, then line
+- no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names only each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check); it reports each site by file path, then line
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time but a
@@ -303,7 +328,7 @@ under 24 MiB and runs the benchmarks that gate each pull request, the rows the s
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
 binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
-by sample for every timing row, and a row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
+by sample for every timing row. When a gated timing row breaches, the job runs a second harness process for that row alone, 4 more samples per side, and judges all samples. The `terminal attach` row and `session_list_ms` never remeasure: the first already takes 5 samples and the second maps to no row. A row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
 exact rows no skipped row feeds still run on the head and compare
 against the backstop's stored results for the base commit, the
 `benchmarks-<sha>` artifact, and a memory or exact budget the base fails

@@ -1,6 +1,6 @@
 //! Screen snapshots: the whole in-memory screen against stored files.
 
-use super::{conversation_rows, cursor, draw_row, render, text};
+use super::{conversation_rows, cursor, draw_row, focus_style, lift_hover, render, text};
 use crate::app::App;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
@@ -940,6 +940,177 @@ fn ledger_with_an_image_line() {
     ));
     app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
     insta::assert_snapshot!("ledger_with_an_image_line", sized(&mut app, 80, 12));
+}
+
+/// A one-row buffer with a placeholder cell then a plain one.
+fn placeholder_row() -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+    buf.set_string(
+        0,
+        0,
+        "\u{10EEEE}\u{305}\u{305}",
+        Style::new().fg(ratatui::style::Color::Indexed(1)),
+    );
+    buf.set_string(1, 0, "x", Style::new());
+    buf
+}
+
+#[test]
+fn hover_leaves_placeholder_cells_alone() {
+    let mut buf = placeholder_row();
+    lift_hover(&mut buf, Rect::new(0, 0, 2, 1));
+    // The placeholder keeps its id-encoding colours, while the plain
+    // cell takes the hover tint.
+    assert_eq!(buf[(0, 0)].fg, ratatui::style::Color::Indexed(1));
+    assert_eq!(buf[(0, 0)].bg, ratatui::style::Color::Reset);
+    assert_ne!(buf[(1, 0)].bg, ratatui::style::Color::Reset);
+}
+
+#[test]
+fn focus_leaves_placeholder_cells_alone() {
+    let mut buf = placeholder_row();
+    focus_style(&mut buf, Rect::new(0, 0, 2, 1));
+    // Reversing a placeholder would destroy the image id its colours
+    // carry; the plain cell still takes the focus style.
+    assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+    assert!(buf[(1, 0)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn ledger_with_an_inline_image() {
+    use serde_json::json;
+    // Where the terminal speaks kitty's graphics protocol, a call whose
+    // result carried a PNG draws its placeholder grid under its ledger
+    // row, then its caption line (`docs/tui.md`, "Images").
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "look at this"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "shot.png"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [
+            {"type": "text", "text": "saved"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        2_000,
+        json!({"outcome": "completed"}),
+    ));
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    insta::assert_snapshot!("ledger_with_an_inline_image", sized(&mut app, 80, 24));
+}
+
+#[test]
+fn clicking_a_placeholder_opens_the_image_in_the_viewer() {
+    use serde_json::json;
+    // A call whose result carried a PNG draws its placeholder grid under
+    // its ledger row: clicking a placeholder cell opens the viewer, like
+    // the caption does (`docs/tui.md`, "Images").
+    let mut app = empty();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "look at this"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "shot.png"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [
+            {"type": "text", "text": "saved"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        2_000,
+        json!({"outcome": "completed"}),
+    ));
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    // The first placeholder cell: a grid cell, not the caption.
+    let mut cell = None;
+    for y in 0..24 {
+        for x in 0..80 {
+            if buf[(x, y)].symbol().starts_with('\u{10EEEE}') {
+                cell = Some((x, y));
+                break;
+            }
+        }
+        if cell.is_some() {
+            break;
+        }
+    }
+    let (x, y) = cell.expect("the grid draws placeholder cells");
+    let target = crate::mouse::hit(&targets, x, y).expect("the cell is a target");
+    assert!(
+        matches!(
+            target,
+            crate::mouse::TargetId::Line(crate::app::Target::Image(_))
+        ),
+        "the placeholder carries the image target: {target:?}"
+    );
+    let effect = app.on_click(target);
+    if let crate::app::Effect::Send(lines) = effect {
+        assert_eq!(lines.len(), 1);
+        let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+        assert_eq!(
+            line.get("command").and_then(serde_json::Value::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            line.get("args")
+                .and_then(|args| args.get("path"))
+                .and_then(serde_json::Value::as_str),
+            Some("artifacts/shot.png")
+        );
+    } else {
+        panic!("the click opens the viewer: {effect:?}");
+    }
 }
 
 #[test]

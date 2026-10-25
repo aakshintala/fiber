@@ -18,6 +18,7 @@ pub(super) fn median(values: &[f64], runs: usize) -> Result<f64, String> {
 }
 
 /// A parsed result file.
+#[derive(Clone, Debug)]
 pub(super) struct Results {
     pub(super) idle_secs: u64,
     /// The run count every metric without its own entry declares.
@@ -179,6 +180,88 @@ pub(super) fn runs<'a>(results: Option<&'a Results>, id: &str) -> Result<Vec<&'a
             Some(_) | None => Err(format!("{id}: run {}: nothing recorded", i + 1)),
         })
         .collect()
+}
+
+/// Appends the remeasure run's samples to the first pass's for every timing
+/// metric of `rows`, so the judge medians all 7 per side. `rows` holds
+/// `ROW_METRICS` row names from the first pass's breaches; other metrics
+/// keep their first-pass samples, and ids ending in `_kib` (memory) or
+/// `_counts` (counts) are never merged. The same function merges the head
+/// pair and the base pair. Any problem with the extra file is an error and
+/// the caller keeps the first pass: a different `cpu` (a different runner),
+/// a non-empty `failures` (a failed run, not slow samples), a breached-row
+/// metric missing from the extra file, one declaring a count other than
+/// `REMEASURE_RUNS`, or a sample that is not a finite, non-negative number.
+pub(super) fn merge_remeasure(
+    first: &Results,
+    extra: &Results,
+    rows: &[&str],
+) -> Result<Results, String> {
+    if first.cpu != extra.cpu {
+        return Err(format!(
+            "cpu {:?} differs from the first pass's {:?}: not the same runner",
+            extra.cpu, first.cpu
+        ));
+    }
+    if !extra.failures.is_empty() {
+        return Err(format!(
+            "extra run failed, not a slow sample: {}",
+            extra.failures.join("; ")
+        ));
+    }
+    let mut merged = first.clone();
+    for row in rows {
+        let (_, ids) = super::judge::ROW_METRICS
+            .iter()
+            .find(|(name, _)| name == row)
+            .ok_or_else(|| format!("{row}: no ROW_METRICS row holds it"))?;
+        for id in *ids {
+            if id.ends_with("_kib") || id.ends_with("_counts") {
+                continue;
+            }
+            let extra_values = extra
+                .metrics
+                .get(*id)
+                .ok_or_else(|| format!("{id}: missing from the extra run"))?;
+            let extra_samples = extra_values
+                .as_array()
+                .ok_or_else(|| format!("{id}: not an array in the extra run"))?;
+            let declared = extra.runs_of(id);
+            if declared != super::judge::REMEASURE_RUNS {
+                return Err(format!(
+                    "{id}: extra run declares {declared} runs, expected {}",
+                    super::judge::REMEASURE_RUNS
+                ));
+            }
+            if extra_samples.len() != super::judge::REMEASURE_RUNS {
+                return Err(format!(
+                    "{id}: extra run holds {} samples, expected {}",
+                    extra_samples.len(),
+                    super::judge::REMEASURE_RUNS
+                ));
+            }
+            for sample in extra_samples {
+                let valid = sample.as_f64().is_some_and(|n| n.is_finite() && n >= 0.0);
+                if !valid {
+                    return Err(format!(
+                        "{id}: extra run holds a sample that is not a finite, \
+                         non-negative number: {sample}"
+                    ));
+                }
+            }
+            let first_samples = merged
+                .metrics
+                .get_mut(*id)
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| format!("{id}: missing from the first pass"))?;
+            first_samples.extend(extra_samples.iter().cloned());
+            merged.metric_runs.insert(
+                (*id).to_owned(),
+                first.runs_of(id) + super::judge::REMEASURE_RUNS,
+            );
+        }
+    }
+    Ok(merged)
 }
 
 pub(super) fn field(entry: &Value, id: &str, name: &str) -> Result<u64, String> {

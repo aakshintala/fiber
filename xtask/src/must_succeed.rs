@@ -14,30 +14,16 @@ use crate::select::is_test_file;
 /// reads no Rust source for it; an xtask test asserts the two are equal.
 pub(crate) const FLOOR: Duration = Duration::from_secs(10);
 
-/// One kept bound: a `const` by name, or every site in a file that an open
-/// pull request holds.
+/// One kept bound: a `const` kept by name.
 pub(crate) struct Allowance {
     pub(crate) path: &'static str,
-    /// `None` covers every site in `path`. Only a file another open pull
-    /// request holds gets one, and its reason names that pull request.
-    pub(crate) name: Option<&'static str>,
+    /// The kept `const`'s name.
+    pub(crate) name: &'static str,
     pub(crate) reason: &'static str,
 }
 
 const fn kept(path: &'static str, name: &'static str, reason: &'static str) -> Allowance {
-    Allowance {
-        path,
-        name: Some(name),
-        reason,
-    }
-}
-
-const fn held(path: &'static str, reason: &'static str) -> Allowance {
-    Allowance {
-        path,
-        name: None,
-        reason,
-    }
+    Allowance { path, name, reason }
 }
 
 const READS: &str = "code under test reads it";
@@ -110,7 +96,6 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
         ABSENT,
     ),
     kept("crates/cli/src/doctor/files_tests.rs", "ABSENT", ABSENT),
-    held("crates/main/tests/delegates.rs", "held by #3001"),
 ];
 
 /// Calls whose top-level arguments may hold a wait bound, by name.
@@ -151,18 +136,12 @@ pub(crate) fn must_succeed(files: &[RustFile], allowances: &[Allowance]) -> Vec<
         let mut found = Vec::new();
         walk(&trees, &scan, &mut found);
         found.sort_by_key(|site| site.line);
-        let whole_file = allowances
-            .iter()
-            .any(|a| a.path == file.path && a.name.is_none());
         for site in found {
-            if whole_file {
-                continue;
-            }
-            let allowed = allowances.iter().find(|a| {
-                a.path == file.path && a.name.is_some() && a.name == site.name.as_deref()
-            });
+            let allowed = allowances
+                .iter()
+                .find(|a| a.path == file.path && Some(a.name) == site.name.as_deref());
             match allowed {
-                Some(allowance) => hits.push((allowance.path, allowance.name.unwrap_or_default())),
+                Some(allowance) => hits.push((allowance.path, allowance.name)),
                 None => failures.push(format!(
                     "{}:{}: {} MUST_SUCCEED_WITHIN ({})",
                     file.path,
@@ -176,7 +155,7 @@ pub(crate) fn must_succeed(files: &[RustFile], allowances: &[Allowance]) -> Vec<
     let mut stale: Vec<(&str, &str, String)> = allowances
         .iter()
         .filter_map(|a| {
-            let name = a.name?;
+            let name = a.name;
             let scanned_here = scanned.iter().any(|f| f.path == a.path);
             (scanned_here && !hits.contains(&(a.path, name))).then(|| {
                 (

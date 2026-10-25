@@ -577,6 +577,9 @@ fn resumed_session(
         &extensions.commands(),
     );
     mcp.notices.extend(listed.notices);
+    // The turn-start check measures the runnable set against these rows,
+    // so a template added while the session was away still refreshes them.
+    skill_set.sync_commands(&listed.runnable);
     session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
@@ -585,6 +588,8 @@ fn resumed_session(
         backend: extensions.search_backend(),
     };
     let current = Arc::new(crate::session_extensions::Current::new(extensions));
+    let (commands_refresh, commands_sync) =
+        crate::session_command::command_update_wiring(&current, &session, &skill_set);
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());
     session.credentials(readers.labels, readers.admitted);
@@ -604,6 +609,7 @@ fn resumed_session(
         diag.clone(),
         shell_read_only,
         std::sync::Arc::new(std::sync::Mutex::new(repository)),
+        commands_sync,
     );
     // Every notice the startup already wrote, including the ones
     // `mcp_servers_started` writes after this read: the late preparer
@@ -704,6 +710,7 @@ fn resumed_session(
                         .repository_code(offer)
                         .approved_code(load)
                         .skill_set(skill_set)
+                        .commands_refresh(commands_refresh)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,

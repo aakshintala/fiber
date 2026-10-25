@@ -116,6 +116,7 @@ struct Fixture {
     rig: Rig,
     state: Arc<State>,
     replacements: Arc<Mutex<Vec<doors::Replacement>>>,
+    commands_synced: Arc<Mutex<r#loop::RunnableCommands>>,
     declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
     delegate: Arc<RecordingDelegate>,
     servers: Vec<FakeServer>,
@@ -185,6 +186,8 @@ impl Fixture {
         });
         let replacements = Arc::new(Mutex::new(Vec::new()));
         let seen = replacements.clone();
+        let commands_synced = Arc::new(Mutex::new(r#loop::RunnableCommands::new()));
+        let synced = commands_synced.clone();
         let declared = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let declared_now = declared.clone();
         let empty = empty_servers(&rig, &parts.prompt.clock);
@@ -212,6 +215,9 @@ impl Fixture {
                 }
             }),
             replace: Arc::new(move |replacement| seen.lock().unwrap().push(replacement)),
+            commands_sync: Arc::new(move |rows| {
+                *synced.lock().unwrap() = rows.clone();
+            }),
             drive: Arc::new(NoDrive),
             model: Arc::new(NoDrive),
             delegate: Arc::clone(&delegate) as Arc<dyn contract::extension::HostDelegate>,
@@ -229,6 +235,7 @@ impl Fixture {
             rig,
             state,
             replacements,
+            commands_synced,
             declared,
             delegate,
             servers: Vec::new(),
@@ -500,6 +507,47 @@ fn reload_replaces_command_list_and_dropped_preparation_does_not_install() {
     );
     assert!(replacements[0].hooks.is_some());
     assert!(fixture.declared.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_reload_install_syncs_the_runnable_discovery_baseline() {
+    let fixture = Fixture::new();
+    let template = fixture
+        .rig
+        .workspace
+        .join(".agents/skills/release/SKILL.md");
+    std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+    std::fs::write(
+        &template,
+        "---\nname: release\ndescription: Releases.\ndisable-model-invocation: true\n---\nBody.\n",
+    )
+    .unwrap();
+    let path = fixture.rig.home.join("extensions/demo/init.lua");
+    std::fs::write(
+        path,
+        "fiber.command('fresh',{timeout=5000,run=function() return 'fresh' end})",
+    )
+    .unwrap();
+    assert!(fixture.commands_synced.lock().unwrap().is_empty());
+    let prepared = fixture.prepare();
+    assert!(fixture.commands_synced.lock().unwrap().is_empty());
+    (prepared.installed)();
+    // The install hands the skill set the same skill/template baseline
+    // the replacement rows contain, without tracking extension commands.
+    let replacements = fixture.replacements.lock().unwrap();
+    assert_eq!(replacements.len(), 1);
+    assert_eq!(
+        *fixture.commands_synced.lock().unwrap(),
+        std::collections::BTreeMap::from([("release".to_owned(), false)])
+    );
+    assert_eq!(
+        replacements[0]
+            .commands
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["release", "fresh"]
+    );
 }
 
 #[test]
@@ -1359,6 +1407,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         repository: Arc::clone(&base.repository),
         declare: Arc::clone(&base.declare),
         replace: Arc::clone(&base.replace),
+        commands_sync: Arc::clone(&base.commands_sync),
         drive: Arc::clone(&base.drive),
         model: Arc::clone(&base.model),
         delegate: Arc::clone(&base.delegate),

@@ -491,7 +491,7 @@ fn a_schema_mismatch_says_so_and_hangs_up() {
 #[test]
 fn restore_puts_back_what_setup_changed() {
     let pair = open();
-    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c";
+    let start = "\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?1003h\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n\x1b[?u\x1b[c\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
     let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let frames = watch(&pair.main, vec![start.as_bytes(), end.as_bytes()]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
@@ -1151,7 +1151,7 @@ fn command_after_decline(
     payload: serde_json::Value,
     keys: &[u8],
 ) -> serde_json::Value {
-    let (mut lp, reader) = connected_loop();
+    let (mut lp, mut reader) = connected_loop();
     if running {
         feed(
             &mut lp,
@@ -1166,6 +1166,28 @@ fn command_after_decline(
                 payload: serde_json::json!({"input": [{"type": "message",
                     "source": "driver",
                     "content": [{"type": "text", "text": "go"}]}]})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            }))],
+        );
+        // The turn asks `commands` again: answer with no rows so the
+        // decline's reply stays next on the socket.
+        let (next, asked) = command(reader, "the turn's commands");
+        reader = next;
+        assert_eq!(asked["command"], "commands");
+        feed(
+            &mut lp,
+            vec![Input::Hub(Line::Session(contract::Envelope {
+                kind: "command_accepted".to_owned(),
+                session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: None,
+                seq: None,
+                payload: serde_json::json!({"command_id": asked["id"],
+                    "result": {"commands": []}})
                 .as_object()
                 .cloned()
                 .unwrap_or_default(),
