@@ -3485,7 +3485,9 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
         (
             Some(NO_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // An `on_failure`-less entry beside a `blocking` one still gates.
         (
@@ -3493,19 +3495,25 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
                 r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#,
             ),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["guard".to_owned(), "plain".to_owned()],
+            },
         ),
         // An unknown `on_failure` is not consent to fail open.
         (
             Some(UNKNOWN_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // A non-string `on_failure` is not consent either.
         (
             Some(NON_STRING_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // Watcher entries never gate the start.
         (Some(WATCHER_ENTRY), false, super::HooksState::Ready),
@@ -3530,6 +3538,29 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
 }
 
 #[test]
+fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
+    let home = Home::new();
+    let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
+        super::HooksState::MissingBlocking {
+            names: vec!["a".into(), "invalid".into(), "missing".into(), "z".into()]
+        }
+    );
+    let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[]).unwrap(),
+        super::HooksState::MissingBlocking {
+            names: vec!["a".into(), "z".into()]
+        }
+    );
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[config::full_name("hooks")]).unwrap(),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
 fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
     let home = Home::new();
     match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]).unwrap() {
@@ -3545,7 +3576,7 @@ fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
                 notice.message
             );
         }
-        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking) => {
+        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking { .. }) => {
             panic!("expected MissingNotice, got {state:?}");
         }
     }
