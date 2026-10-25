@@ -3757,3 +3757,403 @@ fn unreadable_hooks_settings_skip_the_load_and_report_config_invalid() {
     let error = super::hooks_state(&home.config(&[]), &[]).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConfigInvalid);
 }
+
+// ---------- Process package admission ----------
+//
+// A process package's registrations fold into the session's registries
+// through the same settle and notice paths Lua registrations take, with
+// the process references behind the session's runtime.
+
+use crate::package::{Package as ProcessPackage, PackageOptions as ProcessPackageOptions};
+use crate::process::RegisterOutcome as ProcessOutcome;
+use contract::CommandId as ProcessCommandId;
+use serde_json::Value as ProcessValue;
+use std::collections::BTreeSet as ProcessFoldSet;
+
+/// A process package directory holding `extra` merged over the base
+/// manifest for `fiber.test/proc`.
+fn process_dir(extra: serde_json::Value) -> fakes::TempDir {
+    let dir = fakes::TempDir::new("fiber-process-fold");
+    let mut manifest = json!({
+        "name": "fiber.test/proc",
+        "version": "v1.2.3",
+        "fiber": "0.1.0",
+        "api": 1,
+        "process": {"program": "proc", "exit_timeout_ms": 1000},
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        manifest[key] = value.clone();
+    }
+    fs::write(dir.path().join("extension.json"), manifest.to_string()).unwrap();
+    dir
+}
+
+/// Loads the process package in `dir`.
+fn process_package(dir: &fakes::TempDir) -> Arc<ProcessPackage> {
+    ProcessPackage::load(ProcessPackageOptions {
+        dir: dir.path().to_path_buf(),
+        clock: FakeClock::new(),
+    })
+    .unwrap()
+}
+
+/// Answers one registration call through the package.
+fn process_register(
+    package: &ProcessPackage,
+    id: &str,
+    call: &str,
+    args: ProcessValue,
+) -> ProcessOutcome {
+    package.register(
+        ProcessCommandId(id.to_owned()),
+        call,
+        args.as_array().unwrap(),
+    )
+}
+
+/// A valid `fiber.tool` spec with `run`, as JSON.
+fn process_tool_spec() -> ProcessValue {
+    json!({
+        "description": "Does the thing.",
+        "input_schema": {"type": "object"},
+        "effects": {"effects": [], "reversible": true},
+        "timeout": 5000,
+        "run": true,
+    })
+}
+
+/// A valid `fiber.hook` spec with `run`, as JSON.
+fn process_hook_spec() -> ProcessValue {
+    json!({
+        "phase": "transform",
+        "timeout": 5000,
+        "on_failure": "blocking",
+        "run": true,
+    })
+}
+
+/// A valid `fiber.watch` spec with `run`, as JSON.
+fn process_watcher_spec() -> ProcessValue {
+    json!({"timeout": 5000, "run": true})
+}
+
+/// A valid `fiber.command` spec with `run`, as JSON.
+fn process_command_spec() -> ProcessValue {
+    json!({"timeout": 5000, "run": true, "description": "Runs it."})
+}
+
+/// A valid `fiber.search_backend` spec with `run`, as JSON.
+fn process_search_spec() -> ProcessValue {
+    json!({"timeout": 5000, "run": true})
+}
+
+/// Registers one of every session-facing family through the package.
+fn register_every_family(package: &ProcessPackage) {
+    for (id, call, args) in [
+        ("c1", "fiber.tool", json!(["t", process_tool_spec()])),
+        (
+            "c2",
+            "fiber.hook",
+            json!(["turn_start", process_hook_spec()]),
+        ),
+        (
+            "c3",
+            "fiber.hook",
+            json!(["after_tool", process_hook_spec()]),
+        ),
+        (
+            "c4",
+            "fiber.watch",
+            json!([["notice"], process_watcher_spec()]),
+        ),
+        (
+            "c5",
+            "fiber.command",
+            json!(["cmd", process_command_spec()]),
+        ),
+        (
+            "c6",
+            "fiber.search_backend",
+            json!(["web", process_search_spec()]),
+        ),
+    ] {
+        let outcome = process_register(package, id, call, args);
+        assert!(
+            matches!(outcome, ProcessOutcome::Accepted { .. }),
+            "{call}: {outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn process_registrations_fold_into_the_session() {
+    let dir = process_dir(json!({}));
+    let package = process_package(&dir);
+    register_every_family(&package);
+    let mut session = SessionExtensions::default();
+    let mut chain = super::chain::Builder::default();
+    let settled: ProcessFoldSet<(String, String)> =
+        ProcessFoldSet::from([("fiber.test/proc".to_owned(), "t".to_owned())]);
+    assert!(
+        session.admit_process("fiber.test/proc", &package, &mut chain, &settled),
+        "a clean package folds"
+    );
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    let tools = session.tools();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].0, "fiber.test/proc");
+    assert_eq!(tools[0].1.definition().name, "t");
+    assert!(session.has_hooks());
+    let home = Home::new();
+    chain.fill(&home.config(&[]), &mut session);
+    assert_eq!(session.lifecycle.turn_start.len(), 1);
+    assert_eq!(session.after_tool.len(), 1);
+    assert_eq!(
+        session.after_tool[0].hook.command,
+        ProcessCommandId("c3".to_owned())
+    );
+    let hook = &session.lifecycle.turn_start[0];
+    assert!(hook.blocking);
+    assert_eq!(hook.hook.command, ProcessCommandId("c2".to_owned()));
+    assert_eq!(hook.hook.key, "run");
+    assert_eq!(session.watchers.len(), 1);
+    assert_eq!(session.watchers[0].name, "fiber.test/proc");
+    assert_eq!(session.watchers[0].kinds, vec!["notice".to_owned()]);
+    assert_eq!(
+        session.watchers[0].watcher.command,
+        ProcessCommandId("c4".to_owned())
+    );
+}
+
+#[test]
+fn process_package_problems_become_session_notices() {
+    let dir = process_dir(json!({}));
+    let package = process_package(&dir);
+    let refused = process_register(
+        &package,
+        "c1",
+        "fiber.tool",
+        json!(["t", {"description": "Does the thing.", "input_schema": {"type": "object"}, "effects": {"effects": [], "reversible": true}, "run": true}]),
+    );
+    assert!(
+        matches!(refused, ProcessOutcome::Rejected { .. }),
+        "{refused:?}"
+    );
+    let kept = process_register(
+        &package,
+        "c2",
+        "fiber.hook",
+        json!(["turn_end", process_hook_spec()]),
+    );
+    assert!(matches!(kept, ProcessOutcome::Accepted { .. }), "{kept:?}");
+    // An accepted tool the settle dropped stays out of the session.
+    let dropped = process_register(
+        &package,
+        "c3",
+        "fiber.tool",
+        json!(["u", process_tool_spec()]),
+    );
+    assert!(
+        matches!(dropped, ProcessOutcome::Accepted { .. }),
+        "{dropped:?}"
+    );
+    let mut session = SessionExtensions::default();
+    let mut chain = super::chain::Builder::default();
+    assert!(
+        session.admit_process(
+            "fiber.test/proc",
+            &package,
+            &mut chain,
+            &ProcessFoldSet::new()
+        ),
+        "a refusal keeps the package"
+    );
+    assert_eq!(
+        session.notices(),
+        vec![Notice {
+            code: ErrorCode::ExtensionFailed,
+            message: "`t` tool not registered: missing `timeout`".to_owned(),
+            extension: Some("fiber.test/proc".to_owned()),
+        }],
+    );
+    assert!(session.tools().is_empty());
+    assert!(session.has_hooks());
+}
+
+#[test]
+fn process_package_failure_fails_the_session_fold() {
+    let dir = process_dir(json!({}));
+    let package = process_package(&dir);
+    let fatal = process_register(
+        &package,
+        "c1",
+        "fiber.provider",
+        json!(["p", {"models": {"timeout": 1000, "run": true}}]),
+    );
+    assert!(
+        matches!(fatal, ProcessOutcome::FailedPackage { .. }),
+        "{fatal:?}"
+    );
+    let mut session = SessionExtensions::default();
+    let mut chain = super::chain::Builder::default();
+    assert!(
+        !session.admit_process(
+            "fiber.test/proc",
+            &package,
+            &mut chain,
+            &ProcessFoldSet::new()
+        ),
+        "a failed package does not fold"
+    );
+    assert_eq!(
+        session.notices(),
+        vec![Notice {
+            code: ErrorCode::ExtensionFailed,
+            message: "The extension `fiber.test/proc` registers the provider `p`, which its manifest does not declare under `providers`.".to_owned(),
+            extension: Some("fiber.test/proc".to_owned()),
+        }],
+    );
+    assert_eq!(session.rejected(), vec!["fiber.test/proc".to_owned()]);
+    assert!(session.tools().is_empty());
+    assert!(!session.has_hooks());
+}
+
+/// Installs `fiber.test/<short>` as a process package: a manifest with a
+/// process program and no entry script.
+fn install_process(home: &Home, short: &str) {
+    let src = home.root.path().join("src").join(short);
+    fs::create_dir_all(&src).unwrap();
+    let manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1, "process": {"program": "proc", "exit_timeout_ms": 1000}});
+    fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
+    plan(
+        &home.home(),
+        &Request::Path(src),
+        "0.1.0",
+        &Origin::github(),
+        &*FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+#[test]
+fn process_package_loads_without_starting_a_vm() {
+    let home = Home::new();
+    install_process(&home, "proc");
+    let session = home.load(&[]);
+    assert!(
+        session
+            .loaded_names()
+            .contains(&"fiber.test/proc".to_owned()),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(session.tools().is_empty());
+    assert!(session.commands().is_empty());
+    assert!(session.lua_providers().is_empty());
+    assert!(session.lua.is_empty(), "a process package starts no VM");
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| notice.extension.as_deref() != Some("fiber.test/proc")),
+        "{:?}",
+        session.notices()
+    );
+}
+
+#[test]
+fn process_package_with_undeclared_provider_file_fails_the_load() {
+    let home = Home::new();
+    install_process(&home, "proc");
+    let installed = home.home().join("extensions").join("fiber.test-proc");
+    fs::create_dir_all(installed.join("providers")).unwrap();
+    fs::write(installed.join("providers").join("q.json"), "{}").unwrap();
+    let session = home.load(&[]);
+    assert!(
+        !session
+            .loaded_names()
+            .contains(&"fiber.test/proc".to_owned()),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(
+        session.notices().iter().any(|notice| {
+            notice.code == ErrorCode::ExtensionFailed
+                && notice.extension.as_deref() == Some("fiber.test/proc")
+                && notice.message.contains("registers the provider `q`")
+        }),
+        "{:?}",
+        session.notices()
+    );
+}
+
+#[test]
+fn process_commands_and_search_join_session_sources() {
+    let dir = process_dir(json!({}));
+    let package = process_package(&dir);
+    for (id, call, args) in [
+        (
+            "c5",
+            "fiber.command",
+            json!(["cmd", process_command_spec()]),
+        ),
+        (
+            "c6",
+            "fiber.search_backend",
+            json!(["web", process_search_spec()]),
+        ),
+    ] {
+        let outcome = process_register(&package, id, call, args);
+        assert!(
+            matches!(outcome, ProcessOutcome::Accepted { .. }),
+            "{call}: {outcome:?}"
+        );
+    }
+    let runtime = crate::runtime::Runtime::new(FakeClock::new());
+    let started = super::Started {
+        name: "fiber.test/proc".to_owned(),
+        version: "v1.2.3".to_owned(),
+        slug: "fiber.test-proc".to_owned(),
+        dir: dir.path().to_path_buf(),
+        manifest: package.manifest().clone(),
+        prompt: None,
+        extension: None,
+        package: Some(Arc::clone(&package)),
+        declared: None,
+        commands: Vec::new(),
+        tools: Vec::new(),
+        backends: Vec::new(),
+        providers: Vec::new(),
+        lazy: None,
+    };
+    let meta = started.process_meta().unwrap();
+    assert_eq!(meta.extension, "fiber.test/proc");
+    assert_eq!(
+        meta.commands,
+        vec![("cmd".to_owned(), "Runs it.".to_owned())]
+    );
+    let source = started.process_command_source(&runtime).unwrap();
+    assert_eq!(source.extension, "fiber.test/proc");
+    let command = match &source.runner {
+        crate::commands::CommandRunner::Process(runner) => {
+            runner.commands.get("cmd").unwrap().command.clone()
+        }
+        crate::commands::CommandRunner::Lua(_) => {
+            panic!("a process command runs through its runtime reference")
+        }
+    };
+    assert_eq!(command, ProcessCommandId("c5".to_owned()));
+    let home = Home::new();
+    let commands = crate::commands::SessionCommands::build(&[source], &home.config(&[]));
+    let listed: Vec<String> = commands
+        .list()
+        .iter()
+        .map(|info| info.name.clone())
+        .collect();
+    assert_eq!(listed, vec!["cmd".to_owned()]);
+    let backends = started.process_search_sources(&runtime);
+    assert_eq!(backends.len(), 1);
+    assert_eq!(backends[0].name, "web");
+}

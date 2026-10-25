@@ -38,13 +38,13 @@ pub(crate) enum CommandRunner {
     Process(ProcessCommandRunner),
 }
 
-/// A process command's run: its owner, runtime and registered names.
+/// A process command's run: the runtime holding its references, and each
+/// registered name beside its function reference. The admitted command
+/// carries the extension; the runner needs no owner.
 #[derive(Clone)]
 pub(crate) struct ProcessCommandRunner {
     /// The session's runtime, holding the command's reference.
     pub(crate) runtime: Runtime,
-    /// The extension that registered the command.
-    pub(crate) owner: String,
     /// Each registered name beside its function reference.
     pub(crate) commands: BTreeMap<String, FunctionRef>,
 }

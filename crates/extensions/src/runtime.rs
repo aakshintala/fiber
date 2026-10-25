@@ -81,6 +81,10 @@ pub(crate) struct LuaBinding {
 }
 
 /// Which Lua function a reference names.
+#[allow(
+    dead_code,
+    reason = "constructed as each family wires its dispatch through references; asserted by tests"
+)]
 #[derive(Clone, Debug)]
 pub(crate) enum LuaKind {
     /// One hook at `point`, by its place among the extension's hooks there.
@@ -133,6 +137,10 @@ pub(crate) enum LuaKind {
 
 /// A provider function a reference can name: the five `fiber.provider`
 /// functions (`docs/extensions.md`, "Registering").
+#[allow(
+    dead_code,
+    reason = "constructed as provider dispatch wires through references in a later part; asserted by tests"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderFunction {
     /// The provider's `models`.
@@ -147,6 +155,10 @@ pub(crate) enum ProviderFunction {
     Cost,
 }
 
+#[allow(
+    dead_code,
+    reason = "read once provider dispatch resolves references in a later part; asserted by tests"
+)]
 impl ProviderFunction {
     /// The function's name, as `fiber.provider` registers it.
     pub(crate) fn name(self) -> &'static str {
@@ -203,6 +215,10 @@ struct Inner {
     /// Each registered function by its full reference, beside its owner.
     functions: BTreeMap<(CommandId, String, u64), (String, FunctionTarget)>,
     /// Each pending callback request by its id.
+    #[allow(
+        dead_code,
+        reason = "request correlation retires through here once the transport holds calls in a later part"
+    )]
     pending: BTreeMap<RequestId, FunctionRef>,
     /// The session's emitter, for process failures with no VM to emit them.
     emit: Option<Arc<dyn Emit>>,
@@ -288,6 +304,10 @@ impl Runtime {
     }
 
     /// The owner's current generation, when it registered one.
+    #[allow(
+        dead_code,
+        reason = "observed by tests pinning generation-keyed references"
+    )]
     pub(crate) fn generation(&self, name: &str) -> Option<u64> {
         lock(&self.inner)
             .owners
@@ -326,6 +346,10 @@ impl Runtime {
     /// Installs the process `invoke` for (`owner`, `command`, `key`) under
     /// the owner's current generation and returns its reference: the seam
     /// the transport fills in production and tests fill directly.
+    #[allow(
+        dead_code,
+        reason = "installs the transport's handler in a later part; the tests' stand-in"
+    )]
     pub(crate) fn install_process_handler(
         &self,
         owner: &str,
@@ -374,17 +398,26 @@ impl Runtime {
     /// Remembers that `id` waits on `func`. Answered, timed out and
     /// cancelled requests leave through [`Runtime::pending_take`], so one
     /// request answers once.
+    #[allow(
+        dead_code,
+        reason = "request correlation holds here once the transport queues calls in a later part; asserted by tests"
+    )]
     pub(crate) fn pending_insert(&self, id: RequestId, func: FunctionRef) {
         lock(&self.inner).pending.insert(id, func);
     }
 
     /// Takes the reference `id` waits on, if any. Taking removes it, so a
     /// late reply finds nothing and fails stale.
+    #[allow(
+        dead_code,
+        reason = "request correlation retires through here once the transport queues calls in a later part; asserted by tests"
+    )]
     pub(crate) fn pending_take(&self, id: &RequestId) -> Option<FunctionRef> {
         lock(&self.inner).pending.remove(id)
     }
 
     /// The reference `id` waits on, if any, left in place.
+    #[allow(dead_code, reason = "observed by tests pinning request correlation")]
     pub(crate) fn pending_get(&self, id: &RequestId) -> Option<FunctionRef> {
         lock(&self.inner).pending.get(id).cloned()
     }
@@ -535,6 +568,10 @@ impl Runtime {
     /// Runs the command behind `func` with `text`, as
     /// [`LuaExtension::command`] does: its returned text, or empty when it
     /// answered nothing.
+    #[allow(
+        dead_code,
+        reason = "the synchronous command dispatch beside the queued one; exercised by tests"
+    )]
     pub(crate) fn command_run(&self, func: &FunctionRef, text: &str) -> Result<String, Error> {
         let resolved = self.resolve(func)?;
         match resolved.target {
@@ -690,6 +727,10 @@ impl Runtime {
     }
 
     /// Runs the provider function behind `func` on `arg`.
+    #[allow(
+        dead_code,
+        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
+    )]
     pub(crate) fn provider_call(&self, func: &FunctionRef, arg: Value) -> Result<Value, Error> {
         let resolved = self.resolve(func)?;
         match resolved.target {
@@ -713,6 +754,10 @@ impl Runtime {
 
     /// Runs the `credential` behind `func` for `pair`, passing the session's
     /// label and the stored credential's name, as `LuaExtension` does.
+    #[allow(
+        dead_code,
+        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
+    )]
     pub(crate) fn provider_credential(
         &self,
         func: &FunctionRef,
@@ -748,6 +793,10 @@ impl Runtime {
     /// Runs the `credential` behind `func` as a login, passing the stored
     /// credential's name, the `--as` label and the login method, as
     /// `LuaExtension` does.
+    #[allow(
+        dead_code,
+        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
+    )]
     pub(crate) fn provider_login(
         &self,
         func: &FunctionRef,
@@ -797,6 +846,10 @@ impl Runtime {
 
     /// Runs the harness function behind `func` on `arg`: `command`, `line`,
     /// `models` or the optional `quota`, as the delegate runner asks.
+    #[allow(
+        dead_code,
+        reason = "provider and harness dispatch wires through references in a later part; exercised by tests"
+    )]
     pub(crate) fn harness_call(&self, func: &FunctionRef, arg: Value) -> Result<Value, Error> {
         let resolved = self.resolve(func)?;
         match resolved.target {

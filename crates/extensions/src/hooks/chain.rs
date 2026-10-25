@@ -68,6 +68,50 @@ pub(super) struct Lifecycle {
 }
 
 impl Builder {
+    /// Pushes a process package's `declared` hooks onto the builder, in
+    /// registration order, behind the references its registry minted: the
+    /// registry and the session share one runtime, so the references keep
+    /// the generation they registered under. A hook with no reference
+    /// stays out, as a hook that did not register does.
+    pub(super) fn push_process(
+        &mut self,
+        name: &str,
+        declared: &DeclaredHooks,
+        runs: &BTreeMap<(String, usize), FunctionRef>,
+    ) {
+        for point in [
+            SESSION_START,
+            TURN_START,
+            BEFORE_MODEL_CALL,
+            TURN_END,
+            BEFORE_HANDOFF,
+            BEFORE_TOOL,
+            BEFORE_MESSAGE,
+            super::AFTER_TOOL,
+        ] {
+            for (index, hook) in declared
+                .by_point
+                .get(point)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let Some(run) = runs.get(&(point.to_owned(), index)) else {
+                    continue;
+                };
+                self.entries.entry(point).or_default().push((
+                    hook.phase,
+                    name.to_owned(),
+                    Entry {
+                        hook: run.clone(),
+                        blocking: hook.blocking,
+                        check: hook.phase == HookPhase::Check,
+                    },
+                ));
+            }
+        }
+    }
+
     /// Pushes `declared`'s hooks at the three points onto the builder, in
     /// registration order, registering each behind the session's runtime:
     /// the entry carries the reference, never the backend.

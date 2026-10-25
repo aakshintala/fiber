@@ -28,9 +28,12 @@ use serde_json::{Map, Value};
 use contract::search::SearchBackend;
 use contract::tool::Tool;
 
-use crate::commands::{CommandSource, Lazy, SessionCommands};
+use crate::commands::{CommandRunner, CommandSource, Lazy, ProcessCommandRunner, SessionCommands};
+use crate::extension_tools::ProcessTool;
 use crate::lua::{DeclaredHooks, LuaExtension};
+use crate::package::Package;
 use crate::runtime::{FunctionRef, FunctionTarget, LuaBinding, LuaKind, Runtime};
+use crate::search::{ProcessSearchBackend, SearchBackendKind, SearchSource};
 use crate::{API, Error, LuaProvider, LuaTool};
 
 mod before;
@@ -172,6 +175,7 @@ struct Started {
     manifest: config::Manifest,
     prompt: Option<String>,
     extension: Option<Arc<LuaExtension>>,
+    package: Option<Arc<Package>>,
     declared: Option<DeclaredHooks>,
     commands: Vec<(String, String)>,
     tools: Vec<LuaTool>,
@@ -180,6 +184,69 @@ struct Started {
     /// For an extension whose manifest has a `commands` key: the start its
     /// first command run owes.
     lazy: Option<Arc<Lazy>>,
+}
+
+impl Started {
+    /// The settle metadata of a started process package, from the
+    /// registrations its process sent so far: its commands and tools join
+    /// the same conflict and `replaces` checks Lua registrations meet.
+    fn process_meta(&self) -> Option<Meta> {
+        let registry = self.package.as_ref()?.registry()?;
+        Some(Meta {
+            extension: self.name.clone(),
+            replaces: self.manifest.replaces.clone(),
+            commands: registry
+                .commands()
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.description.clone()))
+                .collect(),
+            tools: registry.tools().keys().cloned().collect(),
+        })
+    }
+
+    /// The command source of a started process package: its commands list
+    /// under their descriptions and run through their runtime references.
+    fn process_command_source(&self, runtime: &Runtime) -> Option<CommandSource> {
+        let registry = self.package.as_ref()?.registry()?;
+        let mut commands = BTreeMap::new();
+        for (name, entry) in registry.commands() {
+            commands.insert(name.clone(), entry.run.clone());
+        }
+        Some(CommandSource {
+            extension: self.name.clone(),
+            replaces: self.manifest.replaces.clone(),
+            commands: registry
+                .commands()
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.description.clone()))
+                .collect(),
+            runner: CommandRunner::Process(ProcessCommandRunner {
+                runtime: runtime.clone(),
+                commands,
+            }),
+        })
+    }
+
+    /// The search sources of a started process package: each backend runs
+    /// behind its runtime reference.
+    fn process_search_sources(&self, runtime: &Runtime) -> Vec<SearchSource> {
+        let Some(registry) = self.package.as_ref().and_then(|package| package.registry()) else {
+            return Vec::new();
+        };
+        registry
+            .search()
+            .iter()
+            .map(|(name, (_, run))| SearchSource {
+                extension: self.name.clone(),
+                name: name.clone(),
+                backend: SearchBackendKind::Process(ProcessSearchBackend {
+                    runtime: runtime.clone(),
+                    owner: self.name.clone(),
+                    run: run.clone(),
+                }),
+            })
+            .collect()
+    }
 }
 
 /// One session-end watcher failure: what the drain collects for `run_turn`
@@ -527,28 +594,23 @@ impl SessionExtensions {
             // (`docs/extensions.md`, "Process extensions"). Only its data
             // providers need declaring, as for a Lua extension.
             if manifest.process.is_some() {
-                match config::provider_files(&dir) {
-                    Ok(files) => {
-                        let stems: Vec<String> = files
-                            .iter()
-                            .filter_map(|file| file.file_stem())
-                            .map(|stem| stem.to_string_lossy().into_owned())
-                            .collect();
-                        if crate::providers::first_undeclared(
-                            &manifest.providers,
-                            stems.iter().map(String::as_str),
-                        )
-                        .is_some()
-                        {
-                            continue;
-                        }
-                    }
+                // A process package loads through the package seam on the
+                // session's runtime, so its references resolve where the
+                // session dispatches them. A package the seam refuses is
+                // not loaded, with the refusal's notice.
+                let package = match crate::package::Package::load_with_runtime(
+                    crate::package::PackageOptions {
+                        dir: dir.clone(),
+                        clock: Arc::clone(&clock),
+                    },
+                    session.runtime.clone(),
+                ) {
+                    Ok(package) => package,
                     Err(e) => {
-                        session.failed(&name, &Error::Config(e));
+                        session.failed(&name, &e);
                         continue;
                     }
-                }
-                session.runtime.register_process(&name);
+                };
                 started.push(Started {
                     name,
                     version,
@@ -557,6 +619,7 @@ impl SessionExtensions {
                     manifest,
                     prompt,
                     extension: None,
+                    package: Some(package),
                     declared: None,
                     commands: Vec::new(),
                     tools: Vec::new(),
@@ -574,6 +637,7 @@ impl SessionExtensions {
                 manifest,
                 prompt,
                 extension: None,
+                package: None,
                 declared: None,
                 commands: Vec::new(),
                 tools: Vec::new(),
@@ -700,12 +764,17 @@ impl SessionExtensions {
         }
         let metas: Vec<Meta> = started
             .iter()
-            .filter(|s| s.extension.is_some())
-            .map(|s| Meta {
-                extension: s.name.clone(),
-                replaces: s.manifest.replaces.clone(),
-                commands: s.commands.clone(),
-                tools: s.tools.iter().map(|tool| tool.definition().name).collect(),
+            .filter_map(|s| {
+                if s.extension.is_some() {
+                    Some(Meta {
+                        extension: s.name.clone(),
+                        replaces: s.manifest.replaces.clone(),
+                        commands: s.commands.clone(),
+                        tools: s.tools.iter().map(|tool| tool.definition().name).collect(),
+                    })
+                } else {
+                    s.process_meta()
+                }
             })
             .collect();
         let settled = settle::settle(&metas, config, home, &clock);
@@ -718,12 +787,16 @@ impl SessionExtensions {
         let real_sources: Vec<CommandSource> = started
             .iter()
             .filter_map(|s| {
-                s.extension.as_ref().map(|lua| CommandSource {
-                    extension: s.name.clone(),
-                    replaces: s.manifest.replaces.clone(),
-                    commands: s.commands.clone(),
-                    runner: crate::commands::CommandRunner::Lua(Arc::clone(lua)),
-                })
+                if let Some(lua) = s.extension.as_ref() {
+                    Some(CommandSource {
+                        extension: s.name.clone(),
+                        replaces: s.manifest.replaces.clone(),
+                        commands: s.commands.clone(),
+                        runner: crate::commands::CommandRunner::Lua(Arc::clone(lua)),
+                    })
+                } else {
+                    s.process_command_source(&session.runtime)
+                }
             })
             .collect();
         session.commands = SessionCommands::build(&real_sources, config);
@@ -751,6 +824,8 @@ impl SessionExtensions {
                         backend: crate::search::SearchBackendKind::Lua(Arc::clone(lua)),
                     });
                 }
+            } else if s.package.is_some() {
+                backend_choices.extend(s.process_search_sources(&session.runtime));
             }
         }
         let setting = config
@@ -843,6 +918,13 @@ impl SessionExtensions {
                         session.lua.push(Arc::clone(lua));
                     }
                 }
+            }
+            // A process package folds its registrations into the session:
+            // a failed package stays out, with the failure's notice.
+            if let Some(package) = &s.package
+                && !session.admit_process(&s.name, package, &mut chain, &settled.tools)
+            {
+                continue;
             }
             if let Some(opening) = s.manifest.opening {
                 session.openings.push((s.name.clone(), s.slug, opening));
@@ -1360,6 +1442,69 @@ impl SessionExtensions {
         }
         self.any |= declared.by_point.values().any(|hooks| !hooks.is_empty());
         chain.push(&self.runtime, name, lua, &declared);
+    }
+
+    /// Folds a process `package` into the session: its refusals become
+    /// notices, its tools join the settled tools, and its hooks and
+    /// watchers run behind the references its registry minted. A package
+    /// one call failed stays out, with the failure's notice, as a load
+    /// failure does. Returns whether the package stays in the session.
+    fn admit_process(
+        &mut self,
+        name: &str,
+        package: &Package,
+        chain: &mut chain::Builder,
+        settled_tools: &BTreeSet<(String, String)>,
+    ) -> bool {
+        let Some(registry) = package.registry() else {
+            return true;
+        };
+        if let Some((code, message)) = registry.failure() {
+            self.notices.push(notice(code, message, Some(name)));
+            self.reject(name);
+            return false;
+        }
+        for problem in registry
+            .problems()
+            .iter()
+            .chain(registry.watch_problems().iter())
+        {
+            self.notices.push(notice(
+                ErrorCode::ExtensionFailed,
+                problem.clone(),
+                Some(name),
+            ));
+        }
+        let runtime = self.runtime.clone();
+        for (tool, entry) in registry.tools() {
+            if settled_tools.contains(&(name.to_owned(), tool.clone())) {
+                self.tools.push((
+                    name.to_owned(),
+                    Arc::new(ProcessTool::new(
+                        runtime.clone(),
+                        name.to_owned(),
+                        entry.declared.clone(),
+                        entry.run.clone(),
+                        entry.effects.clone(),
+                    )),
+                ));
+            }
+        }
+        let hooks = registry.hooks();
+        self.any |= hooks.by_point.values().any(|hooks| !hooks.is_empty());
+        chain.push_process(name, hooks, registry.hook_runs());
+        for (index, watcher) in registry.watchers().watchers.iter().enumerate() {
+            let Some(run) = registry.watcher_runs().get(&index) else {
+                continue;
+            };
+            self.watchers.push(WatcherRegistration {
+                name: name.to_owned(),
+                watcher: run.clone(),
+                index,
+                kinds: watcher.kinds.clone(),
+            });
+        }
+        true
     }
 
     /// An extension that failed to load: a notice, and it is not loaded.
