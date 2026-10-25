@@ -248,6 +248,9 @@ impl App {
         if rail_hidden {
             self.chrome.hide_rail();
         }
+        // The launch carries `tui.inline_images`: size the images now
+        // that it is known.
+        self.refresh_image_sizing();
     }
 
     /// Stores bare `fiber`'s `--model` and `-c`, normalized into the
