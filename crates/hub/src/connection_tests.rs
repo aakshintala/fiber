@@ -2496,9 +2496,44 @@ fn sessions_default_listing_omits_active() {
 fn sessions_rejects_a_misshaped_active_arg() {
     let temp = Temp::new();
     let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // Two live sessions in distinct projects: the `active: true` project
+    // filter below must keep the match and drop the other, so inverting
+    // the `status.project == key` check in the active path fails.
+    let kept = "s_00000000000000a1";
+    let kept_session = crate::fake::FakeSession::bind(&temp.dir, kept);
+    let mut kept_status = crate::fake::status("n", "/w", "idle", None);
+    kept_status["project"] = json!("p");
+    kept_session.say(&crate::fake::status_line(kept, &kept_status));
+    write_log(
+        &temp,
+        "p",
+        kept,
+        &format!(
+            "{}{}",
+            started_line(kept, 100),
+            log_line("session_status", kept, 9000)
+        ),
+    );
+    let dropped = "s_00000000000000b2";
+    let dropped_session = crate::fake::FakeSession::bind(&temp.dir, dropped);
+    let mut dropped_status = crate::fake::status("n", "/w", "idle", None);
+    dropped_status["project"] = json!("q");
+    dropped_session.say(&crate::fake::status_line(dropped, &dropped_status));
+    write_log(
+        &temp,
+        "q",
+        dropped,
+        &format!(
+            "{}{}",
+            started_line(dropped, 100),
+            log_line("session_status", dropped, 8000)
+        ),
+    );
     let mut client = Client::connect(&hub);
     client.hello();
     hub.feed.start();
+    assert!(kept_session.await_subscribed(1, DEADLINE));
+    assert!(dropped_session.await_subscribed(1, DEADLINE));
     for (id, args) in [
         ("c_1", json!({"active": "yes"})),
         ("c_2", json!({"active": Value::Null})),
@@ -2511,7 +2546,8 @@ fn sessions_rejects_a_misshaped_active_arg() {
         assert_eq!(code, "invalid_arguments", "{id}");
         assert_eq!(echoed.as_deref(), Some(id));
     }
-    // A project filter composes with `active: true`.
+    // A project filter composes with `active: true`: only the live entry
+    // in `p` lists, with its activity; the `q` entry is excluded.
     client.send(&command(
         "c_6",
         "sessions",
@@ -2519,7 +2555,16 @@ fn sessions_rejects_a_misshaped_active_arg() {
     ));
     let (echoed, result) = accepted(&client.next("the filtered listing"));
     assert_eq!(echoed, "c_6");
-    assert_eq!(result.get("live"), Some(&json!([])));
+    let live = result.get("live").unwrap().as_array().unwrap();
+    assert_eq!(live.len(), 1, "only the matching live entry lists");
+    assert_eq!(live[0].get("session_id"), Some(&json!(kept)));
+    assert_eq!(live[0].get("active"), Some(&json!(9000)));
+    assert!(
+        !live
+            .iter()
+            .any(|row| row.get("session_id") == Some(&json!(dropped))),
+        "the other project's live entry is excluded"
+    );
     assert_eq!(result.get("exited"), Some(&json!([])));
     stop_within(&hub.feed);
 }

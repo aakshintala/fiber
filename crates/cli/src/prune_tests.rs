@@ -1378,6 +1378,58 @@ fn remove_for_hub_rejects_a_newly_selectable_item_before_any_removal() {
 }
 
 #[test]
+fn remove_for_hub_rejects_a_worktree_only_preview_mismatch() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let old_log = setup
+        .home()
+        .join("logs")
+        .join("old.log")
+        .display()
+        .to_string();
+    // Exactly one set mismatches: diagnostics, pinned and sessions all
+    // equal the reselection, only the worktree set differs. An `&&` in
+    // place of either `||` would accept this preview, so this case kills
+    // both operator flips while the multi-mismatch cases cannot.
+    let want = HubPruneWant {
+        sessions: BTreeMap::new(),
+        worktrees: BTreeSet::from(["/no/such/worktree".to_owned()]),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::from([old_log]),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        Ok(())
+    };
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        false,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    assert!(
+        setup.home().join("logs").join("old.log").is_file(),
+        "no diagnostic is removed on mismatch"
+    );
+}
+
+#[test]
 fn local_prune_numbers_each_delete_command_differently() {
     let setup = Setup::new();
     setup.session("s_00000000000000a1", None, 0);
