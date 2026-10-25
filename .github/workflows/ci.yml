@@ -437,6 +437,21 @@ jobs:
             echo "complete=false" >> "$GITHUB_OUTPUT"
             echo false > "$MARKER"
           fi
+      # A test the pull request touched must not pass on retry: fail when
+      # any test the leg's retry list names is one the diff adds or
+      # changes (docs/ci.md, "On every pull request that changes code").
+      # Fail closed on an incomplete collection, before any lookup.
+      - name: Fail when a retried test was touched
+        if: always() && github.event_name == 'pull_request'
+        env:
+          LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
+          COMPLETE: ${{ steps.collection.outputs.complete }}
+        run: |
+          if [ "$COMPLETE" != true ]; then
+            echo "the retry collection is incomplete: no report"
+            exit 1
+          fi
+          cargo xtask touched-retries --base "$BASE" --list "$LIST"
       # Every leg uploads its list plus its completion marker, including
       # an empty list which is a complete empty result, except the
       # one-leg test_linux matrix, which keeps its conditional upload:
@@ -485,6 +500,88 @@ jobs:
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
+
+  # The tests the pull request touches, each run 30 times (100 when the
+  # pull request fixes a flaky test), beside the test jobs; non-blocking
+  # during the pilot (docs/ci.md, "On every pull request that changes code").
+  stress:
+    name: Stress the tests the pull request touches
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).stress
+    runs-on: ubuntu-24.04
+    # Too little history for the twice-the-median rule: a generous bound
+    # (docs/ci.md, "Job time limits"); the pilot's recorded times set the
+    # real bound.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: read
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+    steps:
+      - *checkout-full
+      # The clock starts here so the wall time covers the toolchain
+      # install and the build.
+      - name: Record the start time
+        id: clock
+        run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - *toolchain
+      - *cache-restore
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - *shell-debs-key
+      - *shell-debs-restore
+      - *install-shells
+      - name: Find the touched tests
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          number=$(cargo xtask ticket <<<"$PR_BODY")
+          labels=""
+          if [ -n "$number" ]; then
+            # A failed lookup fails the step rather than skipping the run.
+            labels=$(gh issue view "$number" --json labels -q '.labels[].name')
+          fi
+          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY")
+          echo "$plan"
+          {
+            echo "run=$(sed -n 's/^run\t//p' <<<"$plan")"
+            echo "count=$(sed -n 's/^count\t//p' <<<"$plan")"
+            echo "filter<<FILTER_EOF"
+            sed -n 's/^filter\t//p' <<<"$plan"
+            echo "FILTER_EOF"
+            echo "packages<<PACKAGES_EOF"
+            sed -n 's/^package\t//p' <<<"$plan"
+            echo "PACKAGES_EOF"
+            tests=$(sed -n 's/^test\t//p' <<<"$plan" | wc -l)
+            echo "tests=${tests//[[:space:]]/}"
+          } >>"$GITHUB_OUTPUT"
+      - name: Run each touched test
+        id: run
+        if: steps.plan.outputs.run == 'true'
+        env:
+          FILTER: ${{ steps.plan.outputs.filter }}
+          COUNT: ${{ steps.plan.outputs.count }}
+          PACKAGES: ${{ steps.plan.outputs.packages }}
+        run: |
+          package_args=()
+          while IFS= read -r package; do
+            if [ -n "$package" ]; then
+              package_args+=(-p "$package")
+            fi
+          done <<<"$PACKAGES"
+          cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=warn
+      - name: Record the stress cost
+        if: always()
+        env:
+          START: ${{ steps.clock.outputs.start }}
+          COUNT: ${{ steps.plan.outputs.count }}
+          TESTS: ${{ steps.plan.outputs.tests }}
+          OUTCOME: ${{ steps.run.outcome }}
+        run: cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
 
   # Decides what the flake report writes (docs/testing.md, "Flaky tests").
   # It holds `contents: read` and `issues: read`, checks out the tested
