@@ -71,6 +71,50 @@ impl Files {
     }
 }
 
+/// Runs `xtask bench-report` with `args` and returns its exit code. The
+/// comment file is written only when the flags parse.
+fn run(args: &[&str]) -> Option<i32> {
+    let dir = TempDir::new("xtask-bench-report");
+    dir.write("doc.md", DOC);
+    dir.write("head.json", HEAD);
+    dir.write("he.json", HEAD);
+    dir.write("be.json", HEAD);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .args(["bench-report", "--doc", "doc.md", "--head", "head.json"])
+        .args(args)
+        .args(["--event", "pull_request", "--comment", "comment.md"])
+        .current_dir(dir.path());
+    isolated(&mut command);
+    let child = command.spawn().unwrap();
+    let output = finished(
+        "xtask bench-report",
+        child,
+        &[],
+        Deadline::after(CHILD_WITHIN),
+    );
+    let wrote_comment = dir.path().join("comment.md").exists();
+    // A usage error writes no comment; a judged run always does.
+    assert_eq!(wrote_comment, output.status.code() != Some(2), "{output:?}");
+    output.status.code()
+}
+
+#[test]
+fn head_extra_without_base_extra_is_a_usage_error() {
+    assert_eq!(run(&["--head-extra", "he.json"]), Some(2));
+    assert_eq!(run(&["--base-extra", "be.json"]), Some(2));
+}
+
+#[test]
+fn paired_extra_flags_are_accepted() {
+    // The two-row table matches no benchmark, so the judged run fails with
+    // exit 1; the flags themselves parse and the comment is written.
+    assert_eq!(
+        run(&["--head-extra", "he.json", "--base-extra", "be.json"]),
+        Some(1)
+    );
+}
+
 /// The spawn isolation every test in this file relies on: null stdin,
 /// fresh pipes for stdout and stderr, and the child's own process group.
 /// A child spawned this way never holds the test's descriptors, so no

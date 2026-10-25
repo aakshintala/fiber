@@ -24,9 +24,13 @@
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
 //! - `bench-report --head FILE [--base FILE --base-commit SHA] [--stored-base FILE --stored-commit SHA]
-//!   --doc docs/performance.md --event pull_request|push --comment FILE`: judges the benchmark result
+//!   --doc docs/performance.md --event pull_request|push --comment FILE [--remeasure FILE]
+//!   [--head-extra FILE --base-extra FILE]`: judges the benchmark result
 //!   files against the budget table and writes the pull request comment; exit 1
-//!   when a budget, a head self-check or the table mapping fails
+//!   when a budget, a head self-check or the table mapping fails. `--remeasure`
+//!   takes the path the skip list for the remeasure run is written to, when a
+//!   gated timing row breaches on a pull request; `--head-extra` and
+//!   `--base-extra` judge again with the remeasure run's samples merged in
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
@@ -415,9 +419,46 @@ fn run(args: &[String]) -> Result<bool, String> {
                     },
                 }
             });
-            let out = bench::report(&doc, &head, base, stored, event, &base_commit);
+            // The remeasure run's samples, merged into the breached rows and
+            // judged again: both or neither, since one side alone cannot
+            // move the median both sides are judged on.
+            let extra = match (
+                optional(rest, "--head-extra"),
+                optional(rest, "--base-extra"),
+            ) {
+                (Some(head_path), Some(base_path)) => {
+                    let head_extra = read(&head_path)?;
+                    Some((head_extra, Some(read(&base_path))))
+                }
+                (None, None) => None,
+                _ => {
+                    return Err("--head-extra and --base-extra must be given together".to_owned());
+                }
+            };
+            let out = match extra {
+                Some(extra) => bench::report_with_extra(
+                    &doc,
+                    &head,
+                    base,
+                    stored,
+                    event,
+                    &base_commit,
+                    Some(extra),
+                ),
+                None => bench::report(&doc, &head, base, stored, event, &base_commit),
+            };
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
+            // The skip list for the remeasure run: only when a gated timing
+            // row breached on a pull request, so the file's absence or
+            // emptiness means no second harness run.
+            if event == bench::Event::PullRequest
+                && let (Some(path), Some(skip)) =
+                    (optional(rest, "--remeasure"), &out.remeasure_skip)
+            {
+                std::fs::write(path, format!("{skip}\n"))
+                    .map_err(|e| format!("--remeasure: {e}"))?;
+            }
             report(
                 "bench-report",
                 &out.failures,

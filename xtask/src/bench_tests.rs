@@ -4648,6 +4648,650 @@ fn a_head_without_breakdown_renders_no_debug_run_section() {
     );
 }
 
+// --- #3363 breach-triggered remeasure: median of 3, then 4 more, judged on 7 ---
+
+/// Every `paging` timing id the merge reads.
+const PAGING_TIMING_IDS: [(&str, u64); 8] = [
+    ("paging_open_ms", 3),
+    ("paging_load_ms", 3),
+    ("paging_jump_ms", 3),
+    ("paging_width_ms", 3),
+    ("paging_append_ms", 3),
+    ("paging_search_ms", 3),
+    ("paging_scale16_width_ms", 3),
+    ("paging_scale16_search_ms", 3),
+];
+
+/// `DOC` with the width row's ruled 106 ms slow ceiling, so the artifact's
+/// medians read as they did in the failed job (112.6 over 106.0, base 97.7
+/// with an 8 % tolerance).
+fn doc_106() -> String {
+    doc_with(
+        "| 67 ms | 77 ms | 99 ms | 16 % | 8 % |",
+        "| 67 ms | 77 ms | 106 ms | 16 % | 8 % |",
+    )
+}
+
+/// A pull-request pair judging the `paging` row on 3 samples per side:
+/// every paging timing id holds 3 declared samples, both files record the
+/// eligible slow CPU, and the one default scalar that would breach on an
+/// eligible model is neutral, so only the caller's values decide the
+/// verdict.
+fn paging_pair(width_head: Value, width_base: Value) -> (Value, Value) {
+    let mut h = with_counts(head(), 5, 3);
+    h = with_cpu(h, SLOW_MODEL);
+    h = with_metric(
+        h,
+        "terminal_first_frame_ms",
+        json!([1.8, 1.8, 1.8, 1.8, 1.8]),
+    );
+    h = with_metric_runs(h, &PAGING_TIMING_IDS);
+    h = with_metric(h, "paging_open_ms", json!([301.2, 308.0, 305.5]));
+    h = with_metric(h, "paging_load_ms", json!([1.3, 1.2, 1.4]));
+    h = with_metric(h, "paging_jump_ms", json!([2.6, 2.5, 2.7]));
+    h = with_metric(h, "paging_width_ms", width_head);
+    h = with_metric(h, "paging_append_ms", json!([1.8, 1.7, 1.9]));
+    h = with_metric(h, "paging_search_ms", json!([5.4, 5.3, 5.5]));
+    h = with_metric(h, "paging_scale16_width_ms", json!([380.0, 375.0, 379.0]));
+    h = with_metric(h, "paging_scale16_search_ms", json!([86.0, 84.0, 87.0]));
+    let mut b = with_counts(base(), 5, 3);
+    b = with_cpu(b, SLOW_MODEL);
+    b = with_metric_runs(b, &PAGING_TIMING_IDS);
+    b = with_metric(b, "paging_open_ms", json!([290.0, 290.0, 290.0]));
+    b = with_metric(b, "paging_load_ms", json!([1.1, 1.1, 1.1]));
+    b = with_metric(b, "paging_jump_ms", json!([2.2, 2.2, 2.2]));
+    b = with_metric(b, "paging_width_ms", width_base);
+    b = with_metric(b, "paging_append_ms", json!([1.5, 1.5, 1.5]));
+    b = with_metric(b, "paging_search_ms", json!([5.0, 5.0, 5.0]));
+    b = with_metric(b, "paging_scale16_width_ms", json!([370.0, 370.0, 370.0]));
+    b = with_metric(b, "paging_scale16_search_ms", json!([82.0, 82.0, 82.0]));
+    (h, b)
+}
+
+/// The artifact's first pass: head `[113.42, 112.56, 102.27]`, base
+/// `[116.54, 97.18, 97.74]` (medians 112.56 and 97.74).
+fn artifact_pair() -> (Value, Value) {
+    paging_pair(
+        json!([113.42, 112.56, 102.27]),
+        json!([116.54, 97.18, 97.74]),
+    )
+}
+
+/// An extra file holding 4 samples of every paging timing id on `cpu`.
+fn extra_file(cpu: &str, width: Value, search: Value, wide: Value, found: Value) -> Value {
+    let mut metrics = serde_json::Map::new();
+    for (id, values) in [
+        ("paging_open_ms", json!([300.0, 302.0, 299.0, 301.0])),
+        ("paging_load_ms", json!([1.2, 1.3, 1.1, 1.4])),
+        ("paging_jump_ms", json!([2.5, 2.6, 2.4, 2.7])),
+        ("paging_width_ms", width),
+        ("paging_append_ms", json!([1.7, 1.8, 1.6, 1.9])),
+        ("paging_search_ms", search),
+        ("paging_scale16_width_ms", wide),
+        ("paging_scale16_search_ms", found),
+    ] {
+        metrics.insert(id.to_owned(), values);
+    }
+    let mut out = json!({
+        "schema": 1, "runs": 4, "idle_secs": 10,
+        "metrics": {}, "failures": []
+    });
+    out["metrics"] = Value::Object(metrics);
+    out["cpu"] = json!(cpu);
+    out
+}
+
+/// Clean extra samples: the width spike is outvoted and every growth reads
+/// small.
+fn clean_extras() -> (Value, Value) {
+    let head = extra_file(
+        SLOW_MODEL,
+        json!([96.0, 97.1, 95.8, 98.2]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let base = extra_file(
+        SLOW_MODEL,
+        json!([97.0, 96.5, 97.9, 97.3]),
+        json!([5.0, 5.1, 4.9, 5.2]),
+        json!([370.0, 371.0, 369.0, 372.0]),
+        json!([82.0, 83.0, 81.0, 84.0]),
+    );
+    (head, base)
+}
+
+/// The pair judged with extras, through the remeasure path.
+fn judged_extra(
+    head: &Value,
+    base: &Value,
+    head_extra: &Value,
+    base_extra: Option<&Value>,
+    doc: &str,
+) -> Report {
+    report_with_extra(
+        doc,
+        &head.to_string(),
+        Some(Ok(base.to_string())),
+        None,
+        Event::PullRequest,
+        "base0000",
+        Some((
+            head_extra.to_string(),
+            base_extra.map(|b| Ok(b.to_string())),
+        )),
+    )
+}
+
+#[test]
+fn remeasure_maps_timing_ids_to_their_rows() {
+    assert_eq!(super::judge::REMEASURE_RUNS, 4);
+    assert_eq!(
+        super::judge::TIMING_WORKLOADS,
+        &[
+            "session start",
+            "terminal first frame",
+            "sessions list",
+            "terminal attach",
+            "paging",
+            "terminal wheel",
+            "session_list",
+        ],
+    );
+    for (id, row) in [
+        ("session_start_ms", "session start"),
+        ("terminal_first_frame_ms", "terminal first frame"),
+        ("sessions_list_ms", "sessions list"),
+        ("wheel_paging_ms", "terminal wheel"),
+        ("wheel_read_ms", "terminal wheel"),
+        ("paging_open_ms", "paging"),
+        ("paging_load_ms", "paging"),
+        ("paging_jump_ms", "paging"),
+        ("paging_width_ms", "paging"),
+        ("paging_append_ms", "paging"),
+        ("paging_search_ms", "paging"),
+        ("paging_scale16_width_ms", "paging"),
+        ("paging_scale16_search_ms", "paging"),
+    ] {
+        assert_eq!(super::judge::remeasured_row(id), Some(row), "{id}");
+    }
+    // The attach row already takes 5 samples and nests samples by fixture,
+    // and `session_list` has no row the selector skips: neither remeasures.
+    assert_eq!(super::judge::remeasured_row("terminal_attach_ms"), None);
+    assert_eq!(super::judge::remeasured_row("session_list_ms"), None);
+    assert_eq!(super::judge::remeasured_row("no_such_metric"), None);
+}
+
+#[test]
+fn a_breached_paging_row_leaves_every_other_timing_workload_in_the_skip_list() {
+    let (h, b) = artifact_pair();
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(
+        has(
+            &out.failures,
+            "median 112.6 ms of paging_width_ms is over 106.0 ms slow ceiling \
+             and over base 97.7 ms by more than 8%",
+        ),
+        "{:?}",
+        out.failures
+    );
+    assert_eq!(
+        out.remeasure_skip,
+        Some(
+            "session start,terminal first frame,sessions list,\
+             terminal attach,terminal wheel,session_list"
+                .to_owned()
+        ),
+    );
+}
+
+/// `results` declaring 3 samples for every paging timing id plus each of
+/// `extra`: `with_metric_runs` replaces the declaration map, so callers
+/// starting from `paging_pair` add to it through here.
+fn with_paging_counts(mut results: Value, extra: &[(&str, u64)]) -> Value {
+    let mut counts = PAGING_TIMING_IDS.to_vec();
+    counts.extend_from_slice(extra);
+    results = with_metric_runs(results, &counts);
+    results
+}
+
+#[test]
+fn two_breached_rows_both_leave_the_skip_list() {
+    let (mut h, mut b) = artifact_pair();
+    h = with_paging_counts(h, &[("session_start_ms", 3)]);
+    h = with_metric(h, "session_start_ms", json!([20.0, 21.0, 22.0]));
+    b = with_paging_counts(b, &[("session_start_ms", 3)]);
+    b = with_metric(b, "session_start_ms", json!([0.6, 0.6, 0.6]));
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    assert!(has(&out.failures, "session_start_ms"), "{:?}", out.failures);
+    assert_eq!(
+        out.remeasure_skip,
+        Some(
+            "terminal first frame,sessions list,terminal attach,\
+             terminal wheel,session_list"
+                .to_owned()
+        ),
+    );
+}
+
+#[test]
+fn a_clean_report_names_no_remeasure_skip() {
+    // No CPU model, so every timing stays advisory.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert_eq!(out.remeasure_skip, None);
+    // An eligible model with every median holding gates and passes.
+    let (h, b) = paging_pair(json!([24.1, 23.8, 24.0]), json!([20.5, 20.5, 20.5]));
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+}
+
+#[test]
+fn a_single_leg_over_is_not_a_breach() {
+    // Over the ceiling but within tolerance.
+    let (h, b) = paging_pair(json!([107.0, 107.0, 107.0]), json!([100.0, 100.0, 100.0]));
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+    // Over the relative bound but under the ceiling.
+    let (h, b) = paging_pair(json!([100.0, 101.0, 102.0]), json!([20.0, 21.0, 22.0]));
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+    // Exactly at the ceiling: the gate needs strictly over.
+    let (h, b) = paging_pair(json!([106.0, 106.0, 106.0]), json!([20.0, 21.0, 22.0]));
+    let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+}
+
+#[test]
+fn advisory_and_push_runs_name_no_remeasure_skip() {
+    let (h, b) = artifact_pair();
+    // An unknown CPU model stays advisory.
+    let unknown = with_cpu(h.clone(), "Some Other CPU 1234");
+    let unknown_base = with_cpu(b.clone(), "Some Other CPU 1234");
+    let out = judge_doc(
+        &doc_106(),
+        &unknown,
+        Some(&unknown_base),
+        Event::PullRequest,
+    );
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert_eq!(out.remeasure_skip, None);
+    // A classified model with fewer than 5 stored runs stays advisory.
+    let few = with_cpu(h.clone(), SLOW_ADVISORY_MODEL);
+    let few_base = with_cpu(b.clone(), SLOW_ADVISORY_MODEL);
+    let out = judge_doc(&doc_106(), &few, Some(&few_base), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert_eq!(out.remeasure_skip, None);
+    // A push has no base column and stays advisory.
+    let out = judge_doc(&doc_106(), &h, None, Event::Push);
+    assert_eq!(out.failures, Vec::<String>::new());
+    assert_eq!(out.remeasure_skip, None);
+}
+
+#[test]
+fn attach_and_session_list_breaches_name_no_remeasure_skip() {
+    // The attach row already takes 5 samples: its breach fails with no skip.
+    let (h, b) = attach_pair(
+        &[1400.0, 1401.0, 1399.0, 1402.0, 1398.0],
+        &[31.0, 31.2, 30.8, 31.1, 30.9],
+        &[800.0; 5],
+        &[30.5; 5],
+        SLOW_MODEL,
+    );
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+    // `session_list` has no row the selector skips: its breach fails with no skip.
+    let mut h = with_counts(neutral_scalars("session_list_ms", head()), 5, 3);
+    h = with_cpu(h, SLOW_MODEL);
+    h = with_metric(
+        h,
+        "terminal_first_frame_ms",
+        json!([1.8, 1.8, 1.8, 1.8, 1.8]),
+    );
+    h = with_metric_runs(h, &[("session_list_ms", 3)]);
+    h = with_metric(h, "session_list_ms", json!([100.0, 100.0, 100.0]));
+    let mut b = with_counts(base(), 5, 3);
+    b = with_cpu(b, SLOW_MODEL);
+    b = with_metric_runs(b, &[("session_list_ms", 3)]);
+    b = with_metric(b, "session_list_ms", json!([50.0, 50.0, 50.0]));
+    let out = judge(&h, Some(&b), Event::PullRequest);
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "session_list_ms"), "{:?}", out.failures);
+    assert_eq!(out.remeasure_skip, None);
+}
+
+/// A parsed extra file.
+fn parsed(text: &Value) -> super::results::Results {
+    super::results::parse_results(&text.to_string()).expect("extra fixture parses")
+}
+
+#[test]
+fn merged_extras_judge_seven_samples_per_side() {
+    let (h, b) = artifact_pair();
+    let (he, be) = clean_extras();
+    let merged_head = super::results::merge_remeasure(&parsed(&h), &parsed(&he), &["paging"])
+        .expect("clean extras merge");
+    let merged_base = super::results::merge_remeasure(&parsed(&b), &parsed(&be), &["paging"])
+        .expect("clean base extras merge");
+    for (merged, side) in [(&merged_head, "head"), (&merged_base, "base")] {
+        for id in [
+            "paging_open_ms",
+            "paging_load_ms",
+            "paging_jump_ms",
+            "paging_width_ms",
+            "paging_append_ms",
+            "paging_search_ms",
+            "paging_scale16_width_ms",
+            "paging_scale16_search_ms",
+        ] {
+            let samples = merged.metrics[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("{side} {id}: not an array"));
+            assert_eq!(samples.len(), 7, "{side} {id}");
+            assert_eq!(merged.runs_of(id), 7, "{side} {id}");
+        }
+    }
+    // Memory keeps its first-pass samples: the extras carry 4 more RSS
+    // samples that must never merge.
+    let mut rss_extra = he.clone();
+    rss_extra["metrics"]["paging_rss_kib"] = json!([30000.0, 30000.0, 30000.0, 30000.0]);
+    let merged = super::results::merge_remeasure(&parsed(&h), &parsed(&rss_extra), &["paging"])
+        .expect("extras carrying memory merge");
+    assert_eq!(
+        merged.metrics["paging_rss_kib"].as_array().unwrap().len(),
+        5
+    );
+    // A row that did not breach stays at 3 even if the extra file carries it.
+    let mut other_extra = he.clone();
+    other_extra["metrics"]["session_start_ms"] = json!([9.1, 9.0, 9.3, 9.2]);
+    let (mut h3, _) = artifact_pair();
+    h3 = with_metric_runs(h3, &[("session_start_ms", 3)]);
+    h3 = with_metric(h3, "session_start_ms", json!([9.0, 9.4, 9.2]));
+    let merged = super::results::merge_remeasure(&parsed(&h3), &parsed(&other_extra), &["paging"])
+        .expect("extras carrying an unbreached row merge");
+    assert_eq!(
+        merged.metrics["session_start_ms"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(merged.runs_of("session_start_ms"), 3);
+    // Counts are not samples: they never merge.
+    let merged = super::results::merge_remeasure(&parsed(&h), &parsed(&he), &["paging"])
+        .expect("clean extras merge");
+    assert_eq!(merged.metrics["paging_counts"].as_array().unwrap().len(), 5);
+}
+
+#[test]
+fn broken_extras_keep_the_first_pass() {
+    let (h, b) = artifact_pair();
+    let (he, _) = clean_extras();
+    let first = parsed(&h);
+    // A different CPU model is a different runner.
+    let other_cpu = extra_file(
+        FAST_MODEL,
+        json!([96.0, 97.1, 95.8, 98.2]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&other_cpu), &["paging"]).unwrap_err()],
+        "cpu",
+    ));
+    // A failed extra run is a failed run, not a slow sample.
+    let mut failed = he.clone();
+    failed["failures"] = json!(["harness broke"]);
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&failed), &["paging"]).unwrap_err()],
+        "failed",
+    ));
+    // A breached-row metric absent from the extra file.
+    let mut missing = he.clone();
+    missing["metrics"]
+        .as_object_mut()
+        .unwrap()
+        .remove("paging_width_ms");
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&missing), &["paging"]).unwrap_err()],
+        "paging_width_ms",
+    ));
+    // Only 4 declared samples merge: 3 and 5 are rejected, 4 accepted.
+    let mut three = he.clone();
+    three["metrics"]["paging_width_ms"] = json!([96.0, 97.1, 95.8]);
+    three["metric_runs"] = json!({"paging_width_ms": 3});
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&three), &["paging"]).unwrap_err()],
+        "3 runs",
+    ));
+    let mut five = he.clone();
+    five["metrics"]["paging_width_ms"] = json!([96.0, 97.1, 95.8, 98.2, 99.0]);
+    five["metric_runs"] = json!({"paging_width_ms": 5});
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&five), &["paging"]).unwrap_err()],
+        "5 runs",
+    ));
+    // Four samples holding three is a short file, not a remeasure.
+    let mut short = he.clone();
+    short["metrics"]["paging_width_ms"] = json!([96.0, 97.1, 95.8]);
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&short), &["paging"]).unwrap_err()],
+        "3 samples",
+    ));
+    // An unknown row name merges nothing.
+    assert!(super::results::merge_remeasure(&first, &parsed(&he), &["no such row"]).is_err());
+    let _ = b;
+}
+
+#[test]
+fn clean_extras_outvote_the_spike() {
+    let (h, b) = artifact_pair();
+    let (he, be) = clean_extras();
+    // Merged head median 98.2, merged base median 97.3, bound 105.1,
+    // ceiling 106.0: the breach is gone.
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "`paging` jig, slowest re-count at a new width",
+    );
+    assert!(line.contains("98.2 ms"), "{line}");
+    assert!(line.ends_with("| pass |"), "{line}");
+    assert!(
+        out.comment.contains(
+            "Each number is the median of 5 runs on Linux x86_64, \
+             a timing-only workload's or the paging jig's of 3 (`docs/performance.md`). \
+             paging used 7 samples per side after a breach."
+        ),
+        "{}",
+        out.comment
+    );
+    // The first pass's comment keeps the "of 3" wording with no remeasure sentence.
+    let first = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert!(
+        first.comment.contains("the paging jig's of 3 ("),
+        "{}",
+        first.comment
+    );
+    assert!(!first.comment.contains("7 samples"), "{}", first.comment);
+}
+
+#[test]
+fn hot_extras_keep_failing_on_all_seven() {
+    let (h, b) = artifact_pair();
+    // Four hot extras: the merged median stays over on 111.0 of 7.
+    let he = extra_file(
+        SLOW_MODEL,
+        json!([111.0, 112.0, 113.0, 114.0]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let (_, be) = clean_extras();
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    // Two hot and two clean extras still fail: the median of 7 is 111.0,
+    // which an even-count median or an any-extra-passes rule would miss.
+    let he = extra_file(
+        SLOW_MODEL,
+        json!([95.0, 110.0, 111.0, 112.0]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "111.0 ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn a_mismatched_extra_keeps_the_first_pass_failure() {
+    let (h, b) = artifact_pair();
+    let (he, be) = clean_extras();
+    let he = with_cpu(he, FAST_MODEL);
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
+    // Nothing was remeasured, so the comment keeps the first-pass wording.
+    assert!(!out.comment.contains("7 samples"), "{}", out.comment);
+    // An unreadable extra file fails the same way: schema 2 is not schema 1.
+    let mut schema_two = he.clone();
+    schema_two["schema"] = json!(2);
+    let out = judged_extra(&h, &b, &schema_two, Some(&be), &doc_106());
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
+}
+
+#[test]
+fn a_memory_failure_stands_whatever_the_timing_extras_show() {
+    let (mut h, b) = artifact_pair();
+    h = with_paging_counts(h, &[("paging_rss_kib", 3)]);
+    h = with_metric(h, "paging_rss_kib", json!([30000.0, 30000.0, 30000.0]));
+    let (he, be) = clean_extras();
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(has(&out.failures, "paging_rss_kib"), "{:?}", out.failures);
+    assert!(!has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    // The `within` memory row stands too.
+    let (mut h, b) = artifact_pair();
+    h = with_metric(
+        h,
+        "web_fetch_rss_kib",
+        json!([30000, 30000, 30000, 30000, 30000]),
+    );
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert!(
+        has(&out.failures, "web_fetch_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+    assert!(!has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn a_ratio_failing_on_its_first_pass_is_judged_again_on_merged_pairs() {
+    // The width breach plus a scale-16 growth of about 26x: two failures.
+    let (mut h, b) = artifact_pair();
+    h = with_metric(
+        h,
+        "paging_scale16_width_ms",
+        json!([2900.0, 2900.0, 2900.0]),
+    );
+    let first = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    assert_eq!(first.failures.len(), 2, "{:?}", first.failures);
+    // Clean extras outvote both: every merged pair grows about 4x.
+    let (he, be) = clean_extras();
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    // Hot extras keep every merged pair over 24x: both still fail.
+    let hot = extra_file(
+        SLOW_MODEL,
+        json!([111.0, 112.0, 113.0, 114.0]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([2900.0, 2900.0, 2900.0, 2900.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let out = judged_extra(&h, &b, &hot, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
+    assert!(
+        has(
+            &out.failures,
+            "`paging` jig at scale 16, slowest re-count at a new width"
+        ),
+        "{:?}",
+        out.failures
+    );
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+}
+
+#[test]
+fn an_all_over_growth_blow_up_in_the_extras_still_breaks_the_ratio() {
+    // The search ratio fails on its first pass while the width timing breaches.
+    let (mut h, b) = artifact_pair();
+    h = with_metric(h, "paging_search_ms", json!([50.0, 51.0, 52.0]));
+    h = with_metric(
+        h,
+        "paging_scale16_search_ms",
+        json!([1300.0, 1300.0, 1300.0]),
+    );
+    let search = extra_file(
+        SLOW_MODEL,
+        json!([96.0, 97.1, 95.8, 98.2]),
+        json!([50.0, 51.0, 52.0, 53.0]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([1300.0, 1300.0, 1300.0, 1300.0]),
+    );
+    let (_, be) = clean_extras();
+    let out = judged_extra(&h, &b, &search, Some(&be), &doc_106());
+    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    assert!(
+        has(
+            &out.failures,
+            "`paging` jig at scale 16, a search of the whole session with no match"
+        ),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn only_a_merged_base_median_can_move_the_verdict() {
+    // The head extras stay hot, so the merged head median is still over the
+    // ceiling; the base extras lift the merged base median to 116.0, and
+    // the relative leg passes.
+    let (h, b) = artifact_pair();
+    let hot = extra_file(
+        SLOW_MODEL,
+        json!([111.0, 112.0, 113.0, 114.0]),
+        json!([5.3, 5.4, 5.2, 5.5]),
+        json!([378.0, 376.0, 377.0, 381.0]),
+        json!([84.0, 85.0, 83.0, 86.0]),
+    );
+    let lifted = extra_file(
+        SLOW_MODEL,
+        json!([115.0, 116.0, 117.0, 118.0]),
+        json!([5.0, 5.1, 4.9, 5.2]),
+        json!([370.0, 371.0, 369.0, 372.0]),
+        json!([82.0, 83.0, 81.0, 84.0]),
+    );
+    let out = judged_extra(&h, &b, &hot, Some(&lifted), &doc_106());
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let line = row(
+        &out.comment,
+        "`paging` jig, slowest re-count at a new width",
+    );
+    assert!(line.contains("112.6 ms"), "{line}");
+    assert!(line.ends_with("| pass |"), "{line}");
+}
+
 #[test]
 fn a_single_provider_request_is_recorded_not_none_recorded() {
     let metric = json!([{
