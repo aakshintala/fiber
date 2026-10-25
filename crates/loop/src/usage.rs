@@ -3,13 +3,14 @@
 //! the spending budget, so the two cannot drift.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 
 use contract::events::{Event, Notice, UsageRecorded};
 use contract::provider::{CallUsage, Cost, CostLookup, Tier};
 use contract::shapes::{Tokens, Usage};
 use contract::{ActionId, TurnId};
 use contract::{ErrorCode, GenerationId};
+use support::lock;
 
 /// The call's cost in US dollars (`docs/model-routing.md`, "Cost").
 ///
@@ -267,10 +268,7 @@ impl crate::Loop {
     /// Only copies and tap arrivals claim, for a prompt stop while the
     /// loop is parked or mid-turn on foreign spend.
     fn record_usage(&self, recorded: &UsageRecorded) {
-        self.spend_trip
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .record(recorded);
+        lock(&self.spend_trip).record(recorded);
     }
 
     /// Publishes one ledgered line to the spend tripwire, stopping
@@ -282,10 +280,7 @@ impl crate::Loop {
     /// end stops nothing twice.
     fn publish_usage(&self, recorded: &UsageRecorded) {
         let tripped = {
-            let mut trip = self
-                .spend_trip
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut trip = lock(&self.spend_trip);
             trip.ack(recorded)
         };
         if tripped && let Some(jobs) = &self.ending.jobs {
