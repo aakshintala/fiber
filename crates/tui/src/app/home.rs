@@ -1568,3 +1568,7 @@ pub(super) fn refusal_code(payload: &serde_json::Map<String, Value>) -> String {
 #[cfg(test)]
 #[path = "home_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "home/scoped_page_tests.rs"]
+mod scoped_page_tests;
