@@ -1092,6 +1092,162 @@ fn a_context_line_before_the_span_selects_nothing() {
 }
 
 #[test]
+fn a_colon_before_a_non_colon_in_a_test_path_selects_nothing() {
+    // `#[test:,]` holds `:` then `,`, so only the first colon check
+    // holds and the `&&` guard fails: the walk stops after `test`,
+    // leaving two trailing tokens that reject the path. Replacing `&&`
+    // with `||` (or the guard with `true`) walks past the pair and
+    // accepts the empty rest, wrongly selecting `odd`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/colon_tests.rs",
+        "#[test:,]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/colon_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_non_colon_before_a_colon_in_a_test_path_selects_nothing() {
+    // `#[test,:]` holds `,` then `:`, so only the second colon check
+    // holds and the `&&` guard fails: the walk stops after `test`,
+    // leaving two trailing tokens that reject the path. Replacing `&&`
+    // with `||` (or the guard with `true`) walks past the pair and
+    // accepts the empty rest, wrongly selecting `odd`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/comma_tests.rs",
+        "#[test,:]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/comma_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_double_non_colon_in_a_test_path_selects_nothing() {
+    // `#[test!!]` holds no colon at all, so both colon checks fail and
+    // the `&&` guard fails: the walk stops after `test`, leaving two
+    // trailing tokens that reject the path. Replacing the guard with
+    // `true` walks past the pair and accepts the empty rest, wrongly
+    // selecting `odd`. (Replacing `&&` with `||` still fails here, so
+    // this pins the guard itself with both comparisons false.)
+    let sources = vec![file(
+        "log",
+        "crates/log/src/bang_tests.rs",
+        "#[test!!]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/bang_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_cfg_prefixed_test_path_selects_nothing() {
+    // `#[cfg::test]` walks one `::` pair to segments `[cfg, test]`
+    // with an empty rest: the last segment is `test`, but the first is
+    // `cfg`, so the `||` rejects it. Replacing `||` with `&&` (or the
+    // `cfg` check's `==` with `!=`) drops the rejection and wrongly
+    // selects `prefixed`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/cfg_path_tests.rs",
+        "#[cfg::test]\nfn prefixed() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/cfg_path_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn prefixed() {}\n+fn prefixed() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_test_prefixed_non_test_path_selects_nothing() {
+    // `#[test::foo]` walks one `::` pair to segments `[test, foo]` with
+    // an empty rest: the last segment is not `test`, so the `!=`
+    // rejects it. Replacing `!=` with `==` accepts the empty rest
+    // instead and wrongly selects `odd`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/suffix_tests.rs",
+        "#[test::foo]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/suffix_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn an_attribute_without_a_path_selects_nothing() {
+    // `#[]` holds no tokens and `#[::test]` starts with a punctuator,
+    // so neither yields a path segment and both hit the empty-path
+    // early return. Returning `true` there (as that arm's mutant would)
+    // wrongly selects both functions.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/empty_tests.rs",
+        "#[]\nfn empty() {}\n\n#[::test]\nfn leading() {}\n",
+    )];
+    let mut diff = String::new();
+    diff.push_str(&diff_file(
+        "crates/log/src/empty_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn empty() {}\n+fn empty() {}\n",
+    ));
+    diff.push_str(&diff_file(
+        "crates/log/src/empty_tests.rs",
+        "@@ -5,1 +5,1 @@\n-fn leading() {}\n+fn leading() {}\n",
+    ));
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
+fn a_test_path_with_a_trailing_argument_list_selects() {
+    // `#[test(foo)]` leaves a single group after `test`: the trailing
+    // argument list still selects. Denying the group arm (as `false`
+    // for the whole trailing-token check would) loses `with_args`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/args_tests.rs",
+        "#[test(foo)]\nfn with_args() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/args_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn with_args() {}\n+fn with_args() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "args::tests::with_args")]
+    );
+}
+
+#[test]
+fn a_test_path_followed_by_a_bare_word_selects_nothing() {
+    // `#[test foo]` leaves a single bare word after `test`: with no
+    // `::` and no argument list the path is rejected. Accepting any
+    // single trailing token (as `true` for the trailing-token check
+    // would) wrongly selects `odd`.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/bare_tests.rs",
+        "#[test foo]\nfn odd() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/bare_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn odd() {}\n+fn odd() {}\n",
+    );
+    assert_eq!(selected(&diff, &sources), vec![]);
+}
+
+#[test]
 fn a_hunk_count_past_u32_is_an_error_naming_the_path() {
     for header in [
         "@@ -1 +18446744073709551615,2 @@\n-old\n+new\n+new\n",
