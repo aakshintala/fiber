@@ -837,6 +837,8 @@ impl Driver {
                 | Event::ExtensionUi(_)
                 | Event::ExtensionMessage(_)
                 | Event::ExtensionLog(_)
+                | Event::ExtensionHello(_)
+                | Event::ExtensionRequest(_)
                 | Event::ExtensionExec(_)
                 | Event::JobStarted(_)
                 | Event::DelegateStarted(_)

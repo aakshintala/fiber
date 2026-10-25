@@ -223,6 +223,8 @@ pub fn render_reviewed(
         Event::ExtensionUi(_)
         | Event::ExtensionMessage(_)
         | Event::ExtensionLog(_)
+        | Event::ExtensionHello(_)
+        | Event::ExtensionRequest(_)
         | Event::ExtensionExec(_) => {}
         Event::JobStarted(_) | Event::DelegateStarted(_) | Event::JobDelta(_) => {}
         Event::JobLine(_) | Event::DelegateFinished(_) | Event::JobCompleted(_) => {}

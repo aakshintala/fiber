@@ -132,6 +132,13 @@ pub struct Process {
     /// Its arguments.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Whether the extension is required: one marked `required` that fails
+    /// to start makes that fatal, as a required MCP server does.
+    #[serde(default)]
+    pub required: bool,
+    /// How long the program may take to finish when the session ends, in
+    /// milliseconds; no default. Zero allows no finish time.
+    pub exit_timeout_ms: u64,
 }
 
 /// One per-account host placeholder a provider's models name
