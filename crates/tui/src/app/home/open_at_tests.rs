@@ -208,10 +208,13 @@ fn a_refused_launch_open_shows_the_refusal_on_home() {
 fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
     let mut app = home_at(OpenAt::List);
     let lines = commands(app.on_line(hello()));
-    assert_eq!(lines.len(), 2);
-    let recent = lines[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("recent id"));
+    // The hello fans out feed and an unscoped recent; no doc promises
+    // their order or count, so take the unscoped recent by kind.
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("unscoped recent id"));
     // The unscoped answer fans out the project's scoped ask.
     let fanout = commands(app.on_line(accepted(
         recent,
@@ -253,7 +256,7 @@ fn a_list_launch_with_no_rows_leaves_the_box_focused() {
 #[test]
 fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
     let mut app = home_at(OpenAt::List);
-    // `docs/invocation.md:1033` (the hub speaks first on each connection).
+    // `docs/invocation.md:1044` (the hub speaks first on each connection).
     let lines = commands(app.on_line(hello()));
     let recent = lines
         .iter()
@@ -300,9 +303,13 @@ fn a_list_launch_on_a_rejected_first_page_leaves_the_box_focused() {
 fn a_home_launch_never_focuses_the_list() {
     let mut app = home_at(OpenAt::Home);
     let lines = commands(app.on_line(hello()));
-    let recent = lines[1]["id"]
-        .as_str()
-        .unwrap_or_else(|| panic!("recent id"));
+    // The hello fans out feed and an unscoped recent; no doc promises
+    // their order or count, so take the unscoped recent by kind.
+    let recent = lines
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("unscoped recent id"));
     // The unscoped answer fans out the project's scoped ask.
     let fanout = commands(app.on_line(accepted(
         recent,

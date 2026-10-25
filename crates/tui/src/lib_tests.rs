@@ -1770,11 +1770,19 @@ fn opening_a_row_by_key_calls_on_attach() {
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let reader = BufReader::new(theirs);
     feed(&mut lp, vec![Input::Connected(ours, hello())]);
-    // The hello fans out feed and an unscoped recent; assert presence,
-    // not order.
-    let (reader, first) = command(reader, "the first hello command");
-    let (reader, second) = command(reader, "the second hello command");
-    let hello_lines = [first, second];
+    // The hello fans out feed and an unscoped recent; no doc promises
+    // their order or count, so collect until both kinds appear.
+    let mut reader = reader;
+    let mut hello_lines: Vec<serde_json::Value> = Vec::new();
+    while !(hello_lines.iter().any(|line| line["command"] == "feed")
+        && hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+    {
+        let (next, line) = command(reader, "a hello command");
+        reader = next;
+        hello_lines.push(line);
+    }
     assert!(
         hello_lines.iter().any(|line| line["command"] == "feed"),
         "a feed went out: {hello_lines:?}"
@@ -1809,11 +1817,18 @@ fn opening_a_row_by_key_calls_on_attach() {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
-    // The introducing status queues its project's scoped ask.
-    let (reader, scoped) = command(reader, "the scoped command");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
+    // The introducing status queues its project's scoped ask; no doc
+    // promises its position, so collect until that kind appears.
+    let scoped = loop {
+        let (next, line) = command(reader, "the scoped command");
+        reader = next;
+        if line["command"] == "recent" && line["args"]["project"] == "-w" {
+            break line;
+        }
+    };
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -1881,11 +1896,19 @@ fn an_exit_sends_its_lines_then_quits() {
     // Ctrl+C twice asks while the session works, and `c` closes all.
     assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
     assert_eq!(lp.step(Input::Bytes(vec![0x03]), &rx), None);
-    // The hello fanned out feed and an unscoped recent; assert presence,
-    // not order.
-    let (reader, first) = command(reader, "the first hello command");
-    let (reader, second) = command(reader, "the second hello command");
-    let hello_lines = [first, second];
+    // The hello fanned out feed and an unscoped recent; no doc promises
+    // their order or count, so collect until both kinds appear.
+    let mut reader = reader;
+    let mut hello_lines: Vec<serde_json::Value> = Vec::new();
+    while !(hello_lines.iter().any(|line| line["command"] == "feed")
+        && hello_lines
+            .iter()
+            .any(|line| line["command"] == "recent" && line.get("args").is_none()))
+    {
+        let (next, line) = command(reader, "a hello command");
+        reader = next;
+        hello_lines.push(line);
+    }
     assert!(
         hello_lines.iter().any(|line| line["command"] == "feed"),
         "a feed went out: {hello_lines:?}"
@@ -1896,11 +1919,18 @@ fn an_exit_sends_its_lines_then_quits() {
             .any(|line| line["command"] == "recent" && line.get("args").is_none()),
         "an unscoped recent went out: {hello_lines:?}"
     );
-    // The introducing status queues its project's scoped ask.
-    let (reader, scoped) = command(reader, "the scoped");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
+    // The introducing status queues its project's scoped ask; no doc
+    // promises its position, so collect until that kind appears.
+    let scoped = loop {
+        let (next, line) = command(reader, "the scoped");
+        reader = next;
+        if line["command"] == "recent" && line["args"]["project"] == "-w" {
+            break line;
+        }
+    };
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));

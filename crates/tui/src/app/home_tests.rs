@@ -512,7 +512,7 @@ fn a_status_after_hello_queues_one_scoped_ask() {
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(lines.len(), 1);
-    // `docs/invocation.md:1091` (recent command).
+    // `docs/invocation.md:1102` (recent command).
     assert_eq!(lines[0]["command"], "recent");
     // `docs/tui.md:268` (scoped ask carries the project's key).
     assert_eq!(lines[0]["args"]["project"], "-w");
@@ -5060,7 +5060,7 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     // While in flight, the left marks dirty and sends nothing, keeping
     // the held fallback.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  fix the parser"]);
@@ -5072,7 +5072,7 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     );
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     let second = line_id(&follow[0]).to_owned();
     assert!(
@@ -5107,7 +5107,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(7));
     // The drop and the second hello reset the connection state.
     app.disconnected();
@@ -5140,12 +5140,15 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
     // `docs/tui.md:268` (one ask per project).
     assert_eq!(projects, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-other"), None);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
-    assert_eq!(listed(&app), ["○  a", "○  b  other"]);
+    // The rows tie on recency, so no `docs/<area>.md` line promises
+    // their order: assert the rows as a set.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
+    assert_eq!(rows, ["○  a", "○  b  other"]);
     // The stale scoped answer matches nothing and folds nothing.
     assert!(
         app.on_line(accepted(
@@ -5154,10 +5157,13 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
-    assert_eq!(listed(&app), ["○  a", "○  b  other"]);
+    // The rows tie on recency, so no `docs/<area>.md` line promises
+    // their order: assert the rows as a set.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
+    assert_eq!(rows, ["○  a", "○  b  other"]);
     // The refetched unscoped page triggers nothing new: both projects
     // already have asks in flight.
     let recent_id = lines
@@ -5191,22 +5197,22 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A replayed status for a known section queues nothing and keeps
     // the total.
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A replayed left retriggers one ask without incrementing.
     let queued = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&queued), ["-w"]);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A second replayed left while in flight only marks dirty.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // Only a fresh scoped answer moves the total, sending the one
     // follow-up the dirty replay earned.
@@ -5218,7 +5224,7 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
     );
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     assert!(
         app.on_line(accepted(
@@ -5353,10 +5359,13 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
     );
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
-    assert_eq!(listed(&app), ["○  other  other", "○  new"]);
+    // The rows tie on recency, so no `docs/<area>.md` line promises
+    // their order: assert the rows as a set.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
+    assert_eq!(rows, ["○  new", "○  other  other"]);
 }
 
 #[test]
@@ -5369,7 +5378,7 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     let lines = commands(app.home_outgoing());
     // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(lines.len(), 1);
-    // `docs/invocation.md:1091` (recent command).
+    // `docs/invocation.md:1102` (recent command).
     assert_eq!(lines[0]["command"], "recent");
     assert_eq!(lines[0]["args"]["project"], "-w");
     assert!(lines[0]["args"].get("before").is_none());
@@ -5505,8 +5514,11 @@ fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
     answer_scoped_empty(&mut app, &fanout, 2);
     // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
-    assert_eq!(listed(&app), ["○  a", "○  b"]);
+    // The rows tie on recency, so no `docs/<area>.md` line promises
+    // their order: assert the rows as a set.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
+    assert_eq!(rows, ["○  a", "○  b"]);
 }
 
 #[test]
@@ -6244,7 +6256,7 @@ fn fanout_projects(lines: &[Value]) -> Vec<&str> {
     lines
         .iter()
         .map(|line| {
-            // `docs/invocation.md:1091` (each fanout line is a scoped `recent`).
+            // `docs/invocation.md:1102` (each fanout line is a scoped `recent`).
             assert_eq!(line["command"], "recent");
             line["args"]["project"]
                 .as_str()
@@ -6287,7 +6299,12 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
     for line in &lines {
         assert!(line["args"].get("before").is_none());
     }
-    assert_ne!(line_id(&lines[0]), line_id(&lines[1]));
+    // `docs/tui.md:268` (one ask per project): the two new projects'
+    // asks carry distinct ids; request order is open.
+    let mut ids: Vec<&str> = lines.iter().map(line_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 2);
     // A stale unscoped id answers nothing more.
     assert!(
         app.on_line(accepted("c_deadbeefdeadbeef", json!({"sessions": []})))
@@ -6306,7 +6323,7 @@ fn an_unscoped_answer_carrying_a_total_stores_nothing() {
     );
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&lines), ["-w"]);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
 }
 
@@ -6342,9 +6359,9 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-other"), Some(2));
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `-w` next, with a duplicate and a new row: pages append.
     assert!(
@@ -6357,12 +6374,15 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
-    // `docs/tui.md:254-255` (newest first) and `233-234` (sections order).
+    // The rows tie on recency, so no `docs/<area>.md` line promises
+    // their order: assert the rows as a set.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
     assert_eq!(
-        listed(&app),
-        ["○  old", "○  other  other", "○  o2  other", "○  new",]
+        rows,
+        ["○  new", "○  o2  other", "○  old", "○  other  other",]
     );
     // A stale scoped id drops without touching rows or totals.
     assert!(
@@ -6372,12 +6392,15 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
-    // A stale scoped id leaves the rows as they were.
+    // A stale scoped id leaves the rows as they were: same rows,
+    // whatever their order, since ties promise none.
+    let mut rows = listed(&app);
+    rows.sort_unstable();
     assert_eq!(
-        listed(&app),
-        ["○  old", "○  other  other", "○  o2  other", "○  new",]
+        rows,
+        ["○  new", "○  o2  other", "○  old", "○  other  other",]
     );
 }
 
@@ -6403,7 +6426,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
     // `docs/tui.md:268` (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     assert_ne!(line_id(&follow[0]), first);
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
     // The follow-up answers with no further trigger: nothing more.
     let second = line_id(&follow[0]).to_owned();
@@ -6411,7 +6434,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
         app.on_line(accepted(&second, json!({"sessions": [], "total": 5}),))
             .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
 }
 
@@ -6435,7 +6458,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code == "gone"
     )));
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  old"]);
@@ -6479,7 +6502,7 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
     )));
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), before);
@@ -6526,7 +6549,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
             )),
             "{label}"
         );
-        // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+        // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
         assert_eq!(stored(&app, "-w"), Some(5), "{label}");
         // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
         assert_eq!(listed(&app), before, "{label}");
@@ -6554,7 +6577,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
         app.on_line(hub_refused(&first, "gone", "no recent"))
             .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // The older unscoped page holds the same project: no scoped retry.
     focus_last(&mut app);
@@ -6571,7 +6594,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     assert!(fanout.is_empty());
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), None);
 }
 
@@ -6592,7 +6615,7 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // The project's loaded rows already match its total, so the next
     // page stays unscoped.
@@ -6609,7 +6632,7 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
             .is_empty()
     );
     assert_eq!(app.notice(), Some("too old"));
-    // `docs/invocation.md:1091` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
     assert_eq!(listed(&app), ["○  old"]);
