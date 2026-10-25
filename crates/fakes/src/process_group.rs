@@ -408,7 +408,7 @@ fn group_lives(group: u32) -> bool {
 
 /// How long each liveness wait holds between probes: one bounded wait
 /// against its stop channel, so no wait spins.
-pub(crate) const POLL: Duration = Duration::from_millis(10);
+pub const POLL: Duration = Duration::from_millis(10);
 
 /// True once `stop` sent or disconnected: the one bounded wait every probe
 /// loop shares, holding no lock between probes.

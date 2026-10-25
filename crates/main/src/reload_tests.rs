@@ -293,23 +293,106 @@ impl Fixture {
         fixture
     }
 
+    /// Runs the reload preparation, dumping every fake MCP server's
+    /// `stderr.log` and `requests.log` into the failure when the wait
+    /// expires or the preparation panics: the failure then shows whether
+    /// the prepare blocked on a server start or past it.
+    #[track_caller]
     fn prepare(&self) -> r#loop::ReloadPrepared {
         let state = self.state.clone();
-        fakes::within(
-            "reload prepared",
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            move || {
-                state
-                    .prepare_inner(
-                        &r#loop::ReloadRoute {
-                            model: "scripted/s.json".into(),
-                            credential: None,
-                        },
-                        super::Preparation::Explicit,
-                    )
-                    .unwrap()
-            },
-        )
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fakes::within(
+                "reload prepared",
+                Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+                move || {
+                    state
+                        .prepare_inner(
+                            &r#loop::ReloadRoute {
+                                model: "scripted/s.json".into(),
+                                credential: None,
+                            },
+                            super::Preparation::Explicit,
+                        )
+                        .unwrap()
+                },
+            )
+        }));
+        match outcome {
+            Ok(prepared) => prepared,
+            Err(payload) => panic!(
+                "{message}\n{dump}",
+                message = panic_text(&payload),
+                dump = dump_fake_servers(self.rig.root.path()),
+            ),
+        }
+    }
+}
+
+/// The text of a caught panic payload, or a fixed line when it is not a
+/// string: the wait's own message already names what expired, and the
+/// server dump below it shows what the fakes saw.
+// debt: one local helper in this module; upgrade trigger: a shared public
+// panic-payload formatter that can be reused without broadening this
+// ticket's fence.
+fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a non-string panic".to_owned()
+    }
+}
+
+/// Every fake server directory under the rig's root, sorted by name: a
+/// directory holding `tools.json` is one `FakeServer` made, whether the
+/// fixture tracks it or a test holds it aside. Each entry shows the
+/// server's stderr and every line it received.
+fn dump_fake_servers(root: &std::path::Path) -> String {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if dir.join("tools.json").is_file() {
+                names.extend(
+                    dir.file_name()
+                        .map(|name| name.to_string_lossy().into_owned()),
+                );
+            }
+        }
+    }
+    names.sort();
+    if names.is_empty() {
+        return format!("fake MCP servers: none under {}", root.display());
+    }
+    let mut dump = String::from("fake MCP servers at the prepare timeout:");
+    for name in &names {
+        dump.push_str(&dump_fake_server(&root.join(name), name));
+    }
+    dump
+}
+
+/// One fake server's logs: its stderr, then every request line it read.
+/// A `fail-start` server exits before it reads, so its `requests.log`
+/// reads absent, which itself says the start never reached the loop.
+// debt: one per-server rendering helper; upgrade trigger: another caller or
+// evidence that inlining improves clarity.
+fn dump_fake_server(dir: &std::path::Path, name: &str) -> String {
+    format!(
+        "\nfake MCP server {name}:\n{stderr}{requests}",
+        stderr = read_server_log(dir, "stderr.log"),
+        requests = read_server_log(dir, "requests.log"),
+    )
+}
+
+/// One log file's contents, naming when it is missing or empty: both
+/// cases diagnose, since a started server always writes `pid.txt` first
+/// and reads into `requests.log` right after.
+fn read_server_log(dir: &std::path::Path, file: &str) -> String {
+    match std::fs::read_to_string(dir.join(file)) {
+        Err(_) => format!("{file}: <absent>\n"),
+        Ok(text) if text.is_empty() => format!("{file}: <empty>\n"),
+        Ok(text) => format!("{file}:\n{}\n", text.trim_end()),
     }
 }
 
@@ -1291,11 +1374,15 @@ impl FakeServer {
         fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
     }
 
-    /// The global-config entry running this fake.
+    /// The global-config entry running this fake: through `/bin/sh` so the
+    /// fake's stderr lands in its directory's `stderr.log`, which a
+    /// prepare timeout dumps beside `requests.log`. The shell execs the
+    /// fixture, so the server keeps its own pid and process group; the
+    /// paths ride as positional parameters, so no path needs quoting.
     fn entry(&self, extra: serde_json::Value) -> serde_json::Value {
         let mut entry = serde_json::json!({
-            "command": fakes::mcp_fixture().display().to_string(),
-            "args": [self.dir.display().to_string()],
+            "command": "/bin/sh",
+            "args": ["-c", "exec \"$0\" \"$1\" 2>\"$1/stderr.log\"", fakes::mcp_fixture().display().to_string(), self.dir.display().to_string()],
         });
         for (key, value) in extra.as_object().unwrap() {
             entry[key] = value.clone();
@@ -2484,5 +2571,131 @@ fn a_failed_start_of_a_not_started_server_removes_its_slot_and_its_resources() {
         !fixture
             .declared_names()
             .contains(&mcp::RESOURCES_TOOL.to_owned())
+    );
+}
+
+#[test]
+fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
+    // The timeout branch itself needs the race, but its formatting does
+    // not: fabricated directories drive the dump deterministically.
+    let rig = Rig::new("fiber-reload-dump");
+    let fx = rig.root.path().join("fx");
+    std::fs::create_dir_all(&fx).unwrap();
+    std::fs::write(fx.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    std::fs::write(fx.join("stderr.log"), "boom\n").unwrap();
+    std::fs::write(fx.join("requests.log"), "{\"jsonrpc\":\"2.0\"}\n").unwrap();
+    let gx = rig.root.path().join("gx");
+    std::fs::create_dir_all(&gx).unwrap();
+    std::fs::write(gx.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    std::fs::write(gx.join("fail-start"), "").unwrap();
+    std::fs::write(gx.join("stderr.log"), "").unwrap();
+    // No `tools.json`: not a server, so the dump skips it.
+    let plain = rig.root.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join("config.json"), "{}").unwrap();
+    // Not a directory at all.
+    std::fs::write(rig.root.path().join("stray.txt"), "x").unwrap();
+
+    let dump = dump_fake_servers(rig.root.path());
+    assert!(
+        dump.contains("fake MCP server fx:"),
+        "names every server: {dump}"
+    );
+    assert!(dump.contains("boom"), "shows the stderr: {dump}");
+    assert!(dump.contains("jsonrpc"), "shows the requests: {dump}");
+    assert!(
+        dump.contains("fake MCP server gx:"),
+        "names the failed server too: {dump}"
+    );
+    assert!(
+        dump.contains("requests.log: <absent>"),
+        "a start that never read has no requests: {dump}"
+    );
+    assert!(
+        dump.contains("stderr.log: <empty>"),
+        "an empty stderr reads empty, not absent: {dump}"
+    );
+    assert!(!dump.contains("plain"), "skips a non-server: {dump}");
+    assert!(!dump.contains("stray"), "skips a file: {dump}");
+}
+
+// debt: one small helper test for the three panic payload forms; upgrade
+// trigger: remove the helper or cover these forms through another focused
+// test.
+#[test]
+fn a_caught_panic_reports_its_text() {
+    let str_payload: Box<dyn std::any::Any + Send> = Box::new("bang");
+    assert_eq!(panic_text(&str_payload), "bang");
+    let string_payload: Box<dyn std::any::Any + Send> = Box::new(String::from("boom"));
+    assert_eq!(panic_text(&string_payload), "boom");
+    let other_payload: Box<dyn std::any::Any + Send> = Box::new(42);
+    assert_eq!(panic_text(&other_payload), "a non-string panic");
+}
+
+#[test]
+fn a_failed_prepare_reports_the_fake_servers_logs() {
+    // An invalid config fails the preparation at once, driving the
+    // failure branch deterministically: the panic names the wait and
+    // carries the live servers' logs.
+    let fixture = Fixture::with_servers(&[("fx", json!([{"name": "echo"}]))]);
+    std::fs::write(fixture.rig.home.join("config.json"), "{").unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fixture.prepare()));
+    let payload = match failure {
+        Ok(_) => panic!("an invalid config fails the prepare"),
+        Err(payload) => payload,
+    };
+    let text = panic_text(&payload);
+    assert!(
+        text.contains("reload prepared"),
+        "names the expired wait: {text}"
+    );
+    assert!(
+        text.contains("fake MCP server fx:"),
+        "carries the server dump: {text}"
+    );
+    assert!(
+        text.contains("requests.log:"),
+        "carries the requests log: {text}"
+    );
+}
+
+#[test]
+fn a_prepare_timeout_dump_with_no_servers_says_so() {
+    let rig = Rig::new("fiber-reload-dump-empty");
+    let dump = dump_fake_servers(rig.root.path().join("home").as_path());
+    assert!(
+        dump.contains("none"),
+        "a missing root holds no servers: {dump}"
+    );
+}
+
+#[test]
+fn a_fake_server_entry_captures_stderr_in_its_directory() {
+    let rig = Rig::new("fiber-reload-entry");
+    let fake = FakeServer::new(&rig, "fx", &json!([{"name": "echo"}]));
+    let entry = fake.entry(json!({}));
+    assert_eq!(entry["command"], json!("/bin/sh"));
+    let args = entry["args"].as_array().unwrap();
+    // The wrapper execs the fixture on the directory and redirects the
+    // server's stderr into it: the paths ride as positional parameters,
+    // never interpolated, so no path needs quoting.
+    assert_eq!(args[0], json!("-c"));
+    assert!(
+        args[1].as_str().unwrap().starts_with("exec \"$0\" \"$1\""),
+        "the wrapper execs its parameters: {args:?}"
+    );
+    assert!(
+        args[1].as_str().unwrap().contains("stderr.log"),
+        "the wrapper redirects stderr: {args:?}"
+    );
+    assert_eq!(
+        args[2],
+        json!(fakes::mcp_fixture().display().to_string()),
+        "the fixture rides as $0: {args:?}"
+    );
+    assert_eq!(
+        args[3],
+        json!(fake.dir.display().to_string()),
+        "the directory rides as $1: {args:?}"
     );
 }
