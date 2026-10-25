@@ -187,31 +187,31 @@ fn choose_table() {
 fn choose_returns_the_chosen_backend() {
     let (_dir, ext) = extension("return nil\n");
     let backends = vec![
-        (
-            "fiber.test/a".to_owned(),
-            "brave".to_owned(),
-            Arc::clone(&ext),
-        ),
-        (
-            "fiber.test/b".to_owned(),
-            "kagi".to_owned(),
-            Arc::clone(&ext),
-        ),
+        SearchSource {
+            extension: "fiber.test/a".to_owned(),
+            name: "brave".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
+        SearchSource {
+            extension: "fiber.test/b".to_owned(),
+            name: "kagi".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
     ];
     let (chosen, notices) = choose(backends, Some("kagi"));
     assert!(chosen.is_some());
     assert!(notices.is_empty());
     let backends = vec![
-        (
-            "fiber.test/a".to_owned(),
-            "brave".to_owned(),
-            Arc::clone(&ext),
-        ),
-        (
-            "fiber.test/b".to_owned(),
-            "kagi".to_owned(),
-            Arc::clone(&ext),
-        ),
+        SearchSource {
+            extension: "fiber.test/a".to_owned(),
+            name: "brave".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
+        SearchSource {
+            extension: "fiber.test/b".to_owned(),
+            name: "kagi".to_owned(),
+            backend: SearchBackendKind::Lua(Arc::clone(&ext)),
+        },
     ];
     let (chosen, notices) = choose(backends, None);
     assert!(chosen.is_none());

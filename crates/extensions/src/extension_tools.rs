@@ -14,12 +14,50 @@ use contract::tool::{Ask, Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value};
 
 use crate::lua::{DeclaredTool, effects_from, urls_from};
+use crate::runtime::{FunctionRef, Runtime};
 use crate::{Error, LuaExtension};
 
 /// One tool a Lua extension registered with `fiber.tool`.
 pub struct LuaTool {
     extension: Arc<LuaExtension>,
     declared: DeclaredTool,
+}
+
+/// One tool a process extension registered with `fiber.tool`: its
+/// definition reads from the same declaration, and its `run` and computed
+/// `effects` resolve behind the session's runtime.
+pub(crate) struct ProcessTool {
+    /// The session's runtime, holding the tool's references.
+    runtime: Runtime,
+    /// The extension that registered the tool.
+    owner: String,
+    /// The tool's declaration, as `fiber.tool` validated it.
+    declared: DeclaredTool,
+    /// Its `run` behind the runtime.
+    run: FunctionRef,
+    /// Its computed `effects` behind the runtime, when it declared a
+    /// function instead of a table.
+    effects: Option<FunctionRef>,
+}
+
+impl ProcessTool {
+    /// The tool `declared` of `owner`, running `run` with computed
+    /// `effects` behind `runtime`.
+    pub(crate) fn new(
+        runtime: Runtime,
+        owner: String,
+        declared: DeclaredTool,
+        run: FunctionRef,
+        effects: Option<FunctionRef>,
+    ) -> Self {
+        Self {
+            runtime,
+            owner,
+            declared,
+            run,
+            effects,
+        }
+    }
 }
 
 impl LuaTool {
@@ -135,6 +173,113 @@ impl Tool for LuaTool {
             ask.inner_calls(),
         );
         self.output(returned)
+    }
+}
+
+impl Tool for ProcessTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.declared.name.clone(),
+            description: self.declared.description.clone(),
+            input_schema: self.declared.input_schema.clone(),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    /// How a long result is cut: the same `keep` a Lua tool declares.
+    fn bound(&self) -> Bound {
+        self.declared.keep
+    }
+
+    /// The static effects, or what the effects function behind the runtime
+    /// returns for these arguments.
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        let name = &self.declared.name;
+        let (declared, hosts) = match &self.declared.effects {
+            Some(fixed) => (fixed.declared.clone(), fixed.hosts.clone()),
+            None => {
+                let Some(reference) = &self.effects else {
+                    return Err(EffectsError::Tool(format!(
+                        "the effects function of the tool `{name}` of `{}` returned effects that do not read: no function",
+                        self.owner
+                    )));
+                };
+                let value = self
+                    .runtime
+                    .tool_effects(reference, Value::Object(arguments.clone()))
+                    .map_err(|e| {
+                        EffectsError::Tool(format!(
+                            "the effects function of the tool `{name}` failed: {e}"
+                        ))
+                    })?;
+                effects_from(&value).map_err(|why| {
+                    EffectsError::Tool(format!(
+                        "the effects function of the tool `{name}` of `{}` returned effects that do not read: {why}",
+                        self.owner
+                    ))
+                })?
+            }
+        };
+        Ok(Effects {
+            declared,
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+            hosts,
+        })
+    }
+
+    /// Runs `run` behind the runtime: a callback past its timeout fails
+    /// `timeout`, and any other failure fails `tool_error`.
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
+        let returned = self
+            .runtime
+            .tool_run(&self.run, Value::Object(arguments.clone()), cancel);
+        self.output(returned)
+    }
+
+    /// Runs `run` behind the runtime as [`Tool::run`] does. A process
+    /// callback has no inner-call runner yet, so the runner is the model's
+    /// path alone and the call runs anyway.
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        let returned = self.runtime.tool_run_asking(
+            &self.run,
+            Value::Object(arguments.clone()),
+            cancel,
+            ask.inner_calls(),
+        );
+        self.output(returned)
+    }
+}
+
+impl ProcessTool {
+    /// What the tool call returned, as a result: the same contract
+    /// `LuaTool` keeps.
+    fn output(&self, returned: Result<Option<Value>, Error>) -> Output {
+        let value = match returned {
+            Ok(Some(value)) => value,
+            Ok(None) => return Output::default(),
+            Err(e @ Error::Timeout { .. }) => {
+                return failed_output(failure(ErrorCode::Timeout, e.to_string()));
+            }
+            Err(e) => return failed_output(failure(ErrorCode::ToolError, e.to_string())),
+        };
+        output_from(value).unwrap_or_else(|why| {
+            failed_output(failure(
+                ErrorCode::ToolError,
+                format!(
+                    "the tool `{}` of `{}` returned {why}",
+                    self.declared.name, self.owner
+                ),
+            ))
+        })
     }
 }
 

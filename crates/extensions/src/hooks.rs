@@ -30,6 +30,7 @@ use contract::tool::Tool;
 
 use crate::commands::{CommandSource, Lazy, SessionCommands};
 use crate::lua::{DeclaredHooks, LuaExtension};
+use crate::runtime::{FunctionRef, FunctionTarget, LuaBinding, LuaKind, Runtime};
 use crate::{API, Error, LuaProvider, LuaTool};
 
 mod before;
@@ -94,6 +95,11 @@ pub struct SessionExtensions {
     has_repository_hooks: bool,
     /// The started Lua extensions.
     lua: Vec<Arc<LuaExtension>>,
+    /// The session's backend-neutral callback owner: Lua extensions
+    /// register their VMs here, process extensions their generations, and
+    /// every hook, watcher, command and provider dispatch resolves
+    /// through it.
+    runtime: Runtime,
     /// Every watcher the loaded extensions registered, in extension-name
     /// order then registration order: what [`SessionExtensions::deliver`]
     /// fans an appended event out to.
@@ -198,11 +204,12 @@ fn watcher_arg(event: &Event) -> Value {
     })
 }
 
-/// One watcher `fiber.watch` registered: its extension's name and handle,
-/// its place in registration order, and the event kinds it wants.
+/// One watcher `fiber.watch` registered: its extension's name, its
+/// function behind the session's runtime, its place in registration order,
+/// and the event kinds it wants.
 struct WatcherRegistration {
     name: String,
-    extension: Arc<LuaExtension>,
+    watcher: FunctionRef,
     index: usize,
     kinds: Vec<String>,
 }
@@ -412,6 +419,7 @@ impl SessionExtensions {
         restart: BTreeSet<String>,
     ) -> Self {
         let mut session = Self {
+            runtime: Runtime::new(Arc::clone(&clock)),
             state,
             home: home.to_path_buf(),
             host_script: host.clone(),
@@ -496,7 +504,7 @@ impl SessionExtensions {
             let manifest = candidate.manifest;
             // Written for another API: it does not load (`docs/extensions.md`,
             // "The extension API version").
-            if manifest.api != API || manifest.process.is_some() {
+            if manifest.api != API {
                 continue;
             }
             // A named prompt file that is missing or outside the package
@@ -513,6 +521,51 @@ impl SessionExtensions {
                 },
                 None => None,
             };
+            // A process extension loads without a VM: its registrations
+            // arrive as messages once its process starts, so it is
+            // admitted with none yet, and its `.lua` files never run
+            // (`docs/extensions.md`, "Process extensions"). Only its data
+            // providers need declaring, as for a Lua extension.
+            if manifest.process.is_some() {
+                match config::provider_files(&dir) {
+                    Ok(files) => {
+                        let stems: Vec<String> = files
+                            .iter()
+                            .filter_map(|file| file.file_stem())
+                            .map(|stem| stem.to_string_lossy().into_owned())
+                            .collect();
+                        if crate::providers::first_undeclared(
+                            &manifest.providers,
+                            stems.iter().map(String::as_str),
+                        )
+                        .is_some()
+                        {
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        session.failed(&name, &Error::Config(e));
+                        continue;
+                    }
+                }
+                session.runtime.register_process(&name);
+                started.push(Started {
+                    name,
+                    version,
+                    slug,
+                    dir,
+                    manifest,
+                    prompt,
+                    extension: None,
+                    declared: None,
+                    commands: Vec::new(),
+                    tools: Vec::new(),
+                    backends: Vec::new(),
+                    providers: Vec::new(),
+                    lazy: None,
+                });
+                continue;
+            }
             let mut entry = Started {
                 name,
                 version,
@@ -669,7 +722,7 @@ impl SessionExtensions {
                     extension: s.name.clone(),
                     replaces: s.manifest.replaces.clone(),
                     commands: s.commands.clone(),
-                    lua: Arc::clone(lua),
+                    runner: crate::commands::CommandRunner::Lua(Arc::clone(lua)),
                 })
             })
             .collect();
@@ -688,11 +741,15 @@ impl SessionExtensions {
                 ));
             }
         }
-        let mut backend_choices: Vec<(String, String, Arc<LuaExtension>)> = Vec::new();
+        let mut backend_choices: Vec<crate::search::SearchSource> = Vec::new();
         for s in &started {
             if let Some(lua) = &s.extension {
                 for backend in &s.backends {
-                    backend_choices.push((s.name.clone(), backend.clone(), Arc::clone(lua)));
+                    backend_choices.push(crate::search::SearchSource {
+                        extension: s.name.clone(),
+                        name: backend.clone(),
+                        backend: crate::search::SearchBackendKind::Lua(Arc::clone(lua)),
+                    });
                 }
             }
         }
@@ -714,6 +771,12 @@ impl SessionExtensions {
                 session.failed(&s.name, &e);
                 continue;
             }
+            // Every kept VM registers behind the runtime exactly once, so
+            // hooks and watchers mint their references under one
+            // generation: a second registration would stale the first.
+            if let Some(lua) = &s.extension {
+                session.runtime.register_lua(&s.name, lua);
+            }
             // A lazy extension's VM stays unstarted but joins the session's
             // walks, which only set what `host.drive`, `host.model` and
             // `host.delegate` later read.
@@ -722,7 +785,7 @@ impl SessionExtensions {
             }
             if let (Some(lua), Some(declared)) = (&s.extension, s.declared) {
                 let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
-                session.register(&s.name, declared, &mut chain);
+                session.register(&s.name, lua, declared, &mut chain);
                 let mut has_tools = false;
                 for tool in s.tools {
                     if settled
@@ -760,9 +823,18 @@ impl SessionExtensions {
                 }
                 if !declared.watchers.is_empty() {
                     for (index, watcher) in declared.watchers.iter().enumerate() {
+                        let made = session.runtime.register_function(
+                            &s.name,
+                            contract::CommandId(format!("lua:{}:watcher:{index}", s.name)),
+                            "run".to_owned(),
+                            FunctionTarget::Lua(LuaBinding {
+                                extension: Arc::downgrade(lua),
+                                kind: LuaKind::Watcher { index },
+                            }),
+                        );
                         session.watchers.push(WatcherRegistration {
                             name: s.name.clone(),
-                            extension: Arc::clone(lua),
+                            watcher: made,
                             index,
                             kinds: watcher.kinds.clone(),
                         });
@@ -1021,12 +1093,12 @@ impl SessionExtensions {
             if !watcher.kinds.iter().any(|kind| kind == event.kind()) {
                 continue;
             }
-            if ephemeral && watcher.extension.is_watcher_busy(watcher.index) {
+            if ephemeral && self.runtime.is_watcher_busy(&watcher.watcher) {
                 continue;
             }
-            if watcher
-                .extension
-                .push_watcher(watcher.index, arg.clone())
+            if self
+                .runtime
+                .push_watcher(&watcher.watcher, arg.clone())
                 .is_some()
                 && let Some(seq) = seq
             {
@@ -1057,20 +1129,19 @@ impl SessionExtensions {
         // A durable delivery the live offer already covered runs before the
         // drain replays past it: the cursor advanced when it queued, so the
         // drain's range skips it, and the teardown after the drain would lose
-        // it still queued or running. One wait per extension; the hub wakes
+        // it still queued or running. One wait per owner; the hub wakes
         // on every finish and on the stop, which ends the wait and is then
         // refused as `Stopped` by the drain's own push, never lost silent.
-        let mut extensions: Vec<Arc<LuaExtension>> = Vec::new();
+        let mut owners: Vec<String> = Vec::new();
         for watcher in &self.watchers {
-            if !extensions
-                .iter()
-                .any(|held| Arc::ptr_eq(held, &watcher.extension))
+            if let Some(owner) = self.runtime.owner_name(&watcher.watcher)
+                && !owners.iter().any(|held| held == &owner)
             {
-                extensions.push(Arc::clone(&watcher.extension));
+                owners.push(owner);
             }
         }
-        for extension in &extensions {
-            extension.wait_for_watchers_idle();
+        for owner in &owners {
+            self.runtime.wait_for_watchers_idle(owner);
         }
         let offered = lock(&self.cursors).clone();
         let watermark = *lock(&self.watermark);
@@ -1151,9 +1222,9 @@ impl SessionExtensions {
                 if *seq < from || !watcher.kinds.iter().any(|kind| kind == event.kind()) {
                     continue;
                 }
-                match watcher
-                    .extension
-                    .drain_watcher(watcher.index, watcher_arg(event))
+                match self
+                    .runtime
+                    .drain_watcher(&watcher.watcher, watcher_arg(event))
                 {
                     Ok(()) => {}
                     Err(Error::Stopped { .. }) => {
@@ -1180,6 +1251,9 @@ impl SessionExtensions {
         {
             *lock(&self.emitter) = Some(Arc::clone(&emit));
         }
+        // Process failures have no VM to carry the sink: the runtime keeps
+        // it for the waiter's report.
+        self.runtime.set_emit(Arc::clone(&emit));
         #[cfg(test)]
         self.at_late(LatePoint::Stored);
         for extension in self.attached_vms() {
@@ -1267,8 +1341,16 @@ impl SessionExtensions {
     }
 
     /// Records `name`'s registrations: a notice per hook that did not
-    /// register, and its hooks onto `chain`.
-    fn register(&mut self, name: &str, declared: DeclaredHooks, chain: &mut chain::Builder) {
+    /// register, and its hooks onto `chain`, each behind the session's
+    /// runtime. The caller registered the VM first, so the references mint
+    /// under its current generation.
+    fn register(
+        &mut self,
+        name: &str,
+        lua: &Arc<LuaExtension>,
+        declared: DeclaredHooks,
+        chain: &mut chain::Builder,
+    ) {
         for problem in &declared.problems {
             self.notices.push(notice(
                 ErrorCode::ExtensionFailed,
@@ -1277,7 +1359,7 @@ impl SessionExtensions {
             ));
         }
         self.any |= declared.by_point.values().any(|hooks| !hooks.is_empty());
-        chain.push(name, self.lua.len(), &declared);
+        chain.push(&self.runtime, name, lua, &declared);
     }
 
     /// An extension that failed to load: a notice, and it is not loaded.
@@ -1316,8 +1398,9 @@ impl Hooks for SessionExtensions {
                 .after_tool
                 .iter()
                 .filter_map(|entry| {
-                    let extension = self.lua.get(entry.extension)?;
-                    Some((extension.name().to_owned(), entry.blocking))
+                    self.runtime
+                        .owner_name(&entry.hook)
+                        .map(|name| (name, entry.blocking))
                 })
                 .collect::<Vec<_>>();
             return contract::hook::not_regular_answer(&chain);
@@ -1329,25 +1412,25 @@ impl Hooks for SessionExtensions {
         let mut notices = Vec::new();
         let mut pending = Vec::new();
         for entry in &self.after_tool {
-            let Some(extension) = self.lua.get(entry.extension) else {
+            let Some(name) = self.runtime.owner_name(&entry.hook) else {
                 continue;
             };
-            if let Some(failure) = before::own_command_failure(extension, AFTER_TOOL) {
+            if let Some(failure) = self.runtime.runs_own_command(&entry.hook, AFTER_TOOL) {
                 return AfterToolAnswer {
                     outcome: AfterToolOutcome::Failed(failure),
                     notices,
                     changed_by,
                 };
             }
-            let name = extension.name();
             let arg = shown(
                 call,
                 content.as_deref().unwrap_or(call.content),
                 details.as_ref().or(call.details),
             );
-            let returned = extension
-                .hook_with(AFTER_TOOL, entry.index, arg, |value| {
-                    let change = decode(name, value)?;
+            let returned = self
+                .runtime
+                .hook_with(&entry.hook, arg, |value| {
+                    let change = decode(&name, value)?;
                     let changed = change.content.is_some()
                         || change.details.is_some()
                         || change.artifact.is_some();
@@ -1377,11 +1460,11 @@ impl Hooks for SessionExtensions {
                         changed = true;
                     }
                     if changed {
-                        name_once(&mut changed_by, name);
+                        name_once(&mut changed_by, &name);
                     }
                 }
                 Err(_) if entry.blocking => {
-                    name_once(&mut changed_by, name);
+                    name_once(&mut changed_by, &name);
                     return AfterToolAnswer {
                         outcome: AfterToolOutcome::Withheld {
                             extension: name.to_owned(),
@@ -1393,7 +1476,7 @@ impl Hooks for SessionExtensions {
                 Err(e) => notices.push(notice(
                     ErrorCode::HookFailed,
                     format!("The `{AFTER_TOOL}` hook failed, so its change was dropped: {e}"),
-                    Some(name),
+                    Some(&name),
                 )),
             }
         }

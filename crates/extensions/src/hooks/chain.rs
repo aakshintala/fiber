@@ -2,10 +2,13 @@
 //! several hooks share a point").
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use config::Config;
+use contract::CommandId;
 
-use crate::lua::{DeclaredHooks, HookPhase};
+use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
+use crate::runtime::{FunctionRef, FunctionTarget, LuaBinding, LuaKind, Runtime};
 
 use super::SessionExtensions;
 
@@ -30,12 +33,11 @@ pub(super) const BEFORE_MESSAGE: &str = "before_message";
 /// The `before_handoff` hook point.
 pub(super) const BEFORE_HANDOFF: &str = "before_handoff";
 
-/// One hook in a chain.
+/// One hook in a chain: its function behind the session's runtime, so the
+/// dispatch names no backend.
 pub(super) struct Entry {
-    /// Its extension, in [`SessionExtensions::lua`].
-    pub(super) extension: usize,
-    /// Its place among its extension's hooks at the point, from 0.
-    pub(super) index: usize,
+    /// Its function behind the session's runtime.
+    pub(super) hook: FunctionRef,
     /// Whether its failure stops what it guards.
     pub(super) blocking: bool,
     /// Whether it is a `check` hook: it refuses or lets it pass, without
@@ -67,9 +69,15 @@ pub(super) struct Lifecycle {
 
 impl Builder {
     /// Pushes `declared`'s hooks at the three points onto the builder, in
-    /// registration order. `extension` is its extension's place among the
-    /// session's Lua extensions.
-    pub(super) fn push(&mut self, name: &str, extension: usize, declared: &DeclaredHooks) {
+    /// registration order, registering each behind the session's runtime:
+    /// the entry carries the reference, never the backend.
+    pub(super) fn push(
+        &mut self,
+        runtime: &Runtime,
+        name: &str,
+        extension: &Arc<LuaExtension>,
+        declared: &DeclaredHooks,
+    ) {
         for point in [
             SESSION_START,
             TURN_START,
@@ -87,12 +95,23 @@ impl Builder {
                 .flatten()
                 .enumerate()
             {
+                let made = runtime.register_function(
+                    name,
+                    CommandId(format!("lua:{name}:{point}:{index}")),
+                    "run".to_owned(),
+                    FunctionTarget::Lua(LuaBinding {
+                        extension: Arc::downgrade(extension),
+                        kind: LuaKind::Hook {
+                            point: point.to_owned(),
+                            index,
+                        },
+                    }),
+                );
                 self.entries.entry(point).or_default().push((
                     hook.phase,
                     name.to_owned(),
                     Entry {
-                        extension,
-                        index,
+                        hook: made,
                         blocking: hook.blocking,
                         check: hook.phase == HookPhase::Check,
                     },
@@ -136,12 +155,13 @@ fn sorted(
     // Within a phase: the extensions `hooks.order` names, in its order,
     // then the rest by name; one extension's hooks in registration order.
     let mut entries = entries.unwrap_or_default();
-    entries.sort_by_key(|(phase, name, entry): &(HookPhase, String, Entry)| {
+    // The sort is stable, so one extension's hooks keep registration order:
+    // each entry carries its own reference, and no index is compared.
+    entries.sort_by_key(|(phase, name, _): &(HookPhase, String, Entry)| {
         (
             *phase,
             rank(name).map_or((1, 0), |at| (0, at)),
             name.clone(),
-            entry.index,
         )
     });
     entries.into_iter().map(|(_, _, entry)| entry).collect()

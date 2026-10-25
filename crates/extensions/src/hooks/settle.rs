@@ -18,7 +18,7 @@ use contract::clock::Clock;
 use contract::events::Notice;
 use contract::tool::BUILT_IN_TOOLS;
 
-use crate::commands::{CommandSource, SessionCommands};
+use crate::commands::{CommandRunner, CommandSource, SessionCommands};
 use crate::lua::LuaExtension;
 
 /// What one started extension registered, by name.
@@ -80,12 +80,14 @@ pub(super) fn settle(
             extension: meta.extension.clone(),
             replaces: meta.replaces.clone(),
             commands: meta.commands.clone(),
-            lua: Arc::new(LuaExtension::new(
+            // The settle build reads names only, so the runner never runs:
+            // an unstarted VM stands in, as before.
+            runner: CommandRunner::Lua(Arc::new(LuaExtension::new(
                 &meta.extension,
                 home,
                 home,
                 Arc::clone(clock),
-            )),
+            ))),
         })
         .collect();
     let commands = SessionCommands::build(&sources, config);

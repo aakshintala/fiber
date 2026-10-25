@@ -66,6 +66,10 @@ mod providers;
 mod release;
 mod repository;
 mod resolve;
+mod runtime;
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
 mod search;
 #[cfg(test)]
 mod stall;

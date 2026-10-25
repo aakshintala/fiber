@@ -1119,7 +1119,7 @@ fn hook_timeout_ms_overrides_the_declared_timeout() {
 }
 
 #[test]
-fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
+fn an_extension_for_another_api_starts_no_vm_while_a_process_extension_loads_without_one() {
     let home = Home::new();
     home.install("old", Some(&tagging("old", "transform")), &[]);
     home.install("proc", Some(&tagging("proc", "transform")), &[]);
@@ -1129,9 +1129,14 @@ fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
         m["process"] = json!({"program": "true", "exit_timeout_ms": 0})
     });
     let session = home.load(&[]);
+    // The wrong-API extension stays out; the process extension loads
+    // without a VM, admitting the package with no registrations yet.
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
-    assert_eq!(loaded, names(&["lua"]));
+    assert_eq!(loaded, names(&["lua", "proc"]));
     assert_eq!(session.lua.len(), 1);
+    let dirs: Vec<String> = session.dirs().into_iter().map(|(name, _)| name).collect();
+    assert_eq!(dirs, names(&["lua", "proc"]));
+    assert!(session.commands().is_empty());
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|lua"));
 }
 
