@@ -101,13 +101,11 @@ fn a_hunk_on_the_line_after_the_span_selects_nothing() {
 #[test]
 fn a_hunk_ending_at_the_span_start_selects() {
     let diff = span_diff("@@ -5,6 +5,6 @@\n-a\n+b\n-a\n+b\n-a\n+b\n-a\n+b\n-a\n+b\n-a\n+b\n");
-    assert_eq!(
-        selected(&diff, &span_sources()),
-        vec![
-            refer("log", None, true, "span::tests::first"),
-            refer("log", None, true, "span::tests::second"),
-        ]
-    );
+    // Selection order is not a documented contract, so compare as a set.
+    let got = selected(&diff, &span_sources());
+    assert_eq!(got.len(), 2);
+    assert!(got.contains(&refer("log", None, true, "span::tests::first")));
+    assert!(got.contains(&refer("log", None, true, "span::tests::second")));
 }
 
 #[test]
@@ -307,13 +305,11 @@ fn two_files_in_one_diff_each_select() {
             "@@ -2,1 +2,1 @@\n-fn two() {}\n+fn two() {}\n"
         ),
     );
-    assert_eq!(
-        selected(&diff, &[one, two]),
-        vec![
-            refer("log", None, true, "one::tests::one"),
-            refer("log", None, true, "two::tests::two"),
-        ]
-    );
+    // Selection order is not a documented contract, so compare as a set.
+    let got = selected(&diff, &[one, two]);
+    assert_eq!(got.len(), 2);
+    assert!(got.contains(&refer("log", None, true, "one::tests::one")));
+    assert!(got.contains(&refer("log", None, true, "two::tests::two")));
 }
 
 #[test]
