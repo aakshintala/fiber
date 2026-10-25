@@ -417,18 +417,20 @@ fn id(input: &Value, name: &str) -> Result<u64, String> {
 /// old base. The writer reads this before any open-issue lookup, so a
 /// stale or pull-request-owned title is skipped even when an open
 /// exact-title issue exists.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Only a stale base carries the base commit the run tested against,
+/// so a base cannot be built on any other class.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Class {
     Lookup,
-    StaleBase,
+    StaleBase { base: String },
     PrOwned,
 }
 
 impl Class {
-    fn tag(self) -> &'static str {
+    fn tag(&self) -> &'static str {
         match self {
             Class::Lookup => "lookup",
-            Class::StaleBase => "stale-base",
+            Class::StaleBase { .. } => "stale-base",
             Class::PrOwned => "pr-owned",
         }
     }
@@ -456,15 +458,13 @@ pub(crate) struct Listed<'a> {
 
 /// One classified flake title: the writer's action, the test name and
 /// runner, the first occurrence's detail, the failing file when the
-/// detail names one, the base only on a stale base, the tested line
-/// and the issue title.
+/// detail names one, the tested line and the issue title.
 pub(crate) struct Classified {
     action: Class,
     name: String,
     runner: String,
     detail: String,
     failing: Option<String>,
-    base: Option<String>,
     tested: String,
     title: String,
 }
@@ -476,7 +476,7 @@ impl Classified {
             "action".to_owned(),
             Value::String(self.action.tag().to_owned()),
         );
-        if let Some(base) = &self.base {
+        if let Class::StaleBase { base } = &self.action {
             map.insert("base".to_owned(), Value::String(base.clone()));
         }
         map.insert("detail".to_owned(), Value::String(self.detail.clone()));
@@ -519,7 +519,9 @@ pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
                         && !run.base.is_empty()
                         && run.compare_files.split('\n').any(|listed| listed == file) =>
                 {
-                    Class::StaleBase
+                    Class::StaleBase {
+                        base: run.base.to_owned(),
+                    }
                 }
                 Some(file)
                     if run.pull_request
@@ -530,11 +532,6 @@ pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
                 _ => Class::Lookup,
             };
             out.push(Classified {
-                base: if action == Class::StaleBase {
-                    Some(run.base.to_owned())
-                } else {
-                    None
-                },
                 action,
                 name: name.to_owned(),
                 runner: list.runner.to_owned(),

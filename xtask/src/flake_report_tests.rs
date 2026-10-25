@@ -562,6 +562,29 @@ fn a_file_the_pull_request_changed_is_pr_owned() {
 }
 
 #[test]
+fn only_a_stale_base_record_names_the_base() {
+    // One pull-request run with a base yields all three classes: the
+    // base field appears on the stale-base record and on no other.
+    let text = "main::old\tthread old panicked at crates/old.rs:10\n\
+                main::new\tthread new panicked at crates/new.rs:3\n\
+                main::other\tthread other panicked at crates/other.rs:5\n";
+    let out = classified(
+        &[("linux", text)],
+        &pr_run(BASE_SHA, HEAD_SHA, "crates/old.rs", "crates/new.rs"),
+    );
+    assert_eq!(out.len(), 3);
+    for record in &out {
+        let want = (field(record, "action") == Some("stale-base")).then_some(BASE_SHA);
+        assert_eq!(field(record, "base"), want, "{record}");
+    }
+    let actions: Vec<_> = out.iter().map(|record| field(record, "action")).collect();
+    assert_eq!(
+        actions,
+        vec![Some("stale-base"), Some("pr-owned"), Some("lookup")]
+    );
+}
+
+#[test]
 fn stale_wins_over_pr_owned() {
     let line = format!("main::t\t{PANIC}");
     let out = classified(&[("linux", &line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
