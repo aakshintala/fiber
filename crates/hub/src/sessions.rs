@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use contract::SessionId;
 use contract::clock::Clock;
 use contract::diag::{Op, Timing};
 use contract::events::SessionStatus;
@@ -56,13 +57,34 @@ pub(crate) fn list(
     let live: Vec<Value> = live
         .into_iter()
         .filter(|(_, status)| project.is_none_or(|key| status.project == key))
-        .map(|(id, status)| json!({"session_id": id, "status": status}))
+        .map(|(id, status)| {
+            let dir = log::session_dir(home, &status.project, &SessionId(id.clone()));
+            json!({"session_id": id, "status": status, "active": active_of(&dir)})
+        })
         .collect();
-    let exited: Vec<recent::RecentRow> = recent::listed(home, project)
+    let exited: Vec<Value> = recent::listed(home, project)
         .into_iter()
         .filter(|row| !running.contains(&row.session_id.0))
+        .map(|row| {
+            let dir = log::session_dir(home, &row.project, &row.session_id);
+            let mut entry = serde_json::to_value(&row).unwrap_or(Value::Null);
+            if let Value::Object(ref mut map) = entry {
+                map.insert("active".to_owned(), active_of(&dir));
+            }
+            entry
+        })
         .collect();
     json!({"live": live, "exited": exited})
+}
+
+/// An entry's activity: its log's last complete line's `ts`, else its
+/// opening line's `ts`, else JSON null when neither can be read. Neither
+/// the row's `ts` nor `status.started` is ever used.
+fn active_of(dir: &Path) -> Value {
+    match log::last_ts(dir).or_else(|| log::opening_ts(dir)) {
+        Some(ts) => Value::from(ts),
+        None => Value::Null,
+    }
 }
 
 #[cfg(test)]

@@ -93,6 +93,21 @@ pub fn resolve(
     }
 }
 
+/// The `ts` of `dir`'s first complete line, when it is `session_started`.
+/// `None` for an empty log, a torn first line, or a first line that does
+/// not parse or is not `session_started`. Unlike [`most_recent`]'s opening
+/// read, no project or delegate check applies: the hub's `sessions`
+/// answer lists whatever `recent` lists.
+pub fn opening_ts(dir: &Path) -> Option<u64> {
+    let mut lines = crate::lines(dir).ok()?;
+    let first = lines.next()?;
+    let line = first.ok()?;
+    match Event::from_envelope(&line) {
+        Ok(Some(Event::SessionStarted(_))) => Some(line.ts),
+        _ => None,
+    }
+}
+
 /// What `dir`'s first complete line says, when it holds one of this
 /// project's sessions: its `ts`, and whether it names a parent, which
 /// makes the session a delegate (`docs/delegates.md`). `None` when it
