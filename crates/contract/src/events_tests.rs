@@ -933,6 +933,16 @@ fn samples() -> Vec<(&'static str, Value)> {
             "command_rejected",
             json!({"code": "malformed", "message": "m"}),
         ),
+        (
+            "extension_hello",
+            json!({"session_id": "s", "reason": "new", "workspace": "/w",
+            "data_dirs": {"machine": "/m", "project": "/p"}, "state": {}}),
+        ),
+        (
+            "extension_request",
+            json!({"request_id": "r_A", "registration": "c_reg", "key": "run",
+            "args": [{"object": {}, "list": []}]}),
+        ),
     ]
 }
 

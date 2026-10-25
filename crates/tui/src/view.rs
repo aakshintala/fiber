@@ -64,13 +64,32 @@ pub(crate) const ALERT_TINT: Style = Style::new().bg(Role::Alert.color());
 /// Paints `rect` as the click target under the pointer: each cell takes
 /// its own background 0x14 lighter on each channel where it sits on a
 /// tint, and the hover tint where it has none (`docs/tui.md`, palette,
-/// `hover`).
+/// `hover`). Placeholder cells keep their colours: tinting one would
+/// destroy the image id they carry (`docs/tui.md`, "Images").
 pub(crate) fn lift_hover(buf: &mut Buffer, rect: Rect) {
     let area = buf.area.intersection(rect);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
+            if crate::graphics::is_placeholder(buf[(x, y)].symbol()) {
+                continue;
+            }
             let bg = buf[(x, y)].bg;
             buf[(x, y)].set_bg(crate::theme::hover_bg(bg));
+        }
+    }
+}
+
+/// Paints `rect` with the focus style, leaving placeholder cells alone:
+/// reversing one would destroy the image id its colours carry
+/// (`docs/tui.md`, "Images").
+fn focus_style(buf: &mut Buffer, rect: Rect) {
+    let area = buf.area.intersection(rect);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if crate::graphics::is_placeholder(buf[(x, y)].symbol()) {
+                continue;
+            }
+            buf[(x, y)].set_style(FOCUS_STYLE);
         }
     }
 }
@@ -205,6 +224,7 @@ pub(crate) fn render(
     // The frame's asks start here: `Screen::draw_with` may render twice,
     // and the loop takes what the drawn frame asked.
     app.motion().clear_wake();
+    app.clear_input_note();
     // The framed slabs start here too: each framed surface notes the slab
     // it draws, so a click outside the overlay on top closes it.
     app.frames().clear();
@@ -243,7 +263,7 @@ pub(crate) fn render(
         }
         if let Some(id) = app.focused() {
             for target in targets.iter().filter(|target| target.id == id) {
-                buf.set_style(target.rect, FOCUS_STYLE);
+                focus_style(buf, target.rect);
             }
         }
         return targets;
@@ -271,7 +291,7 @@ pub(crate) fn render(
     let mut box_top = bottom;
     status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
-        bottom = request::draw(&panel, area, bottom, buf, &mut targets);
+        bottom = request::draw_noted(app, &panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
         box_top = input_box::draw(app, area, &mut bottom, buf, &mut targets);
@@ -354,12 +374,60 @@ pub(crate) fn render(
         None => {
             // The repository offer swaps in for the conversation.
             match app.offer_rows(conversation.width) {
-                Some((rows, top)) => offer::render(&rows, top, conversation, buf, &mut targets),
+                Some((rows, top)) => {
+                    offer::render(&rows, top, conversation, buf, &mut targets);
+                    // The offer reads as its own surface over the
+                    // conversation's rows: the body's drawn rows, the
+                    // title never copying
+                    // (`docs/tui.md`, "Selection and copy").
+                    app.note_surface(crate::app::NotedSurface {
+                        surface: crate::app::SurfaceId::Swapped,
+                        rows: offer::selection_rows(&rows, top, conversation),
+                    });
+                    marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, conversation);
+                }
                 // The search results swap in for the conversation while
                 // open (`docs/tui.md`, "Search", "Swapped views").
                 None => match app.find_results() {
                     Some(view) => {
                         results::render(&view, conversation, buf, &mut targets);
+                        // The results read as their own surface over the
+                        // conversation's rows: the path and match rows
+                        // each entry draws
+                        // (`docs/tui.md`, "Selection and copy").
+                        let mut noted = Vec::new();
+                        for (row, (path, text)) in
+                            results::selection_rows(&view, conversation.width)
+                                .into_iter()
+                                .enumerate()
+                        {
+                            let y = conversation
+                                .y
+                                .saturating_add(3)
+                                .saturating_add(to_u16(row.saturating_mul(3)));
+                            if y.saturating_add(1) >= conversation.bottom() {
+                                break;
+                            }
+                            for (dy, line) in [(0, path), (1, text)] {
+                                noted.push(crate::app::SpanRow {
+                                    y: y.saturating_add(dy),
+                                    x: conversation.x,
+                                    end: conversation.right(),
+                                    text: line,
+                                    join: crate::rows::Join::Break,
+                                });
+                            }
+                        }
+                        app.note_surface(crate::app::NotedSurface {
+                            surface: crate::app::SurfaceId::Swapped,
+                            rows: noted,
+                        });
+                        marks::paint_selection(
+                            app,
+                            buf,
+                            crate::app::SurfaceId::Swapped,
+                            conversation,
+                        );
                         marks::draw(app, conversation, buf, &mut targets, None);
                     }
                     None => {
@@ -437,7 +505,7 @@ pub(crate) fn render(
         // `surface_raised` tint with the hint under them
         // (`docs/tui.md`, "Links").
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, FOCUS_STYLE);
+            focus_style(buf, target.rect);
         }
     }
     targets

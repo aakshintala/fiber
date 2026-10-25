@@ -63,7 +63,7 @@ fn an_extension_summary_shows_what_an_install_shows_and_where_it_is() {
         &json!({
             "replaces": ["shell", "web_search"],
             "install": ["npm", "ci"],
-            "process": {"program": "node", "args": ["server.js"]},
+            "process": {"program": "node", "args": ["server.js"], "exit_timeout_ms": 0},
             "prompt": "prompt.md",
             "providers": {"acme": ["https://api.acme.dev/v1", "https://eu.acme.dev/v1"]},
         }),

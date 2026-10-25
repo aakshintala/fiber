@@ -112,6 +112,39 @@ pub(crate) enum Reply {
     DeviceAttributes,
     /// A theme-report reply: the terminal's light or dark appearance.
     Appearance(Appearance),
+    /// Kitty's graphics reply: the probe's or an image transmit's id,
+    /// and whether it reported success (`docs/tui.md`, "Images").
+    Graphics { id: u32, ok: bool },
+}
+
+/// The edit an unshifted Home or End is in the input editor: Home moves
+/// to the line's start, End to its end (`docs/tui.md`, "Selection and
+/// copy"). Shifted or modified Home and End stay unmapped, as does any
+/// other stroke: the caller routes only where the input editor is the
+/// active key context, so every other context keeps its dispatch.
+pub(crate) fn home_end_edit(stroke: &Stroke) -> Option<Edit> {
+    if stroke.mods != Mods::NONE {
+        return None;
+    }
+    match stroke.code {
+        Code::Home => Some(Edit::LineStart),
+        Code::End => Some(Edit::LineEnd),
+        Code::Char(_)
+        | Code::Enter
+        | Code::Esc
+        | Code::Tab
+        | Code::Backspace
+        | Code::Delete
+        | Code::Insert
+        | Code::Up
+        | Code::Down
+        | Code::Left
+        | Code::Right
+        | Code::Space
+        | Code::PageUp
+        | Code::PageDown
+        | Code::F(_) => None,
+    }
 }
 
 /// A mouse button.
@@ -372,6 +405,14 @@ fn step(buf: &[u8]) -> Step {
                 Osc::Done(events, used) => Some((events, used)),
                 Osc::Off => alt_stroke(buf),
             },
+            // A kitty graphics reply starts here; anything off its
+            // grammar stays keys, so a typed Alt+_ never swallows
+            // text.
+            Some(b'_') => match apc(buf) {
+                Apc::Hold => None,
+                Apc::Done(events, used) => Some((events, used)),
+                Apc::Off => alt_stroke(buf),
+            },
             // ESC before an arrow's CSI is the legacy Alt arrow.
             Some(0x1b) if buf.get(2) == Some(&b'[') => {
                 let (events, used) = parse_csi(buf.get(1..)?)?;
@@ -451,6 +492,94 @@ fn alt_stroke(buf: &[u8]) -> Step {
         }
     }
     Some((events, used.saturating_add(1)))
+}
+
+/// What a kitty graphics reply candidate is: `buf` starts with `ESC _`.
+pub(crate) enum Apc {
+    /// Every byte so far fits the grammar; the rest may follow.
+    Hold,
+    /// A complete reply: its events and the reply's length.
+    Done(Vec<Event>, usize),
+    /// The first byte off the grammar: read `ESC _` as keys instead.
+    Off,
+}
+
+/// The longest a held graphics reply grows: a reply is one short line,
+/// so anything longer is typed text, and resolving it keeps the parser
+/// from holding a never-terminated candidate forever.
+const APC_CAP: usize = 256;
+
+/// Reads a kitty graphics reply byte by byte: `ESC _ G i=<id> ; <status>`
+/// with BEL or `ESC \` after it, `OK` for success (`docs/tui.md`,
+/// "Images"). A buffer that ends while every byte so far fits is held.
+/// The first byte that cannot continue the grammar ends the candidate,
+/// so a typed Alt+_ followed by text stays keys.
+fn apc(buf: &[u8]) -> Apc {
+    if buf.len() > APC_CAP {
+        return Apc::Off;
+    }
+    let mut at = 2;
+    for want in *b"Gi=" {
+        match buf.get(at) {
+            None => return Apc::Hold,
+            Some(byte) if *byte == want => at = at.saturating_add(1),
+            Some(_) => return Apc::Off,
+        }
+    }
+    let digits = at;
+    while matches!(buf.get(at), Some(byte) if byte.is_ascii_digit()) {
+        at = at.saturating_add(1);
+    }
+    if buf.get(at).is_none() {
+        return Apc::Hold;
+    }
+    let id = match std::str::from_utf8(buf.get(digits..at).unwrap_or_default())
+        .ok()
+        .and_then(|text| text.parse::<u32>().ok())
+    {
+        Some(id) => id,
+        None => return Apc::Off,
+    };
+    match buf.get(at) {
+        Some(b';') => at = at.saturating_add(1),
+        _ => return Apc::Off,
+    };
+    let status = at;
+    loop {
+        match buf.get(at) {
+            None => return Apc::Hold,
+            Some(0x07) => {
+                return done_graphics(id, buf.get(status..at).unwrap_or_default(), at + 1);
+            }
+            Some(0x1b) => match buf.get(at.saturating_add(1)) {
+                None => return Apc::Hold,
+                Some(b'\\') => {
+                    return done_graphics(
+                        id,
+                        buf.get(status..at).unwrap_or_default(),
+                        at.saturating_add(2),
+                    );
+                }
+                Some(_) => return Apc::Off,
+            },
+            Some(_) => at = at.saturating_add(1),
+        }
+    }
+}
+
+/// A graphics reply's events: success only for the `OK` status, every
+/// other status an error the terminal reports.
+fn done_graphics(id: u32, status: &[u8], used: usize) -> Apc {
+    if status.is_empty() {
+        return Apc::Off;
+    }
+    Apc::Done(
+        vec![Event::Reply(Reply::Graphics {
+            id,
+            ok: status == b"OK",
+        })],
+        used,
+    )
 }
 
 /// Parses `ESC [` at the start of `buf`.

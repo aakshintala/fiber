@@ -5,11 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+mod changed_tests;
 mod compiled_in;
 mod plan;
 mod runtime_read;
 mod test_filter;
 
+pub(crate) use changed_tests::{TestRef, changed_tests, filter};
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;

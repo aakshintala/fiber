@@ -93,6 +93,21 @@ pub fn resolve(
     }
 }
 
+/// The `ts` of `dir`'s first complete line, when it is `session_started`.
+/// `None` for an empty log, a torn first line, or a first line that does
+/// not parse or is not `session_started`. Unlike [`most_recent`]'s opening
+/// read, no project or delegate check applies: the hub's `sessions`
+/// answer lists whatever `recent` lists.
+pub fn opening_ts(dir: &Path) -> Option<u64> {
+    let mut lines = crate::lines(dir).ok()?;
+    let first = lines.next()?;
+    let line = first.ok()?;
+    match Event::from_envelope(&line) {
+        Ok(Some(Event::SessionStarted(_))) => Some(line.ts),
+        _ => None,
+    }
+}
+
 /// What `dir`'s first complete line says, when it holds one of this
 /// project's sessions: its `ts`, and whether it names a parent, which
 /// makes the session a delegate (`docs/delegates.md`). `None` when it
@@ -138,5 +153,71 @@ fn opening(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<Opening> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test helpers; a failure is the test's"
+    )]
+
+    use std::fs;
+
+    use serde_json::json;
+
+    use super::*;
+
+    fn started_line(ts: u64) -> String {
+        let line = json!({
+            "kind": "session_started", "seq": 0, "session_id": "s_1",
+            "ts": ts, "schema_version": 1,
+            "payload": {"workspace": "/w",
+                "variables": {"path": "", "names": [], "source": "login_shell"}},
+        });
+        format!("{line}\n")
+    }
+
+    fn other_line(ts: u64) -> String {
+        let line = json!({
+            "kind": "session_status", "session_id": "s_1",
+            "ts": ts, "schema_version": 1, "payload": {},
+        });
+        format!("{line}\n")
+    }
+
+    #[test]
+    fn opening_ts_reads_the_first_lines_ts_when_it_opens_a_session() {
+        let home = fakes::TempDir::new("log-opening-ts");
+        let dir = home.path().join("session");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            format!("{}{}", started_line(7), other_line(9)),
+        )
+        .unwrap();
+        assert_eq!(opening_ts(&dir), Some(7));
+    }
+
+    #[test]
+    fn opening_ts_is_none_without_a_session_started_first_line() {
+        let home = fakes::TempDir::new("log-opening-none");
+        let dir = home.path().join("session");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("events.jsonl"), other_line(9)).unwrap();
+        assert_eq!(opening_ts(&dir), None);
+    }
+
+    #[test]
+    fn opening_ts_is_none_for_a_missing_or_torn_log() {
+        let home = fakes::TempDir::new("log-opening-torn");
+        let dir = home.path().join("session");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(opening_ts(&dir), None);
+        fs::write(dir.join("events.jsonl"), "{\"kind\": \"sess").unwrap();
+        assert_eq!(opening_ts(&dir), None);
     }
 }

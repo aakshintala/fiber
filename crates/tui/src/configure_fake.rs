@@ -121,6 +121,14 @@ pub(crate) struct InstallGate {
 
 /// A seam over rows in memory.
 pub(crate) struct Fake {
+    /// Canned filtered blocking names or query error.
+    pub(crate) blocking_hooks_answer: Mutex<Result<Vec<String>, ConfigureError>>,
+    /// Each supplied workspace and exact ordered override list.
+    pub(crate) blocking_hooks_queries: Mutex<Vec<(PathBuf, Vec<String>)>>,
+    /// Canned global hooks install result.
+    pub(crate) hooks_install_answer: Mutex<Result<(), ConfigureError>>,
+    /// Number of global hooks installs requested.
+    pub(crate) hooks_installs: Mutex<usize>,
     /// What `settings` answers.
     pub(crate) rows: Mutex<Result<Vec<SettingRow>, ConfigureError>>,
     /// Every workspace `settings` was asked about, in order.
@@ -233,6 +241,10 @@ impl Fake {
     /// A seam answering `rows`, saving every write.
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         Self {
+            blocking_hooks_answer: Mutex::new(Ok(Vec::new())),
+            blocking_hooks_queries: Mutex::new(Vec::new()),
+            hooks_install_answer: Mutex::new(Ok(())),
+            hooks_installs: Mutex::new(0),
             pending: Mutex::new(false),
             rows: Mutex::new(Ok(rows)),
             reads: Mutex::new(Vec::new()),
@@ -512,6 +524,21 @@ pub(crate) fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> Se
 }
 
 impl Configure for Fake {
+    fn blocking_hooks(
+        &self,
+        workspace: &Path,
+        overrides: &[String],
+    ) -> Result<Vec<String>, ConfigureError> {
+        support::lock(&self.blocking_hooks_queries)
+            .push((workspace.to_path_buf(), overrides.to_vec()));
+        support::lock(&self.blocking_hooks_answer).clone()
+    }
+
+    fn install_hooks(&self, _clock: Arc<dyn Clock>) -> Result<(), ConfigureError> {
+        *support::lock(&self.hooks_installs) += 1;
+        support::lock(&self.hooks_install_answer).clone()
+    }
+
     fn install_provider(
         &self,
         workspace: &Path,

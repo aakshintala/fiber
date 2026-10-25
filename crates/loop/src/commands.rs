@@ -1,6 +1,7 @@
 //! The session's `/name` commands and its `skills` answer
 //! (`docs/invocation.md`, "What each command does").
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use contract::ErrorCode;
@@ -8,6 +9,7 @@ use contract::events::{CommandInfo, Notice, SkillInfo};
 
 use crate::opening;
 use crate::prompt::PromptInputs;
+use crate::skill_set::runnable_commands;
 use crate::skills as discovery;
 
 /// Every `/name` the session runs, and what shadowing left out: the
@@ -27,7 +29,13 @@ pub struct Commands {
     /// One `skill_shadowed` notice per prompt a skill or an earlier
     /// server's prompt shadows.
     pub notices: Vec<Notice>,
+    /// The runnable discovery rows, keyed by name and whether the model
+    /// may load them, for the next turn-start comparison.
+    pub runnable: RunnableCommands,
 }
+
+/// Skill and prompt-template commands, by name and model invocability.
+pub type RunnableCommands = BTreeMap<String, bool>;
 
 /// Every `/name` the session runs: its skills and prompt templates, read
 /// from the places the opening message reads, from the repository's top
@@ -49,13 +57,24 @@ pub fn commands(
     let (chain, _) = opening::repo_chain(&workspace);
     let top = chain.first().unwrap_or(&workspace);
     let found = discovery::discover(inputs, top);
-    let mut rows = discovery::commands(&found.skills, &inputs.skills_disabled);
+    commands_from_found(inputs, &found.skills, prompts, extensions)
+}
+
+/// Builds the complete command answer from one discovery's winners,
+/// without reading skill or template files again. Used when a check or
+/// opening already owns the snapshot that changed the runnable set.
+pub(crate) fn commands_from_found(
+    inputs: &PromptInputs,
+    found: &[discovery::Found],
+    prompts: &[CommandInfo],
+    extensions: &[CommandInfo],
+) -> Commands {
+    let mut rows = discovery::commands(found, &inputs.skills_disabled);
     let mut notices = Vec::new();
     let skills_end = rows.len();
     let mut kept: Vec<CommandInfo> = Vec::new();
     for ext in extensions {
         if let Some(skill) = found
-            .skills
             .iter()
             .find(|found| found.listed.name == ext.name)
             .filter(|_| rows.iter().take(skills_end).any(|row| row.name == ext.name))
@@ -76,11 +95,7 @@ pub fn commands(
         if inputs.skills_disabled.iter().any(|off| off == &row.name) {
             continue;
         }
-        if let Some(skill) = found
-            .skills
-            .iter()
-            .find(|found| found.listed.name == row.name)
-        {
+        if let Some(skill) = found.iter().find(|found| found.listed.name == row.name) {
             notices.push(Notice {
                 code: ErrorCode::SkillShadowed,
                 message: format!(
@@ -121,7 +136,11 @@ pub fn commands(
         rows.push(row.clone());
     }
     rows.extend(kept);
-    Commands { rows, notices }
+    Commands {
+        rows,
+        notices,
+        runnable: runnable_commands(found, &inputs.skills_disabled),
+    }
 }
 
 /// Every skill discovery read, switched-off and shadowed ones included

@@ -509,3 +509,251 @@ fn offer_diff_uses_the_changed_files_hunk_look() {
         "marked removed words"
     );
 }
+
+/// A wrapped row joins with the space the wrap dropped, and a row
+/// that fills its cells joins with nothing
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn wrapped_rows_join_with_the_space_the_wrap_dropped() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = super::wrapped_texts(&Line::from("aaa bbb ccc"), 5);
+    assert_eq!(
+        rows,
+        [
+            ("aaa".to_owned(), Join::Break),
+            ("bbb".to_owned(), Join::WrapSpace),
+            ("ccc".to_owned(), Join::WrapSpace),
+        ]
+    );
+    // A row the text fills exactly still dropped its boundary space.
+    let rows = super::wrapped_texts(&Line::from("aaa bbb ccc"), 3);
+    assert_eq!(
+        rows,
+        [
+            ("aaa".to_owned(), Join::Break),
+            ("bbb".to_owned(), Join::WrapSpace),
+            ("ccc".to_owned(), Join::WrapSpace),
+        ]
+    );
+    // A break inside a word joins with nothing.
+    let rows = super::wrapped_texts(&Line::from("supercalifragilistic"), 5);
+    assert_eq!(
+        rows,
+        [
+            ("super".to_owned(), Join::Break),
+            ("calif".to_owned(), Join::Wrap),
+            ("ragil".to_owned(), Join::Wrap),
+            ("istic".to_owned(), Join::Wrap),
+        ]
+    );
+    // A space the wrap kept rides in the row's own cells.
+    let rows = super::wrapped_texts(&Line::from("  indented line here"), 5);
+    assert_eq!(
+        rows,
+        [
+            ("  ind".to_owned(), Join::Break),
+            ("ented".to_owned(), Join::Wrap),
+            ("line".to_owned(), Join::WrapSpace),
+            ("here".to_owned(), Join::WrapSpace),
+        ]
+    );
+}
+
+/// A `\n` inside a span draws as joined text, and the note reads what
+/// the draw put down (`docs/tui.md`, "Selection and copy").
+#[test]
+fn wrapped_rows_read_an_inner_line_break_as_drawn() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = super::wrapped_texts(&Line::from("ab\ncd ef"), 5);
+    assert_eq!(
+        rows,
+        [
+            ("abcd".to_owned(), Join::Break),
+            ("ef".to_owned(), Join::WrapSpace),
+        ]
+    );
+}
+
+/// A drag over the offer's body copies the covered text: the noted
+/// rows sit where the draw put them, so the drag reads the drawn line
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn repository_offer_drag_selects_visible_range() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let app = offered(json!([server("db", true)]), 80, 24);
+    let (screen, _) = draw(&app, 80, 24);
+    let (y, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("MCP server: db"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the offer body draws the server line");
+    let x = u16::try_from(line.find("MCP").unwrap_or_default()).unwrap_or(u16::MAX);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut app = app;
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 2, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 2, y),
+        Effect::Copy("MCP".to_owned())
+    );
+}
+
+/// A trailing space the wrap kept still joins with the wrap's space:
+/// the rows the note did not read are spaces the trim dropped, so the
+/// wrapper did not change under the note (`docs/tui.md`, "Selection
+/// and copy").
+#[test]
+fn wrapped_rows_keep_the_join_past_a_trailing_space() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = super::wrapped_texts(&Line::from("aaa bbb ccc "), 5);
+    assert_eq!(
+        rows,
+        [
+            ("aaa".to_owned(), Join::Break),
+            ("bbb".to_owned(), Join::WrapSpace),
+            ("ccc".to_owned(), Join::WrapSpace),
+        ]
+    );
+}
+
+/// The offer's title row names the view: only the body rows read as
+/// selection text, so a drag over the body never copies the title
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn selection_rows_skip_the_title() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = vec![
+        super::Row {
+            line: Line::from("Offer"),
+            spots: Vec::new(),
+            clip: false,
+        },
+        super::Row {
+            line: Line::from("MCP server: db"),
+            spots: Vec::new(),
+            clip: false,
+        },
+    ];
+    let area = Rect::new(10, 5, 80, 24);
+    let noted = super::selection_rows(&rows, 0, area);
+    assert_eq!(
+        noted,
+        vec![crate::app::SpanRow {
+            y: 6,
+            x: 10,
+            end: 90,
+            text: "MCP server: db".to_owned(),
+            join: Join::Break,
+        }]
+    );
+}
+
+/// Rows scrolled out of the offer note nothing: a clipped row past
+/// the top reads as no row, not as its text (`docs/tui.md`,
+/// "Selection and copy").
+#[test]
+fn selection_rows_skip_rows_scrolled_out() {
+    use ratatui::text::Line;
+
+    use crate::rows::Join;
+    let rows = vec![
+        super::Row {
+            line: Line::from("Offer"),
+            spots: Vec::new(),
+            clip: false,
+        },
+        super::Row {
+            line: Line::from("a clipped row past the offer's top"),
+            spots: Vec::new(),
+            clip: true,
+        },
+        super::Row {
+            line: Line::from("body text"),
+            spots: Vec::new(),
+            clip: false,
+        },
+    ];
+    // One row shows from the second: the clipped row scrolled out
+    // notes nothing, and the body row notes where the draw put it.
+    let area = Rect::new(10, 5, 80, 1);
+    let noted = super::selection_rows(&rows, 2, area);
+    assert_eq!(
+        noted,
+        vec![crate::app::SpanRow {
+            y: 5,
+            x: 10,
+            end: 90,
+            text: "body text".to_owned(),
+            join: Join::Break,
+        }]
+    );
+}
+
+/// A press in the gap past the offer's rows starts no selection, so
+/// the release copies nothing (`docs/tui.md`, "Selection and copy").
+#[test]
+fn offer_press_misses_row_gap_selects_nothing() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = offered(json!([server("db", true)]), 80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let _ = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Press(Button::Left),
+            col: 2,
+            row: 20,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let _ = app.on_mouse(
+        &Mouse {
+            kind: MouseKind::Drag(Button::Left),
+            col: 5,
+            row: 20,
+        },
+        &targets,
+        &mut pointer,
+        true,
+        now,
+    );
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    assert_eq!(
+        app.on_mouse(
+            &Mouse {
+                kind: MouseKind::Release,
+                col: 5,
+                row: 20
+            },
+            &targets,
+            &mut pointer,
+            true,
+            now,
+        ),
+        Effect::None
+    );
+}

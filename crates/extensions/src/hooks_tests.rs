@@ -1125,7 +1125,9 @@ fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
     home.install("proc", Some(&tagging("proc", "transform")), &[]);
     home.install("lua", Some(&tagging("lua", "transform")), &[]);
     home.edit_manifest("old", |m| m["api"] = json!(2));
-    home.edit_manifest("proc", |m| m["process"] = json!({"program": "true"}));
+    home.edit_manifest("proc", |m| {
+        m["process"] = json!({"program": "true", "exit_timeout_ms": 0})
+    });
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     assert_eq!(loaded, names(&["lua"]));
@@ -3476,6 +3478,8 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
     let home = Home::new();
     let hooks = config::full_name("hooks");
     // (entries JSON, `None` for no `hooks` key; extension loaded; state)
+    // Every `MissingBlocking` below names the sorted blockers it gates on
+    // (`docs/invocation.md:1160`).
     let cases: &[(Option<&str>, bool, super::HooksState)] = &[
         // No declarations: nothing to gate.
         (None, false, super::HooksState::Ready),
@@ -3485,7 +3489,9 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
         (
             Some(NO_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // An `on_failure`-less entry beside a `blocking` one still gates.
         (
@@ -3493,19 +3499,26 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
                 r#"{"plain":{"point":"after_tool","command":"true","timeout":1000},"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}"#,
             ),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                // Blocker names arrive sorted (`docs/invocation.md:1160`).
+                names: vec!["guard".to_owned(), "plain".to_owned()],
+            },
         ),
         // An unknown `on_failure` is not consent to fail open.
         (
             Some(UNKNOWN_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // A non-string `on_failure` is not consent either.
         (
             Some(NON_STRING_ON_FAILURE_ENTRY),
             false,
-            super::HooksState::MissingBlocking,
+            super::HooksState::MissingBlocking {
+                names: vec!["audit".to_owned()],
+            },
         ),
         // Watcher entries never gate the start.
         (Some(WATCHER_ENTRY), false, super::HooksState::Ready),
@@ -3530,6 +3543,31 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
 }
 
 #[test]
+fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
+    let home = Home::new();
+    let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
+        super::HooksState::MissingBlocking {
+            names: vec!["a".into(), "invalid".into(), "missing".into(), "z".into()]
+        }
+    );
+    let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[]).unwrap(),
+        super::HooksState::MissingBlocking {
+            names: vec!["a".into(), "z".into()]
+        }
+    );
+    assert_eq!(
+        super::hooks_state(&hooks_config(&home, objects), &[config::full_name("hooks")]).unwrap(),
+        super::HooksState::Ready
+    );
+}
+
+#[test]
 fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
     let home = Home::new();
     match super::hooks_state(&hooks_config(&home, NON_BLOCKING_ENTRY), &[]).unwrap() {
@@ -3545,7 +3583,7 @@ fn hooks_state_is_missing_notice_for_unloaded_non_blocking_hooks() {
                 notice.message
             );
         }
-        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking) => {
+        state @ (super::HooksState::Ready | super::HooksState::MissingBlocking { .. }) => {
             panic!("expected MissingNotice, got {state:?}");
         }
     }
@@ -3574,6 +3612,68 @@ fn declared_blocking_hooks_without_the_package_stay_silent_until_the_gate() {
         session.loaded_names()
     );
     assert!(session.notices().is_empty(), "{:?}", session.notices());
+}
+
+/// The first-party entry script registers a valid watcher entry beside
+/// one missing `timeout`: the valid entry registers, and the notice for
+/// the invalid one names the entry and the field (`docs/extensions.md`,
+/// "Hooks declared in configuration").
+#[test]
+fn a_watcher_entry_missing_timeout_names_the_entry_and_field() {
+    let home = Home::new();
+    install_hooks(&home, include_str!("../../../extensions/hooks/init.lua"));
+    let session = load_with_hooks(
+        &home,
+        r#"{"broken":{"watch":["turn_completed"],"command":"true"},"ok":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#,
+    );
+    let watchers = session.lua[0].watchers().unwrap();
+    assert_eq!(watchers.watchers.len(), 1, "{watchers:?}");
+    assert_eq!(watchers.watchers[0].kinds, ["turn_completed"]);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices[0].extension.as_deref(),
+        Some(config::full_name("hooks").as_str())
+    );
+    assert!(
+        notices[0]
+            .message
+            .contains("`timeout` hook not registered for entry `broken`"),
+        "{notices:?}"
+    );
+}
+
+/// The person's `hook_timeout_ms` override reaches watcher entries the
+/// first-party script registers, as it does hook entries, while another
+/// extension's override changes nothing (`docs/configuration.md`,
+/// `extensions."<name>".hook_timeout_ms`).
+#[test]
+fn hook_timeout_ms_overrides_a_declared_watcher_timeout() {
+    let home = Home::new();
+    install_hooks(&home, include_str!("../../../extensions/hooks/init.lua"));
+    let entries = r#"{"guard":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"},"note":{"watch":["turn_completed"],"command":"true","timeout":1000}}"#;
+    let setting = hooks_override(entries);
+    let hooks = config::full_name("hooks");
+    let own = format!("extensions.\"{hooks}\".hook_timeout_ms=5");
+    let session = home.load(&[setting.as_str(), own.as_str()]);
+    assert_eq!(
+        session.lua[0].hooks().unwrap().by_point["after_tool"][0].timeout,
+        Duration::from_millis(5)
+    );
+    assert_eq!(
+        session.lua[0].watchers().unwrap().watchers[0].timeout,
+        Duration::from_millis(5)
+    );
+    let other = "extensions.\"fiber.test/b\".hook_timeout_ms=5";
+    let plain = home.load(&[setting.as_str(), other]);
+    assert_eq!(
+        plain.lua[0].hooks().unwrap().by_point["after_tool"][0].timeout,
+        Duration::from_millis(1000)
+    );
+    assert_eq!(
+        plain.lua[0].watchers().unwrap().watchers[0].timeout,
+        Duration::from_millis(1000)
+    );
 }
 
 #[test]

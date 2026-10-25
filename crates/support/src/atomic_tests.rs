@@ -237,3 +237,35 @@ fn failure_leaves_no_temp_beside_the_target() {
     assert!(!file.exists());
     assert!(temps(dir.path()).is_empty());
 }
+
+#[test]
+fn write_count_counts_one_successful_write() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-count-one");
+    let file = dir.path().join("value");
+    reset_write_count();
+    write_atomic(&file, b"hello", 0o600).unwrap();
+    assert_eq!(write_count(), 1);
+    assert_eq!(fs::read(&file).unwrap(), b"hello");
+}
+
+#[test]
+fn write_count_counts_two_successful_writes() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-count-two");
+    let file = dir.path().join("value");
+    reset_write_count();
+    write_atomic(&file, b"one", 0o600).unwrap();
+    write_atomic(&file, b"two", 0o600).unwrap();
+    assert_eq!(write_count(), 2);
+    assert_eq!(fs::read(&file).unwrap(), b"two");
+}
+
+#[test]
+fn reset_write_count_zeroes_after_writes() {
+    let dir = fakes::TempDir::new("fiber-support-atomic-count-reset");
+    let file = dir.path().join("value");
+    reset_write_count();
+    write_atomic(&file, b"one", 0o600).unwrap();
+    assert_ne!(write_count(), 0);
+    reset_write_count();
+    assert_eq!(write_count(), 0);
+}

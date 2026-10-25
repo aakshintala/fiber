@@ -3,6 +3,7 @@
 
 use super::{
     Button, Edit, Event, Key, Mouse, MouseKind, Parser, Reply, canon_event, default_event,
+    home_end_edit,
 };
 use crate::stroke::{Code, Mods, Stroke};
 
@@ -1282,4 +1283,171 @@ proptest::proptest! {
 fn a_csi_n_without_the_question_mark_is_no_reply() {
     assert!(feed_all(&[b"\x1b[997;1n"]).is_empty());
     assert!(feed_all(&[b"\x1b[5n"]).is_empty());
+}
+
+#[test]
+fn unshifted_home_and_end_map_to_line_edits() {
+    assert_eq!(home_end_edit(&plain(Code::Home)), Some(Edit::LineStart));
+    assert_eq!(home_end_edit(&plain(Code::End)), Some(Edit::LineEnd));
+}
+
+#[test]
+fn shifted_or_modified_home_and_end_map_to_nothing() {
+    let shift = Mods::SHIFT;
+    let ctrl = Mods::CTRL;
+    assert_eq!(home_end_edit(&modified(Code::Home, shift)), None);
+    assert_eq!(home_end_edit(&modified(Code::End, shift)), None);
+    assert_eq!(home_end_edit(&modified(Code::Home, ctrl)), None);
+    assert_eq!(home_end_edit(&modified(Code::End, ctrl)), None);
+    assert_eq!(home_end_edit(&plain(Code::Left)), None);
+    assert_eq!(home_end_edit(&plain(Code::Up)), None);
+}
+
+/// The graphics probe's answer parses to its id and success.
+#[test]
+fn graphics_probe_answer_parses() {
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=31;OK\x1b\\"]),
+        vec![Event::Reply(Reply::Graphics { id: 31, ok: true })]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=31;OK\x07"]),
+        vec![Event::Reply(Reply::Graphics { id: 31, ok: true })]
+    );
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=7;OK\x1b\\"]),
+        vec![Event::Reply(Reply::Graphics { id: 7, ok: true })]
+    );
+}
+
+/// A graphics reply split across reads parses once whole.
+#[test]
+fn graphics_reply_split_across_reads_parses() {
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=3", b"1;OK\x1b\\"]),
+        vec![Event::Reply(Reply::Graphics { id: 31, ok: true })]
+    );
+    // A terminator split after its `ESC` holds for the next read.
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b_Gi=31;OK\x1b").is_empty());
+    assert_eq!(
+        parser.feed(b"\\"),
+        vec![Event::Reply(Reply::Graphics { id: 31, ok: true })]
+    );
+}
+
+/// A graphics reply's error status parses with its id, marked failed.
+#[test]
+fn graphics_error_reply_parses_as_not_ok() {
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=7;EINVAL\x1b\\"]),
+        vec![Event::Reply(Reply::Graphics { id: 7, ok: false })]
+    );
+}
+
+/// An invalid graphics reply resolves without stalling and emits no
+/// reply: the bytes after it still parse.
+#[test]
+fn invalid_graphics_reply_resolves() {
+    for invalid in [
+        b"\x1b_Gi=abc;OK\x1b\\".as_slice(),
+        b"\x1b_Gi=31;\x1b\\".as_slice(),
+        b"\x1b_Gi=4294967296;OK\x1b\\".as_slice(),
+        b"\x1b_Hi=31;OK\x1b\\".as_slice(),
+    ] {
+        let mut parser = Parser::default();
+        let events = parser.feed(invalid);
+        assert!(
+            events.iter().all(|event| !matches!(event, Event::Reply(_))),
+            "{invalid:?} reads as {events:?}"
+        );
+        assert_eq!(
+            parser.feed(b"z"),
+            vec![Event::Stroke(Stroke {
+                code: Code::Char('z'),
+                mods: Mods::NONE,
+            })],
+            "{invalid:?} stalls the bytes after it"
+        );
+    }
+}
+
+/// The largest id parses; one more overflows and is no reply.
+#[test]
+fn graphics_id_at_u32_max_parses() {
+    assert_eq!(
+        feed_all(&[b"\x1b_Gi=4294967295;OK\x1b\\"]),
+        vec![Event::Reply(Reply::Graphics {
+            id: u32::MAX,
+            ok: true
+        })]
+    );
+}
+
+/// Typed text around a graphics reply stays keys.
+#[test]
+fn typing_around_a_graphics_reply_stays_keys() {
+    assert_eq!(
+        feed_all(&[b"hi\x1b_Gi=31;OK\x1b\\bye"]),
+        vec![
+            Event::Key(Key::Char('h')),
+            Event::Key(Key::Char('i')),
+            Event::Reply(Reply::Graphics { id: 31, ok: true }),
+            Event::Key(Key::Char('b')),
+            Event::Key(Key::Char('y')),
+            Event::Key(Key::Char('e')),
+        ]
+    );
+}
+
+/// A typed Alt+_ holds for one read, then reads as Alt+_ with the next
+/// read's bytes as keys.
+#[test]
+fn typed_alt_underscore_reads_as_keys() {
+    let mut parser = Parser::default();
+    assert!(parser.feed(b"\x1b_").is_empty());
+    assert_eq!(
+        parser.feed(b"x"),
+        vec![
+            Event::Stroke(Stroke {
+                code: Code::Char('_'),
+                mods: Mods::ALT,
+            }),
+            Event::Stroke(Stroke {
+                code: Code::Char('x'),
+                mods: Mods::NONE,
+            }),
+        ]
+    );
+}
+
+/// A terminated graphics reply at the candidate cap still parses.
+#[test]
+fn graphics_error_at_apc_cap_parses() {
+    let mut reply = b"\x1b_Gi=1;".to_vec();
+    reply.extend(std::iter::repeat_n(b'E', 248));
+    reply.push(0x07);
+    assert_eq!(reply.len(), 256);
+    assert_eq!(
+        feed_all(&[reply.as_slice()]),
+        vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]
+    );
+}
+
+/// A never-terminated graphics candidate resolves instead of holding
+/// forever: past the cap it reads as keys.
+#[test]
+fn overlong_graphics_candidate_resolves() {
+    let mut candidate = b"\x1b_Gi=".to_vec();
+    candidate.extend(std::iter::repeat_n(b'1', 300));
+    let mut parser = Parser::default();
+    let events = parser.feed(&candidate);
+    assert_eq!(
+        events.first(),
+        Some(&Event::Stroke(Stroke {
+            code: Code::Char('_'),
+            mods: Mods::ALT,
+        })),
+        "a held candidate never resolves"
+    );
 }

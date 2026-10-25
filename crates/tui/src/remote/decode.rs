@@ -203,6 +203,14 @@ pub(super) fn logout_rows(value: &Value) -> Option<Vec<LogoutRow>> {
 pub(super) fn deleted(value: &Value) -> Option<String> {
     read!(value, "path")
 }
+pub(super) fn blocking_hooks(value: &Value) -> Option<Vec<String>> {
+    read!(value, "names")
+}
+
+pub(super) fn install_hooks(value: &Value) -> Option<()> {
+    value.as_object()?.is_empty().then_some(())
+}
+
 pub(super) fn install(value: &Value) -> Option<crate::ProviderInstall> {
     Some(crate::ProviderInstall {
         installed: read!(value, "installed")?,

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -40,13 +40,17 @@ const SEED: Fixture = Fixture {
 /// Makes the workspace a git repository, so `fiber sessions` lists the
 /// repository's project.
 fn init_git(ctx: &Ctx<'_>, home: &Home) -> Result<(), String> {
-    let mut command = Command::new("git");
+    // `env_clear` wipes the scrubbed Git pins the shared builder sets, so
+    // set them again after clearing alongside the benchmark's own values.
+    let mut command = support::git::command("git");
     command
         .current_dir(home.workspace())
         .env_clear()
         .env("PATH", ctx.path.as_deref().unwrap_or_default())
         .env("HOME", home.root())
         .env(crate::home::KEY_VAR, "sk-bench")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
         .arg("init")
         .arg("-q")
         .stdin(Stdio::null())

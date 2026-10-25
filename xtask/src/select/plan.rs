@@ -273,6 +273,8 @@ pub(crate) fn plan(
         ("test", test && !draft),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
+        // A draft skips it (`docs/ci.md`).
+        ("stress", pr && test && !draft),
         // Runs with the binary-level tests, on every push, or when the diff
         // touches release code (`docs/ci.md`, "Selection").
         (

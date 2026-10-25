@@ -823,3 +823,56 @@ fn no_color_paint_keeps_box_cells_and_their_modifiers() {
     }
     assert_eq!(buf.content[2].modifier, Modifier::DIM | Modifier::BOLD);
 }
+
+#[test]
+fn placeholder_style_carries_the_id() {
+    use super::placeholder_style;
+    assert_eq!(placeholder_style(7), Style::new().fg(Color::Indexed(7)));
+    // Past 255 saturates: ids never truncate into another image.
+    assert_eq!(
+        placeholder_style(300),
+        Style::new().fg(Color::Indexed(u8::MAX))
+    );
+}
+
+/// A placeholder cell with `id` in its foreground: what the inline grid
+/// draws (`docs/tui.md`, "Images").
+fn placeholder(id: u8) -> (&'static str, Style) {
+    (
+        "\u{10EEEE}\u{305}\u{305}",
+        Style::new().fg(Color::Indexed(id)),
+    )
+}
+
+#[test]
+fn paint_keeps_placeholder_colours_without_colour() {
+    let look = look(ThemeSetting::Dark, &[("NO_COLOR", "1")]);
+    let mut buf = row(&[placeholder(1), ("a", Style::new().fg(Role::Accent.color()))]);
+    look.paint(&mut buf);
+    // The id-encoding foreground survives, while the role marker
+    // resolves away.
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(1));
+    assert_ne!(buf[(1, 0)].fg, Role::Accent.color());
+    assert!(!buf[(0, 0)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn paint_keeps_placeholder_colours_at_256() {
+    let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
+    let mut buf = row(&[placeholder(1), ("a", Style::new().fg(Role::Accent.color()))]);
+    look.paint(&mut buf);
+    // No quantizing the id to the nearest text entry, while the accent
+    // takes its palette entry.
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(1));
+    assert_eq!(buf[(1, 0)].fg, Color::Indexed(75));
+    assert!(!buf[(0, 0)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn paint_keeps_placeholder_colours_in_truecolour() {
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[placeholder(7), ("a", Style::new().fg(Role::Accent.color()))]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(7));
+    assert_eq!(buf[(1, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
+}

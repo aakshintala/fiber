@@ -37,6 +37,12 @@ impl ThinkingLevel {
         Self::Max,
     ];
 
+    /// Every level's name, in declaration order, for static accepted-value
+    /// tables such as the configuration keys. The configuration test pins
+    /// this slice to the names of `ALL`, so the two never drift apart.
+    pub const NAMES: [&'static str; 7] =
+        ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
     /// The level's name, as typed and as the wire records it.
     #[must_use]
     pub fn as_str(self) -> &'static str {

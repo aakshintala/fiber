@@ -38,6 +38,7 @@ mod machine;
 mod pairing;
 mod port;
 mod prompt_history;
+mod prune;
 mod read_file;
 mod recent;
 mod rejoin;
@@ -73,7 +74,7 @@ use crate::listen::Held;
 
 pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
-pub use crate::machine::{DeviceLogin, FileSearch, Machine, ShowCode};
+pub use crate::machine::{DeviceLogin, FileSearch, Machine, PruneFailure, PruneOutcome, ShowCode};
 pub use crate::recent::{Left, RecentError, RecentRow, append, append_exited};
 pub use crate::spawn::{HUB_SESSION_MARKER, SpawnStarter};
 

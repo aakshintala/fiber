@@ -440,12 +440,22 @@ impl Loop {
             notices,
             found,
         } = collected;
-        self.skills.opened(
-            found,
+        let (refresh_commands, commands_changed) = self.skills.opened(
+            found.clone(),
             inputs.skills_disabled.clone(),
             &message.skills,
             &notices,
         );
+        let command_notices = if refresh_commands {
+            let notices = self.refresh_commands(&inputs, &found);
+            if commands_changed {
+                notices
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
         // The previous context's loads, armed by a completed handoff: the
         // set is now the new listing, so what is sent and what is listed
         // follow one rule.
@@ -462,6 +472,7 @@ impl Loop {
         }
         for event in std::iter::once(Event::OpeningMessage(message))
             .chain(notices.into_iter().map(Event::Notice))
+            .chain(command_notices.into_iter().map(Event::Notice))
         {
             self.write(&event, turn, None)?;
         }

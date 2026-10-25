@@ -2,6 +2,7 @@
 //! itself, answers the hub's `prompt` handshake, and records what the hub
 //! sent.
 
+use std::collections::BTreeSet;
 use std::fs::DirBuilder;
 use std::io::{BufReader, Write};
 use std::net::Shutdown;
@@ -13,12 +14,13 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
+use contract::commands::hub::PruneExpect;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
 use serde_json::Value;
 use support::lock;
 
-use crate::{Started, Starter};
+use crate::{PruneOutcome, Started, Starter};
 
 /// What the fake answers the hub's `prompt` handshake with.
 #[derive(Debug, Clone)]
@@ -942,6 +944,7 @@ pub(crate) struct FakeMachine {
     pub(crate) search_gate: Mutex<Option<Arc<SearchGate>>>,
     pub(crate) logins: Mutex<std::collections::VecDeque<Arc<FakeLogin>>>,
     pub(crate) imports: Mutex<std::collections::VecDeque<Result<Option<Value>, Failure>>>,
+    pub(crate) prunes: Mutex<std::collections::VecDeque<Result<PruneOutcome, Failure>>>,
 }
 
 pub(crate) struct SearchGate {
@@ -1075,5 +1078,41 @@ impl crate::Machine for FakeMachine {
     ) -> Result<(), Failure> {
         lock(&self.calls).push(serde_json::json!({"write":[workspace,path,text,version]}));
         Ok(())
+    }
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::type_complexity,
+        reason = "one seam call carries the whole prune: its flags, the previewed items and the session-delete callback"
+    )]
+    fn prune(
+        &self,
+        home: &Path,
+        older_than: Option<String>,
+        cascade: bool,
+        force: bool,
+        dry_run: bool,
+        expect: Option<PruneExpect>,
+        _clock: Arc<dyn contract::clock::Clock>,
+        _delete: &mut (
+                 dyn FnMut(&SessionId, bool, Option<&BTreeSet<SessionId>>) -> Result<(), Failure>
+                     + Send
+             ),
+    ) -> Result<PruneOutcome, Failure> {
+        lock(&self.calls).push(serde_json::json!({"prune":{
+            "home": home, "older_than": older_than, "cascade": cascade,
+            "force": force, "dry_run": dry_run, "expect": expect,
+        }}));
+        lock(&self.prunes).pop_front().unwrap_or(Ok(PruneOutcome {
+            lines: Vec::new(),
+            items: PruneExpect {
+                sessions: Vec::new(),
+                worktrees: Vec::new(),
+                pinned: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            freed: 0,
+            total: 0,
+            failures: Vec::new(),
+        }))
     }
 }

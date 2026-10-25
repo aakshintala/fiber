@@ -11,6 +11,11 @@ use super::Pages;
 use crate::image;
 
 impl Pages {
+    /// Shares the app's process-lifetime image ids with this page layout.
+    pub(crate) fn set_image_ids(&mut self, ids: image::IdAllocator) {
+        self.images.set_allocator(ids);
+    }
+
     /// Notes every image part `envelope` carries under its segment
     /// session, handing each unseen `(session, path)` the next id; a
     /// pair already seen keeps its id, so a page dropped and folded
@@ -56,6 +61,42 @@ impl Pages {
     /// to (`docs/tui.md`, "Images").
     pub(crate) fn column_width(&self) -> u16 {
         self.width
+    }
+
+    /// How the images size: the one line, or the inline grid with its
+    /// cell size (`docs/tui.md`, "Images"). A flat page reports text:
+    /// flat rendering never fetches (`docs/tui.md`, "Screen readers").
+    pub(crate) fn image_sizing(&self) -> image::Sizing {
+        if self.ext.flat {
+            image::Sizing::Text
+        } else {
+            self.images.sizing
+        }
+    }
+
+    /// Sets the image sizing, recounting when it changes, so paging
+    /// counts the inline rows from the logged size without decoding any
+    /// image (`docs/tui.md`, "Images").
+    pub(crate) fn set_image_sizing(&mut self, sizing: image::Sizing) {
+        if self.images.sizing == sizing {
+            return;
+        }
+        self.images.sizing = sizing;
+        self.recount();
+    }
+
+    /// Marks the image at `path` in `session` failed and recounts: its
+    /// rows shrink to the one-line form, and no fetch asks for it again
+    /// while the session's layout lives (`docs/tui.md`, "Images").
+    pub(crate) fn fail_image(&mut self, session: &contract::SessionId, path: &str) {
+        self.images.fail(session, path);
+        self.recount();
+    }
+
+    /// Whether the image at `path` in `session` failed: one line, no
+    /// refetch (`docs/tui.md`, "Images").
+    pub(crate) fn image_failed(&self, session: &contract::SessionId, path: &str) -> bool {
+        self.images.failed(session, path)
     }
 }
 

@@ -17,6 +17,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -24,10 +25,10 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, WAITING_TITLE, Writer,
-    contains, exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params,
-    until_hub_exits, until_hub_exits_with,
+    contains, exact_end, hub_gone, hub_pids, list_processes, query_replies,
+    query_replies_with_graphics, sgr_params, until_hub_exits, until_hub_exits_with,
 };
-use support::{Deadline, Setup, TRUECOLOUR};
+use support::{Deadline, KillGroup, Setup, TRUECOLOUR};
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
 /// grid once the bytes are published: the raw wait proves the reader
@@ -274,14 +275,30 @@ fn query_replies_answers_in_stream_order_and_keeps_its_tail() {
         b"\x1b]11;rgb:0000/0000/0000\x1b\\"
     );
     assert!(pending.is_empty());
-    // A 16-byte non-query tail is kept whole for the next read, and a
-    // 17-byte one is cut to its last 16.
-    let mut pending = vec![b'x'; 16];
+    // A 64-byte non-query tail is kept whole for the next read, and a
+    // 65-byte one is cut to its last 64.
+    let mut pending = vec![b'x'; 64];
     assert!(query_replies(&mut pending).is_empty());
-    assert_eq!(pending.len(), 16);
-    let mut pending = vec![b'x'; 17];
+    assert_eq!(pending.len(), 64);
+    let mut pending = vec![b'x'; 65];
     assert!(query_replies(&mut pending).is_empty());
-    assert_eq!(pending, vec![b'x'; 16]);
+    assert_eq!(pending, vec![b'x'; 64]);
+}
+
+#[test]
+fn graphics_probe_is_answered_only_for_pixel_reporting_terminals() {
+    let probe = b"\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+    let reply = b"\x1b_Gi=31;OK\x1b\\";
+    let (first, second) = probe.split_at(probe.len() / 2);
+    let mut pending = first.to_vec();
+    assert!(query_replies_with_graphics(&mut pending, true).is_empty());
+    pending.extend_from_slice(second);
+    assert_eq!(query_replies_with_graphics(&mut pending, true), reply);
+    assert!(pending.is_empty());
+
+    let mut pending = probe.to_vec();
+    assert!(query_replies(&mut pending).is_empty());
+    assert_eq!(pending, probe);
 }
 
 #[test]
@@ -430,51 +447,215 @@ fn a_hub_alive_without_its_socket_is_not_gone() {
     assert!(!listed, "an attached run lists no processes");
 }
 
-/// `until_hub_exits_with` returns only after the hub row vanishes: the
-/// counting lister shows the hub three polls running, so a socket-only
-/// loop would return on the first poll without listing at all.
+/// `until_hub_exits_with` lists once, after the socket goes: while the
+/// socket exists the wait makes paced socket polls that start no process,
+/// so the lister never runs; one listing showing no hub then ends it.
 #[test]
-fn until_hub_exits_with_waits_until_the_hub_row_vanishes() {
-    let dir = fakes::TempDir::new("hub-exits");
-    let home = "/tmp/fiber-hub-home";
-    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
-    let mut calls = 0;
-    let mut list = || {
-        calls += 1;
-        if calls <= 3 {
-            hub_row.to_owned()
-        } else {
-            String::new()
+fn until_hub_exits_with_lists_once_after_the_socket_goes() {
+    let deadline = Deadline::start();
+    let dir = fakes::TempDir::new("hub-exits-once");
+    let socket = dir.path().join("hub");
+    fs::write(&socket, b"").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (done, finished) = mpsc::channel();
+    thread::spawn({
+        let socket = socket.clone();
+        let calls = Arc::clone(&calls);
+        move || {
+            let mut list = || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                String::new()
+            };
+            until_hub_exits_with(
+                deadline,
+                &socket,
+                "/tmp/fiber-hub-home",
+                "the fake hub to exit",
+                &mut list,
+            );
+            done.send(()).unwrap_or(());
         }
-    };
-    until_hub_exits_with(
-        Deadline::start(),
-        &dir.path().join("missing"),
-        home,
-        "the fake hub to exit",
-        &mut list,
+    });
+    // The wait holds while the socket exists: several poll intervals pass
+    // with no answer. A wait that answered here would end before the
+    // socket goes.
+    assert!(
+        Deadline::after(Duration::from_millis(50))
+            .recv(&finished)
+            .is_err(),
+        "the wait holds while the socket exists"
     );
-    assert_eq!(calls, 4, "the wait returns only after the hub row vanishes");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no listing runs while the socket exists"
+    );
+    fs::remove_file(&socket).unwrap();
+    deadline
+        .recv(&finished)
+        .expect("the wait ends after the socket goes");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "one listing runs after the socket goes"
+    );
 }
 
-/// `until_hub_exits_with` panics naming `what` once the deadline is
-/// gone, even with the hub still listed: the wait ends at the deadline
-/// however the listing behaves.
+/// An attached run (`home` empty) waits on the socket alone: the lister
+/// never runs, however many socket polls pass before the socket goes.
+#[test]
+fn until_hub_exits_with_waits_on_the_socket_alone_when_attached() {
+    let deadline = Deadline::start();
+    let dir = fakes::TempDir::new("hub-attached");
+    let socket = dir.path().join("hub");
+    fs::write(&socket, b"").unwrap();
+    let listed = Arc::new(AtomicBool::new(false));
+    let (done, finished) = mpsc::channel();
+    thread::spawn({
+        let socket = socket.clone();
+        let listed = Arc::clone(&listed);
+        move || {
+            let mut never = || {
+                listed.store(true, Ordering::SeqCst);
+                String::new()
+            };
+            until_hub_exits_with(
+                deadline,
+                &socket,
+                "",
+                "the attached hub to exit",
+                &mut never,
+            );
+            done.send(()).unwrap_or(());
+        }
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(50))
+            .recv(&finished)
+            .is_err(),
+        "the attached wait holds while the socket exists"
+    );
+    assert!(
+        !listed.load(Ordering::SeqCst),
+        "an attached run lists no processes"
+    );
+    fs::remove_file(&socket).unwrap();
+    deadline
+        .recv(&finished)
+        .expect("the attached wait ends after the socket goes");
+    assert!(
+        !listed.load(Ordering::SeqCst),
+        "an attached run lists no processes"
+    );
+}
+
+/// `until_hub_exits_with` returns once the listed hub pid exits: while the
+/// pid lives the wait holds, and releasing its stdin ends the read at end
+/// of file, which the reap below proves before the wait answers.
+#[test]
+fn until_hub_exits_with_returns_once_the_hub_pid_exits() {
+    let deadline = Deadline::start();
+    let dir = fakes::TempDir::new("hub-pid-exit");
+    // The socket is already gone: the wait goes straight to the pid phase.
+    let socket = dir.path().join("missing");
+    let home = "/tmp/fiber-hub-home";
+    // A live child the fake table names as this run's hub, blocked reading
+    // the stdin the test holds open.
+    let mut child = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let guard = KillGroup(group);
+    let watchdog = fakes::Watchdog::group(group);
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let table = format!("{pid} hub serve FIBER_HOME={home}");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (done, finished) = mpsc::channel();
+    thread::spawn({
+        let calls = Arc::clone(&calls);
+        move || {
+            until_hub_exits_with(deadline, &socket, home, "the fake hub to exit", &mut || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                table.clone()
+            });
+            done.send(()).unwrap_or(());
+        }
+    });
+    // While the hub lives the wait holds: no answer within several of its
+    // own poll intervals.
+    assert!(
+        Deadline::after(Duration::from_millis(50))
+            .recv(&finished)
+            .is_err(),
+        "the wait holds while the hub pid lives"
+    );
+    // Releasing stdin ends the read at end of file, and reaping proves
+    // the exit, both bounded by the deadline.
+    drop(stdin);
+    let (reaped, exited) = mpsc::channel();
+    thread::spawn(move || reaped.send(child.wait()).unwrap_or(()));
+    let status = deadline
+        .recv(&exited)
+        .expect("the fake hub exits after the release")
+        .expect("the fake hub reaps");
+    assert!(
+        status.success(),
+        "the fake hub exits cleanly after the release"
+    );
+    deadline
+        .recv(&finished)
+        .expect("the wait ends after the hub pid exits");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "one listing runs for the pid wait, however many polls it makes"
+    );
+    // The hub exiting leaves nothing behind: kill the group, check it
+    // emptied, and stand the watchdog down.
+    match fakes::kill_group(group, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    assert!(
+        fakes::group_empties(group, deadline.cleanup_phase()),
+        "the fake hub's group emptied"
+    );
+    std::mem::forget(guard);
+    watchdog.stand_down(deadline.cleanup_phase());
+}
+
+/// `until_hub_exits_with` panics naming `what` when the hub pid outlives
+/// the deadline: the pid phase keeps only what the socket phase left, and
+/// the live pid here leaves nothing.
 #[test]
 #[should_panic(expected = "waited until the deadline for the hub that never exits")]
-fn until_hub_exits_with_panics_naming_what_after_the_deadline() {
+fn until_hub_exits_with_panics_naming_what_when_the_hub_outlives_the_deadline() {
     let clock = Box::leak(Box::new(FakeClock::new()));
     let deadline = Deadline::on(&**clock);
     // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-    clock.advance(support::WAITS + Duration::from_secs(1));
+    clock.advance(
+        support::WAITS
+            .checked_sub(Duration::from_millis(100))
+            .unwrap(),
+    );
     let dir = fakes::TempDir::new("hub-never-exits");
-    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    // The test's own process is always alive, so the pid wait can never
+    // answer: no child is started for this timeout.
+    let live = std::process::id();
+    let table = format!("{live} hub serve FIBER_HOME=/tmp/fiber-hub-home");
     until_hub_exits_with(
         deadline,
         &dir.path().join("missing"),
         "/tmp/fiber-hub-home",
         "the hub that never exits",
-        &mut || hub_row.to_owned(),
+        &mut || table.clone(),
     );
 }
 
@@ -673,7 +854,16 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     // anywhere, since quitting is taken in any state.
     run.ready();
     run.write(b"say hi\r");
-    let screen = run.wait_screen("the drawn turn", turn_drawn);
+    // A drawn-turn miss carries the hub log: the tail tells whether the
+    // hub was slow or failed to start. The wait still fails with its
+    // screen.
+    let screen = run.wait_screen_reporting("the drawn turn", turn_drawn, || {
+        let tail = support::hub_log_tail(&setup.hub_log());
+        format!(
+            "hub.log tail (last {} lines):\n{tail}",
+            support::HUB_LOG_TAIL
+        )
+    });
     let output = run.output();
     run.write(b"\x03\x03\r");
     let finished = run.wait();

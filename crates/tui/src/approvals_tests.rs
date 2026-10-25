@@ -1030,9 +1030,34 @@ mod through_the_app {
         app
     }
 
-    /// Folds one session envelope.
+    /// Folds one session envelope, answering the `commands` a turn start
+    /// asks for with no rows: a turn start may change the runnable set,
+    /// so the terminal asks again at each one.
     fn feed(app: &mut App, line: contract::Envelope) {
-        assert!(app.on_line(Line::Session(line)).is_empty());
+        let session = line.session_id.clone();
+        let out = app.on_line(Line::Session(line));
+        // Nothing else sends: only a turn start asks, and only once.
+        assert!(out.len() <= 1, "{out:?}");
+        let Some(first) = out.first() else {
+            return;
+        };
+        let asked = parse(first);
+        assert_eq!(asked["command"], "commands");
+        let answer = Line::Session(contract::Envelope {
+            kind: "command_accepted".to_owned(),
+            session_id: session,
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: None,
+            payload: serde_json::json!({"command_id": asked["id"],
+                "result": {"commands": []}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        });
+        assert!(app.on_line(answer).is_empty());
     }
 
     /// A `turn_started` with one message.

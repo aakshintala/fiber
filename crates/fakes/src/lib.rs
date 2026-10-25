@@ -22,6 +22,7 @@ mod jig_start;
 pub mod jobs;
 mod locks;
 mod oauth_server;
+mod process_extension;
 mod process_group;
 mod provider_server;
 pub mod pty;
@@ -64,9 +65,10 @@ pub mod git;
 pub use handoff::no_note;
 pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
+pub use process_extension::ProcessFixture;
 pub use process_group::{
-    WATCHDOG_SCRIPT, group_alive, group_empties, kill_group, kill_matching, kill_pid, matching,
-    matching_exits, pid_alive, pids_exit, try_matching_exits,
+    POLL, WATCHDOG_SCRIPT, group_alive, group_empties, kill_group, kill_matching, kill_pid,
+    matching, matching_exits, pid_alive, pids_exit, try_matching_exits,
 };
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use raw_http_server::RawHttpServer;
