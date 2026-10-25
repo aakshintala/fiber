@@ -112,7 +112,7 @@ groups, then the flags and examples.
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
-| `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
+| `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With `--hub`, it opens the most recent session on that hub in any project, since a client has no launch directory there. With none, it is a usage error naming `fiber`. |
 | `sessions [--all] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. |
 | `sessions search [--all] [--json] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. |
 | `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
@@ -122,7 +122,9 @@ groups, then the flags and examples.
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
-outside one it is every project. `sessions --all` lists every project.
+outside one it is every project. With `--hub`, `continue`, `sessions delete`
+and `sessions prune` never read this machine's directory or logs: their scope
+is every project on that hub. `sessions --all` lists every project.
 
 `models` prints each provider's cached model list at once, and runs a
 provider's `models()` only when it has no cached copy. A list older than
@@ -1402,6 +1404,10 @@ session:
   session and everything `--cascade` adds. On the command line `--yes`
   confirms; without it the command lists what it would delete and asks, and
   with no terminal to ask on it is a usage error.
+- **With `--hub`, the id resolves on that hub.** The command matches it
+  against that hub's `sessions` answer, across every project, as
+  `fiber resume --hub` does, then sends that hub `delete`. `--cascade` and
+  `--yes` work as they do locally.
 - **A kept worktree the session made stays.** Pruning removes worktrees.
 - **`recent.jsonl` keeps the session's row.** Nothing rewrites that file, and
   readers skip a row whose session directory is gone (`docs/state.md`,
@@ -1452,6 +1458,11 @@ that hold nothing to lose:
 - **What it frees.** `--dry-run` prints what prune would delete and the space
   it would free, and deletes nothing. Otherwise prune prints the same list,
   asks as delete does (`--yes` confirms), deletes, and prints the space freed.
+- **With `--hub`, the hub prunes its own machine.** The command asks that
+  hub to prune, and the hub runs everything above on its machine across
+  every project, with the same flags. Without `--yes` the command first asks
+  for the dry run, prints it and asks; the confirmation stays with the
+  client.
 
 ## The delegation supervisor is external
 
