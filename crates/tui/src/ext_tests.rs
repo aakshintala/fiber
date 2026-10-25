@@ -1,7 +1,144 @@
 //! Tests for the seam types: the input key and the renderer handle.
 
+use super::{Decision, FailureKind, SessionCtx, SlotSelection};
 use super::{Failure, Handle, Input, LedgerRow, RawSpan, Renderer, RowError, Status};
 use contract::events::FileChange;
+use std::cell::{Cell, RefCell};
+
+/// Converts legacy fake render callbacks while preserving early error returns.
+pub(crate) fn decide(
+    extension: &str,
+    call: impl FnOnce() -> Result<Vec<Vec<RawSpan>>, Failure>,
+) -> Decision {
+    match call() {
+        Ok(lines) => Decision::Draw {
+            extension: extension.into(),
+            lines,
+        },
+        Err(failure) => Decision::Fail(failure),
+    }
+}
+
+/// Session-aware fake shared by paging, fold and delegate regressions.
+#[derive(Debug)]
+pub(crate) struct SessionRenderer {
+    pub(crate) label: String,
+    pub(crate) gated: bool,
+    pub(crate) failure: Option<FailureKind>,
+    pub(crate) calls: RefCell<Vec<String>>,
+    pending: RefCell<Vec<(String, String)>>,
+    reported: Cell<bool>,
+}
+impl SessionRenderer {
+    pub(crate) fn new(label: &str) -> Self {
+        Self {
+            label: label.into(),
+            gated: false,
+            failure: None,
+            calls: RefCell::new(Vec::new()),
+            pending: RefCell::new(Vec::new()),
+            reported: Cell::new(false),
+        }
+    }
+}
+impl Renderer for SessionRenderer {
+    fn name(&self) -> &str {
+        "session-test"
+    }
+    fn fills(&self, slot: &str) -> bool {
+        !self.label.is_empty() && slot == "ledger_row"
+    }
+    fn fills_for(&self, ctx: &SessionCtx, slot: &str) -> SlotSelection {
+        if !self.fills(slot) {
+            return SlotSelection::Absent;
+        }
+        if self.gated
+            && ctx
+                .halves
+                .as_ref()
+                .and_then(|map| map.get(self.name()))
+                .is_none_or(|version| !version.starts_with("v1."))
+        {
+            if ctx.halves.is_some() && !self.reported.replace(true) {
+                self.pending.borrow_mut().push((
+                    "extension_incompatible".into(),
+                    "session-test TUI v3.0.0: not loaded or incompatible".into(),
+                ));
+            }
+            return SlotSelection::Absent;
+        }
+        SlotSelection::Draw {
+            extension: self.name().into(),
+        }
+    }
+    fn half(&self, ctx: &SessionCtx, _: &str) -> Option<String> {
+        if self.gated {
+            ctx.halves.as_ref()?.get(self.name()).cloned()
+        } else {
+            None
+        }
+    }
+    fn take_pending(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.pending.borrow_mut())
+    }
+    fn render(
+        &self,
+        ctx: &SessionCtx,
+        _: &str,
+        _: &Input<'_>,
+        _: u16,
+        _: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
+    ) -> Decision {
+        self.calls.borrow_mut().push(ctx.session_id.0.clone());
+        if let Some(kind) = self.failure {
+            return Decision::Fail(Failure {
+                kind,
+                extension: self.name().into(),
+                message: "fixture failure".into(),
+            });
+        }
+        Decision::Draw {
+            extension: self.name().into(),
+            lines: vec![
+                vec![RawSpan {
+                    text: self.label.clone(),
+                    ..RawSpan::default()
+                }];
+                3
+            ],
+        }
+    }
+}
+
+/// Rebuilds a fresh terminal-thread renderer for command and startup tests.
+pub(crate) struct TestLoad {
+    pub(crate) calls: std::sync::atomic::AtomicUsize,
+    pub(crate) enabled: std::sync::atomic::AtomicBool,
+    pub(crate) label: &'static str,
+}
+impl TestLoad {
+    pub(crate) fn new(label: &'static str) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            enabled: std::sync::atomic::AtomicBool::new(true),
+            label,
+        })
+    }
+}
+impl super::Load for TestLoad {
+    fn load(&self) -> (std::rc::Rc<dyn Renderer>, Vec<(String, String)>) {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let label = if self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
+            self.label
+        } else {
+            ""
+        };
+        (
+            std::rc::Rc::new(SessionRenderer::new(label)),
+            vec![("extension_failed".into(), "load fixture notice".into())],
+        )
+    }
+}
 
 #[derive(Debug)]
 struct Fake;
@@ -17,14 +154,18 @@ impl Renderer for Fake {
 
     fn render(
         &self,
+        _ctx: &crate::ext::SessionCtx,
         _slot: &str,
         _input: &Input<'_>,
         _width: u16,
         _builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
-    ) -> Result<Vec<Vec<RawSpan>>, Failure> {
-        Err(Failure {
-            extension: String::new(),
-            message: String::new(),
+    ) -> crate::ext::Decision {
+        crate::ext::tests::decide(self.name(), || -> Result<Vec<Vec<RawSpan>>, Failure> {
+            Err(Failure {
+                kind: crate::ext::FailureKind::HookFailed,
+                extension: String::new(),
+                message: String::new(),
+            })
         })
     }
 }

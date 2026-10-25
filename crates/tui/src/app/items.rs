@@ -344,7 +344,8 @@ impl App {
         if fiber {
             let mut swapped = super::screen::Screen::new();
             swapped.set_size(self.screen.width(), self.screen.height());
-            swapped.pages_mut().zone = self.screen.pages().zone.clone();
+            *swapped.pages_mut() = self.screen.pages().fresh();
+            swapped.pages().ext.cache.promote();
             let stashed = std::mem::replace(&mut self.screen, swapped);
             // A fresh screen replays the transcript from the start, so
             // the call count restarts with it: replayed completions
@@ -669,8 +670,9 @@ impl App {
         // The hub's answers settle below in `on_session`'s non-attached
         // branch; the transcript folds here without touching the
         // attached busy flag.
+        self.record_extensions(envelope);
         let applied = self.screen.pages_mut().apply(envelope);
-        if applied.changed {
+        if applied.changed || envelope.kind == "extensions_loaded" {
             self.screen.changed();
         }
         true

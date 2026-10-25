@@ -69,6 +69,113 @@ fn tick(app: &mut App, clock: &std::sync::Arc<fakes::clock::FakeClock>) {
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
 }
 
+fn renderer_turn(app: &mut App, session: &str) {
+    for (seq, (kind, payload)) in [
+        ("turn_started", json!({"input":[]})),
+        ("step_started", json!({})),
+        ("assistant_message_started", json!({})),
+        (
+            "tool_call_requested",
+            json!({"name":"shell","arguments":{"command":"echo row"}}),
+        ),
+        (
+            "assistant_message_completed",
+            json!({"outcome":"completed"}),
+        ),
+        ("turn_completed", json!({"outcome":"completed"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Line::Session(mut line) = other_line(session, kind, payload) else {
+            unreachable!()
+        };
+        line.seq = Some(contract::Seq(seq as u64));
+        app.on_line(Line::Session(line));
+    }
+}
+fn rendered_text(app: &App) -> String {
+    app.screen
+        .pages()
+        .page_text_open(0)
+        .unwrap()
+        .0
+        .iter()
+        .map(|(line, _)| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+#[test]
+fn delegate_gate_notice_redraw_and_reload_reach_both_screens() {
+    let mut app = home();
+    opened(&mut app);
+    let mut fake = crate::ext::tests::SessionRenderer::new("DELEGATE-RENDER");
+    fake.gated = true;
+    let fake = std::rc::Rc::new(fake);
+    app.use_renderer(fake.clone());
+    renderer_turn(&mut app, SESSION);
+    start_delegate(&mut app, "j_renderer", DELEGATE_A);
+    open(&mut app, "j_renderer");
+    renderer_turn(&mut app, DELEGATE_A);
+    assert!(!rendered_text(&app).contains("DELEGATE-RENDER"));
+    app.on_line(other_line(
+        DELEGATE_A,
+        "extensions_loaded",
+        json!({"extensions":[]}),
+    ));
+    rendered_text(&app);
+    assert!(app.drawn(&[]), "selection notice requests immediate redraw");
+    assert!(!app.drawn(&[]));
+    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,..} if code=="extension_incompatible")));
+    app.on_line(other_line(
+        DELEGATE_A,
+        "extensions_loaded",
+        json!({"extensions":[{"name":"session-test","version":"v1.0.0"}]}),
+    ));
+    assert!(rendered_text(&app).contains("DELEGATE-RENDER"));
+    assert!(
+        fake.calls
+            .borrow()
+            .iter()
+            .any(|session| session == DELEGATE_A)
+    );
+    let parent_recounts = app.attached_screen().pages().recounts;
+    let delegate_recounts = app.screen.pages().recounts;
+    let loader = crate::ext::tests::TestLoad::new("RELOADED-DELEGATE");
+    app.home.as_mut().unwrap().launch.extensions = Some(loader.clone());
+    crate::app::commands::run_reload(&mut app, "");
+    assert!(app.attached_screen().pages().recounts > parent_recounts);
+    assert!(app.screen.pages().recounts > delegate_recounts);
+    assert!(rendered_text(&app).contains("RELOADED-DELEGATE"));
+    app.close_item();
+    assert!(rendered_text(&app).contains("RELOADED-DELEGATE"));
+}
+#[test]
+fn parent_page_pruning_cannot_erase_delegate_failure_before_app_drain() {
+    let mut app = home();
+    opened(&mut app);
+    renderer_turn(&mut app, SESSION);
+    let mut fake = crate::ext::tests::SessionRenderer::new("fail");
+    fake.failure = Some(crate::ext::FailureKind::HookFailed);
+    app.install_renderer(std::rc::Rc::new(fake));
+    start_delegate(&mut app, "j_failure", DELEGATE_A);
+    open(&mut app, "j_failure");
+    renderer_turn(&mut app, DELEGATE_A);
+    rendered_text(&app);
+    app.attached_screen()
+        .pages()
+        .ext
+        .cache
+        .drop_page(crate::ext::cache::PageKey {
+            session: SessionId(SESSION.into()),
+            index: 0,
+        });
+    assert!(app.drawn(&[]));
+    let notices = app.notices();
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
+    assert!(!app.drawn(&[]));
+}
+
 #[test]
 fn opening_swaps_in_a_fresh_screen() {
     let mut app = home();

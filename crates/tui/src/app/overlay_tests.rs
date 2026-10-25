@@ -285,6 +285,132 @@ fn thumb_rows(app: &App, buf: &Buffer) -> Vec<u16> {
 }
 
 #[test]
+fn session_gate_event_during_fold_survives_fresh_snapshot_and_landing() {
+    let lines = call_turn(&mut 0, "gate-message", "gate-call");
+    let mut app = folding(&lines, &lines, 5);
+    let mut fake = crate::ext::tests::SessionRenderer::new("FOLD-GATED");
+    fake.gated = true;
+    app.use_renderer(std::rc::Rc::new(fake));
+    let mut fresh = app.pages().fresh();
+    for line in &lines {
+        if let Line::Session(line) = line {
+            fresh.apply(line);
+        }
+    }
+    if let Overlay::Folding { fold, .. } = &mut app.overlay {
+        **fold = fresh;
+    }
+    let Line::Session(mut event) = line(
+        "extensions_loaded",
+        6,
+        None,
+        json!({"extensions":[{"name":"session-test","version":"v1.0.0"}]}),
+    ) else {
+        unreachable!()
+    };
+    event.seq = None;
+    app.on_line(Line::Session(event));
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("fold")
+    };
+    assert!(
+        fold.page_text_open(0)
+            .unwrap()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().contains("FOLD-GATED"))
+    );
+    // A later fresh snapshot must carry the same latest full set.
+    let mut later = fold.fresh();
+    for line in &lines {
+        if let Line::Session(line) = line {
+            later.apply(line);
+        }
+    }
+    assert!(
+        later
+            .page_text_open(0)
+            .unwrap()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().contains("FOLD-GATED"))
+    );
+    let Overlay::Folding { fold, .. } = std::mem::take(&mut app.overlay) else {
+        panic!("fold")
+    };
+    app.land(*fold, false);
+    assert!(
+        app.pages()
+            .page_text_open(0)
+            .unwrap()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().contains("FOLD-GATED"))
+    );
+}
+
+#[test]
+fn reload_during_fold_recounts_before_land_and_landed_cache_can_reload_again() {
+    let lines = call_turn(&mut 0, "message", "call");
+    let mut app = folding(&lines, &lines, 5);
+    let mut fake = crate::ext::tests::SessionRenderer::new("failed-fold");
+    fake.failure = Some(crate::ext::FailureKind::HookFailed);
+    app.use_renderer(std::rc::Rc::new(fake));
+    // Real folding starts after startup loading and retains the installed handle.
+    let mut fresh = app.pages().fresh();
+    for line in &lines {
+        if let Line::Session(line) = line {
+            fresh.apply(line);
+        }
+    }
+    if let Overlay::Folding { fold, .. } = &mut app.overlay {
+        **fold = fresh;
+    }
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("fold")
+    };
+    fold.page_text_open(0);
+    let before = fold.recounts;
+    let loader = crate::ext::tests::TestLoad::new("RELOAD-IN-FOLD");
+    app.set_home(crate::home::Launch {
+        extensions: Some(loader.clone()),
+        ..Default::default()
+    });
+    crate::app::commands::run_reload(&mut app, "");
+    let Overlay::Folding { fold, .. } = &app.overlay else {
+        panic!("fold")
+    };
+    assert!(fold.recounts > before);
+    assert!(
+        fold.page_text_open(0)
+            .unwrap()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().contains("RELOAD-IN-FOLD"))
+    );
+    let Overlay::Folding { fold, .. } = std::mem::take(&mut app.overlay) else {
+        panic!("fold")
+    };
+    app.land(*fold, false);
+    app.install_renderer(std::rc::Rc::new({
+        let mut fake = crate::ext::tests::SessionRenderer::new("landed-fail");
+        fake.failure = Some(crate::ext::FailureKind::HookFailed);
+        fake
+    }));
+    app.pages().page_text_open(0);
+    crate::app::commands::run_reload(&mut app, "");
+    assert!(
+        app.pages()
+            .page_text_open(0)
+            .unwrap()
+            .0
+            .iter()
+            .any(|(line, _)| line.to_string().contains("RELOAD-IN-FOLD")),
+        "landing promotes cache so reload clears shared failure memo"
+    );
+}
+
+#[test]
 fn landing_swaps_exactly_at_last_seq() {
     let mut seq = 0u64;
     let mut lines = Vec::new();

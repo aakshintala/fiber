@@ -7,8 +7,8 @@
 //! "The call rules"). `tui` tests use a fake renderer.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -33,7 +33,9 @@ pub(crate) struct Bound {
     /// with their page.
     pub(crate) cache: Arc<Cache>,
     /// The page these rows draw on.
-    pub(crate) page: usize,
+    pub(crate) page: cache::PageKey,
+    /// The drawn page's session-half snapshot.
+    pub(crate) ctx: SessionCtx,
     /// The screen reader drops every style from the returned spans.
     pub(crate) flat: bool,
 }
@@ -54,14 +56,87 @@ pub(crate) struct Ext {
 
 impl Ext {
     /// The seam one page's rows draw through.
-    pub(crate) fn bind(&self, page: usize) -> Bound {
+    pub(crate) fn bind(&self, page: cache::PageKey, ctx: SessionCtx) -> Bound {
         Bound {
             handle: self.handle,
             cache: Arc::clone(&self.cache),
             page,
+            ctx,
             flat: self.flat,
         }
     }
+}
+
+/// The drawn session and its latest complete session-half map.
+#[derive(Debug, Clone)]
+pub struct SessionCtx {
+    /// The session receiving the callback.
+    pub session_id: contract::SessionId,
+    /// None until `extensions_loaded` has been observed.
+    pub halves: Option<BTreeMap<String, String>>,
+}
+
+/// A session half's observed identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SessionVersion {
+    /// No event observed yet.
+    Unseen,
+    /// The received event omitted this extension.
+    NotLoaded,
+    /// The received version tag.
+    Version(String),
+}
+
+/// The compatible contenders' selection for a slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotSelection {
+    /// No compatible contender; try the catch-all.
+    Absent,
+    /// One selected extension.
+    Draw {
+        /// The winner's identity.
+        extension: String,
+    },
+    /// A conflict; use the built-in without trying the catch-all.
+    Suppressed,
+}
+
+/// A callback's failure family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// An item-local error or malformed spans.
+    HookFailed,
+    /// A timeout switched the VM off until reload.
+    ExtensionFailed,
+}
+
+/// A render result carrying the actual extension's identity.
+#[derive(Debug)]
+pub enum Decision {
+    /// Validatable lines from the selected extension.
+    Draw {
+        /// The extension that drew.
+        extension: String,
+        /// Its lines.
+        lines: Vec<Vec<RawSpan>>,
+    },
+    /// A defensive fallback when the session does not match.
+    NotForSession {
+        /// The extension.
+        extension: String,
+        /// Its client version.
+        tui_version: String,
+        /// The observed session-half identity.
+        half: SessionVersion,
+    },
+    /// A typed callback failure.
+    Fail(Failure),
+}
+
+/// Builds terminal-thread renderers from current local files.
+pub trait Load: Send + Sync {
+    /// The replacement renderer (possibly empty) and load notices.
+    fn load(&self) -> (Rc<dyn Renderer>, Vec<(String, String)>);
 }
 
 /// One extension's drawing of a slot: whether it fills a slot name, and
@@ -73,16 +148,35 @@ pub trait Renderer: std::fmt::Debug {
     /// Whether the extension fills exactly this slot name, such as
     /// `ledger_row:shell`.
     fn fills(&self, slot: &str) -> bool;
+    /// Selects compatible contenders before cache lookup.
+    fn fills_for(&self, _ctx: &SessionCtx, slot: &str) -> SlotSelection {
+        if self.fills(slot) {
+            SlotSelection::Draw {
+                extension: self.name().to_owned(),
+            }
+        } else {
+            SlotSelection::Absent
+        }
+    }
+    /// Drains producer-deduplicated selection and callback notices.
+    fn take_pending(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+    /// The selected half identity, absent for client-only renderers.
+    fn half(&self, _ctx: &SessionCtx, _extension: &str) -> Option<String> {
+        None
+    }
     /// Lines for `slot`; `builtin` returns the built-in renderer's lines
     /// for any input, so an extension that only adds a badge decorates
     /// the built-in rather than drawing the row again.
     fn render(
         &self,
+        ctx: &SessionCtx,
         slot: &str,
         input: &Input<'_>,
         width: u16,
         builtin: &dyn Fn(&Input<'_>, u16) -> Vec<Vec<RawSpan>>,
-    ) -> Result<Vec<Vec<RawSpan>>, Failure>;
+    ) -> Decision;
 }
 
 /// What a slot receives: everything its built-in renderer reads, folded
@@ -183,6 +277,8 @@ pub struct RawSpan {
 /// shape its spans returned. The item falls back to its built-in row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
+    /// The notice family, preserved through caching.
+    pub kind: FailureKind,
     /// The extension that failed.
     pub extension: String,
     /// The Lua error, or what the spans got wrong.
@@ -314,4 +410,4 @@ impl Handle {
 
 #[cfg(test)]
 #[path = "ext_tests.rs"]
-mod tests;
+pub(crate) mod tests;
