@@ -6,6 +6,7 @@
 
 mod content;
 mod declared;
+mod hooks;
 mod offer;
 mod project;
 mod servers;
@@ -18,6 +19,9 @@ mod content_tests;
 #[cfg(test)]
 #[path = "repository/declared_tests.rs"]
 mod declared_tests;
+#[cfg(test)]
+#[path = "repository/hooks_tests.rs"]
+mod hooks_tests;
 #[cfg(test)]
 #[path = "repository/offer_tests.rs"]
 mod offer_tests;
@@ -38,6 +42,7 @@ use contract::events::OfferedKind;
 
 pub use content::{Index, hash};
 pub use declared::{RepoItem, declared_items, mcp_server_item};
+pub(crate) use hooks::{ApprovedHook, HookFailure, HookState};
 pub use offer::{Pending, pending};
 pub use project::{ApprovedExtension, RepositorySet, approved_extension, approved_extensions};
 pub(crate) use project::{Candidate, candidates};

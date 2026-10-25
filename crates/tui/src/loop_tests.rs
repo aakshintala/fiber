@@ -7,6 +7,7 @@ use super::{
     hub::{Connection, LOST},
 };
 use crate::app::App;
+use crate::keys::{Event, Reply};
 use crate::link::Line;
 use contract::clock::Clock;
 use contract::{Envelope, Seq};
@@ -28,6 +29,9 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// PageUp, as the terminal sends it.
 const PAGE_UP: &[u8] = b"\x1b[5~";
+
+/// PageDown, as the terminal sends it.
+const PAGE_DOWN: &[u8] = b"\x1b[6~";
 
 /// One line of the session.
 fn line(kind: &str, seq: Option<u64>, action: Option<&str>, payload: Value) -> Envelope {
@@ -112,6 +116,293 @@ fn answer(kind: &str, payload: Value) -> Input {
 /// What the fake hub does with each `history` command: the command and
 /// the inputs to send back.
 type Script = Box<dyn FnMut(&Value) -> Vec<Input> + Send>;
+
+/// A loop at 60x12 with inline images on: home carries the flag and
+/// graphics were detected, so the images size to the placeholder grid.
+fn inline_opened(
+    lines: Vec<Envelope>,
+) -> (
+    Loop<TestBackend>,
+    UnixStream,
+    Sender<Input>,
+    mpsc::Receiver<Input>,
+) {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 24);
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    app.on_line(Line::Hub(hello));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    // The window tests size this image at a 10 by 20 cell: the same
+    // grid here, so the scroll keeps a known shape.
+    app.set_cell((10, 20));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    for envelope in lines {
+        app.on_line(Line::Session(envelope));
+    }
+    // The ledger draws the image grid only while its group is open.
+    app.open(crate::app::Target::Group(crate::turn::target_id("a_t")));
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    // Tall enough that one page keeps the image grid in view.
+    let screen =
+        Screen::new(TestBackend::new(60, 24), 60, 24).unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = Loop::for_test(app, screen);
+    lp.hub.store(ours);
+    let (tx, rx) = mpsc::channel();
+    (lp, theirs, tx, rx)
+}
+
+/// A session with an image call and the letters under it: the filler
+/// turn above puts the grid a page down, and the text below the call
+/// scrolls with its placeholders.
+fn image_session() -> Vec<Envelope> {
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        lines.push(line(kind, Some(seq), action, payload));
+        seq += 1;
+    };
+    let prompt = |text: &str| {
+        json!({"input": [{"type": "message", "source": "driver",
+        "content": [{"type": "text", "text": text}]}]})
+    };
+    // A long reply above the image, so one page down still shows it.
+    push("turn_started", None, prompt("zeroth"));
+    push("step_started", None, json!({}));
+    push("assistant_message_started", Some("a_m0"), json!({}));
+    let filler = "zeroth filler ".repeat(59);
+    push("text_completed", Some("a_m0"), json!({"text": filler}));
+    push(
+        "assistant_message_completed",
+        Some("a_m0"),
+        json!({"outcome": "completed"}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    push("turn_started", None, prompt("first"));
+    push("step_started", None, json!({}));
+    push(
+        "tool_call_requested",
+        Some("a_t"),
+        json!({"name": "read", "arguments": {"path": "a.png"}}),
+    );
+    push(
+        "tool_call_completed",
+        Some("a_t"),
+        json!({"status": "completed", "content": [
+            {"type": "image", "path": "artifacts/a.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}),
+    );
+    push("assistant_message_started", Some("a_m"), json!({}));
+    push("text_completed", Some("a_m"), json!({"text": "second"}));
+    push(
+        "assistant_message_completed",
+        Some("a_m"),
+        json!({"outcome": "completed"}),
+    );
+    // The turn completes: while a turn runs, Ctrl+C opens the quit
+    // question instead of quitting, and the loop below would never end.
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+#[test]
+fn letters_under_a_scrolled_image_follow_its_placeholders() {
+    // No hub answers: the placeholder grid sizes from the logged width
+    // and height, so the loop never fetches to draw it.
+    let (lp, _theirs, tx, rx) = inline_opened(image_session());
+    // Down one page: enough to move the grid without losing it.
+    let downs: Vec<Input> = (0..1).map(|_| Input::Bytes(PAGE_DOWN.to_vec())).collect();
+    let lp = run(lp, rx, &tx, downs);
+    assert!(lp.app.scroll().0 > 0, "the conversation scrolled");
+    let screen = shown(&lp);
+    let rows: Vec<&str> = screen.lines().collect();
+    let caption = rows
+        .iter()
+        .position(|row| row.contains("▣ a.png · 1280×800"))
+        .unwrap_or_else(|| panic!("the caption scrolled with the grid: {screen}"));
+    // The letters under the image moved with it: the reply below the
+    // caption reads second, and every row between the call and the
+    // caption is a placeholder, so the scrolled grid stays whole.
+    let call = rows
+        .iter()
+        .position(|row| row.contains("✓ read"))
+        .unwrap_or_else(|| panic!("the image call scrolled with the grid: {screen}"));
+    assert!(
+        call + 1 < caption,
+        "the grid has placeholder rows: {screen}"
+    );
+    assert!(
+        rows.get(caption + 2)
+            .is_some_and(|row| row.contains("second")),
+        "{screen}"
+    );
+    for row in rows.iter().take(caption).skip(call + 1) {
+        assert!(
+            row.contains('\u{10EEEE}'),
+            "the scrolled grid stays whole: {screen}"
+        );
+    }
+    assert_eq!(lp.app.notice(), None);
+}
+
+/// The hub's accepted answer to the display `read_file` carrying
+/// `command_id`: PNG bytes, as production relays them.
+fn display_answer(command_id: &str) -> Input {
+    Input::Hub(Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: json!({"command_id": command_id,
+            "result": {"data": "QUJD", "mime_type": "image/png"}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    }))
+}
+
+/// Reads hub commands until the display `read_file`, returning its id:
+/// at most ten lines, each waited on for [`DEADLINE`].
+fn read_display_id(theirs: &UnixStream) -> String {
+    theirs
+        .set_read_timeout(Some(DEADLINE))
+        .unwrap_or_else(|err| panic!("timeout: {err}"));
+    // The frame's commands first, whole: one read holds everything the
+    // joined frame sent, so no line waits on the hub mid-read.
+    let mut raw = vec![0u8; 4096];
+    let mut ends = theirs;
+    let read =
+        std::io::Read::read(&mut ends, &mut raw).unwrap_or_else(|err| panic!("hub bytes: {err}"));
+    let mut reader = std::io::BufReader::new(&raw[..read]);
+    let mut text = String::new();
+    for _ in 0..10 {
+        text.clear();
+        if reader
+            .read_line(&mut text)
+            .unwrap_or_else(|err| panic!("hub command: {err}"))
+            == 0
+        {
+            break;
+        }
+        let command: Value = serde_json::from_str(&text).unwrap_or_default();
+        if command.get("command").and_then(Value::as_str) == Some("read_file") {
+            return command
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("read_file has no id: {command}"))
+                .to_owned();
+        }
+    }
+    panic!("no display fetch reached the hub");
+}
+
+/// Steps the loop once, on a thread: a frame that waits on the hub
+/// would hang the test, so the join carries [`DEADLINE`].
+fn stepped(
+    mut lp: Loop<TestBackend>,
+    rx: mpsc::Receiver<Input>,
+    input: Input,
+) -> (Loop<TestBackend>, mpsc::Receiver<Input>) {
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("loop-step".to_owned())
+        .spawn(move || {
+            let code = lp.step(input, &rx);
+            done.send((code, lp, rx)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    let (code, lp, rx) = match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {DEADLINE:?} for the frame: {err}"),
+    };
+    assert_eq!(code, None);
+    (lp, rx)
+}
+
+/// The second session the ordering test switches to.
+const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+
+#[test]
+fn a_graphics_error_event_fails_the_transmitted_image() {
+    let (lp, theirs, tx, rx) = inline_opened(image_session());
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let command = read_display_id(&theirs);
+    let (mut lp, _rx) = stepped(lp, rx, display_answer(&command));
+    drop(tx);
+
+    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]);
+
+    assert_eq!(
+        lp.app.notice(),
+        Some("Could not show a.png: the terminal reported an error.")
+    );
+}
+
+/// A session change deletes the shown image, and the next session's
+/// image reaches the terminal without reusing the old id.
+#[test]
+fn a_session_change_deletes_the_shown_image_and_the_next_session_shows() {
+    let (mut lp, theirs, tx, rx) = inline_opened(image_session());
+    let dir = fakes::TempDir::new("tui-image-delete-order");
+    let path = dir.path().join("tty");
+    lp.tty = std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}"));
+    // Nothing reaches the hub before the first frame draws: the drain
+    // after the draw sends the frame's fetches.
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut byte = [0u8; 1];
+    match std::io::Read::read(&mut &theirs, &mut byte) {
+        Err(err) if err.kind() == ErrorKind::WouldBlock => {}
+        read => panic!("the hub heard before the first frame: {read:?}"),
+    }
+    theirs
+        .set_nonblocking(false)
+        .unwrap_or_else(|err| panic!("blocking: {err}"));
+    // The first frame draws the image and asks for its bytes.
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let id = read_display_id(&theirs);
+    // The PNG answer transmits and places exactly once.
+    let (mut lp, rx) = stepped(lp, rx, display_answer(&id));
+    drop(tx);
+    let wire = || std::fs::read(&path).unwrap_or_else(|err| panic!("tty: {err}"));
+    let text = String::from_utf8_lossy(&wire()).into_owned();
+    text.find("Ga=t,").expect("the transmit went out");
+    text.find("Ga=p,").expect("the place went out");
+    // The session changes: the shown image is forgotten, and the next
+    // frame draws the new session and deletes the old id. The open
+    // group carries over, so the new session's grid draws too.
+    lp.app.attach(contract::SessionId(OTHER.to_owned()));
+    for envelope in image_session() {
+        lp.app.on_line(Line::Session(envelope));
+    }
+    // The loop drains the queued delete in its pre-draw phase.
+    lp.drain_image_deletes();
+    assert!(
+        lp.app.take_image_deletes().is_empty(),
+        "the pre-draw drain empties the queue"
+    );
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let other = read_display_id(&theirs);
+    let (lp, _) = stepped(lp, rx, display_answer(&other));
+    drop(lp);
+    let text = String::from_utf8_lossy(&wire()).into_owned();
+    assert!(text.contains("Ga=d,"), "the old image delete went out");
+    assert!(text.contains("Ga=t,"), "the next session image transmits");
+}
 
 /// A loop at 60x12, attached to the session, with its lines folded and
 /// the hub connected: the loop, the hub's end, and the inputs' sender.

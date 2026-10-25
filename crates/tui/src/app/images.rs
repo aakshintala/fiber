@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, mint};
+use super::{App, Effect, Target, mint};
 use crate::image;
 
 /// One `read_file` out for a viewer open: what its answer needs to
@@ -20,6 +20,36 @@ struct Fetch {
     path: String,
 }
 
+/// Whether an inline image's bytes are asked for, shown, or failed:
+/// a shown or failed image is not asked for again while its session's
+/// layout lives (`docs/tui.md`, "Images").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DisplayState {
+    Asked,
+    Shown,
+    Failed,
+}
+
+/// A display fetch for an inline image, by its `(session, path)`: the
+/// `read_file` command out, the placeholder id its answer draws under,
+/// and the session generation that asked, so a late answer draws
+/// nowhere stale.
+#[derive(Clone)]
+struct Display {
+    /// The `read_file` command's id: the answer's dispatch key.
+    command: String,
+    /// The placeholder id the answer transmits under.
+    id: u32,
+    /// The session generation that asked.
+    generation: u64,
+    /// Whether its bytes are asked for, shown, or failed.
+    state: DisplayState,
+    /// The logged pixel size: the answer grids it under the current
+    /// width and cell.
+    width: u32,
+    height: u32,
+}
+
 /// What the app holds per session for its images: the viewer fetches
 /// out, the views queued for the loop, and the session generation,
 /// so a late viewer completion after a session change is dropped.
@@ -30,6 +60,18 @@ pub(crate) struct Images {
     /// too large or refused. They stay their line, with the notice said
     /// once, and are not asked for again in that segment.
     refused: BTreeSet<(String, String)>,
+    /// The inline images' display fetches, by `(session, path)`.
+    display: BTreeMap<(String, String), Display>,
+    /// The generation that last queued a transmit for each placeholder
+    /// id: a kitty error answers a transmit, so an error for an id
+    /// nothing transmitted in this generation is an older session's and
+    /// drops (`docs/tui.md`, "Images").
+    transmitted: BTreeMap<u32, u64>,
+    /// The process-lifetime image ids, shared with every page layout.
+    pub(super) id_allocator: image::IdAllocator,
+    /// The session-change deletes queued for the loop's pre-draw drain:
+    /// shown images leave the terminal before the next session draws.
+    deletes: Vec<u8>,
     out: image::Out,
     generation: u64,
 }
@@ -85,8 +127,20 @@ impl App {
     }
 
     /// Answers our `read_file` for a viewer open: queues the view for
-    /// the loop's worker. True when `id` was ours.
+    /// the loop's worker. A display fetch answers here too: its bytes
+    /// transmit under the placeholders, and anything but PNG bytes
+    /// fails its image with a notice (`docs/tui.md`, "Images"). True
+    /// when `id` was ours.
     pub(in crate::app) fn image_answered(&mut self, id: &str, result: Option<&Value>) -> bool {
+        let display = self
+            .images
+            .display
+            .iter()
+            .find(|(_, fetch)| fetch.command == id)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = display {
+            return self.display_answered(key, result);
+        }
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };
@@ -113,8 +167,135 @@ impl App {
     }
 
     /// A `read_file` for a viewer open was rejected: one notice says
-    /// why, and nothing retries. True when `id` was ours.
+    /// why, and nothing retries. A display fetch answers here too: one
+    /// notice says why its image failed, which keeps its one line and is
+    /// not asked for again (`docs/tui.md`, "Images"). True when `id`
+    /// was ours.
+    /// Answers our `read_file` for a display fetch: a PNG answer queues
+    /// its transmit and its place over the placeholders, and marks the
+    /// image shown. Missing or empty bytes or a non-PNG answer fail the
+    /// image with one notice; a stale generation or a second answer
+    /// drops with none (`docs/tui.md`, "Images").
+    fn display_answered(&mut self, key: (String, String), result: Option<&Value>) -> bool {
+        let Some(fetch) = self.images.display.remove(&key) else {
+            return false;
+        };
+        // A late or duplicate answer draws nowhere: the record stands, so
+        // a redraw still finds it shown or failed and asks nothing again.
+        // Only the asked generation shows, once.
+        if fetch.state != DisplayState::Asked || fetch.generation != self.images.generation {
+            self.images.display.insert(key, fetch);
+            return true;
+        }
+        let png = result
+            .and_then(|result| result.get("data"))
+            .and_then(Value::as_str)
+            .filter(|data| !data.is_empty());
+        let mime = result
+            .and_then(|result| result.get("mime_type"))
+            .and_then(Value::as_str);
+        let (Some(data), Some("image/png")) = (png, mime) else {
+            let reason = match (png, mime) {
+                (None, _) => "the answer carried no file",
+                (_, _) => "the answer was not a PNG image",
+            };
+            self.fail_display(&key, reason, fetch);
+            return true;
+        };
+        // The ask no longer applies: a later draw asks again.
+        let crate::image::Sizing::Inline { cell } = self.screen.pages().image_sizing() else {
+            return true;
+        };
+        let part = crate::image::Part {
+            session: contract::SessionId(key.0.clone()),
+            path: key.1.clone(),
+            mime_type: "image/png".to_owned(),
+            width: fetch.width,
+            height: fetch.height,
+        };
+        let columns = self.screen.pages().column_width();
+        let (cols, rows) = crate::image::grid(&part, columns, cell);
+        self.images
+            .out
+            .kitty
+            .extend(crate::graphics::transmit(fetch.id, data));
+        self.images
+            .out
+            .kitty
+            .extend(crate::graphics::place(fetch.id, cols, rows));
+        self.images.transmitted.insert(fetch.id, fetch.generation);
+        self.images.display.insert(
+            key,
+            Display {
+                state: DisplayState::Shown,
+                ..fetch
+            },
+        );
+        true
+    }
+
+    /// Fails the display fetch `fetch` for `key` with one notice: the
+    /// image keeps its one clickable line, is not asked for again while
+    /// its session's layout lives, and the owning pages recount to the
+    /// one-line form (`docs/tui.md`, "Images"). The owner is the
+    /// attached screen while no transcript is swapped in, else the
+    /// swapped-in transcript for its own session and the stashed screen
+    /// for the attached one.
+    fn fail_display(&mut self, key: &(String, String), reason: &str, fetch: Display) {
+        let session = contract::SessionId(key.0.clone());
+        if self.is_item_session(&session) {
+            self.screen.pages_mut().fail_image(&session, &key.1);
+        } else {
+            self.attached_screen_mut()
+                .pages_mut()
+                .fail_image(&session, &key.1);
+        }
+        self.images.display.insert(
+            key.clone(),
+            Display {
+                state: DisplayState::Failed,
+                ..fetch
+            },
+        );
+        let name = file_name(&key.1);
+        let reason = reason.strip_suffix('.').unwrap_or(reason);
+        self.notices
+            .push("io_failed", format!("Could not show {name}: {reason}."));
+    }
+
+    /// A kitty error reply for `id`: the display image that transmitted
+    /// under `id` in this generation fails with one notice, and is not
+    /// asked for again while its session's layout lives (`docs/tui.md`,
+    /// "Images"). An id nothing transmitted in this generation names an
+    /// older session's image, so the error drops.
+    pub(crate) fn fail_display_image(&mut self, id: u32) {
+        if self.images.transmitted.get(&id) != Some(&self.images.generation) {
+            return;
+        }
+        let failed: Vec<((String, String), Display)> = self
+            .images
+            .display
+            .iter()
+            .filter(|(_, fetch)| fetch.id == id && fetch.state != DisplayState::Failed)
+            .map(|(key, fetch)| (key.clone(), (*fetch).clone()))
+            .collect();
+        for (key, fetch) in failed {
+            self.fail_display(&key, "the terminal reported an error", fetch);
+        }
+    }
+
     pub(in crate::app) fn image_rejected(&mut self, id: &str, message: &str) -> bool {
+        let failed = self
+            .images
+            .display
+            .iter()
+            .find(|(_, fetch)| fetch.command == id)
+            .map(|(key, fetch)| (key.clone(), (*fetch).clone()));
+        if let Some((key, fetch)) = failed {
+            self.images.display.remove(&key);
+            self.fail_display(&key, message, fetch);
+            return true;
+        }
         let Some(fetch) = self.images.fetches.remove(id) else {
             return false;
         };
@@ -153,19 +334,106 @@ impl App {
         }
     }
 
-    /// The queued viewer opens, for the loop's workers.
+    /// The queued viewer opens, for the loop's workers. The display
+    /// commands and kitty bytes stay queued for the post-draw drain.
+    pub(crate) fn take_image_views(&mut self) -> Vec<image::View> {
+        std::mem::take(&mut self.images.out.view)
+    }
+
+    /// The queued session-change deletes, for the loop's pre-draw drain:
+    /// shown images leave the terminal before the next session draws.
+    pub(crate) fn take_image_deletes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.images.deletes)
+    }
+
+    /// The queued display commands and kitty transmit and place bytes,
+    /// for the post-draw drain. Deletes never ride along: the pre-draw
+    /// drain already wrote them.
     pub(crate) fn take_image_out(&mut self) -> image::Out {
         std::mem::take(&mut self.images.out)
     }
 
     /// Forgets the session's images on every session change: fetches
     /// and queued views go, and the generation moves, so a late
-    /// answer or viewer completion is dropped.
+    /// answer or viewer completion is dropped. Shown images leave the
+    /// terminal, and the process-lifetime id allocator gives the next
+    /// generation different ids so a late error cannot affect it
+    /// (`docs/tui.md`, "Images").
     pub(in crate::app) fn forget_images(&mut self) {
+        let shown: Vec<u32> = self
+            .images
+            .display
+            .values()
+            .filter(|fetch| fetch.state == DisplayState::Shown)
+            .map(|fetch| fetch.id)
+            .collect();
         self.images.fetches.clear();
         self.images.refused.clear();
+        self.images.display.clear();
         self.images.out = image::Out::default();
+        self.images.deletes.clear();
+        for id in shown {
+            self.images.deletes.extend(crate::graphics::delete(id));
+        }
         self.images.generation = self.images.generation.saturating_add(1);
+        self.images.id_allocator.advance_generation();
+        let ids = self.images.id_allocator.clone();
+        self.screen.pages_mut().set_image_ids(ids.clone());
+        self.attached_screen_mut().pages_mut().set_image_ids(ids);
+    }
+
+    /// Queues the display `read_file` commands for the inline images
+    /// the frame drew, once each: the second draw of a redrawn frame
+    /// finds them asked and queues nothing more (`docs/tui.md`,
+    /// "Images"). The one-line form needs no bytes and asks nothing, as
+    /// does a failed image while its session's layout lives.
+    pub(crate) fn images_drawn(&mut self, targets: &[crate::mouse::Target]) {
+        let crate::image::Sizing::Inline { .. } = self.screen.pages().image_sizing() else {
+            return;
+        };
+        // With no session, or the link down, the loop sends nothing:
+        // queueing now would mark the image asked while its command is
+        // dropped, so a later draw queues once the link is up.
+        if self.session().is_none() || !self.outbox.is_up() {
+            return;
+        }
+        for target in targets {
+            let crate::mouse::TargetId::Line(Target::Image(id)) = target.id else {
+                continue;
+            };
+            let Some(part) = self.screen.pages().image(id) else {
+                continue;
+            };
+            if part.mime_type != "image/png" {
+                continue;
+            }
+            let key = (part.session.0.clone(), part.path.clone());
+            if self.images.display.contains_key(&key) {
+                continue;
+            }
+            if self.screen.pages().image_failed(&part.session, &part.path) {
+                continue;
+            }
+            let command_id = mint();
+            let line = json!({
+                "id": command_id,
+                "command": "read_file",
+                "args": {"session": part.session.0, "path": part.path},
+            })
+            .to_string();
+            self.images.display.insert(
+                key,
+                Display {
+                    command: command_id.clone(),
+                    id,
+                    generation: self.images.generation,
+                    state: DisplayState::Asked,
+                    width: part.width,
+                    height: part.height,
+                },
+            );
+            self.images.out.display.push(line);
+        }
     }
 
     /// Drops the viewer fetches with the connection: they are asked

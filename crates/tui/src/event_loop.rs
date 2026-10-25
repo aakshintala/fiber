@@ -176,6 +176,9 @@ pub(crate) fn run_with(
     if pick_at_start {
         app.start_model_pick();
     }
+    // One cell's pixels, for the placeholder grid, from the tty the
+    // first frame already sized (`docs/tui.md`, "Images").
+    app.set_cell(term::cell(term::pixels(&tty), (width, height)));
     app.set_size(width, height);
     let retry = Retry::new(&clock);
     let open = crate::opener::command(|name| std::env::var_os(name), clipboard::on_path)
@@ -518,6 +521,10 @@ impl<B: Backend> Loop<B> {
                     self.screen.appearance(appearance);
                     Effect::None
                 }
+                Event::Reply(Reply::Graphics { id, ok }) => {
+                    self.graphics(id, ok);
+                    Effect::None
+                }
                 Event::Reply(Reply::DeviceAttributes) | Event::Focus(_) => Effect::None,
             };
             match effect {
@@ -712,6 +719,8 @@ impl<B: Backend> Loop<B> {
             }
             Input::Resize => {
                 if let Ok((width, height)) = term::size(&self.tty) {
+                    self.app
+                        .set_cell(term::cell(term::pixels(&self.tty), (width, height)));
                     self.app.set_size(width, height);
                     if self.screen.resize(width, height).is_err() {
                         return Some(1);
@@ -755,8 +764,14 @@ impl<B: Backend> Loop<B> {
             );
         }
         // The viewer opens the loop queued: one worker per view, each
-        // answering once with `Input::Viewed`.
+        // answering once with `Input::Viewed`. The display commands and
+        // kitty bytes wait for the post-draw drain: the draw queues the
+        // frame's fetches.
         self.drain_images();
+        // A session change queued deletes for its shown images: they
+        // leave the terminal before the draw, so the next session never
+        // draws under a stale id (`docs/tui.md`, "Images").
+        self.drain_image_deletes();
         // The pre-draw sweep births in-frame pushes (page-in loads,
         // image failures) so the draw sees them; the post-draw sweep
         // births renderer-failure pushes before the arm, so a push
@@ -766,6 +781,9 @@ impl<B: Backend> Loop<B> {
         if self.screen.draw(&mut self.app, self.pointer.at).is_err() {
             return Some(1);
         }
+        // The display fetches the frame drew go out after it, with the
+        // kitty bytes their answers queued (`docs/tui.md`, "Images").
+        self.drain_display();
         self.app.sweep_notices(self.clock.now());
         // The open's `full` raise goes out after the first frame draws,
         // so no `full` line is written before it.
@@ -797,9 +815,10 @@ impl<B: Backend> Loop<B> {
     }
 
     /// Opens the queued viewer copies: one worker per view, each
-    /// answering once with `Input::Viewed`.
+    /// answering once with `Input::Viewed`. The display commands and
+    /// kitty bytes stay queued for the post-draw drain.
     fn drain_images(&mut self) {
-        for view in self.app.take_image_out().view {
+        for view in self.app.take_image_views() {
             crate::viewer::spawn(
                 &self.programs.viewer,
                 &self.programs.images_dir,
@@ -807,6 +826,30 @@ impl<B: Backend> Loop<B> {
                 &self.files_out,
                 &self.clock,
             );
+        }
+    }
+
+    /// Writes the queued session-change deletes before the screen draw:
+    /// a later session reuses image ids from 1, so its first frame never
+    /// draws under a stale image (`docs/tui.md`, "Images").
+    fn drain_image_deletes(&mut self) {
+        let deletes = self.app.take_image_deletes();
+        if !deletes.is_empty() {
+            let mut tty = &self.tty;
+            tty.write_all(&deletes).unwrap_or(());
+        }
+    }
+
+    /// Sends the display `read_file` commands the frame drew, and writes
+    /// the kitty transmit and place bytes their answers queued, after the
+    /// screen draw: each posting reaches the terminal through one write
+    /// (`docs/tui.md`, "Images").
+    fn drain_display(&mut self) {
+        let out = self.app.take_image_out();
+        self.hub.send(&out.display, &mut self.app);
+        if !out.kitty.is_empty() {
+            let mut tty = &self.tty;
+            tty.write_all(&out.kitty).unwrap_or(());
         }
     }
 
@@ -845,6 +888,28 @@ impl<B: Backend> Loop<B> {
         let bytes = self.app.take_alerts();
         let mut tty = &self.tty;
         tty.write_all(&bytes).unwrap_or(());
+    }
+
+    /// Kitty's graphics reply: the probe's success records graphics
+    /// support, so later frames may draw images inline (`docs/tui.md`,
+    /// "Images"). An error fails only its matching display image, with
+    /// one notice: the line stays, and nothing asks again while its
+    /// session's layout lives.
+    fn graphics(&mut self, id: u32, ok: bool) {
+        if id == term::PROBE_ID {
+            // The probe's success records graphics support; its error,
+            // like its absence, leaves the one-line form.
+            if ok {
+                self.app.set_graphics();
+            }
+            return;
+        }
+        // An error fails only its matching display image, with one
+        // notice: the line stays, and nothing asks again while its
+        // session's layout lives (`docs/tui.md`, "Images").
+        if !ok {
+            self.app.fail_display_image(id);
+        }
     }
 
     /// Kitty's flags reply: the first pushes the flags the bindings need

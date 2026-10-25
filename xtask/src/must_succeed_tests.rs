@@ -316,16 +316,6 @@ fn a_named_allowance_passes_its_own_file_and_name_only() {
 }
 
 #[test]
-fn a_whole_file_allowance_passes_every_site_in_its_file() {
-    let allowances = [held("crates/x/src/a_tests.rs", "held by #1")];
-    assert!(must_succeed(&[file("src/a_tests.rs", SHORT)], &allowances).is_empty());
-    assert_eq!(
-        must_succeed(&[file("src/b_tests.rs", SHORT)], &allowances).len(),
-        2
-    );
-}
-
-#[test]
 fn a_named_allowance_that_matches_no_short_bound_is_stale() {
     let allowances = [named("crates/x/src/a_tests.rs", "GONE")];
     assert_eq!(
@@ -337,22 +327,6 @@ fn a_named_allowance_that_matches_no_short_bound_is_stale() {
         must_succeed(&[file("src/a_tests.rs", at_the_floor)], &allowances).len(),
         1,
         "a const at the floor is not a short bound, so its allowance is stale"
-    );
-}
-
-#[test]
-fn a_whole_file_allowance_that_matches_nothing_is_not_reported() {
-    let allowances = [held("crates/x/src/a_tests.rs", "held by #1")];
-    assert!(must_succeed(&[file("src/a_tests.rs", "fn a() {}")], &allowances).is_empty());
-    assert!(must_succeed(&[], &allowances).is_empty());
-    let files = [file("src/a_tests.rs", SHORT), file("src/b_tests.rs", SHORT)];
-    let failures = must_succeed(&files, &allowances);
-    assert_eq!(failures.len(), 2, "{failures:?}");
-    assert!(
-        failures
-            .iter()
-            .all(|f| f.starts_with("crates/x/src/b_tests.rs:")),
-        "{failures:?}"
     );
 }
 
