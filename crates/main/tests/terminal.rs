@@ -410,7 +410,7 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
     );
     // A standing project ask for this exact command: with the terminal
     // connected the loop asks a person (`docs/permissions.md`, "Headless").
