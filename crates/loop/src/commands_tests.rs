@@ -9,15 +9,17 @@
 )]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::events::CommandInfo;
 use fakes::clock::FakeClock;
+use log::Log;
 
 use super::{commands, commands_from_found};
-use crate::SkillSet;
 use crate::prompt::PromptInputs;
+use crate::{CommandsRefresh, Loop, Model, Permissions, Session, SkillSet};
 
 /// A temporary tree: `top` is the repository's top level, `home` is
 /// Fiber home, `person` the person's home.
@@ -122,7 +124,7 @@ fn a_template_added_before_the_opening_rebuilds_the_initial_answer() {
         .push(("acme".into(), extension.clone()));
     let initial = commands(&inputs, &tree.top(), &[], &[]);
     let set = SkillSet::new(inputs.clone(), &tree.top());
-    set.sync_commands(&initial.rows);
+    set.sync_commands(&initial.runnable);
 
     skill(
         &extension.join("prompts"),
@@ -163,7 +165,7 @@ fn the_first_opening_refreshes_rows_when_only_a_description_changed() {
     let inputs = tree.inputs();
     let initial = commands(&inputs, &tree.top(), &[], &[]);
     let set = SkillSet::new(inputs.clone(), &tree.top());
-    set.sync_commands(&initial.rows);
+    set.sync_commands(&initial.runnable);
     std::fs::write(
         &skill_file,
         "---\nname: review\ndescription: After.\n---\nBody.\n",
@@ -187,6 +189,60 @@ fn the_first_opening_refreshes_rows_when_only_a_description_changed() {
         .find(|row| row.name == "review")
         .unwrap();
     assert_eq!(review.description, "After.");
+}
+
+#[test]
+fn refreshing_rows_forwards_the_same_snapshot_shadow_notices() {
+    let tree = Tree::new();
+    skill(
+        &tree.top().join(".fiber/skills"),
+        "clash",
+        "clash",
+        "Skill.",
+    );
+    let inputs = tree.inputs();
+    let checked = SkillSet::new(inputs.clone(), &tree.top()).check();
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let stored = Arc::clone(&commands);
+    let clock = Arc::clone(&inputs.clock);
+    let log = Arc::new(Log::create(&tree.root, SessionId("s_test".into()), clock).unwrap());
+    let (_inbox, receiver) = mpsc::channel();
+    let provider: Arc<dyn contract::provider::Provider> =
+        Arc::new(fakes::ScriptedProvider::new(Vec::new()));
+    let mut looped = Loop::start(
+        Session {
+            log,
+            provider,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: inputs.clone(),
+            inbox: receiver,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: tree.top().display().to_string(),
+                credentials: tree.home().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(fakes::NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap()
+    .answerable(false)
+    .commands_refresh(CommandsRefresh {
+        extensions: Arc::new(|| vec![extension("clash", "Extension.", "fiber.test/acme")]),
+        replace: Arc::new(move |rows| *stored.lock().unwrap() = rows),
+    });
+
+    let notices = looped.refresh_commands(&checked.inputs, &checked.found);
+
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::SkillShadowed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/acme"));
+    assert_eq!(commands.lock().unwrap()[0].tag, "skill");
 }
 
 #[test]

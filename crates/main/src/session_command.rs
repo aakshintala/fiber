@@ -576,7 +576,7 @@ pub(crate) fn run_new(
     mcp.notices.extend(listed.notices);
     // The turn-start check measures the runnable set against these rows,
     // so a skill added before the opening lists still refreshes them.
-    skill_set.sync_commands(&listed.rows);
+    skill_set.sync_commands(&listed.runnable);
     session.commands(listed.rows);
     session.quota(quota);
     let door = crate::switch::Door {
@@ -599,7 +599,7 @@ pub(crate) fn run_new(
     // the next turn-start check measures against the installed answer.
     let commands_sync = {
         let skill_set = skill_set.clone();
-        Arc::new(move |rows: &[contract::events::CommandInfo]| skill_set.sync_commands(rows))
+        Arc::new(move |runnable: &r#loop::RunnableCommands| skill_set.sync_commands(runnable))
     };
     let readers =
         switching.credential_readers(switching.clone().closure(door), model.reference.clone());

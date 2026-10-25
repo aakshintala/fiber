@@ -8,6 +8,8 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::collections::BTreeMap;
+
 use fakes::MUST_SUCCEED_WITHIN;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -227,7 +229,7 @@ fn adopting_a_set_into_itself_is_a_no_op() {
 fn an_opening_reports_when_its_snapshot_differs_from_the_commands_answer() {
     let tree = Tree::new();
     let set = tree.set();
-    set.sync_commands(&[]);
+    set.sync_commands(&BTreeMap::new());
     skill(
         &tree.top().join(".fiber/skills"),
         "review",
@@ -855,16 +857,6 @@ fn template(place: &Path, entry: &str, name: &str) -> PathBuf {
     )
 }
 
-fn command_row(name: &str, tag: &str) -> contract::events::CommandInfo {
-    contract::events::CommandInfo {
-        name: name.into(),
-        description: "d".into(),
-        argument_hint: None,
-        tag: tag.into(),
-        extension: false,
-    }
-}
-
 #[test]
 fn a_template_added_reports_a_changed_runnable_set_with_no_skills_changed() {
     let tree = Tree::new();
@@ -973,7 +965,8 @@ fn a_seed_from_the_commands_answer_baselines_the_first_check() {
     let set = tree.set();
     // The session answers what the construction site built, before the
     // opening lists anything.
-    set.sync_commands(&[command_row("a", "skill"), command_row("t", "template")]);
+    let runnable = BTreeMap::from([("a".to_owned(), true), ("t".to_owned(), false)]);
+    set.sync_commands(&runnable);
     open(&set, &tree);
     let checked = set.check();
     assert!(checked.changed.is_none());
@@ -982,6 +975,20 @@ fn a_seed_from_the_commands_answer_baselines_the_first_check() {
     let checked = set.check();
     assert!(checked.changed.is_none());
     assert!(checked.commands_changed);
+}
+
+#[test]
+fn a_command_answer_seed_baselines_a_template_before_the_opening() {
+    let tree = Tree::new();
+    template(&tree.top().join(".agents/skills"), "t", "t");
+    let set = tree.set();
+    let runnable = BTreeMap::from([("t".to_owned(), false)]);
+    set.sync_commands(&runnable);
+
+    let checked = set.check();
+
+    assert!(checked.changed.is_none());
+    assert!(!checked.commands_changed);
 }
 
 #[test]

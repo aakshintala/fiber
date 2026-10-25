@@ -440,13 +440,13 @@ impl Loop {
             notices,
             found,
         } = collected;
-        let (first_opening, commands_changed) = self.skills.opened(
+        let (refresh_commands, commands_changed) = self.skills.opened(
             found.clone(),
             inputs.skills_disabled.clone(),
             &message.skills,
             &notices,
         );
-        let command_notices = if first_opening || commands_changed {
+        let command_notices = if refresh_commands {
             let notices = self.refresh_commands(&inputs, &found);
             if commands_changed {
                 notices

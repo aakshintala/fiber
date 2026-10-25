@@ -1,6 +1,7 @@
 //! The session's `/name` commands and its `skills` answer
 //! (`docs/invocation.md`, "What each command does").
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use contract::ErrorCode;
@@ -8,6 +9,7 @@ use contract::events::{CommandInfo, Notice, SkillInfo};
 
 use crate::opening;
 use crate::prompt::PromptInputs;
+use crate::skill_set::runnable_commands;
 use crate::skills as discovery;
 
 /// Every `/name` the session runs, and what shadowing left out: the
@@ -27,7 +29,13 @@ pub struct Commands {
     /// One `skill_shadowed` notice per prompt a skill or an earlier
     /// server's prompt shadows.
     pub notices: Vec<Notice>,
+    /// The runnable discovery rows, keyed by name and whether the model
+    /// may load them, for the next turn-start comparison.
+    pub runnable: RunnableCommands,
 }
+
+/// Skill and prompt-template commands, by name and model invocability.
+pub type RunnableCommands = BTreeMap<String, bool>;
 
 /// Every `/name` the session runs: its skills and prompt templates, read
 /// from the places the opening message reads, from the repository's top
@@ -128,7 +136,11 @@ pub(crate) fn commands_from_found(
         rows.push(row.clone());
     }
     rows.extend(kept);
-    Commands { rows, notices }
+    Commands {
+        rows,
+        notices,
+        runnable: runnable_commands(found, &inputs.skills_disabled),
+    }
 }
 
 /// Every skill discovery read, switched-off and shadowed ones included

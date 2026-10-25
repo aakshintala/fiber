@@ -116,7 +116,7 @@ struct Fixture {
     rig: Rig,
     state: Arc<State>,
     replacements: Arc<Mutex<Vec<doors::Replacement>>>,
-    commands_synced: Arc<Mutex<Vec<contract::events::CommandInfo>>>,
+    commands_synced: Arc<Mutex<r#loop::RunnableCommands>>,
     declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
     delegate: Arc<RecordingDelegate>,
     servers: Vec<FakeServer>,
@@ -186,7 +186,7 @@ impl Fixture {
         });
         let replacements = Arc::new(Mutex::new(Vec::new()));
         let seen = replacements.clone();
-        let commands_synced = Arc::new(Mutex::new(Vec::new()));
+        let commands_synced = Arc::new(Mutex::new(r#loop::RunnableCommands::new()));
         let synced = commands_synced.clone();
         let declared = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let declared_now = declared.clone();
@@ -216,7 +216,7 @@ impl Fixture {
             }),
             replace: Arc::new(move |replacement| seen.lock().unwrap().push(replacement)),
             commands_sync: Arc::new(move |rows| {
-                *synced.lock().unwrap() = rows.to_vec();
+                *synced.lock().unwrap() = rows.clone();
             }),
             drive: Arc::new(NoDrive),
             model: Arc::new(NoDrive),
@@ -427,8 +427,18 @@ fn reload_replaces_command_list_and_dropped_preparation_does_not_install() {
 }
 
 #[test]
-fn a_reload_install_syncs_the_commands_baseline_to_the_installed_rows() {
+fn a_reload_install_syncs_the_runnable_discovery_baseline() {
     let fixture = Fixture::new();
+    let template = fixture
+        .rig
+        .workspace
+        .join(".agents/skills/release/SKILL.md");
+    std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+    std::fs::write(
+        &template,
+        "---\nname: release\ndescription: Releases.\ndisable-model-invocation: true\n---\nBody.\n",
+    )
+    .unwrap();
     let path = fixture.rig.home.join("extensions/demo/init.lua");
     std::fs::write(
         path,
@@ -439,13 +449,13 @@ fn a_reload_install_syncs_the_commands_baseline_to_the_installed_rows() {
     let prepared = fixture.prepare();
     assert!(fixture.commands_synced.lock().unwrap().is_empty());
     (prepared.installed)();
-    // The install hands the skill set the same rows the replacement
-    // carries, so the next turn-start check measures against them.
+    // The install hands the skill set the same skill/template baseline
+    // the replacement rows contain, without tracking extension commands.
     let replacements = fixture.replacements.lock().unwrap();
     assert_eq!(replacements.len(), 1);
     assert_eq!(
         *fixture.commands_synced.lock().unwrap(),
-        replacements[0].commands
+        std::collections::BTreeMap::from([("release".to_owned(), false)])
     );
     assert_eq!(
         replacements[0]
@@ -453,7 +463,7 @@ fn a_reload_install_syncs_the_commands_baseline_to_the_installed_rows() {
             .iter()
             .map(|row| row.name.as_str())
             .collect::<Vec<_>>(),
-        ["fresh"]
+        ["release", "fresh"]
     );
 }
 

@@ -98,7 +98,7 @@ pub use before_tool::Prepared as ReviewPrepared;
 pub use calls::Decided as ReviewDecision;
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
-pub use commands::{Commands, commands, skills};
+pub use commands::{Commands, RunnableCommands, commands, skills};
 pub use error::Error;
 pub use handoff::HandoffSettings;
 pub use history::forked;

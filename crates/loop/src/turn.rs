@@ -353,7 +353,7 @@ impl Loop {
             .unwrap_or(&[]);
         let commands =
             crate::commands::commands_from_found(inputs, found, prompts, &(refresh.extensions)());
-        self.skills.sync_commands(&commands.rows);
+        self.skills.sync_commands(&commands.runnable);
         (refresh.replace)(commands.rows);
         commands.notices
     }

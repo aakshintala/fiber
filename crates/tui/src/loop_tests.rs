@@ -1853,21 +1853,14 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_default();
     assert_eq!(histories.len(), 1, "{histories:?}");
     assert_eq!(histories[0]["args"], json!({}));
-    // Every replayed turn start asks `commands` again: the requests after
-    // the `full` subscribe match the log's turn starts one for one.
+    // Every turn start the terminal applies asks `commands` again. The
+    // first request loads the session's rows before the log replay.
     let seen_commands: Vec<Value> = seen.lock().map(|held| held.clone()).unwrap_or_default();
-    let full_at = seen_commands
+    let commands: Vec<_> = seen_commands
         .iter()
-        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
-        .expect("the full subscribe");
-    let replayed = &seen_commands[full_at + 1..];
-    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
-    assert!(
-        replayed
-            .iter()
-            .all(|command| command["command"] == "commands"),
-        "{replayed:?}"
-    );
+        .filter(|command| command["command"] == "commands")
+        .collect();
+    assert_eq!(commands.len(), replay_turns + 1, "{commands:?}");
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");
 }

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use contract::Envelope;
-use contract::events::{CommandInfo, Event, Notice, SkillListed, SkillsChanged};
+use contract::events::{Event, Notice, SkillListed, SkillsChanged};
 use support::lock;
 
 use crate::Error;
@@ -144,9 +144,9 @@ impl SkillSet {
     /// Refreshes the set with what the opening message sent: the
     /// discovery's winners, the disabled list in force with them, the
     /// listing as the new baseline, and the opening's notices, which seed
-    /// the check's notice dedupe. Returns whether this is the first
-    /// opening and whether it changed the runnable set since the session's
-    /// `commands` answer, so the caller can rebuild from this discovery.
+    /// the check's notice dedupe. Returns whether the caller must rebuild
+    /// the session's `commands` answer from this discovery, and whether
+    /// the runnable set changed since that answer was built.
     /// The opening's own discovery neither uses nor seeds the cache, so
     /// the first turn-start check reads each `SKILL.md` once
     /// (`docs/system-prompt.md`, "Added
@@ -161,11 +161,11 @@ impl SkillSet {
         let mut inner = lock(&self.0);
         inner.inputs.skills_disabled = disabled;
         let runnable = runnable_commands(&found, &inner.inputs.skills_disabled);
-        let first_opening = !inner.opening_seen;
         let commands_changed = inner
             .commands
             .as_ref()
             .is_some_and(|baseline| *baseline != runnable);
+        let refresh_commands = !inner.opening_seen || commands_changed;
         inner.opening_seen = true;
         inner.known = Some(Known {
             found,
@@ -182,7 +182,7 @@ impl SkillSet {
             .iter()
             .map(|notice| notice.message.clone())
             .collect();
-        (first_opening, commands_changed)
+        (refresh_commands, commands_changed)
     }
 
     /// Refreshes the discovery inputs without changing the last-sent listing.
@@ -196,20 +196,8 @@ impl SkillSet {
     /// the built rows, and a reload's install with the installed ones, so
     /// the next check measures against what the session answers, not
     /// what the opening later lists or a check past the install saw.
-    pub fn sync_commands(&self, rows: &[CommandInfo]) {
-        let mut baseline = BTreeMap::new();
-        for row in rows {
-            match row.tag.as_str() {
-                "skill" => {
-                    baseline.insert(row.name.clone(), true);
-                }
-                "template" => {
-                    baseline.insert(row.name.clone(), false);
-                }
-                _ => {}
-            }
-        }
-        lock(&self.0).commands = Some(baseline);
+    pub fn sync_commands(&self, runnable: &crate::commands::RunnableCommands) {
+        lock(&self.0).commands = Some(runnable.clone());
     }
 
     /// A reload also sends descriptions that differ from the last-sent text.
@@ -562,7 +550,7 @@ impl crate::Loop {
 /// The runnable slash-command set one discovery holds: every found skill
 /// and prompt template `disabled` does not switch off, per name, whether
 /// the model may load it. What the session's `commands` answer must list.
-fn runnable_commands<'a>(
+pub(crate) fn runnable_commands<'a>(
     found: impl IntoIterator<Item = &'a skills::Found>,
     disabled: &[String],
 ) -> BTreeMap<String, bool> {

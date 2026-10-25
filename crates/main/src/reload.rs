@@ -1,6 +1,6 @@
 //! Preparation and publication of configuration reloads (`docs/configuration.md`).
 use contract::diag::DebugLog as _;
-use contract::events::{CommandInfo, ToolSource};
+use contract::events::ToolSource;
 use contract::inbox::Rejection;
 use contract::shapes::Failure;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ pub(crate) fn preparer(
 type Tools = Vec<(String, Arc<dyn contract::tool::Tool>)>;
 
 /// Syncs the skill set's runnable-set baseline to installed command rows.
-pub(crate) type CommandsSync = Arc<dyn Fn(&[CommandInfo]) + Send + Sync>;
+pub(crate) type CommandsSync = Arc<dyn Fn(&r#loop::RunnableCommands) + Send + Sync>;
 
 #[derive(Default)]
 pub(crate) struct Late {
@@ -623,7 +623,7 @@ impl State {
             // The install's rows are what the session answers now: the
             // next turn-start check measures the runnable set against
             // them, even when a check past the install already ran.
-            (shared.commands_sync)(&listed.rows);
+            (shared.commands_sync)(&listed.runnable);
             (shared.replace)(doors::Replacement {
                 commands: listed.rows,
                 skills,
