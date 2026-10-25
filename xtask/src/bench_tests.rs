@@ -4826,6 +4826,9 @@ fn remeasure_maps_timing_ids_to_their_rows() {
 fn a_breached_paging_row_leaves_every_other_timing_workload_in_the_skip_list() {
     let (h, b) = artifact_pair();
     let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    // One gate breaches on this fixture: only `paging_width_ms` is over
+    // both its slow ceiling and its base tolerance (`docs/performance.md`,
+    // "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         has(
@@ -4864,6 +4867,9 @@ fn two_breached_rows_both_leave_the_skip_list() {
     b = with_paging_counts(b, &[("session_start_ms", 3)]);
     b = with_metric(b, "session_start_ms", json!([0.6, 0.6, 0.6]));
     let out = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    // Two gates breach on this fixture: `paging_width_ms` and
+    // `session_start_ms` are each over ceiling and base tolerance
+    // (`docs/performance.md`, "When a budget is exceeded").
     assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
     assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
     assert!(has(&out.failures, "session_start_ms"), "{:?}", out.failures);
@@ -4946,6 +4952,9 @@ fn attach_and_session_list_breaches_name_no_remeasure_skip() {
         SLOW_MODEL,
     );
     let out = judge(&h, Some(&b), Event::PullRequest);
+    // One gate breaches on this fixture: the attach row's timing is over
+    // its ceiling and base tolerance and nothing else breaches
+    // (`docs/performance.md`, "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert_eq!(out.remeasure_skip, None);
     // `session_list` has no row the selector skips: its breach fails with no skip.
@@ -4963,6 +4972,9 @@ fn attach_and_session_list_breaches_name_no_remeasure_skip() {
     b = with_metric_runs(b, &[("session_list_ms", 3)]);
     b = with_metric(b, "session_list_ms", json!([50.0, 50.0, 50.0]));
     let out = judge(&h, Some(&b), Event::PullRequest);
+    // One gate breaches on this fixture: only `session_list_ms` is over
+    // its ceiling and base tolerance (`docs/performance.md`,
+    // "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "session_list_ms"), "{:?}", out.failures);
     assert_eq!(out.remeasure_skip, None);
@@ -4981,6 +4993,8 @@ fn merged_extras_judge_seven_samples_per_side() {
         .expect("clean extras merge");
     let merged_base = super::results::merge_remeasure(&parsed(&b), &parsed(&be), &["paging"])
         .expect("clean base extras merge");
+    // A remeasured row holds all 7 samples per side on the merge
+    // (`docs/performance.md`, "Measuring": 4 more per side, judged on all 7).
     for (merged, side) in [(&merged_head, "head"), (&merged_base, "base")] {
         for id in [
             "paging_open_ms",
@@ -4999,8 +5013,9 @@ fn merged_extras_judge_seven_samples_per_side() {
             assert_eq!(merged.runs_of(id), 7, "{side} {id}");
         }
     }
-    // Memory keeps its first-pass samples: the extras carry 4 more RSS
-    // samples that must never merge.
+    // Memory keeps its first-pass samples: the first pass holds 5
+    // (`docs/performance.md`, "Measuring": the median of 5 runs), and the
+    // extras' 4 more RSS samples must never merge.
     let mut rss_extra = he.clone();
     rss_extra["metrics"]["paging_rss_kib"] = json!([30000.0, 30000.0, 30000.0, 30000.0]);
     let merged = super::results::merge_remeasure(&parsed(&h), &parsed(&rss_extra), &["paging"])
@@ -5009,7 +5024,8 @@ fn merged_extras_judge_seven_samples_per_side() {
         merged.metrics["paging_rss_kib"].as_array().unwrap().len(),
         5
     );
-    // A row that did not breach stays at 3 even if the extra file carries it.
+    // A row that did not breach stays at its first-pass timing count of 3
+    // (`docs/performance.md`, "Measuring") even if the extra file carries it.
     let mut other_extra = he.clone();
     other_extra["metrics"]["session_start_ms"] = json!([9.1, 9.0, 9.3, 9.2]);
     let (mut h3, _) = artifact_pair();
@@ -5022,10 +5038,12 @@ fn merged_extras_judge_seven_samples_per_side() {
         3
     );
     assert_eq!(merged.runs_of("session_start_ms"), 3);
-    // Counts are not samples: they never merge.
+    // Counts are not samples: they never merge, so the merge preserves
+    // the first pass's entries whatever their undocumented count.
+    let counts_before = parsed(&h).metrics["paging_counts"].as_array().unwrap().len();
     let merged = super::results::merge_remeasure(&parsed(&h), &parsed(&he), &["paging"])
         .expect("clean extras merge");
-    assert_eq!(merged.metrics["paging_counts"].as_array().unwrap().len(), 5);
+    assert_eq!(merged.metrics["paging_counts"].as_array().unwrap().len(), counts_before);
 }
 
 #[test]
@@ -5130,7 +5148,8 @@ fn malformed_extra_samples_keep_the_first_pass_failure() {
     );
     assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
     assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
-    // A valid extra file still merges: the width spike is outvoted.
+    // A valid extra file still merges: the width spike is outvoted on all
+    // 7 samples per side (`docs/performance.md`, "Measuring").
     let (he, be) = clean_extras();
     let merged = super::results::merge_remeasure(&first, &parsed(&he), &["paging"])
         .expect("clean extras merge");
@@ -5185,6 +5204,9 @@ fn hot_extras_keep_failing_on_all_seven() {
     );
     let (_, be) = clean_extras();
     let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    // One gate still breaches on all 7 merged samples: every sample stays
+    // over (`docs/performance.md`, "Measuring" for the 7 and
+    // "When a budget is exceeded" for the gate).
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
     // Two hot and two clean extras still fail: the median of 7 is 111.0,
@@ -5197,6 +5219,9 @@ fn hot_extras_keep_failing_on_all_seven() {
         json!([84.0, 85.0, 83.0, 86.0]),
     );
     let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    // The median of the 7 merged samples is 111.0, still over ceiling and
+    // base tolerance (`docs/performance.md`, "Measuring" and
+    // "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(has(&out.failures, "111.0 ms"), "{:?}", out.failures);
 }
@@ -5207,7 +5232,10 @@ fn a_mismatched_extra_keeps_the_first_pass_failure() {
     let (he, be) = clean_extras();
     let he = with_cpu(he, FAST_MODEL);
     let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
-    assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
+    // The required failures are the first-pass breach, which stands, and
+    // the `remeasure:` failure the rejected extra adds; no documented count
+    // covers their total, so only their presence is pinned.
+    assert!(!out.failures.is_empty(), "{:?}", out.failures);
     assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
     assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
     // Nothing was remeasured, so the comment keeps the first-pass wording.
@@ -5227,7 +5255,10 @@ fn a_memory_failure_stands_whatever_the_timing_extras_show() {
     h = with_metric(h, "paging_rss_kib", json!([30000.0, 30000.0, 30000.0]));
     let (he, be) = clean_extras();
     let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
-    assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
+    // The required failure is the memory failure, which stands whatever
+    // the timing extras show; no documented count covers the total, so only
+    // its presence, and the width breach's absence, are pinned.
+    assert!(!out.failures.is_empty(), "{:?}", out.failures);
     assert!(has(&out.failures, "paging_rss_kib"), "{:?}", out.failures);
     assert!(!has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
     // The `within` memory row stands too.
@@ -5256,6 +5287,9 @@ fn a_ratio_failing_on_its_first_pass_is_judged_again_on_merged_pairs() {
         json!([2900.0, 2900.0, 2900.0]),
     );
     let first = judge_doc(&doc_106(), &h, Some(&b), Event::PullRequest);
+    // Two gates fail on this first pass: the width timing breach and the
+    // scale-16 growth over 24 times its scale-1 sample (`docs/performance.md`,
+    // "When a budget is exceeded").
     assert_eq!(first.failures.len(), 2, "{:?}", first.failures);
     // Clean extras outvote both: every merged pair grows about 4x.
     let (he, be) = clean_extras();
@@ -5270,6 +5304,9 @@ fn a_ratio_failing_on_its_first_pass_is_judged_again_on_merged_pairs() {
         json!([84.0, 85.0, 83.0, 86.0]),
     );
     let out = judged_extra(&h, &b, &hot, Some(&be), &doc_106());
+    // Hot extras keep every merged pair over 24x, so both the width breach
+    // and the ratio failure stand on all 7 samples (`docs/performance.md`,
+    // "Measuring" and "When a budget is exceeded").
     assert_eq!(out.failures.len(), 2, "{:?}", out.failures);
     assert!(
         has(
@@ -5301,6 +5338,9 @@ fn an_all_over_growth_blow_up_in_the_extras_still_breaks_the_ratio() {
     );
     let (_, be) = clean_extras();
     let out = judged_extra(&h, &b, &search, Some(&be), &doc_106());
+    // One gate fails on the merged pairs: the all-over growth still reads
+    // over 24x while the width timing is outvoted (`docs/performance.md`,
+    // "When a budget is exceeded").
     assert_eq!(out.failures.len(), 1, "{:?}", out.failures);
     assert!(
         has(
