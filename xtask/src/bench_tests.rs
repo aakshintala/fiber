@@ -5090,6 +5090,56 @@ fn broken_extras_keep_the_first_pass() {
 }
 
 #[test]
+fn malformed_extra_samples_keep_the_first_pass_failure() {
+    let (h, b) = artifact_pair();
+    let first = parsed(&h);
+    // Strings in place of samples never merge: the extra file is rejected.
+    let mut strings = clean_extras().0;
+    strings["metrics"]["paging_width_ms"] = json!(["slow", "slower", "slowest", "stalled"]);
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&strings), &["paging"]).unwrap_err()],
+        "paging_width_ms",
+    ));
+    // A negative sample never merges either.
+    let mut negative = clean_extras().0;
+    negative["metrics"]["paging_width_ms"] = json!([96.0, 97.1, -1.0, 98.2]);
+    assert!(has(
+        &[super::results::merge_remeasure(&first, &parsed(&negative), &["paging"]).unwrap_err()],
+        "paging_width_ms",
+    ));
+    // A malformed base extra keeps the first-pass failure through the
+    // remeasure path and adds the `remeasure:` failure, for each shape.
+    for bad in [strings, negative] {
+        let out = judged_extra(&h, &b, &clean_extras().0, Some(&bad), &doc_106());
+        assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+        assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
+    }
+    // A non-finite sample is not a number any JSON parser accepts: the
+    // extra file fails to parse, which keeps the first pass the same way.
+    let non_finite = serde_json::to_string(&clean_extras().1)
+        .expect("base extra serializes")
+        .replace("[97.0,96.5,97.9,97.3]", "[1e999,96.5,97.9,97.3]");
+    let out = report_with_extra(
+        &doc_106(),
+        &h.to_string(),
+        Some(Ok(b.to_string())),
+        None,
+        Event::PullRequest,
+        "base0000",
+        Some((clean_extras().0.to_string(), Some(Ok(non_finite)))),
+    );
+    assert!(has(&out.failures, "paging_width_ms"), "{:?}", out.failures);
+    assert!(has(&out.failures, "remeasure:"), "{:?}", out.failures);
+    // A valid extra file still merges: the width spike is outvoted.
+    let (he, be) = clean_extras();
+    let merged = super::results::merge_remeasure(&first, &parsed(&he), &["paging"])
+        .expect("clean extras merge");
+    assert_eq!(merged.metrics["paging_width_ms"].as_array().unwrap().len(), 7);
+    let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+}
+
+#[test]
 fn clean_extras_outvote_the_spike() {
     let (h, b) = artifact_pair();
     let (he, be) = clean_extras();

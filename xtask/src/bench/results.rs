@@ -190,8 +190,8 @@ pub(super) fn runs<'a>(results: Option<&'a Results>, id: &str) -> Result<Vec<&'a
 /// pair and the base pair. Any problem with the extra file is an error and
 /// the caller keeps the first pass: a different `cpu` (a different runner),
 /// a non-empty `failures` (a failed run, not slow samples), a breached-row
-/// metric missing from the extra file, or one declaring a count other than
-/// `REMEASURE_RUNS`.
+/// metric missing from the extra file, one declaring a count other than
+/// `REMEASURE_RUNS`, or a sample that is not a finite, non-negative number.
 pub(super) fn merge_remeasure(
     first: &Results,
     extra: &Results,
@@ -239,6 +239,17 @@ pub(super) fn merge_remeasure(
                     extra_samples.len(),
                     super::judge::REMEASURE_RUNS
                 ));
+            }
+            for sample in extra_samples {
+                let valid = sample
+                    .as_f64()
+                    .is_some_and(|n| n.is_finite() && n >= 0.0);
+                if !valid {
+                    return Err(format!(
+                        "{id}: extra run holds a sample that is not a finite, \
+                         non-negative number: {sample}"
+                    ));
+                }
             }
             let first_samples = merged
                 .metrics
