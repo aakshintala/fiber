@@ -124,30 +124,26 @@ fn assert_one_clients_line(lines: &[Value]) {
     assert_eq!(clients, 1, "one attach writes one clients line: {lines:?}");
 }
 
-/// Queries `sessions` until the hub lists the session as exited. The
-/// shutdown writes the `recent.jsonl` row before the session process
-/// exits, so the loop converges instead of racing the feed's scan: each
-/// query blocks for its own answer, and the socket's deadline bounds the
-/// whole wait.
+/// Queries `sessions` once and returns the exited row for `id`. The caller
+/// waits for [`SessionGuard::wait_gone`] first: the shutdown writes the
+/// `recent.jsonl` row before the session process exits, so a gone process
+/// proves the row is listed and one query observes it (`docs/testing.md`,
+/// "Waits and timeouts": wait for the signal proving the operation, not a
+/// poll for settled state).
 fn exited_row(client: &Socket, id: &str) -> Value {
-    let mut n = 0;
-    loop {
-        n += 1;
-        let command = format!("c_sess_{n}");
-        client.send(&format!(
-            "{{\"id\":\"{command}\",\"command\":\"sessions\"}}"
-        ));
-        let listing = until(client, "the sessions answer", |line| {
-            line["kind"] == "command_accepted" && line["payload"]["command_id"] == command
-        });
-        let answer = listing.last().expect("the sessions answer");
-        let exited = answer["payload"]["result"]["exited"]
-            .as_array()
-            .expect("the answer names exited sessions");
-        if let Some(row) = exited.iter().find(|row| row["session_id"] == id) {
-            return row.clone();
-        }
-    }
+    client.send(r#"{"id":"c_sess","command":"sessions"}"#);
+    let listing = until(client, "the sessions answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_sess"
+    });
+    let answer = listing.last().expect("the sessions answer");
+    let exited = answer["payload"]["result"]["exited"]
+        .as_array()
+        .expect("the answer names exited sessions");
+    exited
+        .iter()
+        .find(|row| row["session_id"] == id)
+        .unwrap_or_else(|| panic!("the exited session is listed: {exited:?}"))
+        .clone()
 }
 
 /// Stops the hub and waits for the session watchdog to stand down.
@@ -179,20 +175,15 @@ fn a_supervised_start_denies_without_asking_and_sends_no_attention() {
     let lines = until(&control, "the turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
-    // `clients`, `session_status`, the hub's `attention` and `date_changed`
-    // are set aside, so a duplicated, missing or reordered event of any
-    // other kind fails, ephemeral deltas included. Order follows
-    // `docs/loop.md`, "One step" with `permission_resolved` standing where
-    // `tool_call_started` would (`docs/permissions.md`, "What the log
-    // records"), and the deny-then-continue from `docs/permissions.md`,
-    // "Supervised sessions" ("An escalation is a block at once, and the run
-    // carries on") and "What happens on a block" ("A block is not the end
-    // of the turn. ... The turn continues."). The two
-    // `assistant_message_delta` lines are the closing `Hello.` streaming in
-    // two fragments (`docs/loop.md`, "One step": the loop streams the reply,
-    // emitting its actions as they arrive; `docs/events.md`,
-    // "`assistant_message_delta`").
+    // Complete ordered kinds (`docs/testing.md`, "Event streams"; set aside
+    // `clients`, `session_status`, the hub's `attention` and `date_changed`,
+    // so every other kind is pinned in order, ephemeral lines included).
+    // Order follows `docs/loop.md`, "One step", with `permission_resolved`
+    // standing where `tool_call_started` would (`docs/permissions.md`, "What
+    // the log records"); deny-then-continue is "Supervised sessions" ("An
+    // escalation is a block at once, and the run carries on") and "What
+    // happens on a block". The two deltas stream the closing `Hello.` in
+    // fragments (`docs/events.md`, "`assistant_message_delta`").
     assert_one_clients_line(&lines);
     assert_eq!(
         kinds(&lines),
@@ -270,12 +261,20 @@ fn a_supervised_start_denies_without_asking_and_sends_no_attention() {
     let end = lines.last().expect("the turn end");
     assert_eq!(end["payload"]["outcome"], "completed");
     close_and_wait(&control, &id);
-    // The exited session lists with its flag: the shutdown wrote the
-    // `recent.jsonl` row carrying the last `session_status`.
+    // The exit is proved by the gone process, not by polling the listing:
+    // the shutdown wrote the `recent.jsonl` row carrying the last
+    // `session_status` before exiting, so `wait_gone` proves the row is
+    // listed and one `sessions` query observes it.
+    guard.wait_gone();
     let row = exited_row(&control, &id);
     assert_eq!(row["how"], "exited", "{row}");
     assert_eq!(row["status"]["supervised"], true, "{row}");
-    stop_hub(&hub, guard);
+    // The wait above consumed the guard; only the hub is left to stop.
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
 }
 
 #[test]
@@ -338,26 +337,15 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
     lines.extend(until(&control, "the second turn end", |line| {
         line["kind"] == "turn_completed"
     }));
-    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
-    // `clients`, `session_status`, the hub's `attention` and `date_changed`
-    // are set aside, so a duplicated, missing or reordered event of any
-    // other kind fails, ephemeral lines included. The first turn denies as
-    // in the block test, then the steered second turn allows. The
-    // deny-then-allow order is forced by the pause point between them: the
-    // first `until` completes before the steer is sent. The allow turn's
-    // `permission_resolved` precedes its `tool_call_started`
-    // (`docs/permissions.md`, "What the log records"), and the run carries
-    // on (`docs/permissions.md`, "Supervised sessions": "An escalation is a
-    // block at once, and the run carries on"; "the model's retry passes").
-    // Between the turns the steer queues, is answered, and drains:
-    // `steering_queue` is written whenever the queue changes (`docs/events.md`,
-    // "`steering_queue`"), the steer's `command_accepted` answers it exactly
-    // once (`docs/invocation.md`, "Driver commands"), and the second
-    // `steering_queue` is the emptied queue the next turn drains
-    // (`docs/loop.md`, "One step": the loop drains the inbox at the step
-    // boundary). The closing `assistant_message_delta` pairs stream each
-    // turn's `Hello.` in two fragments (`docs/loop.md`, "One step";
-    // `docs/events.md`, "`assistant_message_delta`").
+    // Complete ordered kinds (the same four set aside as above, every other
+    // kind pinned in order). The first `until` ends before the steer,
+    // splitting deny from allow; the allow's `permission_resolved` precedes
+    // `tool_call_started` (`docs/permissions.md`, "What the log records").
+    // `steering_queue` marks each queue change (`docs/events.md`,
+    // "`steering_queue`"), `command_accepted` answers the steer once
+    // (`docs/invocation.md`, "Driver commands"), and the drained queue feeds
+    // the next turn (`docs/loop.md`, "One step"). Deltas stream each turn's
+    // `Hello.` in fragments (same pages as above).
     assert_one_clients_line(&lines);
     assert_eq!(
         kinds(&lines),
@@ -492,16 +480,11 @@ fn a_supervised_ask_user_completes_with_its_questions() {
     let lines = until(&control, "the turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered kinds (`docs/testing.md`, "Event streams"): only
-    // `clients`, `session_status`, the hub's `attention` and `date_changed`
-    // are set aside, so a duplicated, missing or reordered event of any
-    // other kind fails. The `ask_user` turn ends `completed` with the
-    // questions on `turn_completed` (`docs/tools.md`, "When a program drives
-    // the session"). The `ask_user` call carries no streamed text, so no
-    // `assistant_message_delta` appears: the request runs (`tool_call_started`)
-    // and completes (`tool_call_completed`) between the completed request
-    // (`assistant_message_completed`, `docs/loop.md`, "One step") and the
-    // turn end.
+    // Complete ordered kinds (the same four set aside as above). The
+    // `ask_user` turn ends `completed` with the questions on `turn_completed`
+    // (`docs/tools.md`, "When a program drives the session"); with no
+    // streamed text there are no deltas, and the call runs between the
+    // completed request and the turn end (`docs/loop.md`, "One step").
     assert_one_clients_line(&lines);
     assert_eq!(
         kinds(&lines),
@@ -610,21 +593,16 @@ fn a_supervised_resume_stays_unanswerable() {
     let lines = until(&resumed, "the resumed turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered kinds for the resumed turn (`docs/testing.md`,
-    // "Event streams"): only `clients`, `session_status`, the hub's
-    // `attention` and `date_changed` are set aside, so a duplicated, missing
-    // or reordered event of any other kind fails, ephemeral lines included.
-    // `extensions_loaded` replays on the fresh subscribe before the turn's
-    // own lines; the prompt's `command_accepted` answers it exactly once
-    // (`docs/invocation.md`, "Driver commands") after the prompt starts the
-    // turn (`turn_started`, same page) and before the first step runs
-    // (`docs/loop.md`, "One step"). The resumed turn denies as a fresh
-    // supervised block (`docs/permissions.md`, "Supervised sessions": "A
-    // person driving the session does not change it: its escalations stay
-    // blocks"), with the closing `Hello.` streaming as two
-    // `assistant_message_delta` lines (`docs/loop.md`, "One step";
-    // `docs/events.md`, "`assistant_message_delta`").
-    assert_one_clients_line(&lines);
+    // Complete ordered kinds of the resumed turn (the same four set aside as
+    // above, but no `clients` count is pinned: the resumed stream can carry
+    // both attaches' lines, so only the order is pinned,
+    // `docs/testing.md`, "Event streams"). `extensions_loaded` replays on
+    // the fresh subscribe; the prompt's `command_accepted` answers it once
+    // after `turn_started` and before the first step (`docs/invocation.md`,
+    // "Driver commands"; `docs/loop.md`, "One step"). The resumed turn
+    // denies as a fresh supervised block (`docs/permissions.md`, "Supervised
+    // sessions": "A person driving the session does not change it: its
+    // escalations stay blocks"); deltas as above.
     assert_eq!(
         kinds(&lines),
         [

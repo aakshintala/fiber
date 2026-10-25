@@ -1499,6 +1499,9 @@ fn start_with_supervised_true_records_supervised() {
     let (id, result) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_1");
     assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the request's flag.
     assert_eq!(starter.started_supervised(), [true]);
 }
 
@@ -1514,6 +1517,10 @@ fn start_without_supervised_records_not_supervised() {
     let (id, result) = accepted(&client.next("the acknowledgement"));
     assert_eq!(id, "c_1");
     assert!(result.get("session_id").is_some());
+    // One accepted `start` starts one session (`docs/invocation.md`, "The
+    // hub", `start`: "Starts a session in the workspace ... and answers with
+    // its `session_id`"), so the single launch carries the absent flag as
+    // false.
     assert_eq!(starter.started_supervised(), [false]);
 }
 
@@ -1538,6 +1545,12 @@ fn start_rejects_a_misshaped_supervised() {
         let (code, _, _) = rejected(&client.next("the rejection"));
         assert_eq!(code, "invalid_arguments", "{name}");
     }
+    // A rejected `start` launches nothing: `supervised` is a boolean,
+    // optional arg (`docs/invocation.md`, "The hub", `start`), and a request
+    // that does not fit is rejected `invalid_arguments` before any session
+    // starts (same page: a `content` that does not fit `prompt`'s `args` is
+    // "rejected `invalid_arguments` before any session starts"; the arg
+    // validation in `start_args` runs before `start::run` either way).
     assert!(starter.started_supervised().is_empty());
 }
 

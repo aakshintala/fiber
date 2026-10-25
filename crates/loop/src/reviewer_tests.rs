@@ -1456,12 +1456,9 @@ mod supervised {
         // The retry is judged again, never answered by the steer itself
         // (`docs/permissions.md`, "Supervised sessions": the reviewer
         // "judges the call again when the model retries it"; "The
-        // supervisor never answers an approval").
-        assert!(
-            reviewer.requests().len() > first_requests,
-            "the retry was judged again: {}",
-            reviewer.requests().len()
-        );
+        // supervisor never answers an approval"). The grant read below
+        // already proves a post-steer review ran, so no separate count is
+        // pinned.
         let requests = reviewer.requests();
         let (earlier, later) = requests.split_at(first_requests);
         let reads_grant = |request: &contract::provider::ModelRequest| {
