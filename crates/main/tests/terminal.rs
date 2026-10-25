@@ -15,6 +15,9 @@
 
 mod support;
 
+#[path = "support/hub_start.rs"]
+mod hub_start;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -761,6 +764,134 @@ fn continue_with_no_session_is_a_usage_error() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(2));
+}
+
+/// Two exited sessions on the hub machine in different projects, the
+/// second newer: what `continue --hub` must choose between. The asks run
+/// before the test-port hub is served, and the hub idles out before the
+/// serve, so only one hub holds the home at a time.
+fn seed_hub_sessions(a: &support::Setup) {
+    let server = ProviderServer::start([reply("First."), reply("Second.")]).unwrap();
+    provider(a, &server);
+    assert_eq!(ask(a, &["ask", "first"]).status.code(), Some(0));
+    let other = a.root.path().join("other");
+    fs::create_dir_all(&other).unwrap();
+    let mut second = a.fiber(&["ask", "second"]);
+    second.current_dir(&other);
+    assert_eq!(
+        support::run_to_exit(a.deadline, "the second ask", second)
+            .status
+            .code(),
+        Some(0)
+    );
+    until_socket(a.deadline, &a.hub_socket(), false, "the hub to idle out");
+}
+
+/// Serves `a`'s hub on a test port and pairs a fresh client to it as
+/// `box`: the client selects `box` by default when `default` holds.
+fn paired_client(a: &support::Setup, default: bool) -> (support::Setup, hub_start::Served) {
+    let b = support::Setup::new();
+    let served = hub_start::serve_installed(
+        a,
+        hub_start::ATTEMPTS,
+        &mut hub_start::free_port,
+        &mut |port| {
+            write_json(
+                &a.home().join("config.json"),
+                &json!({"hub": {"port": port}}),
+            );
+            a.fiber(&["hub", "serve", "--installed"])
+        },
+    );
+    let paired = ask(a, &["hub", "pair", "laptop"]);
+    assert_eq!(paired.status.code(), Some(0));
+    let code = String::from_utf8(paired.stdout).unwrap();
+    let address = format!("ws://127.0.0.1:{}", served.port);
+    let input = b.root.path().join("pairing-input");
+    fs::write(&input, format!("{}\n", code.trim())).unwrap();
+    let mut args = vec!["hub", "add", "box", &address];
+    if default {
+        args.push("--default");
+    }
+    let mut command = b.fiber(&args);
+    command.stdin(fs::File::open(input).unwrap());
+    let added = support::run_to_exit(b.deadline, "hub add with a pairing code", command);
+    assert_eq!(added.status.code(), Some(0));
+    (b, served)
+}
+
+/// Reaps a served hub: the held connection drops and the hub exits on
+/// `TERM`, as `hub_list.rs` reaps its served hubs.
+fn reap_served(served: hub_start::Served) {
+    drop(served.hub);
+    served.process.kill("TERM");
+    assert_eq!(served.process.wait().code(), Some(143));
+}
+
+#[test]
+fn continue_hub_opens_the_latest_session_across_projects() {
+    let a = support::Setup::new();
+    seed_hub_sessions(&a);
+    let (b, served) = paired_client(&a, false);
+    let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn continue_hub_without_a_session_is_a_usage_error() {
+    let a = support::Setup::new();
+    let (b, served) = paired_client(&a, false);
+    let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
+    run.wait_screen("the usage error", |grid| {
+        grid.contents.contains("No session on hub `box`")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(2));
+    reap_served(served);
+}
+
+#[test]
+fn continue_without_a_flag_uses_the_configured_hub() {
+    let a = support::Setup::new();
+    seed_hub_sessions(&a);
+    let (b, served) = paired_client(&a, true);
+    // No `--hub`: `hub.default=box` selects the listed hub.
+    let mut run = terminal(&b, 120, 32, &["continue"], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn continue_explicit_hub_overrides_the_configured_default() {
+    let a = support::Setup::new();
+    seed_hub_sessions(&a);
+    let (b, served) = paired_client(&a, true);
+    // `hub.default=box` is configured, but the explicit flag wins: the
+    // unknown hub fails instead of opening the default hub's session.
+    let mut run = terminal(&b, 120, 32, &["continue", "--hub", "nope"], &[]);
+    run.wait_screen("the usage error", |grid| {
+        grid.contents.contains("No hub named `nope`")
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(2));
+    reap_served(served);
 }
 
 #[test]

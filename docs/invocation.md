@@ -112,12 +112,12 @@ groups, then the flags and examples.
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
 | `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
-| `continue` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With `--hub`, it opens the most recent session on that hub in any project, since a client has no launch directory there. With none, it is a usage error naming `fiber`. |
+| `continue [--hub <name>]` | Opens the most recent session in this project, the launch directory's own outside a git repository, live or exited, in the terminal. With `--hub`, it asks for `active: true` and opens the entry with the greatest (`active`, `id`) among entries whose `active` is not `null` across every project, since a client has no launch directory there; with no eligible entry it is the same usage error as an empty hub. With none, it is a usage error naming `fiber`. |
 | `sessions [--all] [--json]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. |
 | `sessions search [--all] [--json] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. |
-| `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
+| `sessions delete [--hub <name>] [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
-| `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
+| `sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
 | `models [<search>] [--json]` | Lists the models the installed providers serve, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one notice per provider and missing setting on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
@@ -1401,7 +1401,7 @@ session:
   "Rewind"). `--cascade` deletes them too, and whatever points at them; it is
   refused if any of them is held. Finding them reads the first line of each
   session log.
-- **When `expect` is supplied, a cascade removes only the sessions the person confirmed.** A client sends them in `delete`'s `expect` ("The hub"): the session and everything `--cascade` adds. When the sessions the hub would remove differ, such as a fork made while the question was open, the delete is rejected `stale_request`, the message names the sessions it would remove now, and nothing is deleted. `fiber sessions delete` and pruning send no `expect`.
+- **When `expect` is supplied, a cascade removes only the sessions the person confirmed.** A client sends them in `delete`'s `expect` ("The hub"): the session and everything `--cascade` adds. When the sessions the hub would remove differ, such as a fork made while the question was open, the delete is rejected `stale_request`, the message names the sessions it would remove now, and nothing is deleted. `fiber sessions delete --hub` and `fiber sessions prune --hub` without `--yes` send the set their dry run named; otherwise the command line sends no `expect`.
 - **Delete is permanent.** It removes the session's directory: its log and its
   artifacts together. There is no trash. The terminal asks first, naming the
   session and everything `--cascade` adds. On the command line `--yes`
@@ -1409,8 +1409,10 @@ session:
   with no terminal to ask on it is a usage error.
 - **With `--hub`, the id resolves on that hub.** The command matches it
   against that hub's `sessions` answer, across every project, as
-  `fiber resume --hub` does, then sends that hub `delete`. `--cascade` and
-  `--yes` work as they do locally.
+  `fiber resume --hub` does, then sends that hub `delete`. Without `--yes`
+  it first sends a dry run, prints the answered set and asks, then sends
+  `delete` with that exact set as `expect`; with `--yes` it sends one
+  `delete` with no `expect`. `--cascade` works as it does locally.
 - **A kept worktree the session made stays.** Pruning removes worktrees.
 - **`recent.jsonl` keeps the session's row.** Nothing rewrites that file, and
   readers skip a row whose session directory is gone (`docs/state.md`,
