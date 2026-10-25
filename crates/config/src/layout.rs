@@ -32,6 +32,11 @@ pub fn extension_data_dir(layer: &Path, slug: &str) -> PathBuf {
     layer.join("data").join(slug)
 }
 
+/// `<home>/projects`: every project's directory, one `<key>/` each.
+pub fn projects_dir(home: &Path) -> PathBuf {
+    home.join("projects")
+}
+
 /// `<home>/projects/<key>/approvals`: one project's approvals of code a
 /// repository ships, one file per extension or hook decision.
 pub fn project_approvals_dir(home: &Path, project: &ProjectKey) -> PathBuf {
@@ -51,6 +56,11 @@ pub fn project_servers_dir(home: &Path, project: &ProjectKey) -> PathBuf {
 /// directory.
 pub fn project_data_dir(home: &Path, project: &ProjectKey, slug: &str) -> PathBuf {
     extension_data_dir(&home.join("projects").join(project.as_str()), slug)
+}
+
+/// `<home>/projects/<key>/worktrees`: one project's checked-out worktrees.
+pub fn project_worktrees_dir(home: &Path, project: &ProjectKey) -> PathBuf {
+    projects_dir(home).join(project.as_str()).join("worktrees")
 }
 
 /// `<home>/cache/mcp`: where MCP server output is cached.
@@ -98,4 +108,30 @@ pub fn docs_dir(home: &Path) -> PathBuf {
 /// `<home>/run`: where running sessions listen. Never creates it.
 pub fn run_dir(home: &Path) -> PathBuf {
     home.join("run")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "a failure is the test's")]
+
+    use std::path::PathBuf;
+
+    use super::{ProjectKey, project_worktrees_dir, projects_dir};
+
+    #[test]
+    fn projects_dir_is_projects_under_home() {
+        assert_eq!(
+            projects_dir(&PathBuf::from("/h")),
+            PathBuf::from("/h/projects")
+        );
+    }
+
+    #[test]
+    fn project_worktrees_dir_is_worktrees_under_the_project() {
+        let project = ProjectKey::new("proj").unwrap();
+        assert_eq!(
+            project_worktrees_dir(&PathBuf::from("/h"), &project),
+            PathBuf::from("/h/projects/proj/worktrees")
+        );
+    }
 }

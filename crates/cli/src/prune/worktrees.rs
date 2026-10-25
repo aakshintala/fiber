@@ -65,7 +65,7 @@ pub(crate) enum WorktreeRow {
 /// A worktree prune will remove, with its project for the revalidation.
 pub(crate) struct PlannedRemoval {
     /// The worktree's directory.
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
     /// The listed bytes.
     bytes: u64,
     /// The directory name under `worktrees/`.
@@ -116,11 +116,8 @@ pub(crate) struct RemovedWorktrees {
     pub(crate) total: usize,
 }
 
-/// Lists the kept worktrees in scope: inside a git repository the
-/// repository's project, outside one every project. Unless `dry_run`,
-/// each one's users' locks are held until the run ends: `--dry-run` drops
-/// each lock at once, so the scan and output hold none. A symlinked entry
-/// is not listed. Dropping the plan releases every kept lock.
+/// The workspace form of the scoped core, kept for the module's tests.
+#[cfg(test)]
 pub(crate) fn select(
     home: &Path,
     users: &[log::Started],
@@ -129,7 +126,31 @@ pub(crate) fn select(
     dry_run: bool,
     now: SystemTime,
 ) -> Planned {
-    let keys = scope_keys(home, workspace);
+    select_scoped(
+        home,
+        users,
+        super::Scope::Project(workspace),
+        force,
+        dry_run,
+        now,
+    )
+}
+
+/// Lists the kept worktrees in scope: inside a git repository the
+/// repository's project, outside one every project, and every project
+/// hub-wide. Unless `dry_run`, each one's users' locks are held until the
+/// run ends: `--dry-run` drops each lock at once, so the scan and output
+/// hold none. A symlinked entry is not listed. Dropping the plan releases
+/// every kept lock.
+pub(crate) fn select_scoped(
+    home: &Path,
+    users: &[log::Started],
+    scope: super::Scope<'_>,
+    force: bool,
+    dry_run: bool,
+    now: SystemTime,
+) -> Planned {
+    let keys = scope_keys_scoped(home, scope);
     let mut planned = Planned {
         rows: Vec::new(),
         removals: Vec::new(),
@@ -139,7 +160,10 @@ pub(crate) fn select(
     // Every listed worktree, sorted by name.
     let mut listed: Vec<Listed> = Vec::new();
     for key in &keys {
-        let worktrees = home.join("projects").join(key).join("worktrees");
+        let Ok(project) = config::ProjectKey::new(key.as_str()) else {
+            continue;
+        };
+        let worktrees = config::project_worktrees_dir(home, &project);
         let Ok(entries) = std::fs::read_dir(&worktrees) else {
             continue;
         };
@@ -383,15 +407,23 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
     planned.removals.iter().map(|removal| removal.bytes).sum()
 }
 
-/// The project keys in scope: the repository's project inside one, every
-/// project under `projects/` outside one.
+/// The workspace form of the scoped keys, kept for the module's tests.
+#[cfg(test)]
 pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
-    let resolved = doors::resolve_project(workspace);
-    if resolved.in_repository {
-        return vec![log::project_key(&resolved.path)];
+    scope_keys_scoped(home, super::Scope::Project(workspace))
+}
+
+/// The scoped keys core behind [`scope_keys`]: as the workspace form, and
+/// every project hub-wide.
+pub(super) fn scope_keys_scoped(home: &Path, scope: super::Scope<'_>) -> Vec<String> {
+    if let super::Scope::Project(workspace) = scope {
+        let resolved = doors::resolve_project(workspace);
+        if resolved.in_repository {
+            return vec![log::project_key(&resolved.path)];
+        }
     }
     let mut keys = Vec::new();
-    let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
+    let Ok(projects) = std::fs::read_dir(config::projects_dir(home)) else {
         return keys;
     };
     for project in projects.flatten() {
