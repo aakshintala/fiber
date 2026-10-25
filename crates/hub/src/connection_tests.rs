@@ -3408,6 +3408,15 @@ mod session_refusal_tests {
         parents: HashMap<u32, u32>,
         euids: HashMap<u32, u32>,
         argvs: HashMap<u32, Vec<Vec<u8>>>,
+        /// Pause point: the first `parent` read signals `entered`, then
+        /// waits for `release` (or the deadline) before answering from
+        /// `parents`. Lets a test replace the relay entry mid-walk. The
+        /// receiver sits behind a lock so the script stays shareable.
+        block_first_parent: Option<(
+            std::sync::mpsc::Sender<()>,
+            std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        )>,
+        blocked: std::sync::atomic::AtomicBool,
     }
 
     impl support::peer::ProcessRead for Script {
@@ -3423,6 +3432,16 @@ mod session_refusal_tests {
         }
 
         fn parent(&self, pid: u32) -> Result<u32, support::peer::ReadError> {
+            if let Some((entered, release)) = &self.block_first_parent
+                && !self.blocked.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                entered.send(()).unwrap_or(());
+                if let Ok(release) = release.lock() {
+                    fakes::Deadline::after(super::DEADLINE)
+                        .recv(&release)
+                        .unwrap_or(());
+                }
+            }
             self.parents
                 .get(&pid)
                 .copied()
@@ -3515,6 +3534,18 @@ mod session_refusal_tests {
         json!({"command": "steer", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
     }
 
+    fn prompt(id: &str) -> Value {
+        json!({"command": "prompt", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
+    }
+
+    fn message(id: &str) -> Value {
+        json!({"command": "message", "args": {"text": "hi"}, "id": id})
+    }
+
+    fn full_subscribe(id: &str) -> Value {
+        json!({"command": "subscribe", "args": {"level": "full"}, "id": id})
+    }
+
     fn approval_args(request: &str) -> Value {
         json!({"request_id": request, "decision": "allow"})
     }
@@ -3545,6 +3576,7 @@ mod session_refusal_tests {
             parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
             euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
             argvs: [(1, vec![b"/sbin/init".to_vec()])].into_iter().collect(),
+            ..Default::default()
         }
     }
 
@@ -3611,6 +3643,52 @@ mod session_refusal_tests {
     }
 
     #[test]
+    fn prompt_to_the_callers_own_session_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        rig.relay("c_1", OWNED, prompt("c_1"), &owned_owners(OWNED));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
+    fn a_question_reply_to_the_callers_own_session_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OWNED,
+            reply_with("c_1", labels_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
+    fn an_approval_reply_to_an_unrelated_session_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", approval_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+    }
+
+    #[test]
     fn steer_to_a_delegate_below_the_caller_is_refused() {
         let script = Script {
             current: 1000,
@@ -3626,6 +3704,7 @@ mod session_refusal_tests {
             )]
             .into_iter()
             .collect(),
+            ..Default::default()
         };
         let mut rig = Rig::new(script);
         let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
@@ -3639,6 +3718,67 @@ mod session_refusal_tests {
     }
 
     #[test]
+    fn a_question_reply_to_a_delegate_below_the_caller_is_refused() {
+        let script = Script {
+            current: 1000,
+            parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(
+                1,
+                vec![
+                    b"/path/to/fiber".to_vec(),
+                    b"session".to_vec(),
+                    format!("--id={OWNED}").into_bytes(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        rig.relay(
+            "c_1",
+            OTHER,
+            reply_with("c_1", labels_args("r_1")),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OWNED), "{message}");
+        assert!(message.contains(OTHER), "{message}");
+    }
+
+    #[test]
+    fn a_message_to_the_callers_own_session_is_forwarded() {
+        let mut rig = Rig::new(plain_target());
+        let (peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        rig.relay("c_1", OWNED, message("c_1"), &owned_owners(OWNED));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "message");
+    }
+
+    #[test]
+    fn a_full_subscribe_to_an_unknown_session_is_not_found_not_refused() {
+        let mut rig = Rig::new(plain_target());
+        rig.relay(
+            "c_1",
+            "s_aaaaaaaaaaaaaaaa",
+            full_subscribe("c_1"),
+            &owned_owners(OWNED),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "session_not_found");
+    }
+
+    #[test]
     fn the_direct_parent_reaches_its_delegate() {
         let script = Script {
             current: 1000,
@@ -3647,6 +3787,7 @@ mod session_refusal_tests {
                 .into_iter()
                 .collect(),
             argvs: HashMap::new(),
+            ..Default::default()
         };
         let mut rig = Rig::new(script);
         let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
@@ -3666,6 +3807,7 @@ mod session_refusal_tests {
             parents: [(TARGET, PEER)].into_iter().collect(),
             euids: HashMap::new(),
             argvs: HashMap::new(),
+            ..Default::default()
         };
         let mut rig = Rig::new(script);
         let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
@@ -3698,6 +3840,7 @@ mod session_refusal_tests {
             parents: HashMap::new(),
             euids: HashMap::new(),
             argvs: HashMap::new(),
+            ..Default::default()
         };
         let mut rig = Rig::new(script);
         let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
@@ -3771,6 +3914,7 @@ mod session_refusal_tests {
             )]
             .into_iter()
             .collect(),
+            ..Default::default()
         }
     }
 
@@ -3781,6 +3925,7 @@ mod session_refusal_tests {
             parents: [(own, 1), (1, 0)].into_iter().collect(),
             euids: [(1, 0)].into_iter().collect(),
             argvs: HashMap::new(),
+            ..Default::default()
         }
     }
 
@@ -3803,6 +3948,25 @@ mod session_refusal_tests {
         let line = client.next("the mint");
         assert_eq!(line["kind"], "command_accepted", "{line}");
         assert_eq!(line["payload"]["command_id"], "c_p");
+    }
+
+    #[test]
+    fn pairing_code_with_an_unreadable_owner_fails_closed() {
+        let own = std::process::id();
+        let script = Script {
+            current: 1000,
+            parents: [(own, 50), (50, 1), (1, 0)].into_iter().collect(),
+            euids: [(1, 1000)].into_iter().collect(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        };
+        let (mut client, _temp) = pairing_client(script);
+        client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
+        let line = client.next("the refusal");
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("`50`"), "{message}");
     }
 
     /// The no-relay first command: a listener stands in for the session
@@ -3832,6 +3996,7 @@ mod session_refusal_tests {
             )]
             .into_iter()
             .collect(),
+            ..Default::default()
         };
         let (mut rig, listener) = first_command_rig(script, OTHER);
         // The opener's peer is this test process, whose walk passes the
@@ -3859,6 +4024,7 @@ mod session_refusal_tests {
             parents: HashMap::new(),
             euids: HashMap::new(),
             argvs: HashMap::new(),
+            ..Default::default()
         };
         let (mut rig, listener) = first_command_rig(script, OTHER);
         // No subscription is kept on this rig, so the opener writes the
@@ -3879,5 +4045,99 @@ mod session_refusal_tests {
         let entry = held.entries.first().unwrap();
         assert_eq!(entry.session, OTHER);
         assert_eq!(entry.session_pid, Some(std::process::id()));
+    }
+
+    #[test]
+    fn no_command_routes_under_stale_authorization() {
+        // The stale entry's target is the caller's own child, so the
+        // direct-parent exception allows the command; the replacement
+        // entry's target has no readable walk, so a fresh check refuses
+        // it. Without the epoch re-check the stale allow would write to
+        // the new entry.
+        const STALE_PID: u32 = 50;
+        const FRESH_PID: u32 = 60;
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut script = Script {
+            current: 1000,
+            parents: [(STALE_PID, PEER), (FRESH_PID, 1), (PEER, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            euids: [
+                (STALE_PID, 1000),
+                (FRESH_PID, 1000),
+                (PEER, 1000),
+                (1, 1000),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: HashMap::new(),
+            ..Default::default()
+        };
+        script.block_first_parent = Some((entered_tx, std::sync::Mutex::new(release_rx)));
+        let mut rig = Rig::new(script);
+        let (mut peer_old, _keep_old) = rig.push_entry(OTHER, Some(STALE_PID));
+        peer_old.set_nonblocking(true).unwrap();
+        let hub = std::sync::Arc::clone(&rig.hub);
+        let writer = std::sync::Arc::clone(&rig.writer);
+        let relays = std::sync::Arc::clone(&rig.relays);
+        let routed = std::thread::spawn(move || {
+            crate::relay::relay_command(
+                &contract::CommandId("c_1".to_owned()),
+                OTHER,
+                &steer("c_1"),
+                &hub,
+                &writer,
+                &relays,
+                &owned_owners(OWNED),
+            );
+        });
+        // The route parks in the stale target's parent read; replace the
+        // entry before it is allowed to answer, so the check and the write
+        // see different epochs.
+        fakes::Deadline::after(super::DEADLINE)
+            .recv_or_fail(&entered_rx, "the route to park in the parent read");
+        let (old, mut peer_new) = {
+            let mut held = crate::connection::lock(&rig.relays);
+            let at = held
+                .entries
+                .iter()
+                .position(|entry| entry.session == OTHER)
+                .unwrap();
+            let mut old = held.entries.remove(at);
+            let (writer_new, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.set_nonblocking(true).unwrap();
+            held.entries.push(Relay {
+                session: OTHER.to_owned(),
+                epoch: old.epoch + 1,
+                writer: writer_new,
+                kept: Kept::default(),
+                replayed: Replayed::default(),
+                thread: old.thread.take(),
+                retiring: None,
+                session_pid: Some(FRESH_PID),
+            });
+            (old, peer)
+        };
+        release_tx.send(()).unwrap();
+        routed.join().unwrap();
+        // The fresh check refused, so neither entry got the command.
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert!(message.contains(OTHER), "{message}");
+        for (name, peer) in [("stale", &mut peer_old), ("fresh", &mut peer_new)] {
+            let mut idle = [0u8; 1];
+            let idle = std::io::Read::read(peer, &mut idle);
+            assert!(
+                matches!(idle, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "nothing reaches the {name} entry"
+            );
+        }
+        assert!(
+            crate::connection::lock(&old.kept).is_empty(),
+            "nothing queues on the stale entry"
+        );
     }
 }

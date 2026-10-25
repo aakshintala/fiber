@@ -147,6 +147,7 @@ fn rig(
         replayed: Replayed::default(),
         thread,
         retiring: None,
+        session_pid: None,
     });
     let rig = Rig {
         hub,
@@ -358,6 +359,7 @@ fn route_on_thread(rig: &Rig, id: &str, stripped: Map<String, Value>) {
             &relays,
             None,
             false,
+            None,
         );
         done_tx.send(()).unwrap_or(());
     });

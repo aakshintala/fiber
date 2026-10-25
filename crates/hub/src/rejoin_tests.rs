@@ -647,6 +647,7 @@ fn entry(session: &str, epoch: u64) -> crate::relay::Relay {
         replayed: crate::relay::Replayed::default(),
         thread: None,
         retiring: None,
+        session_pid: None,
     }
 }
 
