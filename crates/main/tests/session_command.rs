@@ -4023,9 +4023,17 @@ fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
         &client,
         r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
     );
-    until_session(&client, "the second turn_completed", |line| {
+    let second_turn = until_session(&client, "the second turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
+    assert!(
+        second_turn.iter().any(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["code"] == "skill_shadowed"
+                && line["payload"]["extension"] == "fiber.test/clashbox"
+        }),
+        "the turn-start refresh forwards the template's shadow notice: {second_turn:?}"
+    );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
     let answered = until_session(&client, "the commands answer", |line| {
         line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"

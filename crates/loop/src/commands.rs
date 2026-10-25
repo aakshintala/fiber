@@ -49,13 +49,24 @@ pub fn commands(
     let (chain, _) = opening::repo_chain(&workspace);
     let top = chain.first().unwrap_or(&workspace);
     let found = discovery::discover(inputs, top);
-    let mut rows = discovery::commands(&found.skills, &inputs.skills_disabled);
+    commands_from_found(inputs, &found.skills, prompts, extensions)
+}
+
+/// Builds the complete command answer from one discovery's winners,
+/// without reading skill or template files again. Used when a check or
+/// opening already owns the snapshot that changed the runnable set.
+pub(crate) fn commands_from_found(
+    inputs: &PromptInputs,
+    found: &[discovery::Found],
+    prompts: &[CommandInfo],
+    extensions: &[CommandInfo],
+) -> Commands {
+    let mut rows = discovery::commands(found, &inputs.skills_disabled);
     let mut notices = Vec::new();
     let skills_end = rows.len();
     let mut kept: Vec<CommandInfo> = Vec::new();
     for ext in extensions {
         if let Some(skill) = found
-            .skills
             .iter()
             .find(|found| found.listed.name == ext.name)
             .filter(|_| rows.iter().take(skills_end).any(|row| row.name == ext.name))
@@ -76,11 +87,7 @@ pub fn commands(
         if inputs.skills_disabled.iter().any(|off| off == &row.name) {
             continue;
         }
-        if let Some(skill) = found
-            .skills
-            .iter()
-            .find(|found| found.listed.name == row.name)
-        {
+        if let Some(skill) = found.iter().find(|found| found.listed.name == row.name) {
             notices.push(Notice {
                 code: ErrorCode::SkillShadowed,
                 message: format!(

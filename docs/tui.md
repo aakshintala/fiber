@@ -1917,9 +1917,9 @@ never as a row of its own.
 The rest of the list is the session's answer to the `commands` driver command
 (`docs/invocation.md`, "What each command does"): its skills, prompt templates
 and extension commands, each with the tag the answer gives. The terminal sends
-`commands` when it attaches to a session and again after each `reloaded` and
+`commands` when it attaches to a session and again after each `reloaded`,
 each `extensions_loaded`, which an offer's approval writes with no `reloaded`
-(`docs/events.md`, "`extensions_loaded`"), and
+(`docs/events.md`, "`extensions_loaded`"), and each `turn_started`, and
 fills the list from the answer to the latest one it sent; until that answer
 arrives, the list holds the commands above only. A skill, prompt template or MCP server's prompt named like a command above is left out. An extension's command named like one, which the `commands` answer marks with `extension`, takes its row instead, with its own description and hint, and runs in its place; it loads only when its manifest names that command in `replaces` (`docs/extensions.md`, "What a package holds"). An extension's command named like an alias takes that name the same way: its own row shows, and the built-in row drops the alias. An extension's commands run
 with the `command` driver command (`docs/extensions.md`, "Commands and

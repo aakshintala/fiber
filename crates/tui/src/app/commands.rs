@@ -773,7 +773,8 @@ impl App {
     }
 
     /// A `commands` line for `session`, sent on attach and after each
-    /// `reloaded`; its answer, and no older one, fills the `/` list.
+    /// `reloaded`, `extensions_loaded`, and `turn_started`; its answer,
+    /// and no older one, fills the `/` list.
     /// Until it answers, the list holds the built-ins only.
     pub(super) fn ask_commands(&mut self, session: &SessionId) -> String {
         self.completion.ask_commands(session)

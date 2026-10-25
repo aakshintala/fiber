@@ -224,6 +224,40 @@ fn adopting_a_set_into_itself_is_a_no_op() {
 }
 
 #[test]
+fn an_opening_reports_when_its_snapshot_differs_from_the_commands_answer() {
+    let tree = Tree::new();
+    let set = tree.set();
+    set.sync_commands(&[]);
+    skill(
+        &tree.top().join(".fiber/skills"),
+        "review",
+        "review",
+        "Reviews.",
+    );
+    let collected = crate::opening::collect(&tree.inputs(), &tree.top());
+
+    assert_eq!(
+        set.opened(
+            collected.found,
+            tree.inputs().skills_disabled,
+            &collected.message.skills,
+            &collected.notices,
+        ),
+        (true, true)
+    );
+    let unchanged = crate::opening::collect(&tree.inputs(), &tree.top());
+    assert_eq!(
+        set.opened(
+            unchanged.found,
+            tree.inputs().skills_disabled,
+            &unchanged.message.skills,
+            &unchanged.notices,
+        ),
+        (false, false)
+    );
+}
+
+#[test]
 fn adopt_moves_the_state_so_a_reader_answers_from_it_not_disk() {
     let tree = Tree::new();
     let path = skill(&tree.top().join(".agents/skills"), "tdd", "tdd", "d");

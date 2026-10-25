@@ -3,7 +3,8 @@
 
 use super::commands_testkit::{
     SESSION, answer_commands, answer_rows, attached, connected, enter, hub_line, image_part, now,
-    paste_image, sent, session_line, shown, start_accepted, turn_starts, type_text,
+    paste_image, sent, session_line, shown, start_accepted, turn_starts, turn_starts_with,
+    type_text,
 };
 use crate::app::{App, Effect};
 use crate::keys::Key;
@@ -585,7 +586,17 @@ fn report_keys_keep_the_held_conversation_position() {
         .cloned()
         .unwrap_or_default(),
     });
-    assert!(app.on_line(held).is_empty());
+    // The replayed start asks `commands` again; answering with no rows
+    // leaves the held row to the anchor below.
+    let asked = app.on_line(held);
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
     app.screen.pages_mut().hold_anchor(
         &contract::SessionId(SESSION.to_owned()),
         contract::Seq(0),
@@ -1014,11 +1025,11 @@ fn an_extension_command_sends_command_with_text() {
 #[test]
 fn an_extension_command_sends_command_during_a_turn() {
     let mut app = attached();
-    answer_rows(
-        &mut app,
-        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]),
-    );
-    turn_starts(&mut app);
+    let rows =
+        json!([{"name": "deploy", "description": "Deploys.", "tag": "acme", "extension": true}]);
+    answer_rows(&mut app, rows.clone());
+    // The turn's answer keeps the rows: `/deploy` still dispatches.
+    turn_starts_with(&mut app, rows);
     let lines = sent(enter(&mut app, "/deploy now"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["command"], "command");

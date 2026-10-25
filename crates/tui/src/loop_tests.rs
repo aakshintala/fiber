@@ -1612,6 +1612,12 @@ fn resume_open_replays_the_log_to_the_tail() {
     // The hub: answers commands, then streams the 150 turns / 1,348
     // envelopes on subscribe and hangs up, so the loop drains and returns.
     let stream = lines.clone();
+    // Every replayed turn start asks `commands` again: the hub serves
+    // those requests, then hangs up once each has been answered.
+    let replay_turns = lines
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
     // The hub's last step for the stall report: the hub sets each field
@@ -1670,6 +1676,8 @@ fn resume_open_replays_the_log_to_the_tail() {
                 value["payload"] = json!({"command_id": id, "result": result});
                 value
             };
+            let mut replaying = false;
+            let mut replay_commands = 0usize;
             while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
                 let command: Value = serde_json::from_str(&text).unwrap_or_default();
                 text.clear();
@@ -1687,7 +1695,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                         if command["args"]["level"] == "full" {
                             // The raise, released by the first frame: the
                             // last line read ends the preview, so the
-                            // replay folds from its first line.
+                            // replay folds from its first line. The hub
+                            // stays up through the replay: every replayed
+                            // turn start sends `commands` again.
                             let last = stream
                                 .iter()
                                 .filter_map(|envelope| envelope.seq.map(|seq| seq.0))
@@ -1697,7 +1707,7 @@ fn resume_open_replays_the_log_to_the_tail() {
                             for envelope in &stream {
                                 write(serde_json::to_value(envelope).unwrap_or(Value::Null));
                             }
-                            break;
+                            replaying = true;
                         }
                         // The first stage: park until the test releases
                         // it, then answer only. The raise follows the
@@ -1708,6 +1718,14 @@ fn resume_open_replays_the_log_to_the_tail() {
                     }
                     Some("commands") => {
                         write(session_ack(&id, json!({"commands": []})));
+                        // The replay's turn starts ask again: hang up once
+                        // every one has its answer.
+                        if replaying {
+                            replay_commands += 1;
+                            if replay_commands >= replay_turns {
+                                break;
+                            }
+                        }
                     }
                     Some("history") => {
                         // Parked with the question read: the loop asked
@@ -1835,6 +1853,21 @@ fn resume_open_replays_the_log_to_the_tail() {
         .unwrap_or_default();
     assert_eq!(histories.len(), 1, "{histories:?}");
     assert_eq!(histories[0]["args"], json!({}));
+    // Every replayed turn start asks `commands` again: the requests after
+    // the `full` subscribe match the log's turn starts one for one.
+    let seen_commands: Vec<Value> = seen.lock().map(|held| held.clone()).unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed = &seen_commands[full_at + 1..];
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
+    assert!(
+        replayed
+            .iter()
+            .all(|command| command["command"] == "commands"),
+        "{replayed:?}"
+    );
     let screen = shown(&lp);
     assert!(screen.contains("quokkas"), "{screen}");
 }

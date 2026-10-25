@@ -316,6 +316,32 @@ fn turn_started(session: &str) -> Line {
     })
 }
 
+/// A `turn_started` for `session`, answering the `commands` it asks for
+/// with no rows: a turn start may change the runnable set, so the
+/// terminal asks again at each one.
+fn turn_started_answered(app: &mut App, session: &str) {
+    let asked = commands(app.on_line(turn_started(session)));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0]["command"], "commands");
+    let id = asked[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("commands id"));
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: contract::SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::json!({"command_id": id, "result": {"commands": []}})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    assert!(app.on_line(answer).is_empty());
+}
+
 /// Parses outgoing command lines.
 fn commands(lines: Vec<String>) -> Vec<serde_json::Value> {
     lines
@@ -534,7 +560,7 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
     // conversation below.
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert_eq!(listed(&app), ["✓  fix the parser"]);
-    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    turn_started_answered(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(
         app.lines()
             .iter()
@@ -1233,6 +1259,7 @@ fn lines_before_the_acknowledgement_fold_the_row_and_skip_the_conversation() {
         ))
         .is_empty()
     );
+    // The session is not attached yet, so its turn start sends nothing.
     assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
     assert!(app.on_line(review()).is_empty());
     assert_eq!(listed(&app), ["●  tidy docs"]);
@@ -1267,7 +1294,7 @@ fn the_acknowledgement_and_lines_after_it_reach_the_conversation() {
         app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack))
             .is_empty()
     );
-    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    turn_started_answered(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(
         app.lines()
             .iter()
@@ -1577,7 +1604,7 @@ fn after_a_refused_open_the_next_open_sends_summary_raises_and_attaches() {
         app.session().map(|session| session.0.as_str()),
         Some("s_aaaaaaaaaaaaaaaa")
     );
-    assert!(app.on_line(turn_started("s_aaaaaaaaaaaaaaaa")).is_empty());
+    turn_started_answered(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert!(
         app.lines()
             .iter()

@@ -15,7 +15,8 @@ use contract::ErrorCode;
 use contract::events::CommandInfo;
 use fakes::clock::FakeClock;
 
-use super::commands;
+use super::{commands, commands_from_found};
+use crate::SkillSet;
 use crate::prompt::PromptInputs;
 
 /// A temporary tree: `top` is the repository's top level, `home` is
@@ -93,6 +94,99 @@ fn extension(name: &str, description: &str, tag: &str) -> CommandInfo {
         tag: tag.into(),
         extension: true,
     }
+}
+
+#[test]
+fn a_commands_refresh_uses_the_exact_check_snapshot() {
+    let tree = Tree::new();
+    let old = skill(&tree.top().join(".fiber/skills"), "old", "old", "Old.");
+    let inputs = tree.inputs();
+    let set = SkillSet::new(inputs.clone(), &tree.top());
+    let checked = set.check();
+
+    std::fs::remove_file(old).unwrap();
+    skill(&tree.top().join(".fiber/skills"), "new", "new", "New.");
+    let refreshed = commands_from_found(&checked.inputs, &checked.found, &[], &[]);
+
+    assert!(refreshed.rows.iter().any(|row| row.name == "old"));
+    assert!(!refreshed.rows.iter().any(|row| row.name == "new"));
+}
+
+#[test]
+fn a_template_added_before_the_opening_rebuilds_the_initial_answer() {
+    let tree = Tree::new();
+    let mut inputs = tree.inputs();
+    let extension = tree.root.join("extensions/acme");
+    inputs
+        .extension_dirs
+        .push(("acme".into(), extension.clone()));
+    let initial = commands(&inputs, &tree.top(), &[], &[]);
+    let set = SkillSet::new(inputs.clone(), &tree.top());
+    set.sync_commands(&initial.rows);
+
+    skill(
+        &extension.join("prompts"),
+        "release",
+        "release",
+        "Releases.",
+    );
+    let opening = crate::opening::collect(&inputs, &tree.top());
+    assert_eq!(
+        set.opened(
+            opening.found.clone(),
+            inputs.skills_disabled.clone(),
+            &opening.message.skills,
+            &opening.notices,
+        ),
+        (true, true)
+    );
+    let refreshed = commands_from_found(&inputs, &opening.found, &[], &[]);
+
+    assert!(initial.rows.iter().all(|row| row.name != "release"));
+    assert!(
+        refreshed
+            .rows
+            .iter()
+            .any(|row| row.name == "release" && row.tag == "template")
+    );
+}
+
+#[test]
+fn the_first_opening_refreshes_rows_when_only_a_description_changed() {
+    let tree = Tree::new();
+    let skill_file = skill(
+        &tree.top().join(".fiber/skills"),
+        "review",
+        "review",
+        "Before.",
+    );
+    let inputs = tree.inputs();
+    let initial = commands(&inputs, &tree.top(), &[], &[]);
+    let set = SkillSet::new(inputs.clone(), &tree.top());
+    set.sync_commands(&initial.rows);
+    std::fs::write(
+        &skill_file,
+        "---\nname: review\ndescription: After.\n---\nBody.\n",
+    )
+    .unwrap();
+    let opening = crate::opening::collect(&inputs, &tree.top());
+
+    assert_eq!(
+        set.opened(
+            opening.found.clone(),
+            inputs.skills_disabled.clone(),
+            &opening.message.skills,
+            &opening.notices,
+        ),
+        (true, false)
+    );
+    let refreshed = commands_from_found(&inputs, &opening.found, &[], &[]);
+    let review = refreshed
+        .rows
+        .iter()
+        .find(|row| row.name == "review")
+        .unwrap();
+    assert_eq!(review.description, "After.");
 }
 
 #[test]

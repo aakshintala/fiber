@@ -995,6 +995,62 @@ fn reloaded_asks_again_and_only_the_latest_answer_fills_the_list() {
 }
 
 #[test]
+fn turn_started_asks_again_and_the_latest_answer_fills_the_list() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let first = attached_asking(&mut app, now);
+    let lines = app.on_line(turn_started(S_A, "hi"));
+    assert_eq!(lines.len(), 1);
+    let again = parse(&lines[0]);
+    assert_eq!(again["command"], "commands");
+    assert_eq!(again["session_id"], S_A);
+    let second = again["id"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(first, second);
+    let row = |name: &str| serde_json::json!([{"name": name, "description": "d", "tag": "skill"}]);
+    // The older answer arrives after the turn start: ignored.
+    assert!(
+        app.on_line(commands_answer(&first, row("older")))
+            .is_empty()
+    );
+    assert_eq!(slash_rows(&mut app, "older", now), ["no matches"]);
+    assert!(
+        app.on_line(commands_answer(&second, row("latest")))
+            .is_empty()
+    );
+    assert_eq!(slash_rows(&mut app, "latest", now), ["/latest  d  skill"]);
+}
+
+#[test]
+fn each_replayed_turn_started_asks_commands_again() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    let first = attached_asking(&mut app, now);
+    // Replayed history carries the same lines with sequence numbers: each
+    // replayed turn start asks `commands` again.
+    let mut ids = Vec::new();
+    for (at, text) in [(1u64, "first"), (2, "second")] {
+        let mut line = turn_started(S_A, text);
+        if let Line::Session(envelope) = &mut line {
+            envelope.seq = Some(contract::Seq(at));
+        }
+        let lines = app.on_line(line);
+        assert_eq!(lines.len(), 1, "replayed turn {at}");
+        let asked = parse(&lines[0]);
+        assert_eq!(asked["command"], "commands");
+        assert_eq!(asked["session_id"], S_A);
+        ids.push(asked["id"].as_str().unwrap_or_default().to_owned());
+    }
+    assert_ne!(first, ids[0]);
+    assert_ne!(ids[0], ids[1]);
+    let row = |name: &str| serde_json::json!([{"name": name, "description": "d", "tag": "skill"}]);
+    assert!(
+        app.on_line(commands_answer(&ids[1], row("latest")))
+            .is_empty()
+    );
+    assert_eq!(slash_rows(&mut app, "latest", now), ["/latest  d  skill"]);
+}
+
+#[test]
 fn the_opening_messages_skills_no_longer_feed_the_list() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
