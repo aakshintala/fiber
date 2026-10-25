@@ -21,11 +21,12 @@ fn selected(diff: &str, sources: &[RustFile]) -> Vec<TestRef> {
     result.unwrap_or_default()
 }
 
-fn refer(package: &str, binary: Option<&str>, name: &str) -> TestRef {
+fn refer(package: &str, binary: Option<&str>, unit: bool, name: &str) -> TestRef {
     TestRef {
         package: package.to_owned(),
         binary: binary.map(str::to_owned),
         name: name.to_owned(),
+        unit,
     }
 }
 
@@ -78,7 +79,7 @@ fn a_hunk_on_the_first_attribute_line_selects() {
     let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -87,7 +88,7 @@ fn a_hunk_on_the_closing_brace_line_selects() {
     let diff = span_diff("@@ -20,1 +20,1 @@\n-}\n+}\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -103,8 +104,8 @@ fn a_hunk_ending_at_the_span_start_selects() {
     assert_eq!(
         selected(&diff, &span_sources()),
         vec![
-            refer("log", None, "span::tests::first"),
-            refer("log", None, "span::tests::second"),
+            refer("log", None, true, "span::tests::first"),
+            refer("log", None, true, "span::tests::second"),
         ]
     );
 }
@@ -114,7 +115,7 @@ fn a_hunk_starting_at_the_span_end_selects() {
     let diff = span_diff("@@ -20,1 +20,6 @@\n-}\n+}\n+a\n+b\n+c\n+d\n+e\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -123,7 +124,7 @@ fn a_hunk_header_may_carry_a_section_heading() {
     let diff = span_diff("@@ -10,1 +10,1 @@ fn second\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -132,7 +133,7 @@ fn a_zero_count_gap_before_the_span_start_selects() {
     let diff = span_diff("@@ -9,1 +9,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -147,12 +148,12 @@ fn a_zero_count_gap_inside_the_span_selects() {
     let diff = span_diff("@@ -10,1 +10,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
     let diff = span_diff("@@ -19,1 +19,0 @@\n-gone\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -169,7 +170,7 @@ fn a_hunk_on_a_doc_comment_above_the_test_selects() {
     let diff = span_diff("@@ -10,1 +10,1 @@\n-/// old\n+/// new\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::second")]
+        vec![refer("log", None, true, "span::tests::second")]
     );
 }
 
@@ -196,7 +197,7 @@ fn a_test_after_inner_attributes_is_selected_only_by_its_own_span() {
     let diff = span_diff("@@ -5,1 +5,1 @@\n-#[test]\n+#[test]\n");
     assert_eq!(
         selected(&diff, &span_sources()),
-        vec![refer("log", None, "span::tests::first")]
+        vec![refer("log", None, true, "span::tests::first")]
     );
 }
 
@@ -214,7 +215,7 @@ fn kept() {}
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "kept::tests::kept")]
+        vec![refer("log", None, true, "kept::tests::kept")]
     );
 }
 
@@ -230,7 +231,7 @@ fn a_hunk_with_an_omitted_new_count_holds_one_line() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "omitted::tests::same")]
+        vec![refer("log", None, true, "omitted::tests::same")]
     );
 }
 
@@ -244,7 +245,7 @@ fn a_hunk_end_is_start_plus_count_minus_one() {
     );
     assert_eq!(
         selected(&wide, &sources),
-        vec![refer("log", None, "end::tests::sixth")]
+        vec![refer("log", None, true, "end::tests::sixth")]
     );
     let narrow = diff_file(
         "crates/log/src/end_tests.rs",
@@ -265,7 +266,7 @@ fn a_hunk_body_is_consumed_by_its_counts() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "quoted::tests::quoted")]
+        vec![refer("log", None, true, "quoted::tests::quoted")]
     );
 }
 
@@ -279,7 +280,7 @@ fn a_missing_trailing_newline_is_not_a_hunk_line() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "newline::tests::bare")]
+        vec![refer("log", None, true, "newline::tests::bare")]
     );
 }
 
@@ -309,8 +310,8 @@ fn two_files_in_one_diff_each_select() {
     assert_eq!(
         selected(&diff, &[one, two]),
         vec![
-            refer("log", None, "one::tests::one"),
-            refer("log", None, "two::tests::two"),
+            refer("log", None, true, "one::tests::one"),
+            refer("log", None, true, "two::tests::two"),
         ]
     );
 }
@@ -402,21 +403,25 @@ fn only_test_attributes_select() {
     for line in [1, 4, 7, 10, 13, 15, 18, 21, 24, 29, 32, 39, 43, 46] {
         diff.push_str(&detect_diff(line));
     }
-    let names: Vec<String> = selected(&diff, &detect_sources())
+    // The filter joins one term per test, and `docs/ci.md` promises which
+    // tests run but not the order of the terms, so the names compare as a
+    // set.
+    let mut names: Vec<String> = selected(&diff, &detect_sources())
         .iter()
         .map(|t| t.name.clone())
         .collect();
+    names.sort();
     assert_eq!(
         names,
         vec![
-            "detect::tests::plain",
-            "detect::tests::async_plain",
             "detect::tests::async_mt",
-            "detect::tests::stacked",
+            "detect::tests::async_plain",
             "detect::tests::generic",
-            "detect::tests::type",
-            "detect::tests::nested::inner",
             "detect::tests::nested::deep::deeper",
+            "detect::tests::nested::inner",
+            "detect::tests::plain",
+            "detect::tests::stacked",
+            "detect::tests::type",
         ]
     );
 }
@@ -427,7 +432,7 @@ fn a_test_attribute_stack_starts_at_its_first_attribute() {
     let diff = detect_diff(24);
     assert_eq!(
         selected(&diff, &detect_sources()),
-        vec![refer("log", None, "detect::tests::stacked")]
+        vec![refer("log", None, true, "detect::tests::stacked")]
     );
     let before = detect_diff(23);
     assert_eq!(selected(&before, &detect_sources()), vec![]);
@@ -448,7 +453,7 @@ fn untouched() {}
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "two::tests::touched")]
+        vec![refer("log", None, true, "two::tests::touched")]
     );
 }
 
@@ -465,7 +470,7 @@ fn a_unit_test_file_names_its_module_path() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("log", None, "writer::tests::flushes_on_drop")]
+        vec![refer("log", None, true, "writer::tests::flushes_on_drop")]
     );
 }
 
@@ -482,7 +487,12 @@ fn a_tests_binary_names_the_bare_function() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("loop", Some("loop::turns"), "resumes_after_pause")]
+        vec![refer(
+            "loop",
+            Some("loop::turns"),
+            false,
+            "resumes_after_pause"
+        )]
     );
 }
 
@@ -499,7 +509,7 @@ fn a_shared_tests_subdirectory_without_a_root_file_names_no_binary() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("loop", None, "support::helper")]
+        vec![refer("loop", None, false, "support::helper")]
     );
 }
 
@@ -519,7 +529,7 @@ fn a_shared_tests_subdirectory_with_a_root_file_names_that_binary() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("loop", Some("loop::support"), "helper")]
+        vec![refer("loop", Some("loop::support"), false, "helper")]
     );
 }
 
@@ -539,7 +549,12 @@ fn a_tests_subdirectory_with_a_root_file_prefixes_below_the_directory() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("main", Some("main::completion"), "bash::completes")]
+        vec![refer(
+            "main",
+            Some("main::completion"),
+            false,
+            "bash::completes"
+        )]
     );
 }
 
@@ -559,6 +574,7 @@ fn an_example_test_file_names_its_example_binary() {
         vec![refer(
             "bench",
             Some("bench::example/bench"),
+            false,
             "run::tests::runs"
         )]
     );
@@ -584,7 +600,62 @@ fn a_path_declared_test_file_maps_to_its_declaring_module() {
     );
     assert_eq!(
         selected(&diff, &sources),
-        vec![refer("main", None, "settings::idle_tests::idle")]
+        vec![refer("main", None, true, "settings::idle_tests::idle")]
+    );
+}
+
+#[test]
+fn a_unit_test_without_a_tests_segment_selects_with_the_unit_filter() {
+    // A `*_tests` file a `#[path]` declaration names from a plain module
+    // (as `crates/tui/src/app/commands.rs` names `aliases_tests.rs` from
+    // `mod aliases`): its tests compile into the package's unit tests, so
+    // the filter is the package term even though the module path holds no
+    // `tests::` segment.
+    let sources = vec![
+        file(
+            "log",
+            "crates/log/src/writer.rs",
+            "#[path = \"writer_alias_tests.rs\"]\nmod writer_alias;\n",
+        ),
+        file(
+            "log",
+            "crates/log/src/writer_alias_tests.rs",
+            "#[test]\nfn flushes() {}\n",
+        ),
+    ];
+    let diff = diff_file(
+        "crates/log/src/writer_alias_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn flushes() {}\n+fn flushes() {}\n",
+    );
+    let touched = selected(&diff, &sources);
+    assert_eq!(
+        touched,
+        vec![refer("log", None, true, "writer::writer_alias::flushes")]
+    );
+    assert_eq!(
+        filter(&touched),
+        "(package(log) & test(=writer::writer_alias::flushes))"
+    );
+}
+
+#[test]
+fn a_shared_support_test_selects_with_the_kind_filter() {
+    // A module under `tests/<dir>/` with no root file compiles into the
+    // integration binaries, so its term keeps `kind(test)`.
+    let sources = vec![file(
+        "loop",
+        "crates/loop/tests/support/mod.rs",
+        "#[test]\nfn helper() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/loop/tests/support/mod.rs",
+        "@@ -2,1 +2,1 @@\n-fn helper() {}\n+fn helper() {}\n",
+    );
+    let touched = selected(&diff, &sources);
+    assert_eq!(touched, vec![refer("loop", None, false, "support::helper")]);
+    assert_eq!(
+        filter(&touched),
+        "(package(loop) & kind(test) & test(=support::helper))"
     );
 }
 
@@ -603,20 +674,28 @@ fn a_non_test_file_with_a_touched_test_selects_nothing() {
 }
 
 #[test]
-fn filter_joins_terms_in_diff_order() {
+fn filter_joins_one_term_per_touched_test() {
+    // `docs/ci.md` promises which tests run but not the order of the
+    // terms, so the terms compare as a set.
     let tests = vec![
-        refer("loop", Some("loop::turns"), "resumes_after_pause"),
-        refer("log", None, "writer::tests::flushes_on_drop"),
+        refer("loop", Some("loop::turns"), false, "resumes_after_pause"),
+        refer("log", None, true, "writer::tests::flushes_on_drop"),
     ];
+    let joined = filter(&tests);
+    let mut terms: Vec<&str> = joined.split(" | ").collect();
+    terms.sort_unstable();
     assert_eq!(
-        filter(&tests),
-        "(binary_id(loop::turns) & test(=resumes_after_pause)) | (package(log) & test(=writer::tests::flushes_on_drop))"
+        terms,
+        vec![
+            "(binary_id(loop::turns) & test(=resumes_after_pause))",
+            "(package(log) & test(=writer::tests::flushes_on_drop))",
+        ]
     );
 }
 
 #[test]
 fn filter_marks_a_shared_support_test_with_its_kind() {
-    let tests = vec![refer("log", None, "support::helper")];
+    let tests = vec![refer("log", None, false, "support::helper")];
     assert_eq!(
         filter(&tests),
         "(package(log) & kind(test) & test(=support::helper))"
@@ -659,7 +738,7 @@ fn a_quoted_diff_path_is_an_error_naming_the_path() {
     ] {
         match changed_tests(diff, &members(), &span_sources()) {
             Err(error) => assert!(error.contains(path), "{diff}: {error}"),
-            Ok(tests) => assert!(tests.is_empty(), "{diff}: got {tests:?}"),
+            Ok(tests) => panic!("{diff}: expected an error naming the path, got {tests:?}"),
         }
     }
 }
@@ -673,7 +752,9 @@ fn a_malformed_hunk_header_is_an_error_naming_the_path() {
                 error.contains("crates/log/src/span_tests.rs"),
                 "{header}: {error}"
             ),
-            Ok(tests) => assert!(tests.is_empty(), "{header}: got {tests:?}"),
+            Ok(tests) => {
+                panic!("{header}: expected an error naming the path, got {tests:?}")
+            }
         }
     }
 }
@@ -691,7 +772,7 @@ fn an_unparsable_test_file_is_an_error_naming_the_path() {
     );
     match changed_tests(&diff, &members(), &sources) {
         Err(error) => assert!(error.contains("crates/log/src/broken_tests.rs"), "{error}"),
-        Ok(tests) => assert!(tests.is_empty(), "expected an error, got {tests:?}"),
+        Ok(tests) => panic!("expected an error naming the path, got {tests:?}"),
     }
 }
 
@@ -707,7 +788,9 @@ fn a_hunk_count_past_u32_is_an_error_naming_the_path() {
                 error.contains("crates/log/src/span_tests.rs"),
                 "{header}: {error}"
             ),
-            Ok(tests) => assert!(tests.is_empty(), "{header}: got {tests:?}"),
+            Ok(tests) => {
+                panic!("{header}: expected an error naming the path, got {tests:?}")
+            }
         }
     }
 }

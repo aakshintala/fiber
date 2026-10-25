@@ -6,6 +6,7 @@ fn binary_test() -> TestRef {
         package: "main".to_owned(),
         binary: Some("main::completion".to_owned()),
         name: "bash::registers".to_owned(),
+        unit: false,
     }
 }
 
@@ -14,12 +15,12 @@ fn unit_test() -> TestRef {
         package: "log".to_owned(),
         binary: None,
         name: "writer::tests::flushes_on_drop".to_owned(),
+        unit: true,
     }
 }
 
 #[test]
 fn an_empty_label_list_runs_the_pilot_default() {
-    assert_eq!(stress_count(""), STRESS_COUNT);
     assert_eq!(stress_count(""), 30);
 }
 
@@ -31,7 +32,6 @@ fn a_label_list_without_test_only_runs_the_pilot_default() {
 
 #[test]
 fn a_test_only_label_runs_the_flaky_fix_count() {
-    assert_eq!(stress_count("test-only"), TEST_ONLY_COUNT);
     assert_eq!(stress_count("test-only"), 100);
     assert_eq!(stress_count("bug\ntest-only"), 100);
 }

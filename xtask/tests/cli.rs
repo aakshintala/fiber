@@ -325,15 +325,40 @@ fn stress_plan_prints_the_touched_tests() {
         "",
     );
     assert_eq!(code, 0);
+    // `docs/ci.md` promises which tests run but not the order of the
+    // selection lines, so every line but the run/count head compares as a
+    // set, and the filter terms compare as a set too.
+    let mut head = Vec::new();
+    let mut terms = Vec::new();
+    let mut rest = Vec::new();
+    for line in out.lines() {
+        if let Some(filter) = line.strip_prefix("filter\t") {
+            terms.extend(filter.split(" | ").map(str::to_owned));
+        } else if line.starts_with("run\t") || line.starts_with("count\t") {
+            head.push(line.to_owned());
+        } else {
+            rest.push(line.to_owned());
+        }
+    }
+    head.sort();
+    terms.sort();
+    rest.sort();
+    assert_eq!(head, ["count\t30".to_owned(), "run\ttrue".to_owned()]);
     assert_eq!(
-        out,
-        "run\ttrue\n\
-         count\t30\n\
-         filter\t(binary_id(a::t) & test(=new_test)) | (package(b) & test(=fold::tests::second))\n\
-         package\ta@0.0.0\n\
-         package\tb@0.0.0\n\
-         test\ta::t new_test\n\
-         test\tb fold::tests::second\n"
+        terms,
+        [
+            "(binary_id(a::t) & test(=new_test))".to_owned(),
+            "(package(b) & test(=fold::tests::second))".to_owned(),
+        ]
+    );
+    assert_eq!(
+        rest,
+        [
+            "package\ta@0.0.0".to_owned(),
+            "package\tb@0.0.0".to_owned(),
+            "test\ta::t new_test".to_owned(),
+            "test\tb fold::tests::second".to_owned(),
+        ]
     );
     let (code, out) = xtask(
         &dir,

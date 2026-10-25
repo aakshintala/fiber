@@ -19,20 +19,26 @@ use crate::rules::RustFile;
 /// and test name that select it. `binary` is the nextest binary id for
 /// integration and example tests and for `tests/<dir>/` modules with a
 /// root file; `None` for unit tests and for shared `tests/<dir>/` modules.
+/// `unit` is whether the test compiles into the package's unit tests (a
+/// file under `src/`): only then does the filter use the package term, so
+/// a unit test whose module path holds no `tests::` segment still matches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestRef {
     pub(crate) package: String,
     pub(crate) binary: Option<String>,
     pub(crate) name: String,
+    pub(crate) unit: bool,
 }
 
 /// Where one test file's tests run: the package, the nextest binary id if
-/// the file is an integration or example test, and the prefix its tests'
-/// names start with.
+/// the file is an integration or example test, the prefix its tests'
+/// names start with, and whether its tests compile into the package's
+/// unit tests rather than an integration binary.
 struct FileScope {
     package: String,
     binary: Option<String>,
     prefix: String,
+    unit: bool,
 }
 
 /// The package, binary and name prefix of the tests in the file at `path`:
@@ -49,6 +55,10 @@ fn file_scope(
     sources: &[RustFile],
 ) -> Option<FileScope> {
     if let Some((package, scope, prefix)) = scope_of(path, members, by_target) {
+        // Only a file under `src/` runs in the package's unit tests; a
+        // file directly in `tests/` or under `examples/` runs in its own
+        // binary instead.
+        let unit = matches!(scope, Scope::Package);
         let binary = match scope {
             Scope::Binary(stem) => Some(format!("{package}::{stem}")),
             Scope::Package => None,
@@ -58,6 +68,7 @@ fn file_scope(
             package,
             binary,
             prefix,
+            unit,
         });
     }
     if !path.ends_with(".rs") {
@@ -91,12 +102,14 @@ fn file_scope(
             package: name.to_owned(),
             binary: Some(format!("{name}::{dir}")),
             prefix: short,
+            unit: false,
         })
     } else {
         Some(FileScope {
             package: name.to_owned(),
             binary: None,
             prefix: format!("{dir}::{short}"),
+            unit: false,
         })
     }
 }
@@ -347,6 +360,7 @@ fn resolve(
                     package: scope.package.clone(),
                     binary: scope.binary.clone(),
                     name: format!("{}{}", scope.prefix, f.name),
+                    unit: scope.unit,
                 };
                 (f, test)
             })
@@ -483,19 +497,17 @@ fn select(hunk: &Hunk, tests: &[(TestFn, TestRef)], out: &mut Vec<TestRef>) {
 /// The nextest filter selecting exactly the touched tests, in diff order:
 /// a binary term for integration and example tests, a package term for
 /// unit tests, and a `kind(test)` package term for shared `tests/`
-/// support modules. Unit tests live in test modules, so their names hold
-/// a `tests::` segment, either from the file's own test name or from the
-/// module a `#[path]` declaration gives it. A test in a shared support
-/// directory has no binary and no such segment, so `kind(test)` keeps the
-/// term to the integration binaries. A `#[path]`-declared unit test whose
-/// module path has no `tests::` segment takes the `kind(test)` term and
-/// matches nothing: declare test files from test modules.
+/// support modules. Which package term a test without a binary takes is
+/// kept from where it compiles, never read from its module path: a unit
+/// test in a `#[path]`-declared file (as `app::commands::aliases::<name>`)
+/// holds no `tests::` segment, yet still runs in the package's unit
+/// tests, where a `kind(test)` term would match nothing.
 pub(crate) fn filter(tests: &[TestRef]) -> String {
     tests
         .iter()
         .map(|test| match &test.binary {
             Some(binary) => format!("(binary_id({binary}) & test(={}))", test.name),
-            None if test.name.contains("tests::") => {
+            None if test.unit => {
                 format!("(package({}) & test(={}))", test.package, test.name)
             }
             None => format!(
