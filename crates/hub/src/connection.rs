@@ -1002,6 +1002,9 @@ fn on_command(
             &line.id,
             crate::delete::delete(hub, &line.args),
         ),
+        "prune" if hub.machine.is_some() => {
+            answer(writer, hub, &line.id, crate::prune::prune(hub, &line.args))
+        }
         "import" if hub.machine.is_some() => answer(
             writer,
             hub,

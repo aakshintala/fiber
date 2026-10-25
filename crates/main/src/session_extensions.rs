@@ -105,7 +105,7 @@ pub(crate) fn missing_hooks(
         Ok(state) => state,
         Err(error) => return Err(failed(error.code(), error)),
     };
-    if !matches!(state, extensions::HooksState::MissingBlocking) {
+    if !matches!(state, extensions::HooksState::MissingBlocking { .. }) {
         return Ok(());
     }
     Err(failed(

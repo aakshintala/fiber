@@ -107,6 +107,91 @@ fn install(home: &Path) {
 }
 
 #[test]
+fn hooks_operations_validate_wire_arguments_before_side_effects() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::with_origin(
+        home.clone(),
+        Arc::new(extensions::Origin::new("git", |_| {
+            panic!("invalid hooks request must not fetch")
+        })),
+    );
+    for args in [
+        json!({}),
+        json!({"workspace":null}),
+        json!({"workspace":7}),
+        json!({"workspace":"relative"}),
+        json!({"workspace":workspace,"unknown":true}),
+        json!({"workspace":workspace,"overrides":null}),
+        json!({"workspace":workspace,"overrides":"a=b"}),
+        json!({"workspace":workspace,"overrides":["a=b",1]}),
+    ] {
+        assert_eq!(
+            call(&seam, "blocking_hooks", args).unwrap_err().code,
+            ErrorCode::InvalidArguments
+        );
+    }
+    for args in [
+        json!({"workspace":workspace}),
+        json!({"extra":true}),
+        json!({"clock":null}),
+    ] {
+        assert_eq!(
+            call(&seam, "install_hooks", args).unwrap_err().code,
+            ErrorCode::InvalidArguments
+        );
+    }
+    assert!(!home.join("extensions").exists());
+}
+
+#[test]
+fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
+    fakes::within("hooks wire query", Deadline::start(), || {
+        let dirs = Dirs::new();
+        let workspace = dirs.workspace("one");
+        let home = dirs.home();
+        let seam = Seam::new(home.clone());
+        // Empty with no blockers (`docs/invocation.md:1160`).
+        assert_eq!(
+            result(&seam, "blocking_hooks", json!({"workspace":workspace})),
+            json!({"names":[]})
+        );
+        let key = "extensions.\"github.com/aakshintala/fiber/extensions/hooks\".settings.hooks";
+        let overrides = vec![
+            format!("{key}.z={{\"on_failure\":\"blocking\"}}"),
+            format!("{key}.a={{\"on_failure\":\"blocking\"}}"),
+            format!("{key}.z.on_failure=non-blocking"),
+        ];
+        // The lone surviving blocker is named (`docs/invocation.md:1160`).
+        assert_eq!(
+            result(
+                &seam,
+                "blocking_hooks",
+                json!({"workspace":workspace,"overrides":overrides})
+            ),
+            json!({"names":["a"]})
+        );
+        let actual = call(
+            &seam,
+            "blocking_hooks",
+            json!({"workspace":workspace,"overrides":["=bad"]}),
+        )
+        .unwrap_err();
+        let expected = seam
+            .blocking_hooks(&workspace, &["=bad".into()])
+            .unwrap_err();
+        assert_eq!(actual.code, expected.code);
+        assert_eq!(actual.message, expected.message);
+        write(&home.join("config.json"), "not json");
+        let actual = call(&seam, "blocking_hooks", json!({"workspace":workspace})).unwrap_err();
+        let expected = seam.blocking_hooks(&workspace, &[]).unwrap_err();
+        assert_eq!(actual.code, ErrorCode::ConfigInvalid);
+        assert_eq!(actual.message, expected.message);
+    });
+}
+
+#[test]
 fn provider_install_rejects_invalid_argument_shapes_and_unknown_providers() {
     let dirs = Dirs::new();
     let home = dirs.home();
@@ -1320,6 +1405,8 @@ fn remote_operation_documentation_lists_the_complete_wire_surface() {
             "reviewer_models",
             "models",
             "install_provider",
+            "blocking_hooks",
+            "install_hooks",
             "set_reviewer",
             "gaps",
             "save_host",
@@ -1385,4 +1472,351 @@ fn logout_operations_answer_their_wire_shapes() {
             {"row":"secret","name":"acme.api_key","deletable":true},
         ]})
     );
+}
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use contract::SessionId;
+use contract::commands::hub::{PruneExpect, PruneSession};
+
+/// A session dir under `projects/<project>/sessions/<id>`: the hub-wide
+/// selection finds it whatever the workspace is; the lock file proves no
+/// pass takes it.
+fn prune_session(home: &Path, project: &str, id: &str, from: Option<&str>, ts: u64) -> PathBuf {
+    let dir = home
+        .join("projects")
+        .join(project)
+        .join("sessions")
+        .join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let mut payload = json!({"workspace": "/w"});
+    if let Some(from) = from {
+        payload["forked_from"] = json!({"session_id": from, "seq": 1});
+    }
+    let first = json!({"kind": "session_started", "seq": 0, "payload": payload});
+    let last = json!({"kind": "x", "ts": ts});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a.txt"), b"0123456789").unwrap();
+    fs::write(dir.join("session.lock"), b"").unwrap();
+    dir
+}
+
+fn wall_ms(clock: &std::sync::Arc<fakes::clock::FakeClock>) -> u64 {
+    contract::clock::wall_ms(clock.wall())
+}
+
+#[test]
+fn seam_prune_dry_run_previews_across_projects_without_removing() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let root = prune_session(&home, "one", "s_00000000000000a1", None, 0);
+    let fork = prune_session(
+        &home,
+        "two",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        0,
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let seam = Seam::new(home.clone());
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    let outcome = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            true,
+            false,
+            true,
+            None,
+            clock.clone(),
+            &mut delete,
+        )
+        .unwrap();
+    assert!(calls.is_empty(), "a dry run deletes nothing");
+    assert_eq!(outcome.items.sessions.len(), 1);
+    assert_eq!(outcome.items.sessions[0].id.0, "s_00000000000000a1");
+    assert_eq!(
+        outcome.items.sessions[0].cascade,
+        [
+            SessionId("s_00000000000000a1".into()),
+            SessionId("s_00000000000000b2".into())
+        ]
+    );
+    assert_eq!(outcome.items.worktrees, Vec::<String>::new());
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    assert_eq!(outcome.freed, listed);
+    assert!(
+        outcome
+            .lines
+            .iter()
+            .any(|line| line.contains("s_00000000000000a1"))
+    );
+    assert!(root.join("session.lock").is_file());
+    assert!(fork.join("session.lock").is_file());
+    assert!(root.join("events.jsonl").is_file());
+    assert!(fork.join("events.jsonl").is_file());
+}
+
+#[test]
+fn seam_prune_confirm_removes_previewed_items_through_the_callback() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let root = prune_session(&home, "one", "s_00000000000000a1", None, 0);
+    let fork = prune_session(
+        &home,
+        "two",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        0,
+    );
+    fs::create_dir_all(home.join("logs")).unwrap();
+    fs::write(home.join("logs").join("old.log"), b"0123456789").unwrap();
+    let old_log = home.join("logs").join("old.log").display().to_string();
+    let clock = fakes::clock::FakeClock::new();
+    fs::File::options()
+        .write(true)
+        .open(home.join("logs").join("old.log"))
+        .unwrap()
+        .set_modified(clock.wall() - std::time::Duration::from_secs(31 * 24 * 60 * 60))
+        .unwrap();
+    let seam = Seam::new(home.clone());
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    let outcome = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            true,
+            false,
+            false,
+            Some(PruneExpect {
+                sessions: vec![PruneSession {
+                    id: SessionId("s_00000000000000a1".into()),
+                    cascade: vec![
+                        SessionId("s_00000000000000a1".into()),
+                        SessionId("s_00000000000000b2".into()),
+                    ],
+                }],
+                worktrees: Vec::new(),
+                pinned: Vec::new(),
+                diagnostics: vec![old_log.clone()],
+            }),
+            clock.clone(),
+            &mut delete,
+        )
+        .unwrap();
+    // Each session arrives with its previewed cascade set as `expect`.
+    assert_eq!(
+        calls,
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            Some(
+                [
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ]
+                .into_iter()
+                .collect()
+            ),
+        )]
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    assert_eq!(outcome.freed, listed + 10);
+    assert_eq!(outcome.total, 2);
+    assert!(outcome.failures.is_empty());
+    assert!(!home.join("logs").join("old.log").exists());
+}
+
+#[test]
+fn seam_prune_older_than_boundary_and_invalid_duration() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let clock = fakes::clock::FakeClock::new();
+    let now = wall_ms(&clock);
+    let thirty_days = 30 * 24 * 60 * 60 * 1000;
+    // Just under the duration survives; just over is selected.
+    prune_session(
+        &home,
+        "one",
+        "s_00000000000000a1",
+        None,
+        now - thirty_days + 60_000,
+    );
+    prune_session(
+        &home,
+        "one",
+        "s_00000000000000b2",
+        None,
+        now - thirty_days - 60_000,
+    );
+    let seam = Seam::new(home.clone());
+    let mut delete = |_: &SessionId, _: bool, _: Option<&BTreeSet<SessionId>>| Ok(());
+    let outcome = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            false,
+            false,
+            true,
+            None,
+            clock.clone(),
+            &mut delete,
+        )
+        .unwrap();
+    assert_eq!(outcome.items.sessions.len(), 1);
+    assert_eq!(outcome.items.sessions[0].id.0, "s_00000000000000b2");
+    // An unreadable duration fails before any removal.
+    let mut calls = 0;
+    let mut counting = |_: &SessionId, _: bool, _: Option<&BTreeSet<SessionId>>| {
+        calls += 1;
+        Ok(())
+    };
+    let refused = seam
+        .prune(
+            &home,
+            Some("bogus".to_owned()),
+            false,
+            false,
+            false,
+            None,
+            clock,
+            &mut counting,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::InvalidArguments);
+    assert_eq!(calls, 0);
+    assert!(
+        home.join("projects/one/sessions/s_00000000000000a1/events.jsonl")
+            .is_file()
+    );
+    assert!(
+        home.join("projects/one/sessions/s_00000000000000b2/events.jsonl")
+            .is_file()
+    );
+}
+
+#[test]
+fn seam_prune_running_worktree_mismatch_rejects_before_any_removal() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let clock = fakes::clock::FakeClock::new();
+    // A worktree a running session works in: its lock stays taken through
+    // the confirm, so the reselect leaves it out.
+    let worktree = home.join("projects/pw/worktrees/w1");
+    fs::create_dir_all(&worktree).unwrap();
+    let canonical = fs::canonicalize(&worktree).unwrap();
+    let running = home.join("projects/pw/sessions/s_00000000000000c3");
+    fs::create_dir_all(&running).unwrap();
+    fs::write(
+        running.join("events.jsonl"),
+        format!(
+            "{}\n{}\n",
+            json!({"kind": "session_started", "seq": 0,
+                "payload": {"workspace": canonical.to_str().unwrap()}}),
+            json!({"kind": "x", "ts": 0}),
+        ),
+    )
+    .unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(running.join("session.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    let seam = Seam::new(home.clone());
+    let mut calls = 0;
+    let mut delete = |_: &SessionId, _: bool, _: Option<&BTreeSet<SessionId>>| {
+        calls += 1;
+        Ok(())
+    };
+    let key = worktree.display().to_string();
+    // The previewed worktree is no longer selectable: the whole
+    // request rejects before any removal.
+    let refused = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            false,
+            false,
+            false,
+            Some(PruneExpect {
+                sessions: Vec::new(),
+                worktrees: vec![key.clone()],
+                pinned: Vec::new(),
+                diagnostics: Vec::new(),
+            }),
+            clock,
+            &mut delete,
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert_eq!(calls, 0, "no session reaches the callback on mismatch");
+    assert!(worktree.is_dir(), "the running worktree survives");
+    drop(lock);
+}
+
+#[test]
+fn seam_prune_confirm_without_expect_removes_the_current_selection() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let root = prune_session(&home, "one", "s_00000000000000a1", None, 0);
+    let fork = prune_session(
+        &home,
+        "two",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        0,
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let seam = Seam::new(home.clone());
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    // Without `expect` (`--yes`) the confirm removes the current
+    // selection, as the local path does.
+    let outcome = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            true,
+            false,
+            false,
+            None,
+            clock.clone(),
+            &mut delete,
+        )
+        .unwrap();
+    // Each session arrives with its previewed cascade set as `expect`.
+    assert_eq!(
+        calls,
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            Some(
+                [
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ]
+                .into_iter()
+                .collect()
+            ),
+        )]
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    assert_eq!(outcome.freed, listed);
+    assert_eq!(outcome.total, 1);
+    assert!(outcome.failures.is_empty());
 }
