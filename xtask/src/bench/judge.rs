@@ -674,6 +674,11 @@ pub(super) fn head_skipped_rows(head: Option<&Results>) -> Vec<&'static str> {
 /// per-MiB checks their one id, ratios either side, and exact checks
 /// read none, so an exact budget never skips. `10 busy turns` and names
 /// outside `ROW_METRICS` never match: the selector never emits them.
+// Exempt: the ratio arm's `||` (`ids.contains(&small) || ids.contains(&large)`)
+// becomes `&&` without a behaviour change in the shipped table, since both ids
+// of every ratio row belong to the `paging` row (`ROW_METRICS`). A test cannot
+// reach this private function from `bench_tests.rs` without widening it.
+#[cfg_attr(false, mutants::skip)]
 fn head_skipped_row(check: Check, head: Option<&Results>) -> Option<&'static str> {
     let head = head?;
     for (row, ids) in ROW_METRICS {
