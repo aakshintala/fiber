@@ -197,7 +197,7 @@ fn a_feed_row_that_left_exited_joins_the_exited_rows_newest_first() {
     sessions.left(&SessionId("s_a".into()), Left::Exited);
     sessions.left(&SessionId("s_c".into()), Left::Exited);
     sessions.recent(
-        recent_rows(&result(vec![recent_row("s_d", "recent", "exited", None)])),
+        recent_rows(&result(vec![recent_row("s_d", "recent", "exited", None)])).0,
         true,
     );
     let sections = sessions.sections(Some(PROJECT));
@@ -229,7 +229,8 @@ fn exited_rows_cap_at_three_and_count_the_rest() {
                 (0..count)
                     .map(|i| recent_row(&format!("s_{i}"), "recent", "exited", None))
                     .collect(),
-            )),
+            ))
+            .0,
             true,
         );
         let sections = sessions.sections(Some(PROJECT));
@@ -283,7 +284,8 @@ fn a_recent_row_keeps_its_last_status() {
             Some(payload(json!({"state": "idle", "turns": 5, "since": 123}))),
         ),
         recent_row("s_b", "absent", "exited", None),
-    ]));
+    ]))
+    .0;
     let status = rows[0].status.as_ref().unwrap();
     assert_eq!(status.turns, Some(5));
     assert_eq!(status.since, 123);
@@ -364,7 +366,8 @@ fn a_status_for_a_recent_row_moves_it_and_keeps_its_key() {
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     let key = sessions.all()[1].key;
@@ -438,7 +441,8 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
@@ -449,7 +453,8 @@ fn the_first_recent_page_replaces_skips_feed_rows_and_keeps_keys() {
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
             recent_row("s_cccccccccccccccc", "third", "crashed", None),
             recent_row("s_ffffffffffffffff", "live", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     assert_eq!(
@@ -472,7 +477,8 @@ fn an_older_page_skips_ids_already_in_the_feed() {
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "live", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
-        ])),
+        ]))
+        .0,
         false,
     );
     assert_eq!(shown(&sessions), ["●  fix the parser", "○  second"]);
@@ -486,7 +492,8 @@ fn remove_drops_only_the_named_row() {
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     sessions.remove(&SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
@@ -533,7 +540,8 @@ fn a_recent_row_adds_cost_and_subscription_cost() {
             "old work",
             "exited",
             Some(status),
-        )])),
+        )]))
+        .0,
         true,
     );
     let rows = sessions.all();
@@ -550,14 +558,16 @@ fn an_older_recent_page_appends_and_skips_rows_already_listed() {
             "first",
             "exited",
             None,
-        )])),
+        )]))
+        .0,
         true,
     );
     sessions.recent(
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "crashed", None),
-        ])),
+        ]))
+        .0,
         false,
     );
     assert_eq!(shown(&sessions), ["○  first", "✗  second"]);
@@ -578,7 +588,8 @@ fn a_recent_row_keeps_its_last_status_waiting_text_and_spend() {
             "old work",
             "exited",
             Some(waiting),
-        )])),
+        )]))
+        .0,
         true,
     );
     assert_eq!(shown(&sessions), ["○  old work  approval: shell · $0.41"]);
@@ -589,11 +600,12 @@ fn a_recent_row_that_does_not_parse_is_skipped() {
     let rows = recent_rows(&result(vec![
         json!({"ts": 0, "name": "no session"}),
         recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
-    ]));
+    ]))
+    .0;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id.0, "s_aaaaaaaaaaaaaaaa");
-    assert!(recent_rows(&json!({})).is_empty());
-    assert!(recent_rows(&json!({"sessions": {}})).is_empty());
+    assert!(recent_rows(&json!({})).0.is_empty());
+    assert!(recent_rows(&json!({"sessions": {}})).0.is_empty());
 }
 
 #[test]
@@ -604,7 +616,8 @@ fn keys_are_never_reused_after_a_row_drops() {
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_bbbbbbbbbbbbbbbb", "second", "exited", None),
             recent_row("s_cccccccccccccccc", "third", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     let keys: Vec<u64> = sessions.all().iter().map(|row| row.key).collect();
@@ -616,7 +629,8 @@ fn keys_are_never_reused_after_a_row_drops() {
         recent_rows(&result(vec![
             recent_row("s_aaaaaaaaaaaaaaaa", "first", "exited", None),
             recent_row("s_cccccccccccccccc", "third", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     sessions.status(from_status(&envelope(
@@ -1001,7 +1015,8 @@ fn a_recent_row_is_in_git_when_its_last_status_is() {
                 Some(git_payload(json!({"state": "idle"}))),
             ),
             recent_row("s_bbbbbbbbbbbbbbbb", "plain work", "exited", None),
-        ])),
+        ]))
+        .0,
         true,
     );
     let rows = sessions.all();
@@ -1069,4 +1084,247 @@ fn line_is_line_with_the_still_glyph() {
             line_with(&row, Some(PROJECT), glyph(&row))
         );
     }
+}
+
+/// One exited `recent` row for `session` in `project`.
+fn project_row(session: &str, project: &str) -> Value {
+    json!({
+        "session_id": session,
+        "ts": 0,
+        "project": project,
+        "workspace": format!("/work/{project}"),
+        "name": session,
+        "how": "exited",
+    })
+}
+
+/// The ids of every loaded row, feed first.
+fn ids(sessions: &Sessions) -> Vec<&str> {
+    sessions.all().iter().map(|row| row.id.0.as_str()).collect()
+}
+
+#[test]
+fn recent_rows_returns_the_answer_total_when_it_is_an_integer() {
+    let (rows, total) = recent_rows(&json!({"sessions": [], "total": 7}));
+    assert!(rows.is_empty());
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(total, Some(7));
+}
+
+#[test]
+fn recent_rows_leaves_the_total_empty_without_an_integer() {
+    for result in [
+        json!({"sessions": []}),
+        json!({"sessions": [], "total": "7"}),
+        json!({"sessions": [], "total": 7.5}),
+        json!({"sessions": [], "total": -1}),
+        json!({"sessions": [], "total": true}),
+        json!({"sessions": [], "total": json!({"n": 7})}),
+        json!({"sessions": [], "total": null}),
+    ] {
+        assert_eq!(recent_rows(&result).1, None, "{result}");
+    }
+    // Sessions may be missing while the total is present: the rows are
+    // empty and the total still parses.
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(recent_rows(&json!({"total": 7})), (Vec::new(), Some(7)));
+}
+
+#[test]
+fn a_scoped_page_appends_without_touching_other_projects_rows() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_u", "unscoped", "exited", None)])).0,
+        true,
+    );
+    let (rows, total) = recent_rows(&json!({"sessions": [project_row("s_p", OTHER)], "total": 4}));
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(total, Some(4));
+    sessions.scoped(rows);
+    sessions.note_total(OTHER, total.unwrap_or(0));
+    // No `docs/<area>.md` line promises the row order for tied rows:
+    // assert the ids as a set.
+    let mut got = ids(&sessions);
+    got.sort_unstable();
+    assert_eq!(got, ["s_p", "s_u"]);
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(OTHER), Some(4));
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(PROJECT), None);
+    let sections = sessions.sections(Some(PROJECT));
+    // `docs/tui.md:254-255` and `docs/tui.md:233-234` (order) and `docs/tui.md:268` (counts).
+    assert_eq!(sections.len(), 2);
+    // `docs/tui.md:254-255` and `docs/tui.md:233-234` (order) and `docs/tui.md:268` (counts).
+    assert_eq!(sections[0].total, None);
+    // `docs/tui.md:254-255` and `docs/tui.md:233-234` (order) and `docs/tui.md:268` (counts).
+    assert_eq!(sections[1].total, Some(4));
+}
+
+#[test]
+fn a_scoped_page_skips_feed_and_earlier_scoped_duplicates() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_feed", PROJECT, 0));
+    let (first, _) = recent_rows(&json!({"sessions": [project_row("s_feed", OTHER)]}));
+    sessions.scoped(first);
+    // `docs/tui.md:254-255` and `docs/tui.md:233-234` (order) and `docs/tui.md:268` (counts).
+    assert_eq!(ids(&sessions), ["s_feed"]);
+    let (page, _) = recent_rows(&json!({
+        "sessions": [project_row("s_feed", OTHER), project_row("s_new", OTHER)],
+    }));
+    sessions.scoped(page);
+    // No `docs/<area>.md` line promises the row order for tied rows:
+    // assert the ids as a set.
+    let mut got = ids(&sessions);
+    got.sort_unstable();
+    assert_eq!(got, ["s_feed", "s_new"]);
+    let (again, _) = recent_rows(&json!({"sessions": [project_row("s_new", OTHER)]}));
+    sessions.scoped(again);
+    // No `docs/<area>.md` line promises the row order for tied rows:
+    // assert the ids as a set.
+    let mut got = ids(&sessions);
+    got.sort_unstable();
+    assert_eq!(got, ["s_feed", "s_new"]);
+}
+
+#[test]
+fn out_of_order_scoped_pages_keep_both_projects_rows() {
+    let mut sessions = Sessions::default();
+    let (other_first, _) = recent_rows(&json!({"sessions": [project_row("s_o1", OTHER)]}));
+    sessions.scoped(other_first);
+    let (own, _) = recent_rows(&json!({"sessions": [project_row("s_p1", PROJECT)]}));
+    sessions.scoped(own);
+    sessions.note_total(PROJECT, 2);
+    sessions.note_total(OTHER, 3);
+    let (other_second, _) = recent_rows(&json!({
+        "sessions": [project_row("s_o1", OTHER), project_row("s_o2", OTHER)],
+    }));
+    sessions.scoped(other_second);
+    // No `docs/<area>.md` line promises the row order for tied rows:
+    // assert the ids as a set.
+    let mut got = ids(&sessions);
+    got.sort_unstable();
+    assert_eq!(got, ["s_o1", "s_o2", "s_p1"]);
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(PROJECT), Some(2));
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(OTHER), Some(3));
+}
+
+#[test]
+fn scoped_folds_leave_the_unscoped_cursor_and_paging_alone() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![
+            recent_row("s_a", "a", "exited", None),
+            recent_row("s_b", "b", "exited", None),
+        ]))
+        .0,
+        true,
+    );
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_c", "c", "exited", None)])).0,
+        false,
+    );
+    assert!(sessions.more());
+    assert_eq!(
+        sessions.last_recent().map(|row| row.id.0.as_str()),
+        Some("s_c")
+    );
+    let (scoped, _) = recent_rows(&json!({"sessions": [project_row("s_p", OTHER)]}));
+    sessions.scoped(scoped);
+    sessions.note_total(OTHER, 9);
+    assert!(sessions.more());
+    assert_eq!(
+        sessions.last_recent().map(|row| row.id.0.as_str()),
+        Some("s_c")
+    );
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(OTHER), Some(9));
+    sessions.recent(Vec::new(), false);
+    assert!(!sessions.more());
+    assert_eq!(
+        sessions.last_recent().map(|row| row.id.0.as_str()),
+        Some("s_c")
+    );
+}
+
+#[test]
+fn the_unscoped_cursor_follows_unscoped_pages_only() {
+    let mut sessions = Sessions::default();
+    assert_eq!(sessions.last_recent(), None);
+    sessions.recent(Vec::new(), true);
+    assert_eq!(sessions.last_recent(), None);
+    assert!(!sessions.more());
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+        true,
+    );
+    assert_eq!(
+        sessions.last_recent().map(|row| row.id.0.as_str()),
+        Some("s_a")
+    );
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_b", "b", "exited", None)])).0,
+        false,
+    );
+    assert_eq!(
+        sessions.last_recent().map(|row| row.id.0.as_str()),
+        Some("s_b")
+    );
+}
+
+#[test]
+fn totals_drop_together_while_rows_and_paging_stay() {
+    let mut sessions = Sessions::default();
+    sessions.recent(
+        recent_rows(&result(vec![recent_row("s_a", "a", "exited", None)])).0,
+        true,
+    );
+    sessions.note_total(PROJECT, 5);
+    sessions.note_total(OTHER, 2);
+    sessions.mark_dirty(PROJECT);
+    sessions.drop_all_totals();
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(PROJECT), None);
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268`.
+    assert_eq!(sessions.total_for(OTHER), None);
+    assert!(!sessions.is_dirty(PROJECT));
+    // `docs/tui.md:254-255` and `docs/tui.md:233-234` (order) and `docs/tui.md:268` (counts).
+    assert_eq!(ids(&sessions), ["s_a"]);
+    assert!(sessions.more());
+}
+
+#[test]
+fn dirty_marks_clear_one_project_at_a_time() {
+    let mut sessions = Sessions::default();
+    assert!(!sessions.is_dirty(PROJECT));
+    sessions.mark_dirty(PROJECT);
+    assert!(sessions.is_dirty(PROJECT));
+    assert!(!sessions.is_dirty(OTHER));
+    sessions.mark_dirty(PROJECT);
+    assert!(sessions.is_dirty(PROJECT));
+    sessions.clear_dirty(OTHER);
+    assert!(sessions.is_dirty(PROJECT));
+    sessions.clear_dirty(PROJECT);
+    assert!(!sessions.is_dirty(PROJECT));
+}
+
+#[test]
+fn status_left_and_remove_leave_every_stored_total_untouched() {
+    let mut sessions = Sessions::default();
+    sessions.status(section_row("s_a", PROJECT, 0));
+    sessions.note_total(PROJECT, 5);
+    sessions.status(section_row("s_b", OTHER, 1));
+    sessions.note_total(OTHER, 3);
+    sessions.status(section_row("s_a", PROJECT, 2));
+    sessions.left(&SessionId("s_a".into()), Left::Exited);
+    sessions.left(&SessionId("s_unknown".into()), Left::Crashed);
+    sessions.remove(&SessionId("s_b".into()));
+    sessions.remove(&SessionId("s_unknown".into()));
+    assert_eq!(sessions.total_for(PROJECT), Some(5));
+    assert_eq!(sessions.total_for(OTHER), Some(3));
+    // A rail dismiss drops the card through the same `remove`, with the
+    // total held for the next scoped answer.
+    sessions.remove(&SessionId("s_a".into()));
+    assert_eq!(sessions.total_for(PROJECT), Some(5));
 }

@@ -1284,6 +1284,70 @@ fn clicking_done_with_no_exits_lands_home_unfocused() {
     assert_eq!(app.focused(), None);
 }
 
+/// A `Done` click with a held total above the loaded rows still opens
+/// home on the first loaded exited row.
+#[test]
+fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "exited"));
+    app.home.as_mut().unwrap().sessions.note_total("-w", 4);
+    let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    // A Done click sends no scoped ask without a new trigger: a subscribe
+    // goes out and no scoped recent does.
+    assert!(
+        parsed
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == A),
+        "a subscribe for the focused session went out: {parsed:?}"
+    );
+    assert!(
+        parsed.iter().all(|line| line
+            .get("args")
+            .and_then(|args| args.get("project"))
+            .is_none()),
+        "no scoped ask went out: {parsed:?}"
+    );
+    assert!(app.on_home());
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    assert_eq!(
+        app.focused(),
+        Some(TargetId::Home(HomeSpot::Entry(row_key(&app, B))))
+    );
+}
+
+/// A `Done` click with a held total but no loaded rows lands home
+/// unfocused, like no exits at all.
+#[test]
+fn clicking_done_with_a_total_but_no_loaded_rows_lands_unfocused() {
+    let mut app = opened(&[A, B], A);
+    app.home.as_mut().unwrap().sessions.note_total("-w", 3);
+    let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    // A Done click sends no scoped ask without a new trigger: a subscribe
+    // goes out and no scoped recent does.
+    assert!(
+        parsed
+            .iter()
+            .any(|line| line["command"] == "subscribe" && line["session_id"] == A),
+        "a subscribe for the focused session went out: {parsed:?}"
+    );
+    assert!(
+        parsed.iter().all(|line| line
+            .get("args")
+            .and_then(|args| args.get("project"))
+            .is_none()),
+        "no scoped ask went out: {parsed:?}"
+    );
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+    assert_eq!(app.focused(), None);
+}
+
 /// A click on "N ✓" expands `more` hiding exited rows: the first
 /// exited row lands focused even with four exits behind a collapsed
 /// project.
@@ -1462,8 +1526,9 @@ fn exited_row(session: &str) -> Value {
     })
 }
 
-/// Answers `recent` with exited rows for `sessions`, oldest first.
-fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) {
+/// Answers `recent` with exited rows for `sessions`, oldest first: the
+/// scoped fan-out lines, if any.
+fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) -> Vec<String> {
     let result = json!({"sessions": sessions
         .iter()
         .map(|session| exited_row(session))
@@ -1479,7 +1544,7 @@ fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) {
         .into_iter()
         .collect(),
     });
-    assert!(app.on_line(line).is_empty());
+    app.on_line(line)
 }
 
 /// Thirty live sessions in the launch project with `recent` waiting,

@@ -256,7 +256,6 @@ list is one row tall, it shows the focused row's first line.
   right the id, turns, spend and age ("3h ago"). When there are more, a last
   row reads "… N more", and Enter or a click on it lists the rest of the
   project's exited sessions in place.
-
 The focused row is drawn on the selection bar. With no session, the list's
 rows hold two dim lines, centred: "No sessions yet." and "Type below and
 press Enter to start one."
@@ -265,6 +264,8 @@ Live sessions come from the hub's feed, across every project, grouped by the
 `project` on each `session_status`. Exited sessions come from `recent.jsonl`,
 then from the hub's paged query for older ones, grouped by the `project` on
 each row.
+
+Each project's "exited · N", "… N more" and the rail's "N ✓" count from the `total` of a `recent` scoped to that project. The terminal asks for one when the project first appears, after a reconnect, and when one of the project's sessions leaves or is deleted, with one ask in flight per project; it never adjusts a count itself. Until the first answer arrives, N counts the rows loaded. "… N more" counts the rows the hub holds past those shown, and opening it pages the project's `recent`.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A resume the hub refuses because the workspace is gone shows

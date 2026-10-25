@@ -147,6 +147,71 @@ fn two(share: f64, fields: Value) -> App {
     app
 }
 
+/// An accepted hub command with `result`.
+fn accepted(id: &str, result: Value) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "command_accepted".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: [
+            ("command_id".to_owned(), Value::String(id.to_owned())),
+            ("result".to_owned(), result),
+        ]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// A `hub_hello` this terminal reads.
+fn hello() -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    })
+}
+
+/// Accepts the feed and the empty unscoped first page, then triggers a
+/// scoped refresh as `B` leaves and answers it with `total` and no rows:
+/// the held total with the loaded fallback beneath it.
+fn hold_total(app: &mut App, total: usize) {
+    fn parse(line: &String) -> Value {
+        serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+    }
+    let start: Vec<Value> = app.on_line(hello()).iter().map(parse).collect();
+    let feed = start
+        .iter()
+        .find(|line| line["command"] == "feed")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a feed"));
+    let recent = start
+        .iter()
+        .find(|line| line["command"] == "recent" && line.get("args").is_none())
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("an unscoped recent"));
+    assert!(app.on_line(accepted(feed, json!({}))).is_empty());
+    assert!(
+        app.on_line(accepted(recent, json!({"sessions": []})))
+            .is_empty()
+    );
+    let fanout: Vec<Value> = app.on_line(left(B, "exited")).iter().map(parse).collect();
+    // `docs/tui.md:268` (a session leaving asks for its project's total).
+    assert!(
+        !fanout.is_empty(),
+        "the session-left trigger asks for a scoped total"
+    );
+    for line in &fanout {
+        // `docs/invocation.md:1102` (scoped `recent` for the project).
+        assert_eq!(line["command"], "recent");
+        let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
+        assert!(
+            app.on_line(accepted(id, json!({"sessions": [], "total": total})))
+                .is_empty()
+        );
+    }
+}
+
 /// The text of `B`'s card's `n`th text row, 0-based, in `two`'s rail.
 fn b_row(buf: &Buffer, n: u16) -> String {
     lines(buf)
@@ -328,6 +393,63 @@ fn a_long_project_name_keeps_its_plus() {
             (plus, 1, 1, Spot::Start(key(&app, A))),
             (35, 3, 1, Spot::Done(key(&app, A))),
         ]
+    );
+}
+
+/// The header draws the hub's held total, not the loaded rows: one
+/// loaded exit with a total of seven reads "7 ✓", dim.
+#[test]
+fn the_header_draws_the_held_total_beside_the_spend() {
+    let mut app = two(20.0, json!({}));
+    hold_total(&mut app, 7);
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 7 ✓"), "{text:?}");
+    // `docs/tui.md:332-335` (the project header's start target and right-aligned exited count).
+    assert_eq!(
+        header.spots,
+        vec![
+            (8, 1, 1, Spot::Start(key(&app, A))),
+            (35, 3, 1, Spot::Done(key(&app, A))),
+        ]
+    );
+}
+
+/// A total above nine widens the count: "12 ✓" keeps the spend whole
+/// while the `Done` target stays on the first card.
+#[test]
+fn the_header_widens_the_count_for_a_two_digit_total() {
+    let mut app = two(20.0, json!({}));
+    hold_total(&mut app, 12);
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 12 ✓"), "{text:?}");
+    assert!(
+        header
+            .spots
+            .iter()
+            .any(|spot| matches!(spot, (_, _, _, Spot::Done(_)))),
+        "{text:?}"
+    );
+}
+
+/// A held total of zero draws "0 ✓" with the loaded row beneath it.
+#[test]
+fn the_header_draws_zero_for_a_held_zero_total() {
+    let mut app = two(20.0, json!({}));
+    hold_total(&mut app, 0);
+    let drawn = super::rows(&app, 40);
+    let header = &drawn[0];
+    let text = header.line.to_string();
+    assert!(text.ends_with("$0.00 · 0 ✓"), "{text:?}");
+    assert!(
+        header
+            .spots
+            .iter()
+            .any(|spot| matches!(spot, (_, _, _, Spot::Done(_)))),
+        "{text:?}"
     );
 }
 
