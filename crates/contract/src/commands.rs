@@ -536,6 +536,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "approvals",
     "reload",
     "import",
+    "clear",
     "close",
     "quit",
     "exit",

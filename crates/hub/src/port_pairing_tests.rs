@@ -29,8 +29,17 @@ fn text(deadline: Deadline, client: &Ws) -> Value {
 
 fn pair(client: &Ws, code: &str) -> String {
     client.text(&json!({"id":"p1","command":"pair","args":{"code":code}}).to_string());
+    // The pairing announcement carries no promised position relative to the
+    // acknowledgement, so one deadline bounds both receives and the two
+    // lines are matched by kind instead of by arrival order.
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
-    let accepted = text(deadline, client);
+    let first = text(deadline, client);
+    let second = text(deadline, client);
+    let (accepted, notice) = if first["kind"] == "command_accepted" {
+        (first, second)
+    } else {
+        (second, first)
+    };
     assert_eq!(accepted["kind"], "command_accepted");
     assert_eq!(accepted["payload"]["command_id"], "p1");
     let token = accepted["payload"]["result"]["token"]
@@ -38,7 +47,6 @@ fn pair(client: &Ws, code: &str) -> String {
         .unwrap()
         .to_owned();
     assert_eq!(token.len(), 43);
-    let notice = text(deadline, client);
     assert_eq!(notice["kind"], "device_changed");
     assert_eq!(notice["payload"]["change"], "paired");
     token
