@@ -15,14 +15,15 @@
 mod support;
 
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use contract::clock::{Clock, Wake};
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
 use support::{
-    SessionGuard, Setup, Socket, TRUECOLOUR, close_session, connect_hub, connect_hub_within, recv,
-    start_session, subscribe, until, write_json,
+    SessionGuard, Setup, Socket, TRUECOLOUR, close_session, connect_hub,
+    connect_hub_within_on_clock, recv, start_session, subscribe, until, write_json,
 };
 
 /// The standing-ask tint in truecolour.
@@ -579,24 +580,100 @@ fn two_sessions_approvals_share_one_queue_and_esc_steps_then_badges() {
     hub.wait();
 }
 
+/// Holds a connect wait until the test observes child exit, then advances
+/// its fake time by the requested amount.
+struct StartupFailureClock {
+    clock: Arc<fakes::clock::FakeClock>,
+    sleeping: mpsc::Sender<std::time::Instant>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl Clock for StartupFailureClock {
+    fn now(&self) -> std::time::Instant {
+        self.clock.now()
+    }
+
+    fn wall(&self) -> std::time::SystemTime {
+        self.clock.wall()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let until = self.clock.now() + duration;
+        self.sleeping.send(until).unwrap();
+        self.clock.wait_until(Some(until), &mut |_| {
+            self.release.lock().unwrap().recv().unwrap();
+        });
+    }
+
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.clock.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: std::sync::Weak<dyn Wake>) {
+        self.clock.subscribe(waker);
+    }
+}
+
 /// A hub that cannot start reports its exit status and its `hub.log` tail
 /// through the connect wait: the configuration is broken, so the hub the
 /// wait starts exits at once and the socket never binds.
 #[test]
 fn hub_start_failure_reports_status_and_log_tail() {
-    let setup = Setup::new();
+    let setup = Arc::new(Setup::new());
     let marker = "hub-start-marker-2664";
     let logs = setup.home().join("logs");
     fs::create_dir_all(&logs).unwrap();
     fs::write(logs.join("hub.log"), format!("{marker}\n")).unwrap();
     fs::write(setup.home().join("config.json"), "{invalid-2664").unwrap();
     let hub = Arc::new(Mutex::new(None));
-    // The connect's five-second bind wait spans ten seconds here, three
-    // short of this wait, so its `did not bind` error arrives before this
-    // wait's own timeout.
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        connect_hub_within(&setup, &hub, Duration::from_secs(13))
-    }));
+    let (sleeping, waiting) = mpsc::channel();
+    let (release, releases) = mpsc::channel();
+    let clock = Arc::new(StartupFailureClock {
+        clock: fakes::clock::FakeClock::new(),
+        sleeping,
+        release: Mutex::new(releases),
+    });
+    let (exited, child_exit) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    let connect_setup = Arc::clone(&setup);
+    let connect_hub = Arc::clone(&hub);
+    let connect_clock: Arc<dyn Clock> = Arc::clone(&clock);
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            connect_hub_within_on_clock(
+                &connect_setup,
+                &connect_hub,
+                Duration::from_secs(13),
+                connect_clock,
+                Some(exited),
+            )
+        }));
+        let _ = finished.send(result);
+    });
+
+    let status = setup
+        .deadline
+        .recv_or_fail(&child_exit, "the failed hub child to exit");
+    assert_eq!(status.code(), Some(1), "the hub exits on its broken config");
+    let bind_deadline = clock.clock.origin() + doors::hub::CONNECT_DEADLINE;
+    while clock.clock.now() < bind_deadline {
+        let until = setup
+            .deadline
+            .recv_or_fail(&waiting, "the hub connect's injected-clock wait");
+        let advance = until.saturating_duration_since(clock.clock.now());
+        clock
+            .clock
+            .advance_when_parked(Some(until), None, advance, &setup.deadline);
+        release.send(()).unwrap();
+    }
+
+    let failed = setup
+        .deadline
+        .recv_or_fail(&result, "the connect wait to report startup failure");
     let message = failed
         .err()
         .and_then(|panic| panic.downcast::<String>().ok().map(|boxed| *boxed))

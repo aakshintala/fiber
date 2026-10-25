@@ -1054,23 +1054,51 @@ pub(crate) fn connect_hub_within(
     hub: &Arc<Mutex<Option<HubProc>>>,
     wait: Duration,
 ) -> (Socket, Value) {
+    let clock = StretchedClock {
+        anchor: SystemClock.now(),
+        scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
+            .unwrap_or(1)
+            .max(1),
+    };
+    connect_hub_within_on_clock(setup, hub, wait, Arc::new(clock), None)
+}
+
+/// [`connect_hub_within`] with an injected clock and an exit signal for the
+/// hub it starts. The caller can release the clock only after the child has
+/// exited, while the ordinary wall-clock `wait` remains the hang guard.
+#[track_caller]
+pub(crate) fn connect_hub_within_on_clock(
+    setup: &Setup,
+    hub: &Arc<Mutex<Option<HubProc>>>,
+    wait: Duration,
+    clock: Arc<dyn Clock>,
+    exited: Option<mpsc::Sender<ExitStatus>>,
+) -> (Socket, Value) {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
     let mut serve = setup.fiber(&["hub", "serve"]);
     let home = setup.home();
     let (done, connected) = mpsc::channel();
     thread::spawn(move || {
+        let mut exited = exited;
         let mut start = move || {
             *slot.lock().unwrap() = Some(HubProc::spawn_command(deadline, &mut serve));
+            if let Some(exited) = exited.take() {
+                let slot = Arc::clone(&slot);
+                thread::spawn(move || {
+                    let mut process = slot
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take()
+                        .expect("the hub starter stored its child");
+                    let status = process.child.wait().unwrap();
+                    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(process);
+                    let _ = exited.send(status);
+                });
+            }
             Ok(())
         };
-        let clock = StretchedClock {
-            anchor: SystemClock.now(),
-            scale: u32::try_from(wait.as_millis() / doors::hub::CONNECT_DEADLINE.as_millis())
-                .unwrap_or(1)
-                .max(1),
-        };
-        done.send(doors::hub::connect(&home, &mut start, &clock))
+        done.send(doors::hub::connect(&home, &mut start, clock.as_ref()))
             .unwrap();
     });
     let connected = match Deadline::after(wait).recv(&connected) {
