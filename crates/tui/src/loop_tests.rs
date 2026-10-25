@@ -1609,8 +1609,9 @@ fn resume_open_replays_the_log_to_the_tail() {
             reader_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The hub: answers commands, then streams the 150 turns / 1,348
-    // envelopes on subscribe and hangs up, so the loop drains and returns.
+    // The hub: drains requests on a read thread while it streams the
+    // 150 turns / 1,348 envelopes on subscribe, answers them in order,
+    // then hangs up, so the loop drains and returns.
     let stream = lines.clone();
     // Every replayed turn start asks `commands` again: the hub serves
     // those requests, then hangs up once each has been answered.
@@ -1648,12 +1649,38 @@ fn resume_open_replays_the_log_to_the_tail() {
     // The hub signals when it finishes its writes, so the test waits on
     // the hub's answer instead of the drain window alone.
     let (hub_done_tx, hub_done) = mpsc::channel();
+    // The drain stays ahead of the stream: each replayed turn start asks
+    // `commands` again while the hub still writes, so reading on the
+    // hub's thread would fill the socket and stall both sides. The read
+    // thread queues requests in arrival order; the hub below handles
+    // them in that order once its writes allow.
+    let (queue_tx, queue_rx) = mpsc::channel();
+    let hub_read = hub_end
+        .try_clone()
+        .unwrap_or_else(|err| panic!("clone: {err}"));
+    let read_step = Arc::clone(&hub_progress);
+    std::thread::Builder::new()
+        .name("resume-hub-read".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(hub_read);
+            let mut text = String::new();
+            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                text.clear();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                if let Ok(mut held) = read_step.lock() {
+                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
+                }
+                queue_tx.send(command).unwrap_or(());
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
     std::thread::Builder::new()
         .name("resume-hub".to_owned())
         .spawn(move || {
-            let mut reader = BufReader::new(hub_end.try_clone().unwrap());
             let mut hub_end = hub_end;
-            let mut text = String::new();
             let mut write = |value: Value| {
                 if let Ok(mut held) = hub_step.lock() {
                     held.writing = true;
@@ -1678,15 +1705,7 @@ fn resume_open_replays_the_log_to_the_tail() {
             };
             let mut replaying = false;
             let mut replay_commands = 0usize;
-            while reader.read_line(&mut text).is_ok_and(|read| read > 0) {
-                let command: Value = serde_json::from_str(&text).unwrap_or_default();
-                text.clear();
-                if let Ok(mut held) = record.lock() {
-                    held.push(command.clone());
-                }
-                if let Ok(mut held) = hub_step.lock() {
-                    held.last_command = command["command"].as_str().unwrap_or("?").to_owned();
-                }
+            for command in queue_rx {
                 let id = command["id"].clone();
                 match command["command"].as_str() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
@@ -1747,6 +1766,9 @@ fn resume_open_replays_the_log_to_the_tail() {
                     _ => write(hub_ack(&id, json!({}))),
                 }
             }
+            // The hang-up: shut the read half so the drain thread above
+            // sees EOF and exits, then report the finished writes.
+            hub_end.shutdown(std::net::Shutdown::Both).unwrap_or(());
             hub_done_tx.send(()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
