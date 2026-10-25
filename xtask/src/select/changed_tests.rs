@@ -128,10 +128,7 @@ fn is_test_attr(group: &Group) -> bool {
     let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
     let mut segments: Vec<String> = Vec::new();
     let mut rest = 0;
-    loop {
-        let Some(TokenTree::Ident(segment)) = tokens.get(rest) else {
-            break;
-        };
+    while let Some(TokenTree::Ident(segment)) = tokens.get(rest) {
         segments.push(segment.to_string());
         let first_colon = matches!(
             tokens.get(rest + 1),
@@ -154,11 +151,7 @@ fn is_test_attr(group: &Group) -> bool {
     if last != "test" || first == "cfg" {
         return false;
     }
-    match tokens.get(rest..) {
-        Some([]) => true,
-        Some([TokenTree::Group(_)]) => true,
-        _ => false,
-    }
+    matches!(tokens.get(rest..), Some([]) | Some([TokenTree::Group(_)]))
 }
 
 /// One attribute stack: where it starts and whether it holds a test.
@@ -235,7 +228,10 @@ fn walk(trees: Vec<TokenTree>, prefix: &str, out: &mut Vec<TestFn>) {
                             break;
                         }
                         TokenTree::Punct(semi) if semi.as_char() == ';' => break,
-                        _ => {}
+                        TokenTree::Group(_)
+                        | TokenTree::Ident(_)
+                        | TokenTree::Punct(_)
+                        | TokenTree::Literal(_) => {}
                     }
                 }
                 if let (true, Some(end)) = (is_test, end) {
@@ -256,7 +252,10 @@ fn walk(trees: Vec<TokenTree>, prefix: &str, out: &mut Vec<TestFn>) {
             // The `pub(..)` restriction or the `extern` string: only
             // `pub` puts a group or literal after the attributes.
             TokenTree::Group(_) | TokenTree::Literal(_) if stack.is_some() => {}
-            _ => {
+            TokenTree::Group(_)
+            | TokenTree::Ident(_)
+            | TokenTree::Punct(_)
+            | TokenTree::Literal(_) => {
                 stack = None;
             }
         }
@@ -457,13 +456,14 @@ pub(crate) fn changed_tests(
             };
             let name = current.path.as_deref().unwrap_or(current.raw.as_str());
             let (_, old_count, new_start, new_count) = parse_hunk(line, name)?;
-            if !current.deleted && new_count == 0 {
-                if let Some(tests) = current.tests.as_ref() {
-                    let after = new_start
-                        .checked_add(1)
-                        .ok_or_else(|| format!("{name}: malformed hunk header"))?;
-                    select(&Hunk::Gap(new_start, after), tests, &mut out);
-                }
+            if !current.deleted
+                && new_count == 0
+                && let Some(tests) = current.tests.as_ref()
+            {
+                let after = new_start
+                    .checked_add(1)
+                    .ok_or_else(|| format!("{name}: malformed hunk header"))?;
+                select(&Hunk::Gap(new_start, after), tests, &mut out);
             }
             hunk = Some((old_count, new_count, new_start));
         }
