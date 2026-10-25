@@ -221,7 +221,7 @@ fn a_cut_shell_call_pages_to_the_end_with_both_markers() {
         &setup,
         json!([
             {"reasoning": REASONING, "tool_calls": [
-                {"name": "shell", "arguments": {"command": "awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf(\"%03d %220s\", i, \"x\"); print \"TAIL\" }'"}},
+                {"name": "shell", "arguments": {"command": "awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf(\"%03d %220s\", i, \"x\"); print \"TA\" \"IL\" }'"}},
             ]},
             {"text": ["Done."]},
         ]),
@@ -246,9 +246,9 @@ fn a_cut_shell_call_pages_to_the_end_with_both_markers() {
     });
     assert_view_chrome(&grid, "Shell", "awk", true);
     assert_snapshot!("call_view_open", snapshot_text(&setup, &grid, &[]));
-    // Search stays scoped to the view: the tail hit and the echoed
-    // command count, and the ledger's thought behind the view never does.
-    scoped_search(&mut run, "1 of 2");
+    // Search stays scoped to the view: the tail hit counts once, and
+    // the ledger's thought behind the view never does.
+    scoped_search(&mut run, "1 of 1");
     // `y` copies the call's whole output text as the tool returned it.
     let from = run.output().len();
     run.write(b"y");
@@ -286,8 +286,7 @@ fn temp_id(setup: &Setup) -> String {
 /// the truncated workspace path too: its visible prefix depends on whether
 /// the runner's temp directory is `/tmp` or a longer path, so any prefix
 /// before `[session]/w` folds to `[workspace]/w`. The title row's pad
-/// before the `auto` status varies with that prefix length, so it folds
-/// to one space.
+/// before the `auto` status and the live speed value also vary by runner.
 fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
     let mut ids = vec![temp_id(setup)];
     ids.extend(extra.iter().cloned());
@@ -313,6 +312,9 @@ fn snapshot_text(setup: &Setup, grid: &Grid, extra: &[String]) -> String {
                         );
                     }
                 }
+            }
+            if let Some(speed) = row.find("speed, last reply") {
+                row = format!("{}speed, last reply            —", &row[..speed]);
             }
             row
         })
@@ -375,9 +377,8 @@ fn any_marked(grid: &Grid) -> bool {
 /// the rows' match marks and the find-bar count `hit`: the tail output
 /// row marks, while the ledger's thought behind the view marks nothing
 /// and its miss counts `no matches`, with its marks clearing once the
-/// rescan lands. The shell case counts twice: the echoed command holds
-/// `TAIL` as well as the tail output row. The fetch case has no command
-/// row, so its tail counts once.
+/// rescan lands. Both fixtures contain `TAIL` only in the output, so
+/// the count stays one even though the shell command is also in the view.
 fn scoped_search(run: &mut Run, hit: &str) {
     run.write(b"\x06TAIL");
     let grid = run.wait_screen("the scoped tail hit", |grid| {

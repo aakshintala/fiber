@@ -2,7 +2,7 @@
 source: crates/main/tests/call_view.rs
 expression: "snapshot_text(&setup, &grid, &[])"
 ---
-  Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TAIL" }'               Esc returns
+  Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TA" "IL" }'            Esc returns
  462                                                                                                                           ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
  463                                                                                                                             [workspace]/w auto
  ── the model's view resumes ──
@@ -14,7 +14,7 @@ expression: "snapshot_text(&setup, &grid, &[])"
  469                                                                                                                             cache hits                   —
  470                                                                                                                             cost                   unknown
  471                                                                                                                             cost on subscription     $0.00
- 472                                                                                                                             speed, last reply   0 tokens/s
+ 472                                                                                                                             speed, last reply            —
  473                                                                                                                             turns                        1
  474                                                                                                                           ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  475
