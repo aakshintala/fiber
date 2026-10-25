@@ -1514,9 +1514,7 @@ fn scoped_result(
     if !result.is_object() {
         return None;
     }
-    if result.get("sessions").and_then(Value::as_array).is_none() {
-        return None;
-    }
+    result.get("sessions").and_then(Value::as_array)?;
     let (rows, total) = recent_rows(result);
     Some((rows, total?))
 }
