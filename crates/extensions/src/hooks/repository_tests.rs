@@ -192,6 +192,7 @@ fn gathered_hooks_keep_personal_names_and_only_approved_repository_names() {
     ]);
     let set = setup.set(&empty_skipped());
     let filtered = set.hooks_config(&config);
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
     assert_eq!(
         crate::hooks_state(&filtered, &[]).unwrap(),
         crate::HooksState::MissingBlocking {
@@ -391,6 +392,7 @@ fn unapproved_hooks_gate_when_the_extension_is_absent() {
     let config = setup.config(&[]);
     let session = setup.load(&config, setup.set(&empty_skipped()));
     let filtered = session.hooks_config(&config);
+    // The lone blocker is named (`docs/invocation.md:1160`).
     assert_eq!(
         crate::hooks_state(&filtered, &[]).unwrap(),
         crate::HooksState::MissingBlocking {

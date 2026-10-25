@@ -403,6 +403,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
         format!("{hook_key}.z.on_failure=non-blocking"),
     ];
     let query = json!({"operation":"blocking_hooks","workspace":workspace,"overrides":overrides});
+    // Sorted names per the blocking_hooks contract (`docs/invocation.md:1160`).
     assert_eq!(
         accepted(configure(&mut client, &setup, query.clone())),
         json!({"names":["a","only_override"]})
@@ -422,6 +423,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
             .is_file()
     );
     assert!(!client_home.join("extensions").exists());
+    // Empty once the hooks package is installed (`docs/invocation.md:1160`).
     assert_eq!(
         accepted(configure(&mut client, &setup, query)),
         json!({"names":[]})

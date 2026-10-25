@@ -3476,6 +3476,8 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
     let home = Home::new();
     let hooks = config::full_name("hooks");
     // (entries JSON, `None` for no `hooks` key; extension loaded; state)
+    // Every `MissingBlocking` below names the sorted blockers it gates on
+    // (`docs/invocation.md:1160`).
     let cases: &[(Option<&str>, bool, super::HooksState)] = &[
         // No declarations: nothing to gate.
         (None, false, super::HooksState::Ready),
@@ -3496,6 +3498,7 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
             ),
             false,
             super::HooksState::MissingBlocking {
+                // Blocker names arrive sorted (`docs/invocation.md:1160`).
                 names: vec!["guard".to_owned(), "plain".to_owned()],
             },
         ),
@@ -3541,6 +3544,7 @@ fn hooks_state_maps_declarations_to_a_gate_state() {
 fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
     let home = Home::new();
     let entries = r#"{"z":{"on_failure":"blocking"},"a":false,"missing":{},"invalid":{"on_failure":7},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[],"on_failure":"blocking"}}"#;
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
     assert_eq!(
         super::hooks_state(&hooks_config(&home, entries), &[]).unwrap(),
         super::HooksState::MissingBlocking {
@@ -3548,6 +3552,7 @@ fn hooks_state_names_every_blocker_but_no_watcher_or_non_blocking_entry() {
         }
     );
     let objects = r#"{"z":{"on_failure":"blocking"},"a":{"on_failure":"blocking"},"notice":{"on_failure":"non-blocking"},"watch":{"watch":[]}}"#;
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
     assert_eq!(
         super::hooks_state(&hooks_config(&home, objects), &[]).unwrap(),
         super::HooksState::MissingBlocking {

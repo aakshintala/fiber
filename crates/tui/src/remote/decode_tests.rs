@@ -3,6 +3,7 @@ use serde_json::json;
 
 #[test]
 fn hooks_answers_require_complete_names_and_an_empty_install_object() {
+    // The hub answers sorted names (`docs/invocation.md:1160`); decoding keeps that order.
     assert_eq!(blocking_hooks(&json!({"names":[]})), Some(vec![]));
     assert_eq!(
         blocking_hooks(&json!({"names":["a","z"]})),

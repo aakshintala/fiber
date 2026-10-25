@@ -152,6 +152,7 @@ fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
         let workspace = dirs.workspace("one");
         let home = dirs.home();
         let seam = Seam::new(home.clone());
+        // Empty with no blockers (`docs/invocation.md:1160`).
         assert_eq!(
             result(&seam, "blocking_hooks", json!({"workspace":workspace})),
             json!({"names":[]})
@@ -162,6 +163,7 @@ fn blocking_hooks_wire_keeps_absence_override_precedence_and_config_errors() {
             format!("{key}.a={{\"on_failure\":\"blocking\"}}"),
             format!("{key}.z.on_failure=non-blocking"),
         ];
+        // The lone surviving blocker is named (`docs/invocation.md:1160`).
         assert_eq!(
             result(
                 &seam,

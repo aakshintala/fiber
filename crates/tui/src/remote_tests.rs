@@ -159,6 +159,7 @@ fn hooks_remote_waits_for_a_worker_link_and_uses_only_the_hub() {
         let (args, answer, expected) = match operation {
             "blocking_hooks" => (
                 json!({"operation":operation,"workspace":"/remote/ws","overrides":hooks_overrides()}),
+                // Canned hub answer in sorted wire order (`docs/invocation.md:1160`).
                 json!({"names":["a","z"]}),
                 vec!["a".to_owned(), "z".to_owned()],
             ),
