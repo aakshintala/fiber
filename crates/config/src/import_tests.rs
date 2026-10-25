@@ -173,8 +173,10 @@ fn a_source_home_past_512_reports_under_the_source_name() {
     let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
     let report = planned.report();
     // docs/configuration.md, "Importing": one overflow line past 512 under
-    // the source's own name, kept entries in name order, which 512
-    // unspecified, so no total or membership is pinned.
+    // the source's own name, which 512 unspecified, so no total or
+    // membership is pinned. Name order is promised only for kept entries
+    // that are imported, so no order is asserted on these unmapped
+    // left-behind entries.
     let overflow = reasons(&report)
         .iter()
         .filter(|(item, reason)| {
@@ -182,16 +184,6 @@ fn a_source_home_past_512_reports_under_the_source_name() {
         })
         .count();
     assert_eq!(overflow, 1, "{report:?}");
-    let unmapped: Vec<&str> = report
-        .left_behind
-        .iter()
-        .filter(|left| left.item != ".claude")
-        .map(|left| left.item.as_str())
-        .collect();
-    assert!(
-        unmapped.windows(2).all(|pair| pair[0] <= pair[1]),
-        "kept entries are imported in name order: {unmapped:?}",
-    );
     assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
 
