@@ -16,11 +16,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
+use super::{
+    HubPruneWant, OldFile, PruneArgs, delete_sessions, format_age, format_size, prune, prune_run,
+    remove_diagnostics, remove_for_hub, select_for_hub,
+};
 use crate::CliError;
 use crate::sessions::Ask;
 use contract::clock::Clock;
-use contract::{ErrorCode, HubLine};
+use contract::shapes::Failure;
+use contract::{ErrorCode, HubLine, SessionId};
 use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
@@ -1144,4 +1148,278 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
             output.status
         );
     }
+}
+
+/// A session dir under `projects/<project>/sessions/<id>`: the hub-wide
+/// selection finds it whatever the workspace is.
+fn project_session(home: &std::path::Path, project: &str, id: &str, from: Option<&str>) -> PathBuf {
+    let dir = home
+        .join("projects")
+        .join(project)
+        .join("sessions")
+        .join(id);
+    fs::create_dir_all(dir.join("artifacts")).unwrap();
+    let mut payload = json!({"workspace": "/w"});
+    if let Some(from) = from {
+        payload["forked_from"] = json!({"session_id": from, "seq": 1});
+    }
+    let first = json!({"kind": "session_started", "seq": 0, "payload": payload});
+    let last = json!({"kind": "x", "ts": 0});
+    fs::write(dir.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+    fs::write(dir.join("artifacts/a.txt"), b"0123456789").unwrap();
+    dir
+}
+
+#[test]
+fn delete_sessions_invokes_the_callback_per_delete_in_send_order() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let deletes = vec![
+        super::sessions::Delete {
+            id: SessionId("s_1".into()),
+            cascade: false,
+        },
+        super::sessions::Delete {
+            id: SessionId("s_2".into()),
+            cascade: true,
+        },
+    ];
+    let mut expects: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    expects.insert(SessionId("s_1".into()), BTreeSet::new());
+    expects.insert(
+        SessionId("s_2".into()),
+        BTreeSet::from([SessionId("s_2".into()), SessionId("s_3".into())]),
+    );
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        if id.0 == "s_2" {
+            Err(Failure {
+                code: ErrorCode::SessionHeld,
+                message: "held".to_owned(),
+                provider: None,
+                retry_after_ms: None,
+            })
+        } else {
+            Ok(())
+        }
+    };
+    let results = delete_sessions(&deletes, &expects, &mut delete);
+    // An empty set stays unconstrained; a full one travels as `expect`.
+    assert_eq!(
+        calls,
+        [
+            ("s_1".to_owned(), false, None),
+            (
+                "s_2".to_owned(),
+                true,
+                Some(BTreeSet::from([
+                    SessionId("s_2".into()),
+                    SessionId("s_3".into())
+                ]))
+            ),
+        ]
+    );
+    assert_eq!(results.len(), 2);
+    assert!(results[0].is_ok());
+    assert_eq!(
+        results[1].as_ref().unwrap_err().code,
+        ErrorCode::SessionHeld
+    );
+}
+
+#[test]
+fn select_for_hub_lists_every_project_with_matching_lines_and_bytes() {
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let selection = select_for_hub(
+        &setup.home(),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        wall(),
+        clock().as_ref(),
+    );
+    assert_eq!(
+        selection.sessions.len(),
+        1,
+        "one cascade root across both projects"
+    );
+    let session = &selection.sessions[0];
+    assert_eq!(session.id.0, "s_00000000000000a1");
+    assert!(session.cascade);
+    assert_eq!(
+        session.expect,
+        [
+            SessionId("s_00000000000000a1".into()),
+            SessionId("s_00000000000000b2".into())
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+    let root_bytes = log::session_bytes(&root);
+    let fork_bytes = log::session_bytes(&fork);
+    let listed = root_bytes + fork_bytes;
+    assert_eq!(session.bytes, listed);
+    assert_eq!(
+        selection.worktrees,
+        Vec::<String>::new(),
+        "no git worktrees in the fixture"
+    );
+    assert!(selection.pinned.is_empty());
+    assert_eq!(selection.diagnostics.len(), 1);
+    assert!(selection.diagnostics[0].ends_with("old.log"));
+    assert_eq!(selection.would_free, listed + 10);
+    // The preview prints exactly what the local printers print.
+    assert_eq!(
+        selection.lines,
+        [
+            format!(
+                "session  s_00000000000000a1  {}  {}",
+                format_age(age_days(0)),
+                format_size(root_bytes)
+            ),
+            format!(
+                "session  s_00000000000000b2  {}  {}  continues s_00000000000000a1",
+                format_age(age_days(0)),
+                format_size(fork_bytes)
+            ),
+            format!("log  old.log  31d  {}", format_size(10)),
+        ]
+    );
+}
+
+#[test]
+fn remove_for_hub_removes_only_previewed_items_and_reports() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    // Newly selectable but never previewed: left alone.
+    let fresh = project_session(&setup.home(), "alpha", "s_00000000000000c3", None);
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(
+        SessionId("s_00000000000000a1".into()),
+        BTreeSet::from([
+            SessionId("s_00000000000000a1".into()),
+            SessionId("s_00000000000000b2".into()),
+        ]),
+    );
+    // Previewed without cascade: deleted unconstrained.
+    sessions.insert(SessionId("s_00000000000000c4".into()), BTreeSet::new());
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::from(["/gone/worktree".to_owned()]),
+        pinned: BTreeSet::from(["gone-hash".to_owned()]),
+        diagnostics: BTreeSet::from([
+            setup
+                .home()
+                .join("logs")
+                .join("old.log")
+                .display()
+                .to_string(),
+            setup
+                .home()
+                .join("logs")
+                .join("missing.log")
+                .display()
+                .to_string(),
+        ]),
+    };
+    let missing_diag = setup
+        .home()
+        .join("logs")
+        .join("missing.log")
+        .display()
+        .to_string();
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        if id.0 == "s_00000000000000c4" {
+            Err(Failure {
+                code: ErrorCode::SessionNotFound,
+                message: "gone".to_owned(),
+                provider: None,
+                retry_after_ms: None,
+            })
+        } else {
+            Ok(())
+        }
+    };
+    let removed = remove_for_hub(&setup.home(), &want, false, clock().as_ref(), &mut delete);
+    assert!(removed.started);
+    assert_eq!(removed.total, 2 + 1 + 1 + 2);
+    // The cascade set travels as `expect`; the plain session goes
+    // unconstrained.
+    assert_eq!(
+        calls,
+        [
+            (
+                "s_00000000000000a1".to_owned(),
+                true,
+                BTreeSet::from([
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ])
+            ),
+            ("s_00000000000000c4".to_owned(), false, BTreeSet::new()),
+        ]
+    );
+    assert_eq!(removed.freed, listed + 10);
+    assert_eq!(
+        removed.failures,
+        [
+            (
+                missing_diag.clone(),
+                ErrorCode::StaleRequest,
+                format!("{missing_diag} is no longer selected; nothing was removed"),
+            ),
+            (
+                "worktree /gone/worktree".to_owned(),
+                ErrorCode::StaleRequest,
+                "worktree /gone/worktree is no longer selected; nothing was removed".to_owned(),
+            ),
+            (
+                "pinned gone-hash".to_owned(),
+                ErrorCode::StaleRequest,
+                "pinned gone-hash is no longer selected; nothing was removed".to_owned(),
+            ),
+            (
+                "s_00000000000000c4".to_owned(),
+                ErrorCode::SessionNotFound,
+                "gone".to_owned()
+            ),
+        ]
+    );
+    assert!(
+        fresh.join("events.jsonl").is_file(),
+        "never previewed, left alone"
+    );
+    assert!(
+        root.join("events.jsonl").is_file(),
+        "the recording callback removes nothing"
+    );
 }

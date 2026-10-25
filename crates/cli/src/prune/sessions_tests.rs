@@ -18,6 +18,7 @@ use fakes::Deadline;
 use serde_json::json;
 
 use super::*;
+use crate::prune::Scope;
 
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
@@ -66,7 +67,7 @@ impl Setup {
         select(
             &self.home(),
             &log::started_sessions(&self.home()),
-            &self.workspace(),
+            Scope::Project(&self.workspace()),
             Some(older_than()),
             cascade,
             wall(),
@@ -362,7 +363,7 @@ fn in_project_scope_a_session_from_another_project_is_excluded_and_a_missing_wor
     let selected = select(
         &home,
         &log::started_sessions(&home),
-        &workspace,
+        Scope::Project(&workspace),
         Some(older_than()),
         false,
         wall(),
@@ -544,7 +545,7 @@ fn a_git_redirect_keeps_selection_scoped_to_the_workspace_project() {
                 let selected = select(
                     &home,
                     &log::started_sessions(&home),
-                    &workspace,
+                    Scope::Project(&workspace),
                     Some(older_than()),
                     false,
                     wall(),

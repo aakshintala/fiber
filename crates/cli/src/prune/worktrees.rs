@@ -65,7 +65,7 @@ pub(crate) enum WorktreeRow {
 /// A worktree prune will remove, with its project for the revalidation.
 pub(crate) struct PlannedRemoval {
     /// The worktree's directory.
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
     /// The listed bytes.
     bytes: u64,
     /// The directory name under `worktrees/`.
@@ -124,12 +124,12 @@ pub(crate) struct RemovedWorktrees {
 pub(crate) fn select(
     home: &Path,
     users: &[log::Started],
-    workspace: &Path,
+    scope: super::Scope<'_>,
     force: bool,
     dry_run: bool,
     now: SystemTime,
 ) -> Planned {
-    let keys = scope_keys(home, workspace);
+    let keys = scope_keys(home, scope);
     let mut planned = Planned {
         rows: Vec::new(),
         removals: Vec::new(),
@@ -384,11 +384,13 @@ pub(crate) fn listed_bytes(planned: &Planned) -> u64 {
 }
 
 /// The project keys in scope: the repository's project inside one, every
-/// project under `projects/` outside one.
-pub(super) fn scope_keys(home: &Path, workspace: &Path) -> Vec<String> {
-    let resolved = doors::resolve_project(workspace);
-    if resolved.in_repository {
-        return vec![log::project_key(&resolved.path)];
+/// project under `projects/` outside one, and every project hub-wide.
+pub(super) fn scope_keys(home: &Path, scope: super::Scope<'_>) -> Vec<String> {
+    if let super::Scope::Project(workspace) = scope {
+        let resolved = doors::resolve_project(workspace);
+        if resolved.in_repository {
+            return vec![log::project_key(&resolved.path)];
+        }
     }
     let mut keys = Vec::new();
     let Ok(projects) = std::fs::read_dir(home.join("projects")) else {

@@ -38,9 +38,9 @@ pub(super) enum PinnedRow {
 }
 
 /// A copy prune will remove, with what its revalidation needs.
-struct PlannedCopy {
+pub(crate) struct PlannedCopy {
     /// The content hash.
-    hash: String,
+    pub(crate) hash: String,
     /// The listed bytes.
     bytes: u64,
     /// The owner keys at selection, sorted.
@@ -74,7 +74,7 @@ pub(super) struct Plan {
     /// The pinned rows, by hash.
     pub(super) rows: Vec<PinnedRow>,
     /// The removals, in row order.
-    removals: Vec<PlannedCopy>,
+    pub(crate) removals: Vec<PlannedCopy>,
 }
 
 /// What removing the planned copies freed and what it could not.
@@ -97,20 +97,21 @@ const REDIRECTING_ENV: [&str; 4] = [
 ];
 
 /// Lists the pinned copies in scope with no worktree match: inside a git
-/// repository the repository's project, outside one every project. A copy
-/// another project also approved is kept and not listed, as is a copy no
-/// project record names at all. A per-machine record alone keeps a copy;
-/// it never lists one its project records name.
+/// repository the repository's project, outside one every project, and
+/// hub-wide every project. A copy another project also approved is kept
+/// and not listed, as is a copy no project record names at all. A
+/// per-machine record alone keeps a copy; it never lists one its project
+/// records name.
 pub(super) fn select(
     home: &Path,
     started: &[log::Started],
-    workspace: &Path,
+    scope: super::Scope<'_>,
     clock: &dyn Clock,
 ) -> Plan {
     select_with(
         home,
         started,
-        workspace,
+        scope,
         clock,
         &|name| std::env::var_os(name),
         &|dir| worktree::list(dir),
@@ -122,7 +123,7 @@ pub(super) fn select(
 fn select_with(
     home: &Path,
     started: &[log::Started],
-    workspace: &Path,
+    scope: super::Scope<'_>,
     clock: &dyn Clock,
     env: &dyn Fn(&str) -> Option<OsString>,
     list: &dyn Fn(&Path) -> Result<Vec<worktree::Listed>, worktree::Error>,
@@ -148,8 +149,8 @@ fn select_with(
             };
         }
     };
-    let scope = scope_keys(home, workspace);
-    select_candidates(home, started, workspace, clock, list, &scope, &kept)
+    let keys = scope_keys(home, scope);
+    select_candidates(home, started, scope, clock, list, &keys, &kept)
 }
 
 /// Lists the candidates among `kept`: a copy with at least one
@@ -158,16 +159,16 @@ fn select_with(
 fn select_candidates(
     home: &Path,
     started: &[log::Started],
-    workspace: &Path,
+    scope: super::Scope<'_>,
     clock: &dyn Clock,
     list: &dyn Fn(&Path) -> Result<Vec<worktree::Listed>, worktree::Error>,
-    scope: &[String],
+    keys: &[String],
     kept: &[extensions::KeptCopy],
 ) -> Plan {
     let candidates: Vec<&extensions::KeptCopy> = kept
         .iter()
         .filter(|kept| {
-            !kept.owners.is_empty() && kept.owners.iter().all(|owner| scope.contains(owner))
+            !kept.owners.is_empty() && kept.owners.iter().all(|owner| keys.contains(owner))
         })
         .collect();
     // Every recorded identity by its session's project key.
@@ -181,7 +182,6 @@ fn select_candidates(
         };
         identities.entry(key).or_default().push(identity);
     }
-    let resolved_workspace = doors::resolve_project(workspace);
     let mut index = extensions::Index::load(home);
     let mut rows = Vec::new();
     let mut removals = Vec::new();
@@ -197,11 +197,11 @@ fn select_candidates(
                 );
             }
         }
-        if resolved_workspace.in_repository {
-            owned.push((
-                log::project_key(&resolved_workspace.path),
-                workspace.to_path_buf(),
-            ));
+        if let super::Scope::Project(workspace) = scope {
+            let resolved = doors::resolve_project(workspace);
+            if resolved.in_repository {
+                owned.push((log::project_key(&resolved.path), workspace.to_path_buf()));
+            }
         }
         match judge(&kept.hash, clock, list, &mut index, &owned) {
             Judged::Matched => {}

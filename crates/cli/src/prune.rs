@@ -4,11 +4,13 @@
 //! and deletes old diagnostic logs and crash files, with `--dry-run`,
 //! `--yes` and the space freed.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufReader, IsTerminal, Write};
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use contract::ErrorCode;
+use contract::SessionId;
 use contract::clock::Clock;
 use contract::shapes::Failure;
 use log::diag::{OldFile, old_diagnostics};
@@ -28,6 +30,82 @@ const PRUNE_PROMPT: &str = "prune? [y/N]";
 /// The usage failure when there is nobody to ask.
 const PRUNE_NOBODY: &str =
     "`fiber sessions prune` has no terminal to ask on. Pass `--yes` to prune without asking.";
+
+/// The projects a prune selection covers: one repository's project, or
+/// every project on the machine.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Scope<'a> {
+    /// The repository's project at this workspace, as today.
+    Project(&'a Path),
+    /// Every project under `home`.
+    HubWide,
+}
+
+/// The session-delete callback the hub path invokes once per selected
+/// session, and the local path once per delete with no `expect`. The
+/// lifetime is the callback's borrows, which end when the seam call
+/// returns; a bare alias would demand `'static` and refuse either caller.
+pub type HubDelete<'a> =
+    dyn FnMut(&SessionId, bool, Option<&BTreeSet<SessionId>>) -> Result<(), Failure> + Send + 'a;
+
+/// What a hub-wide selection answers: the printable lines, the per-session
+/// sets, the file keys and the bytes the preview would free. File keys are
+/// the dry-run line strings: worktree directory paths, pinned hashes and
+/// diagnostic paths.
+pub struct HubPruneSelection {
+    /// The preview lines, in print order.
+    pub lines: Vec<String>,
+    /// The sessions to delete, in send order.
+    pub sessions: Vec<HubPruneSession>,
+    /// The worktree directory paths to remove.
+    pub worktrees: Vec<String>,
+    /// The pinned-copy hashes to remove.
+    pub pinned: Vec<String>,
+    /// The diagnostic paths to remove.
+    pub diagnostics: Vec<String>,
+    /// The bytes the preview would free.
+    pub would_free: u64,
+}
+
+/// One session a hub-wide selection deletes.
+pub struct HubPruneSession {
+    /// The session to delete.
+    pub id: SessionId,
+    /// Whether the preview deletes with `cascade`.
+    pub cascade: bool,
+    /// The listed bytes the delete would free.
+    pub bytes: u64,
+    /// The confirmed set the delete removes; empty is an unconstrained
+    /// preview, deleted without `expect`.
+    pub expect: BTreeSet<SessionId>,
+}
+
+/// The previewed items a confirmed hub prune removes: each named as the
+/// dry run names it.
+pub struct HubPruneWant {
+    /// The sessions to delete, each with its previewed cascade set; an
+    /// empty set is an unconstrained preview.
+    pub sessions: BTreeMap<SessionId, BTreeSet<SessionId>>,
+    /// The worktree directory paths to remove.
+    pub worktrees: BTreeSet<String>,
+    /// The pinned-copy hashes to remove.
+    pub pinned: BTreeSet<String>,
+    /// The diagnostic paths to remove.
+    pub diagnostics: BTreeSet<String>,
+}
+
+/// What a confirmed hub prune removed: the space freed, each item that
+/// failed or was skipped, and how many items it tried to remove.
+pub struct HubPruneRemoved {
+    /// The bytes removed.
+    pub freed: u64,
+    /// Each item that failed or was skipped: what stayed, its code and why.
+    pub failures: Vec<(String, ErrorCode, String)>,
+    /// How many items the confirm tried to remove.
+    pub total: usize,
+    /// Whether the confirm ran its removals: false for a dry run.
+    pub started: bool,
+}
 
 /// `fiber sessions prune`'s arguments.
 pub struct PruneArgs {
@@ -103,9 +181,10 @@ fn prune_run(
     let logs = old_diagnostics(&home.join("logs"), now);
     let crashes = old_diagnostics(&home.join("crashes"), now);
     let started = log::started_sessions(home);
-    let selected = sessions::select(home, &started, workspace, older_than, args.cascade, now);
-    let mut planned = worktrees::select(home, &started, workspace, args.force, args.dry_run, now);
-    let pinned_plan = pinned::select(home, &started, workspace, clock);
+    let scope = Scope::Project(workspace);
+    let selected = sessions::select(home, &started, scope, older_than, args.cascade, now);
+    let mut planned = worktrees::select(home, &started, scope, args.force, args.dry_run, now);
+    let pinned_plan = pinned::select(home, &started, scope, clock);
     let has_sessions = !selected.deletes.is_empty();
     let has_worktrees = !planned.removals.is_empty();
     let has_pinned = pinned_plan
@@ -210,16 +289,15 @@ fn prune_run(
         }
     };
     let mut read = BufReader::new(stream);
-    let mut results: Vec<Result<(), Failure>> = Vec::with_capacity(selected.deletes.len());
-    for (n, delete) in selected.deletes.iter().enumerate() {
-        let command_id = format!("c_prune_{}", n + 1);
-        results.push(crate::sessions::send_delete(
-            &mut read,
-            &command_id,
-            &delete.id,
-            delete.cascade,
-        ));
-    }
+    // Today's sends carry no `expect`, exactly as before.
+    let none: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    let mut sent = 0_usize;
+    let mut send = |id: &SessionId, cascade: bool, _expect: Option<&BTreeSet<SessionId>>| {
+        sent += 1;
+        let command_id = format!("c_prune_{sent}");
+        crate::sessions::send_delete(&mut read, &command_id, id, cascade)
+    };
+    let results = delete_sessions(&selected.deletes, &none, &mut send);
     reconcile(
         out,
         &selected,
@@ -232,9 +310,38 @@ fn prune_run(
     )
 }
 
-/// Prints every row: sessions by id, then worktrees by name, then pinned
-/// copies by hash, then `logs/` then `crashes/` by file name, fields
-/// separated by two spaces.
+/// Every row prune prints, in print order: sessions by id, then worktrees
+/// by name, then pinned copies by hash, then `logs/` then `crashes/` by
+/// file name, fields separated by two spaces. The local print and the
+/// hub-wide preview share it, so both list the same lines.
+fn listing_lines(
+    sessions: &[sessions::SessionRow],
+    worktrees: &[worktrees::WorktreeRow],
+    pinned: &[pinned::PinnedRow],
+    logs: &[OldFile],
+    crashes: &[OldFile],
+    now: SystemTime,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for row in sessions {
+        lines.push(session_line(row));
+    }
+    for row in worktrees {
+        lines.push(worktrees::worktree_line(row));
+    }
+    for row in pinned {
+        lines.push(pinned::pinned_line(row));
+    }
+    for file in logs {
+        lines.push(diag_line("log", &file.path, file.bytes, now));
+    }
+    for file in crashes {
+        lines.push(diag_line("crash", &file.path, file.bytes, now));
+    }
+    lines
+}
+
+/// Prints every row.
 fn print_rows(
     out: &mut dyn Write,
     sessions: &[sessions::SessionRow],
@@ -244,23 +351,265 @@ fn print_rows(
     crashes: &[OldFile],
     now: SystemTime,
 ) -> Result<(), CliError> {
-    for row in sessions {
-        write_line(out, &session_line(row)).map_err(CliError::from)?;
-    }
-    for row in worktrees {
-        write_line(out, &worktrees::worktree_line(row)).map_err(CliError::from)?;
-    }
-    for row in pinned {
-        write_line(out, &pinned::pinned_line(row)).map_err(CliError::from)?;
-    }
-    for file in logs {
-        write_line(out, &diag_line("log", &file.path, file.bytes, now)).map_err(CliError::from)?;
-    }
-    for file in crashes {
-        write_line(out, &diag_line("crash", &file.path, file.bytes, now))
-            .map_err(CliError::from)?;
+    for line in listing_lines(sessions, worktrees, pinned, logs, crashes, now) {
+        write_line(out, &line).map_err(CliError::from)?;
     }
     Ok(())
+}
+
+/// Deletes each session through `delete` in send order, one answer per
+/// delete. `expects` carries the previewed cascade set per session; the
+/// local path passes none, as today, and an empty set stays unconstrained.
+fn delete_sessions(
+    deletes: &[sessions::Delete],
+    expects: &BTreeMap<SessionId, BTreeSet<SessionId>>,
+    delete: &mut HubDelete<'_>,
+) -> Vec<Result<(), Failure>> {
+    deletes
+        .iter()
+        .map(|one| {
+            let expect = expects.get(&one.id).filter(|set| !set.is_empty());
+            delete(&one.id, one.cascade, expect)
+        })
+        .collect()
+}
+
+/// Selects hub-wide prune work across every project under `home`: the
+/// printable lines, the per-session sets, the file keys and the bytes the
+/// preview would free. Without `older_than` no session is selected.
+pub fn select_for_hub(
+    home: &Path,
+    older_than: Option<Duration>,
+    cascade: bool,
+    force: bool,
+    now: SystemTime,
+    clock: &dyn Clock,
+) -> HubPruneSelection {
+    let started = log::started_sessions(home);
+    let selected = sessions::select(home, &started, Scope::HubWide, older_than, cascade, now);
+    // The scan holds no locks: the dry run drops each taken lock at once.
+    let planned = worktrees::select(home, &started, Scope::HubWide, force, true, now);
+    let pinned_plan = pinned::select(home, &started, Scope::HubWide, clock);
+    let logs = old_diagnostics(&home.join("logs"), now);
+    let crashes = old_diagnostics(&home.join("crashes"), now);
+    let lines = listing_lines(
+        &selected.rows,
+        &planned.rows,
+        &pinned_plan.rows,
+        &logs,
+        &crashes,
+        now,
+    );
+    let sessions = selected
+        .deletes
+        .iter()
+        .enumerate()
+        .map(|(index, delete)| {
+            let mut expect = BTreeSet::from([delete.id.clone()]);
+            let mut bytes = 0_u64;
+            for row in &selected.rows {
+                let (id, row_bytes, at) = match row {
+                    sessions::SessionRow::Deletable {
+                        id,
+                        bytes,
+                        delete: at,
+                        ..
+                    }
+                    | sessions::SessionRow::Continues {
+                        id,
+                        bytes,
+                        delete: at,
+                        ..
+                    } => (id, bytes, at),
+                    sessions::SessionRow::Blocked { .. }
+                    | sessions::SessionRow::Cycle { .. }
+                    | sessions::SessionRow::Unreadable { .. } => continue,
+                };
+                if *at == index {
+                    expect.insert(SessionId(id.clone()));
+                    bytes += *row_bytes;
+                }
+            }
+            // A plain delete carries no set: unconstrained, as the local
+            // path sends it.
+            if !delete.cascade {
+                expect.clear();
+            }
+            HubPruneSession {
+                id: delete.id.clone(),
+                cascade: delete.cascade,
+                bytes,
+                expect,
+            }
+        })
+        .collect();
+    let would_free = session_listed_bytes(&selected.rows)
+        + worktrees::listed_bytes(&planned)
+        + pinned::listed_bytes(&pinned_plan)
+        + diag_bytes(&logs)
+        + diag_bytes(&crashes);
+    HubPruneSelection {
+        lines,
+        sessions,
+        worktrees: planned
+            .removals
+            .iter()
+            .map(|removal| removal.dir.display().to_string())
+            .collect(),
+        pinned: pinned_plan
+            .removals
+            .iter()
+            .map(|removal| removal.hash.clone())
+            .collect(),
+        diagnostics: logs
+            .iter()
+            .chain(crashes.iter())
+            .map(|file| file.path.display().to_string())
+            .collect(),
+        would_free,
+    }
+}
+
+/// Removes the previewed `want` across every project under `home`:
+/// diagnostics, then worktrees, then pinned copies, then sessions through
+/// `delete`. Each side reselects first and acts only on items in both the
+/// reselection and `want`: a newly selectable item is left alone, and a
+/// previewed item that no longer qualifies is skipped and reported.
+/// Sessions delete with their previewed cascade set as `expect`, so a set
+/// that changed mid-prompt fails that one session without failing the
+/// prune; an empty set deletes unconstrained.
+pub fn remove_for_hub(
+    home: &Path,
+    want: &HubPruneWant,
+    force: bool,
+    clock: &dyn Clock,
+    delete: &mut HubDelete<'_>,
+) -> HubPruneRemoved {
+    let now = clock.wall();
+    let started_sessions = log::started_sessions(home);
+    let total =
+        want.sessions.len() + want.worktrees.len() + want.pinned.len() + want.diagnostics.len();
+    let mut freed = 0_u64;
+    let mut failures = Vec::new();
+    // Diagnostics first, as the local path removes them first.
+    let (logs, crashes) = (
+        old_diagnostics(&home.join("logs"), now),
+        old_diagnostics(&home.join("crashes"), now),
+    );
+    let present: BTreeSet<String> = logs
+        .iter()
+        .chain(crashes.iter())
+        .map(|file| file.path.display().to_string())
+        .collect();
+    for key in &want.diagnostics {
+        if !present.contains(key) {
+            failures.push((
+                key.clone(),
+                ErrorCode::StaleRequest,
+                format!("{key} is no longer selected; nothing was removed"),
+            ));
+        }
+    }
+    let kept: Vec<OldFile> = logs
+        .into_iter()
+        .chain(crashes)
+        .filter(|file| want.diagnostics.contains(&file.path.display().to_string()))
+        .collect();
+    let removed = remove_diagnostics(&kept);
+    freed += removed.freed;
+    failures.extend(
+        removed
+            .failures
+            .into_iter()
+            .map(|(path, message)| (path, ErrorCode::IoFailed, message)),
+    );
+    // Worktrees reselect with their locks held, as the local confirm does.
+    let mut planned = worktrees::select(home, &started_sessions, Scope::HubWide, force, false, now);
+    let selected: BTreeSet<String> = planned
+        .removals
+        .iter()
+        .map(|removal| removal.dir.display().to_string())
+        .collect();
+    for key in &want.worktrees {
+        if !selected.contains(key) {
+            failures.push((
+                format!("worktree {key}"),
+                ErrorCode::StaleRequest,
+                format!("worktree {key} is no longer selected; nothing was removed"),
+            ));
+        }
+    }
+    planned
+        .removals
+        .retain(|removal| want.worktrees.contains(&removal.dir.display().to_string()));
+    let removed_worktrees = worktrees::remove_planned(home, &mut planned, force, &mut |_| {});
+    freed += removed_worktrees.freed;
+    failures.extend(removed_worktrees.failures);
+    // Pinned copies reselect the same way.
+    let mut pinned_plan = pinned::select(home, &started_sessions, Scope::HubWide, clock);
+    let selected: BTreeSet<String> = pinned_plan
+        .removals
+        .iter()
+        .map(|removal| removal.hash.clone())
+        .collect();
+    for key in &want.pinned {
+        if !selected.contains(key) {
+            failures.push((
+                format!("pinned {key}"),
+                ErrorCode::StaleRequest,
+                format!("pinned {key} is no longer selected; nothing was removed"),
+            ));
+        }
+    }
+    pinned_plan
+        .removals
+        .retain(|removal| want.pinned.contains(&removal.hash));
+    let removed_pinned = pinned::remove_planned(home, &pinned_plan, clock, &mut |_| {});
+    freed += removed_pinned.freed;
+    failures.extend(removed_pinned.failures);
+    // Sessions delete through the passed callback, each with its previewed
+    // cascade set as `expect`. Listed bytes are read before each delete,
+    // so a removed session counts exactly the bytes its set held.
+    let deletes: Vec<sessions::Delete> = want
+        .sessions
+        .iter()
+        .map(|(id, set)| sessions::Delete {
+            id: id.clone(),
+            cascade: !set.is_empty(),
+        })
+        .collect();
+    let listed: BTreeMap<&SessionId, u64> = want
+        .sessions
+        .iter()
+        .map(|(id, set)| {
+            // The set names its root too, so the root is counted once.
+            let mut members: BTreeSet<&SessionId> = set.iter().collect();
+            members.insert(id);
+            let bytes = members
+                .into_iter()
+                .filter_map(|member| log::find_logged_session(home, member))
+                .map(|(_, dir)| log::session_bytes(&dir))
+                .sum();
+            (id, bytes)
+        })
+        .collect();
+    let results = delete_sessions(&deletes, &want.sessions, delete);
+    for (one, result) in deletes.iter().zip(results) {
+        match result {
+            Ok(()) => {
+                freed += listed.get(&one.id).copied().unwrap_or(0);
+            }
+            Err(failure) => {
+                failures.push((one.id.0.clone(), failure.code, failure.message));
+            }
+        }
+    }
+    HubPruneRemoved {
+        freed,
+        failures,
+        total,
+        started: true,
+    }
 }
 
 /// One session row, fields separated by two spaces.
@@ -370,8 +719,9 @@ fn format_age(days: u64) -> String {
 }
 
 /// Logical bytes: `N B` below 1024, otherwise one decimal in the largest
-/// of KiB, MiB or GiB that is at least 1.
-fn format_size(bytes: u64) -> String {
+/// of KiB, MiB or GiB that is at least 1. Shared with the hub client's
+/// summary line, which prints the same sizes.
+pub fn format_size(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;

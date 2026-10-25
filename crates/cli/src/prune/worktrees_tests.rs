@@ -22,6 +22,7 @@ use serde_json::json;
 
 use super::super::{PruneArgs, prune_run};
 use super::*;
+use crate::prune::Scope;
 use fakes::Deadline;
 use fakes::git::git;
 
@@ -133,7 +134,7 @@ fn select(setup: &Setup, force: bool, dry_run: bool) -> Planned {
     super::select(
         &setup.home(),
         &log::started_sessions(&setup.home()),
-        &setup.workspace(),
+        Scope::Project(&setup.workspace()),
         force,
         dry_run,
         wall(),
@@ -857,7 +858,10 @@ fn a_git_redirect_keeps_scope_on_the_workspace_repository() {
                     std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_WORKSPACE").unwrap(),
                 );
                 let expected = std::env::var("FIBER_CLI_PRUNE_SCOPE_REDIRECT_EXPECTED").unwrap();
-                assert_eq!(super::scope_keys(&home, &workspace), vec![expected]);
+                assert_eq!(
+                    super::scope_keys(&home, Scope::Project(&workspace)),
+                    vec![expected]
+                );
             },
         );
         return;

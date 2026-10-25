@@ -94,7 +94,7 @@ struct Candidate {
 pub(crate) fn select(
     home: &Path,
     all: &[log::Started],
-    workspace: &Path,
+    scope: super::Scope<'_>,
     older_than: Option<Duration>,
     cascade: bool,
     now: SystemTime,
@@ -123,16 +123,22 @@ pub(crate) fn select(
             .collect::<Vec<_>>()
     };
     let cyclic: BTreeSet<String> = children.cyclic().into_iter().map(|id| id.0).collect();
-    let resolved = doors::resolve_project(workspace);
-    let in_repo = resolved.in_repository;
-    let project = resolved.path;
-    let sessions_dir = log::sessions_dir(home, &project);
+    let project = match scope {
+        super::Scope::Project(workspace) => Some(doors::resolve_project(workspace)),
+        super::Scope::HubWide => None,
+    };
+    let sessions_dir = project
+        .as_ref()
+        .map(|resolved| log::sessions_dir(home, &resolved.path));
     let mut memo: HashMap<String, bool> = HashMap::new();
     let now_ms = wall_ms(now);
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut in_scope = |_id: &str, dir: &Path, workspace: &Option<String>| -> bool {
-        if in_repo {
+        let (Some(resolved), Some(sessions_dir)) = (project.as_ref(), sessions_dir.as_ref()) else {
+            return true;
+        };
+        if resolved.in_repository {
             if dir.parent() != Some(sessions_dir.as_path()) {
                 return false;
             }
@@ -144,7 +150,7 @@ pub(crate) fn select(
             }
             *memo
                 .entry(work.clone())
-                .or_insert_with(|| doors::project(Path::new(work)) == project)
+                .or_insert_with(|| doors::project(Path::new(work)) == resolved.path)
         } else {
             true
         }
