@@ -144,12 +144,11 @@ fn finish(
     // it arrives first and the next wait times out.
     let mut remaining: Vec<&str> = sessions.to_vec();
     until(&client, "the sessions exited", |line| {
-        if line["kind"] == "fiber_exited" {
-            if let Some(exited) = line["session_id"].as_str() {
-                if let Some(pos) = remaining.iter().position(|wanted| *wanted == exited) {
-                    remaining.remove(pos);
-                }
-            }
+        if line["kind"] == "fiber_exited"
+            && let Some(exited) = line["session_id"].as_str()
+            && let Some(pos) = remaining.iter().position(|wanted| *wanted == exited)
+        {
+            remaining.remove(pos);
         }
         remaining.is_empty()
     });
