@@ -1379,7 +1379,7 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
     };
     let removed = remove_for_hub(
         &setup.home(),
-        &want,
+        Some(&want),
         Some(Duration::from_secs(30 * 24 * 60 * 60)),
         true,
         false,
@@ -1606,7 +1606,7 @@ fn remove_for_hub_frees_previewed_worktree_and_pinned_bytes() {
     };
     let removed = remove_for_hub(
         &setup.home(),
-        &want,
+        Some(&want),
         None,
         false,
         false,
@@ -1656,7 +1656,7 @@ fn remove_for_hub_skips_a_session_that_left_the_selection() {
     };
     let removed = remove_for_hub(
         &setup.home(),
-        &want,
+        Some(&want),
         Some(Duration::from_secs(30 * 24 * 60 * 60)),
         false,
         false,
@@ -1678,4 +1678,59 @@ fn remove_for_hub_skips_a_session_that_left_the_selection() {
         )]
     );
     assert!(dir.join("events.jsonl").is_file(), "nothing was removed");
+}
+
+#[test]
+fn remove_for_hub_without_expect_removes_the_current_selection() {
+    use std::collections::BTreeSet;
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    setup.diag(
+        "logs",
+        "old.log",
+        b"0123456789",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    // Without `expect` (`--yes`) the confirm removes the current
+    // selection, as the local path does.
+    let removed = remove_for_hub(
+        &setup.home(),
+        None,
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    );
+    // The cascade set travels as `expect`, as with a preview.
+    assert_eq!(
+        calls,
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            Some(
+                [
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ]
+                .into_iter()
+                .collect()
+            ),
+        )]
+    );
+    assert_eq!(removed.total, 2);
+    assert!(removed.failures.is_empty());
+    assert_eq!(removed.freed, listed + 10);
 }

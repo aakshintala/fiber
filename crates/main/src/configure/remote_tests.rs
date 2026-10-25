@@ -1675,3 +1675,58 @@ fn seam_prune_running_worktree_survives_and_skips_stale() {
     assert!(worktree.is_dir(), "the running worktree survives");
     drop(lock);
 }
+
+#[test]
+fn seam_prune_confirm_without_expect_removes_the_current_selection() {
+    let dirs = Dirs::new();
+    let home = dirs.home();
+    let root = prune_session(&home, "one", "s_00000000000000a1", None, 0);
+    let fork = prune_session(
+        &home,
+        "two",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+        0,
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let seam = Seam::new(home.clone());
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    // Without `expect` (`--yes`) the confirm removes the current
+    // selection, as the local path does.
+    let outcome = seam
+        .prune(
+            &home,
+            Some("30d".to_owned()),
+            true,
+            false,
+            false,
+            None,
+            clock.clone(),
+            &mut delete,
+        )
+        .unwrap();
+    // Each session arrives with its previewed cascade set as `expect`.
+    assert_eq!(
+        calls,
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            Some(
+                [
+                    SessionId("s_00000000000000a1".into()),
+                    SessionId("s_00000000000000b2".into())
+                ]
+                .into_iter()
+                .collect()
+            ),
+        )]
+    );
+    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    assert_eq!(outcome.freed, listed);
+    assert_eq!(outcome.total, 1);
+    assert!(outcome.failures.is_empty());
+}

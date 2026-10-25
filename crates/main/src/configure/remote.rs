@@ -711,13 +711,9 @@ impl hub::Machine for Seam {
                 failures: Vec::new(),
             });
         }
-        let expect = expect.unwrap_or(contract::commands::hub::PruneExpect {
-            sessions: Vec::new(),
-            worktrees: Vec::new(),
-            pinned: Vec::new(),
-            diagnostics: Vec::new(),
-        });
-        let want = cli::HubPruneWant {
+        // Without `expect` (`--yes`) there is no preview to confirm:
+        // the confirm removes the current selection, as locally.
+        let want = expect.map(|expect| cli::HubPruneWant {
             sessions: expect
                 .sessions
                 .into_iter()
@@ -726,14 +722,14 @@ impl hub::Machine for Seam {
             worktrees: expect.worktrees.into_iter().collect(),
             pinned: expect.pinned.into_iter().collect(),
             diagnostics: expect.diagnostics.into_iter().collect(),
-        };
+        });
         // The hub-supplied callback passes through untouched: no loopback
         // connection, no hub socket path. The confirm reselects against
         // the same `older_than` and `cascade`, so a previewed session
         // that no longer qualifies is skipped, not deleted.
         let removed = cli::remove_for_hub(
             home,
-            &want,
+            want.as_ref(),
             older_than,
             cascade,
             force,

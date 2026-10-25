@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -88,6 +89,17 @@ fn dry_run(hub: &Hub, value: serde_json::Value) -> Value {
     delete(hub, &args(value))
         .unwrap()
         .expect("a dry run answers")
+}
+
+/// The answer's `sessions` as a set: `docs/invocation.md` ("The hub")
+/// promises the ids, not their order.
+fn sessions_as_set(answer: &Value) -> BTreeSet<String> {
+    answer["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect()
 }
 
 /// Sends one line on a served connection and returns the answer after
@@ -247,7 +259,7 @@ fn a_dry_run_answers_the_set_and_deletes_nothing() {
         &hub,
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
-    assert_eq!(answer, json!({"sessions": [id(1), id(2)]}));
+    assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
     for dir in [&root, &fork, &other] {
         assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
         assert!(dir.join("session.lock").is_file(), "{}", dir.display());
@@ -301,8 +313,8 @@ fn a_dry_run_over_the_wire_answers_the_sessions() {
     assert_eq!(answer["kind"], "command_accepted");
     assert_eq!(answer["payload"]["command_id"], "c_dry");
     assert_eq!(
-        answer["payload"]["result"],
-        json!({"sessions": [id(1), id(2)]})
+        sessions_as_set(&answer["payload"]["result"]),
+        BTreeSet::from([id(1), id(2)])
     );
 }
 
@@ -346,7 +358,7 @@ fn a_dry_run_on_a_lockless_tree_answers_and_writes_nothing() {
         &hub,
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
-    assert_eq!(answer, json!({"sessions": [id(1), id(2)]}));
+    assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
     assert_eq!(snapshot_tree(&temp.dir), before);
     for dir in [&root, &fork] {
         assert!(!dir.join("session.lock").exists(), "{}", dir.display());

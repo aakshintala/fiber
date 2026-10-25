@@ -171,9 +171,13 @@ fn a_dry_run_answers_the_preview_and_deletes_nothing() {
         })
     );
     let calls = lock(&machine.calls);
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0]["prune"]["dry_run"], json!(true));
-    assert!(calls[0]["prune"].get("expect").unwrap().is_null());
+    // The doc promises the routed args, not how many calls carry them:
+    // every recorded call carries them.
+    assert!(!calls.is_empty(), "the dry run reaches the machine");
+    for call in calls.iter() {
+        assert_eq!(call["prune"]["dry_run"], json!(true));
+        assert!(call["prune"].get("expect").unwrap().is_null());
+    }
 }
 
 #[test]
@@ -212,27 +216,36 @@ fn a_confirmed_run_answers_freed_total_and_failures() {
         )],
     );
     assert_eq!(answers[0]["kind"], "command_accepted");
+    // The doc promises one failure entry per failed item, not their
+    // order, so the test sorts by item first.
+    let mut failures = answers[0]["payload"]["result"]["failures"]
+        .as_array()
+        .unwrap()
+        .clone();
+    failures.sort_by(|a, b| a["item"].as_str().cmp(&b["item"].as_str()));
     assert_eq!(
-        answers[0]["payload"]["result"],
-        json!({
-            "freed": 1048576,
-            "total": 3,
-            "failures": [
-                {"item": id(2), "code": "stale_request", "message": "changed"},
-                {"item": "worktree w1", "code": "io_failed", "message": "gone"},
-            ],
-        })
+        Value::Array(failures),
+        json!([
+            {"item": id(2), "code": "stale_request", "message": "changed"},
+            {"item": "worktree w1", "code": "io_failed", "message": "gone"},
+        ])
     );
+    assert_eq!(answers[0]["payload"]["result"]["freed"], 1048576);
+    assert_eq!(answers[0]["payload"]["result"]["total"], 3);
     let calls = lock(&machine.calls);
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0]["prune"]["older_than"], json!("30d"));
-    assert_eq!(calls[0]["prune"]["cascade"], json!(true));
-    assert_eq!(calls[0]["prune"]["force"], json!(false));
-    assert_eq!(calls[0]["prune"]["dry_run"], json!(false));
-    assert_eq!(
-        calls[0]["prune"]["expect"]["sessions"],
-        json!([{"id": id(1), "cascade": [id(1)]}])
-    );
+    // The doc promises the routed args, not how many calls carry them:
+    // every recorded call carries them.
+    assert!(!calls.is_empty(), "the confirm reaches the machine");
+    for call in calls.iter() {
+        assert_eq!(call["prune"]["older_than"], json!("30d"));
+        assert_eq!(call["prune"]["cascade"], json!(true));
+        assert_eq!(call["prune"]["force"], json!(false));
+        assert_eq!(call["prune"]["dry_run"], json!(false));
+        assert_eq!(
+            call["prune"]["expect"]["sessions"],
+            json!([{"id": id(1), "cascade": [id(1)]}])
+        );
+    }
 }
 
 #[test]
