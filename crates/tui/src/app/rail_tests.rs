@@ -1291,13 +1291,9 @@ fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
     let mut app = opened(&[A, B], A);
     app.on_line(left(B, "exited"));
     app.home.as_mut().unwrap().sessions.note_total("-w", 4);
-    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
     // A Done click sends no scoped ask without a new trigger: a subscribe
     // goes out and no scoped recent does.
-    let parsed: Vec<serde_json::Value> = out
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect();
     assert!(
         parsed
             .iter()
@@ -1331,13 +1327,9 @@ fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
 fn clicking_done_with_a_total_but_no_loaded_rows_lands_unfocused() {
     let mut app = opened(&[A, B], A);
     app.home.as_mut().unwrap().sessions.note_total("-w", 3);
-    let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
     // A Done click sends no scoped ask without a new trigger: a subscribe
     // goes out and no scoped recent does.
-    let parsed: Vec<serde_json::Value> = out
-        .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
-        .collect();
     assert!(
         parsed
             .iter()
