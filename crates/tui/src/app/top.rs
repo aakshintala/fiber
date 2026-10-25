@@ -15,6 +15,8 @@ use std::cell::RefCell;
 /// surface below it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Surface {
+    /// The clear question, over every other surface.
+    Clear,
     /// The quit question, over every other surface.
     Quit,
     /// The accepted-import report.
@@ -72,7 +74,8 @@ impl Surface {
     pub(crate) fn closes_on_outside_click(self) -> bool {
         matches!(
             self,
-            Surface::Quit
+            Surface::Clear
+                | Surface::Quit
                 | Surface::Report
                 | Surface::Keymap
                 | Surface::ReviewerSetup
@@ -157,6 +160,7 @@ impl App {
     /// The surfaces open now, topmost first, ending with the input box.
     pub(crate) fn top_surfaces(&self) -> Vec<Surface> {
         let open = [
+            (Surface::Clear, self.clear_open()),
             (Surface::Quit, self.quit_open()),
             (Surface::Report, self.import_report_open()),
             (Surface::KeysScreen, self.keys_screen_open()),
@@ -196,7 +200,7 @@ impl App {
         self.top_surfaces()
             .into_iter()
             .rev()
-            .filter(|surface| matches!(surface, Surface::Report | Surface::Quit))
+            .filter(|surface| matches!(surface, Surface::Report | Surface::Quit | Surface::Clear))
     }
 
     /// The surface on top: the head of [`Self::top_surfaces`].
@@ -220,7 +224,8 @@ impl App {
     /// The context `surface` gives while it is on top.
     fn context_of(&self, surface: Surface) -> Context {
         match surface {
-            Surface::Quit
+            Surface::Clear
+            | Surface::Quit
             | Surface::Report
             | Surface::Keymap
             | Surface::ReviewerSetup
@@ -264,6 +269,7 @@ impl App {
             return Some(Effect::None);
         }
         match surface {
+            Surface::Clear => self.clear_key(key),
             Surface::Quit => self.quit_key(key),
             Surface::Report => self.report_key(key),
             // The screen takes its strokes in `on_press`, and the

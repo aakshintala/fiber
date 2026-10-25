@@ -63,8 +63,14 @@ pub(crate) enum Spot {
 /// The rail's state behind a small interface.
 #[derive(Debug, Default)]
 pub(crate) struct RailState {
-    /// Each card's number, by its row's key.
-    numbers: Vec<(u64, usize)>,
+    /// Each card's number, by its session.
+    numbers: Vec<(SessionId, usize)>,
+    /// New sessions holding their moved number until their first row
+    /// folds: `sync` keeps the number while no card carries it.
+    retained: BTreeSet<SessionId>,
+    /// Old sessions whose card moved to a new session: never a card
+    /// again, until the session leaves.
+    cardless: BTreeSet<SessionId>,
     /// The focused rail stop; None while the input box has focus.
     /// Only one focus exists: while this is set, [`App::focus`] holds
     /// no rail target (`docs/tui.md`, "The rail"). Every click target
@@ -97,16 +103,24 @@ pub(crate) struct RailState {
 }
 
 impl RailState {
-    /// Numbers the cards: a key no longer a card gives its number up,
-    /// then each card without one, in card order, takes the smallest
+    /// Numbers the cards: a session no longer a card gives its number
+    /// up, then each card without one, in card order, takes the smallest
     /// number from 1 no other card holds. A number never moves while its
     /// card stays, so a card that leaves leaves a gap until a later card
-    /// takes it.
+    /// takes it. A session holding its moved number keeps it until its
+    /// row folds, and a cardless session takes none.
     pub(crate) fn sync(&mut self, cards: &[&Row]) {
-        self.numbers
-            .retain(|(key, _)| cards.iter().any(|card| card.key == *key));
         for card in cards {
-            if self.number(card.key).is_some() {
+            self.retained.remove(&card.id);
+        }
+        self.numbers.retain(|(id, _)| {
+            cards.iter().any(|card| card.id == *id) || self.retained.contains(id)
+        });
+        for card in cards {
+            if self.cardless.contains(&card.id) {
+                continue;
+            }
+            if self.number(&card.id).is_some() {
                 continue;
             }
             let mut held: Vec<usize> = self.numbers.iter().map(|(_, held)| *held).collect();
@@ -114,16 +128,44 @@ impl RailState {
             let free = held
                 .iter()
                 .fold(1, |next, held| if *held == next { next + 1 } else { next });
-            self.numbers.push((card.key, free));
+            self.numbers.push((card.id.clone(), free));
         }
     }
 
-    /// The number of the card whose row has `key`.
-    pub(crate) fn number(&self, key: u64) -> Option<usize> {
+    /// The number the rail holds for `id`, whether its row has folded
+    /// or not.
+    pub(crate) fn number(&self, id: &SessionId) -> Option<usize> {
         self.numbers
             .iter()
-            .find(|(card, _)| *card == key)
+            .find(|(held, _)| *held == *id)
             .map(|(_, number)| *number)
+    }
+
+    /// Moves `old_id`'s number to `new_id` in one step: the number never
+    /// passes through a free state, so `sync` cannot give it to another
+    /// card. The new id keeps it until its row folds; the old id stays
+    /// cardless until it leaves. With no number to move, the old id
+    /// still goes cardless and the new id takes its number on its first
+    /// fold.
+    pub(crate) fn replace(&mut self, old_id: SessionId, new_id: SessionId) {
+        if let Some(at) = self.numbers.iter().position(|(id, _)| *id == old_id) {
+            let (_, number) = self.numbers.remove(at);
+            self.numbers.retain(|(id, _)| *id != new_id);
+            self.numbers.push((new_id.clone(), number));
+            self.retained.insert(new_id);
+        }
+        self.cardless.insert(old_id);
+    }
+
+    /// Whether `id`'s card moved to a new session: it draws no card.
+    pub(crate) fn is_cardless(&self, id: &SessionId) -> bool {
+        self.cardless.contains(id)
+    }
+
+    /// Forgets the cardless mark once the session has exited: its rows
+    /// can never be cards again.
+    pub(crate) fn note_exited(&mut self, id: &SessionId) {
+        self.cardless.remove(id);
     }
 
     /// The focused rail stop, if the rail holds focus. The view
@@ -151,7 +193,8 @@ impl App {
 
     /// The cards and the launch project, or None without home. The cards
     /// are every card except a CANNOT ATTACH card the person hid and that
-    /// has not crashed.
+    /// has not crashed, and never a session whose card moved to a new
+    /// session.
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, Option<&str>)> {
         let home = self.home.as_ref()?;
         let hidden = &self.rail_state.hidden;
@@ -159,7 +202,10 @@ impl App {
             home.sessions
                 .cards()
                 .into_iter()
-                .filter(|row| !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id)))
+                .filter(|row| {
+                    !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id))
+                        && !self.rail_state.is_cardless(&row.id)
+                })
                 .collect(),
             home.launch_project(),
         ))
@@ -479,13 +525,22 @@ impl App {
         if let Key::AltDigit(digit) = key {
             self.clear_rail_focus();
             let number = usize::from(*digit);
-            let card = self
+            // A number names a session, whose row holds the key its
+            // card draws under; a number held for a row not yet folded
+            // jumps nowhere.
+            let id = self
                 .rail_state
                 .numbers
                 .iter()
                 .find(|(_, held)| *held == number)
-                .map(|(key, _)| *key);
-            return Some(card.map_or(Effect::None, |key| self.switch_to(key)));
+                .map(|(id, _)| id.clone());
+            let key = id.and_then(|id| {
+                self.home
+                    .as_ref()
+                    .and_then(|home| home.sessions.row(&id))
+                    .map(|row| row.key)
+            });
+            return Some(key.map_or(Effect::None, |key| self.switch_to(key)));
         }
         if *key == Key::AltA {
             self.clear_rail_focus();
@@ -629,7 +684,10 @@ impl App {
                 .cards()
                 .into_iter()
                 .filter(|row| {
-                    row.left.is_none() && row.state == State::Waiting && Some(&row.id) != attached
+                    row.left.is_none()
+                        && row.state == State::Waiting
+                        && Some(&row.id) != attached
+                        && !self.rail_state.is_cardless(&row.id)
                 })
                 .count(),
         )
@@ -686,7 +744,10 @@ impl App {
                 .cards()
                 .into_iter()
                 .filter(|row| {
-                    row.left.is_none() && row.state == State::Waiting && Some(&row.id) != attached
+                    row.left.is_none()
+                        && row.state == State::Waiting
+                        && Some(&row.id) != attached
+                        && !self.rail_state.is_cardless(&row.id)
                 })
                 .min_by_key(|row| row.status.as_ref().map_or(u64::MAX, |status| status.since))
                 .map(|row| row.key)
