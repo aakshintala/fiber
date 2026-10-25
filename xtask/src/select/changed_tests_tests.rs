@@ -790,6 +790,27 @@ fn a_single_colon_in_a_test_path_selects_nothing() {
 }
 
 #[test]
+fn a_two_level_test_path_selects() {
+    // `a::b::test` walks two `::` pairs before its answer: the walk must
+    // finish and accept the path. Stepping an index past each pair stalls
+    // here instead (`0 * 3` stays 0 under its `*=` mutant), hanging the
+    // run rather than answering.
+    let sources = vec![file(
+        "log",
+        "crates/log/src/nested_attr_tests.rs",
+        "#[a::b::test]\nfn deep() {}\n",
+    )];
+    let diff = diff_file(
+        "crates/log/src/nested_attr_tests.rs",
+        "@@ -2,1 +2,1 @@\n-fn deep() {}\n+fn deep() {}\n",
+    );
+    assert_eq!(
+        selected(&diff, &sources),
+        vec![refer("log", None, true, "nested_attr::tests::deep")]
+    );
+}
+
+#[test]
 fn a_stray_semicolon_does_not_eat_the_next_attribute() {
     // The `;` is not `#`, so it leaves the following `#[test]` for the
     // attribute arm; matching any punctuation there would swallow the `#`

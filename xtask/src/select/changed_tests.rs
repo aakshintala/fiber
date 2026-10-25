@@ -140,22 +140,23 @@ fn strip_raw(ident: &str) -> &str {
 fn is_test_attr(group: &Group) -> bool {
     let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
     let mut segments: Vec<String> = Vec::new();
-    let mut rest = 0;
-    while let Some(TokenTree::Ident(segment)) = tokens.get(rest) {
+    // The unconsumed tail of the path: each pass takes at least the
+    // leading identifier, so the walk always ends. (Stepping an index
+    // past each `::` instead stalls under its `*=` mutant: `0 * 3`
+    // stays 0 and the walk never ends.)
+    let mut rest: &[TokenTree] = &tokens;
+    while let [TokenTree::Ident(segment), tail @ ..] = rest {
         segments.push(segment.to_string());
-        let first_colon = matches!(
-            tokens.get(rest + 1),
-            Some(TokenTree::Punct(colon)) if colon.as_char() == ':'
-        );
-        let second_colon = matches!(
-            tokens.get(rest + 2),
-            Some(TokenTree::Punct(colon)) if colon.as_char() == ':'
-        );
-        if first_colon && second_colon {
-            rest += 3;
-        } else {
-            rest += 1;
-            break;
+        match tail {
+            [TokenTree::Punct(first), TokenTree::Punct(second), next @ ..]
+                if first.as_char() == ':' && second.as_char() == ':' =>
+            {
+                rest = next;
+            }
+            _ => {
+                rest = tail;
+                break;
+            }
         }
     }
     let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
@@ -164,7 +165,7 @@ fn is_test_attr(group: &Group) -> bool {
     if last != "test" || first == "cfg" {
         return false;
     }
-    matches!(tokens.get(rest..), Some([]) | Some([TokenTree::Group(_)]))
+    matches!(rest, [] | [TokenTree::Group(_)])
 }
 
 /// One attribute stack: where it starts and whether it holds a test.
