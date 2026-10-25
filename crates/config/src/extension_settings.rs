@@ -27,6 +27,10 @@ pub struct ExtensionSettings {
     run_settings: Map<String, Value>,
     /// The bytes of every `config/<extension>.json` in each layer, by path.
     files: BTreeMap<PathBuf, Vec<u8>>,
+    /// A replacement for one extension's repository-layer contribution in
+    /// this in-memory clone: the session's authorized repository entries.
+    /// It never persists and never outranks project or run.
+    overlay: BTreeMap<String, Value>,
 }
 
 impl ExtensionSettings {
@@ -43,7 +47,18 @@ impl ExtensionSettings {
             project,
             run_settings,
             files,
+            overlay: BTreeMap::new(),
         }
+    }
+
+    /// Replaces this extension's repository-layer contribution in this
+    /// in-memory clone with `repository`: the session's authorized entries
+    /// for it. Global still beats nothing below it, and project and run
+    /// still beat the overlay, so an approved entry merges key by key in
+    /// normal layer order. It never touches another extension or the files
+    /// on disk.
+    pub fn set_overlay(&mut self, extension: &str, repository: Value) {
+        self.overlay.insert(full_name(extension), repository);
     }
 
     /// The workspace whose `.fiber/` is the repository layer.
@@ -101,6 +116,30 @@ impl ExtensionSettings {
         let mut merged = Value::Object(Map::new());
         let mut notices = Vec::new();
         for (file, repo) in files {
+            if repo && let Some(overlay) = self.overlay.get(extension) {
+                // The authorized replacement still reports what the raw
+                // file holds that the manifest forbids, so a disallowed
+                // key keeps its notice while its value stays withheld.
+                if let Some(bytes) = self.files.get(&file) {
+                    let Value::Object(map) = parse(&file, bytes)? else {
+                        return Err(top_level(&file.display().to_string()));
+                    };
+                    for key in map.keys() {
+                        if !repo_settings.contains(&key.as_str()) {
+                            notices.push(Notice {
+                                code: ErrorCode::ConfigKeyIgnored,
+                                message: format!(
+                                    "{}: ignored `{key}`, which the extension does not list under repo_settings.",
+                                    file.display()
+                                ),
+                                extension: Some(extension.into()),
+                            });
+                        }
+                    }
+                }
+                path::merge(&mut merged, overlay);
+                continue;
+            }
             let Some(bytes) = self.files.get(&file) else {
                 continue;
             };
@@ -175,6 +214,7 @@ impl fmt::Debug for ExtensionSettings {
             .field("project", &self.project)
             .field("run_settings", &self.run_settings.keys())
             .field("files", &self.files.keys())
+            .field("overlay", &self.overlay.keys())
             .finish_non_exhaustive()
     }
 }
@@ -223,6 +263,14 @@ impl ExtensionSettings {
             &self.home.join("projects").join(self.project.as_str()),
             extension,
         );
+        let repository_subtree = if let Some(overlay) = self.overlay.get(extension) {
+            // The overlay already holds only authorized entries, so a
+            // withheld repository value never names the repository layer.
+            // A corrupt raw file still errors through `merged` above.
+            Some(overlay.clone())
+        } else {
+            repository_subtree(&self.files, &repository_file, repo_settings)?
+        };
         let mut layers: Vec<(Source, Option<Value>)> = vec![
             (
                 Source::Global(global_file.clone()),
@@ -230,7 +278,7 @@ impl ExtensionSettings {
             ),
             (
                 Source::Repository(repository_file.clone()),
-                repository_subtree(&self.files, &repository_file, repo_settings)?,
+                repository_subtree,
             ),
             (
                 Source::Project(project_file.clone()),

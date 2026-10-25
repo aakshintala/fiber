@@ -136,11 +136,14 @@ pub struct Diag {
     rotate_at: Option<u64>,
     peak: fn() -> Option<u64>,
     /// A hook run between [`Diag::peak_memory_then_info`]'s two appends,
-    /// told whether the state lock is still held. Test-only: the pair
-    /// must hold one lock across both appends, so a split-lock
-    /// implementation reports an unlocked seam (`docs/testing.md`,
-    /// "Races are forced, not waited for"). Always `None` outside
-    /// tests, where the branch below never fires.
+    /// told whether the state lock is still held. Test-only: the `state`
+    /// mutex and the interval between the pair's appends are private to
+    /// this crate, so no caller can force a competing write into that
+    /// interval and a deterministic pause point is the only way to test
+    /// the lock invariant. The callback runs while the files and state
+    /// guards are held, so it only signals and waits, and must not
+    /// re-enter [`Diag`].
+    #[cfg(test)]
     between: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     state: Arc<Mutex<State>>,
 }
@@ -164,6 +167,7 @@ impl Diag {
             clock,
             rotate_at: None,
             peak: peak_kib,
+            #[cfg(test)]
             between: None,
             state: Arc::new(Mutex::new(State {
                 file,
@@ -197,6 +201,7 @@ impl Diag {
     /// Runs `between` between [`Diag::peak_memory_then_info`]'s two
     /// appends, telling it whether the state lock is still held, before
     /// the writer is shared. Test-only: see [`Diag`].
+    #[cfg(test)]
     #[doc(hidden)]
     #[must_use]
     pub fn with_between(mut self, between: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
@@ -231,6 +236,7 @@ impl Diag {
             clock: Arc::clone(&self.clock),
             rotate_at: None,
             peak: self.peak,
+            #[cfg(test)]
             between: None,
             state: Arc::new(Mutex::new(State {
                 file: self
@@ -288,6 +294,7 @@ impl Diag {
         // The same thread still owns `state`, so `try_lock` never
         // blocks: it reports `WouldBlock` exactly when the single lock
         // is correctly held across both appends.
+        #[cfg(test)]
         if let Some(between) = &self.between {
             between(self.state.try_lock().is_err());
         }

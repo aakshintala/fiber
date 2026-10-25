@@ -249,7 +249,9 @@ pub(crate) fn parts_in(
     // before any session line is written.
     session_extensions::required(&extensions)?;
     // Declared hooks with no extension to run them and any `blocking`
-    // entry fail the start closed, so a guard never fails open.
+    // entry fail the start closed, so a guard never fails open. The hooks
+    // gate reads the session's filtered repository contribution, so an
+    // unapproved entry stays withheld.
     session_extensions::missing_hooks(&config, &extensions)?;
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
