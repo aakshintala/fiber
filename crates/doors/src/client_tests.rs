@@ -964,8 +964,11 @@ mod attribution_tests {
             peer_pid: 555,
             session_process_pids: vec![20],
         };
-        let approval = from_session_message(&local, FromSessionRefusal::Approval);
+        let approval =
+            from_session_message(&local, FromSessionRefusal::Approval { target: &target });
         assert!(approval.contains("inside a session"), "{approval}");
+        assert!(approval.contains("reply"), "{approval}");
+        assert!(approval.contains("s_fedcba9876543210"), "{approval}");
         assert!(
             !approval.contains("s_0123456789abcdef"),
             "no caller session is named: {approval}"
@@ -987,14 +990,18 @@ mod attribution_tests {
             pid: Some(999),
             peer_error: None,
         };
-        let incomplete = from_session_message(&incomplete, FromSessionRefusal::Approval);
+        let incomplete = from_session_message(
+            &incomplete,
+            FromSessionRefusal::Approval { target: &target },
+        );
         assert!(incomplete.contains("999"), "{incomplete}");
         let unknown = Attribution::Incomplete {
             peer_pid: None,
             pid: None,
             peer_error: Some("injected credential failure".to_owned()),
         };
-        let unknown = from_session_message(&unknown, FromSessionRefusal::Approval);
+        let unknown =
+            from_session_message(&unknown, FromSessionRefusal::Approval { target: &target });
         assert!(unknown.contains("injected credential failure"), "{unknown}");
         let unreadable = unreadable_target_message(&target, "steer");
         assert!(unreadable.contains("s_fedcba9876543210"), "{unreadable}");

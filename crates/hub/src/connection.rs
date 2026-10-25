@@ -828,9 +828,9 @@ pub(crate) fn attribute_peer(
                     support::peer::Visit::Skip
                 }
             }) {
-                Ok(session_process_pids) => Attribution::Local {
+                Ok(walk) => Attribution::Local {
                     peer_pid,
-                    session_process_pids,
+                    session_process_pids: walk.matched_pids,
                 },
                 Err(incomplete) => Attribution::Incomplete {
                     peer_pid: Some(peer_pid),

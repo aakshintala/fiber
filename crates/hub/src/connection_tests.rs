@@ -3633,8 +3633,11 @@ mod session_refusal_tests {
 
     /// The exact refusal sentences (`docs/permissions.md`, "Sessions on the
     /// sockets"): no caller session id is ever named.
-    const APPROVAL_REFUSAL: &str =
-        "Only a person answers an approval. This connection comes from inside a session.";
+    fn approval_refusal(target: &str) -> String {
+        format!(
+            "Only a person answers an approval. This connection comes from inside a session, so `reply` to session `{target}` is refused."
+        )
+    }
     const PAIRING_REFUSAL: &str =
         "A connection from inside a session cannot ask for a pairing code.";
 
@@ -3650,6 +3653,8 @@ mod session_refusal_tests {
     struct Script {
         current: u32,
         parents: HashMap<u32, u32>,
+        parent_changes: HashMap<u32, (u32, u32)>,
+        parent_reads: std::sync::Arc<std::sync::Mutex<HashMap<u32, usize>>>,
         euids: HashMap<u32, u32>,
         argvs: HashMap<u32, Vec<Vec<u8>>>,
         /// Pause point: the first `parent` read signals `entered`, then
@@ -3685,6 +3690,17 @@ mod session_refusal_tests {
                         .recv(&release)
                         .unwrap_or(());
                 }
+            }
+            let read_number = if let Ok(mut reads) = self.parent_reads.lock() {
+                let number = reads.entry(pid).or_default();
+                let current = *number;
+                *number += 1;
+                current
+            } else {
+                0
+            };
+            if let Some((first, later)) = self.parent_changes.get(&pid) {
+                return Ok(if read_number == 0 { *first } else { *later });
             }
             self.parents
                 .get(&pid)
@@ -3839,7 +3855,7 @@ mod session_refusal_tests {
         assert_eq!(line["payload"]["code"], "from_session");
         assert_eq!(line["payload"]["command_id"], "c_1");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert_eq!(message, APPROVAL_REFUSAL, "{message}");
+        assert_eq!(message, approval_refusal(OWNED), "{message}");
     }
 
     #[test]
@@ -3941,7 +3957,7 @@ mod session_refusal_tests {
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert_eq!(message, APPROVAL_REFUSAL, "{message}");
+        assert_eq!(message, approval_refusal(OTHER), "{message}");
     }
 
     #[test]
@@ -4043,6 +4059,38 @@ mod session_refusal_tests {
     }
 
     #[test]
+    fn approval_reply_to_an_unknown_session_is_not_found_not_refused() {
+        let mut rig = Rig::new(plain_target());
+        rig.relay(
+            "c_1",
+            "s_aaaaaaaaaaaaaaaa",
+            reply_with("c_1", approval_args("r_1")),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "session_not_found");
+    }
+
+    #[test]
+    fn approval_reply_to_a_synthetic_replay_is_not_refused() {
+        let command = reply_with("c_1", approval_args("r_1"));
+        let stripped = command.as_object().unwrap();
+        let target = contract::SessionId(OWNED.to_owned());
+        let read = plain_target();
+        assert!(
+            crate::relay::session_command_refusal(
+                &session_caller(&[CALLER_HOST]),
+                stripped,
+                &target,
+                crate::relay::RelayTarget::SyntheticReplay,
+                &read,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn the_direct_parent_reaches_its_delegate() {
         let script = Script {
             current: 1000,
@@ -4067,6 +4115,40 @@ mod session_refusal_tests {
             .unwrap();
         let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
         assert_eq!(sent["command"], "steer");
+    }
+
+    #[test]
+    fn exact_parent_and_target_ancestry_share_one_parent_read() {
+        let parent_reads = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let script = Script {
+            current: 1000,
+            parents: [(PEER, SHARED_HOST), (SHARED_HOST, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            parent_changes: [(TARGET, (PEER, SHARED_HOST))].into_iter().collect(),
+            parent_reads: std::sync::Arc::clone(&parent_reads),
+            euids: [(TARGET, 1000), (PEER, 1000), (SHARED_HOST, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (SHARED_HOST, host_argv()),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[SHARED_HOST]));
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "steer");
+        assert_eq!(parent_reads.lock().unwrap().get(&TARGET), Some(&1));
     }
 
     #[test]

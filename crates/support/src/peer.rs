@@ -106,6 +106,16 @@ pub enum Visit {
     MatchStop,
 }
 
+/// A single kernel ancestry read, with the target's parent and every
+/// matching strict ancestor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessWalk {
+    /// The first strict ancestor, or `None` when the target has no parent.
+    pub parent_pid: Option<u32>,
+    /// Matching strict ancestors, nearest first.
+    pub matched_pids: Vec<u32>,
+}
+
 /// Every strict ancestor of `pid` through PID 1, nearest first. Reads each
 /// ancestor's effective uid and parent pid but never an argument vector.
 /// An unreadable effective uid or parent pid ends the walk with that pid,
@@ -153,15 +163,17 @@ pub fn walk_ancestors<F>(
     peer_pid: u32,
     read: &dyn ProcessRead,
     mut predicate: F,
-) -> Result<Vec<u32>, IncompleteWalk>
+) -> Result<ProcessWalk, IncompleteWalk>
 where
     F: FnMut(&[Vec<u8>]) -> Visit,
 {
     let current = read
         .current_euid()
         .map_err(|_| IncompleteWalk { pid: peer_pid })?;
-    let mut matches = Vec::new();
-    for ancestor in ancestors(peer_pid, read)? {
+    let ancestors = ancestors(peer_pid, read)?;
+    let parent_pid = ancestors.first().map(|ancestor| ancestor.pid);
+    let mut matched_pids = Vec::new();
+    for ancestor in ancestors {
         if ancestor.euid != current {
             continue;
         }
@@ -170,14 +182,20 @@ where
             .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
         match predicate(&argv) {
             Visit::Skip => {}
-            Visit::Match => matches.push(ancestor.pid),
+            Visit::Match => matched_pids.push(ancestor.pid),
             Visit::MatchStop => {
-                matches.push(ancestor.pid);
-                return Ok(matches);
+                matched_pids.push(ancestor.pid);
+                return Ok(ProcessWalk {
+                    parent_pid,
+                    matched_pids,
+                });
             }
         }
     }
-    Ok(matches)
+    Ok(ProcessWalk {
+        parent_pid,
+        matched_pids,
+    })
 }
 
 #[cfg(target_os = "linux")]

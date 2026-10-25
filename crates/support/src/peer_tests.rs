@@ -389,7 +389,10 @@ fn walk_collects_same_owner_matches_nearest_first() {
     let read = wanted_walk();
     assert_eq!(
         super::walk_ancestors(10, &read, is_wanted).unwrap(),
-        [20, 30]
+        super::ProcessWalk {
+            parent_pid: Some(20),
+            matched_pids: vec![20, 30],
+        }
     );
     // Both same-owner argument vectors were read, and only those two.
     assert_eq!(read.argv_read.get(), 2);
@@ -407,7 +410,13 @@ fn walk_never_reads_a_foreign_owned_argv() {
     };
     // The foreign ancestor contributes nothing even without an entry: its
     // arguments are never read, so only PID 1's vector is read.
-    assert_eq!(super::walk_ancestors(10, &read, is_wanted).unwrap(), [1]);
+    assert_eq!(
+        super::walk_ancestors(10, &read, is_wanted).unwrap(),
+        super::ProcessWalk {
+            parent_pid: Some(20),
+            matched_pids: vec![1],
+        }
+    );
     assert_eq!(read.argv_read.get(), 1);
 }
 
@@ -421,7 +430,13 @@ fn walk_stops_on_the_first_match() {
             Visit::Skip
         }
     };
-    assert_eq!(super::walk_ancestors(10, &read, stop_first).unwrap(), [20]);
+    assert_eq!(
+        super::walk_ancestors(10, &read, stop_first).unwrap(),
+        super::ProcessWalk {
+            parent_pid: Some(20),
+            matched_pids: vec![20],
+        }
+    );
     // The walk stopped at the first match: PID 30's vector was never read.
     assert_eq!(read.argv_read.get(), 1);
 }
@@ -431,7 +446,10 @@ fn walk_returns_no_matches_for_a_plain_walk() {
     let read = wanted_walk();
     assert_eq!(
         super::walk_ancestors(10, &read, |_| Visit::Skip).unwrap(),
-        Vec::<u32>::new()
+        super::ProcessWalk {
+            parent_pid: Some(20),
+            matched_pids: Vec::new(),
+        }
     );
 }
 

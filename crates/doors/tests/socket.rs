@@ -6629,8 +6629,11 @@ fn other_id(id: &SessionId) -> SessionId {
 
 /// The `from_session` sentence for an approval answered from inside a
 /// session: only a person answers.
-fn refusal_approval_sentence() -> String {
-    "Only a person answers an approval. This connection comes from inside a session.".to_owned()
+fn refusal_approval_sentence(target: &SessionId) -> String {
+    format!(
+        "Only a person answers an approval. This connection comes from inside a session, so `reply` to session `{}` is refused.",
+        target.0
+    )
 }
 
 /// An approval answer from a session-shaped ancestor is refused without
@@ -6654,7 +6657,7 @@ fn approval_from_a_session_shaped_ancestor_is_refused() {
             assert_eq!(command_id(&answer), Some("c_1"));
             assert_eq!(
                 rejection(&answer),
-                ("from_session", refusal_approval_sentence().as_str()),
+                ("from_session", refusal_approval_sentence(&owned).as_str()),
                 "{answer}"
             );
             assert!(
@@ -6735,7 +6738,7 @@ fn unrelated_session_steer_reply_and_message_are_allowed() {
             assert_eq!(command_id(&answer), Some("c_4"));
             assert_eq!(
                 rejection(&answer),
-                ("from_session", refusal_approval_sentence().as_str()),
+                ("from_session", refusal_approval_sentence(&target).as_str()),
                 "{answer}"
             );
             assert!(

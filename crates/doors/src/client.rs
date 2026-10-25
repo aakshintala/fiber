@@ -995,8 +995,11 @@ impl Attribution {
 /// The refused command class a `from_session` message names
 /// (`docs/permissions.md`, "Sessions on the sockets").
 pub(crate) enum FromSessionRefusal<'a> {
-    /// An approval answer.
-    Approval,
+    /// An approval answer to a session.
+    Approval {
+        /// The session the approval is for.
+        target: &'a contract::SessionId,
+    },
     /// `prompt`, `steer` or `reply` to a session on the caller's walk or
     /// sharing a session process with it.
     SessionCommand {
@@ -1011,7 +1014,7 @@ impl FromSessionRefusal<'_> {
     /// The wire command the refusal names in its fallback messages.
     fn command(&self) -> &str {
         match self {
-            FromSessionRefusal::Approval => "reply",
+            FromSessionRefusal::Approval { .. } => "reply",
             FromSessionRefusal::SessionCommand { command, .. } => command,
         }
     }
@@ -1039,10 +1042,10 @@ pub(crate) fn from_session_message(
 ) -> String {
     match attribution {
         Attribution::Local { .. } => match refusal {
-            FromSessionRefusal::Approval => {
-                "Only a person answers an approval. This connection comes from inside a session."
-                    .to_owned()
-            }
+            FromSessionRefusal::Approval { target } => format!(
+                "Only a person answers an approval. This connection comes from inside a session, so `reply` to session `{}` is refused.",
+                target.0
+            ),
             FromSessionRefusal::SessionCommand { command, target } => format!(
                 "A connection from inside a session cannot send `{command}` to session `{}`. A session messages its delegates with delegate_message.",
                 target.0
@@ -1105,9 +1108,9 @@ pub(crate) fn attribute_peer(
             peer_error: Some(error.to_string()),
         },
         Ok(peer_pid) => match support::peer::walk_ancestors(peer_pid, read, is_session_host) {
-            Ok(session_process_pids) => Attribution::Local {
+            Ok(walk) => Attribution::Local {
                 peer_pid,
-                session_process_pids,
+                session_process_pids: walk.matched_pids,
             },
             Err(incomplete) => Attribution::Incomplete {
                 peer_pid: Some(peer_pid),
@@ -1165,7 +1168,7 @@ pub(crate) fn session_command_refusal(
     if is_approval_reply(command) {
         return Some(Refused {
             code: ErrorCode::FromSession,
-            message: from_session_message(attribution, FromSessionRefusal::Approval),
+            message: from_session_message(attribution, FromSessionRefusal::Approval { target }),
         });
     }
     let command_name = match command {
@@ -1199,6 +1202,8 @@ pub(crate) fn session_command_refusal(
         | Command::Shell(_)
         | Command::ProposeNotes(_)
         | Command::Command(_)
+        | Command::Call(_)
+        | Command::Ready
         | Command::Close(_)
         | Command::OfferedFile(_)
         | Command::Unknown => return None,
@@ -1207,20 +1212,10 @@ pub(crate) fn session_command_refusal(
         command: command_name,
         target,
     };
-    // The target's parent decides the direct-parent exception, and the
-    // parent walk decides the intersection: either unreadable fails the
-    // command closed. The target here is this session's own live process.
-    let parent = match read.parent(target_pid) {
-        Ok(parent) => parent,
-        Err(_) => {
-            return Some(Refused {
-                code: ErrorCode::FromSession,
-                message: unreadable_target_message(target, command_name),
-            });
-        }
-    };
-    let target_matches = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
-        Ok(matches) => matches,
+    // Parent and session-host ancestors come from one kernel walk, so a
+    // second parent read cannot authorize against a different process tree.
+    let target_walk = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
+        Ok(walk) => walk,
         Err(_) => {
             return Some(Refused {
                 code: ErrorCode::FromSession,
@@ -1231,7 +1226,7 @@ pub(crate) fn session_command_refusal(
     // The direct-parent exception: the target's own parent still reaches
     // it, whatever the peer's arguments say, but never on an unreadable
     // target ancestry.
-    if Some(parent) == attribution.peer_pid() {
+    if target_walk.parent_pid == attribution.peer_pid() {
         return None;
     }
     match attribution {
@@ -1241,7 +1236,8 @@ pub(crate) fn session_command_refusal(
         }),
         Attribution::Local { .. } => {
             if caller_matches.contains(&target_pid)
-                || target_matches
+                || target_walk
+                    .matched_pids
                     .iter()
                     .any(|pid| caller_matches.contains(pid))
             {

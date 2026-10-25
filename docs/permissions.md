@@ -637,12 +637,15 @@ is the record; no marker file, environment variable or pid table is kept.
 A connection that comes from inside a session is refused `from_session`
 when it:
 
-1. answers an approval with `reply`, on any session;
+1. answers an approval with `reply`, on any live session socket. The
+   rejection names `reply` and its target session, not the source session;
 2. sends `prompt`, `steer` or `reply` to its own session — the session whose
-   process is on the connection's ancestor walk — or to a session that
-   shares a session process between its own parent walk and the connection's
-   walk, which is that session or one of its Fiber delegates;
+   process is on the connection's ancestor walk — or to a session whose
+   parent walk shares one of those processes;
 3. asks for `pairing_code`.
+
+A target with no live process keeps the existing not-found or replay
+behavior; it is not refused just because the caller is session-owned.
 
 A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
 
@@ -653,11 +656,12 @@ delegate it started, the path `delegate_message` uses. A shell the session
 started is never the delegate's parent, so its steering stays refused.
 
 Sessions started through the hub's `start`, including those the delegate CLI
-starts, are not that session's delegates, and steering them stays allowed.
-Everything else is allowed, including steering a session the model started
-itself through the hub's `start`. A session started below the session's own
-tree — `fiber ask` from its shell, or a delegate it spawned — shares a
-session process with the connection's walk, so steering it stays refused.
+starts, stay allowed when they are unrelated to the caller's process tree.
+A session started below the session's own tree — `fiber ask` from its shell,
+or a delegate it spawned — shares a session process with the connection's
+walk, so steering it stays refused. A complete-walk rejection names the
+command and, when it targets a session, that session; it never names a
+source session id.
 
 A process owned by another account is never a session process, and its
 arguments are never read; the walk continues through it to PID 1. When the
