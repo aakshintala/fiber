@@ -123,6 +123,11 @@ impl Subscriptions {
     pub(super) fn take_outbox(&mut self) -> Vec<String> {
         std::mem::take(&mut self.outbox)
     }
+
+    /// Queues one line for the next outgoing pass, which drains it.
+    pub(super) fn queue(&mut self, line: String) {
+        self.outbox.push(line);
+    }
 }
 
 /// A session opening from home: the first stage in flight, the raise
