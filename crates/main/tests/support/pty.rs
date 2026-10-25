@@ -242,6 +242,14 @@ pub(crate) struct Terminal {
 /// would hold the master open.
 #[track_caller]
 pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
+    open_with_pixels(cols, rows, 0, 0)
+}
+
+/// Opens a `cols` by `rows` pty reporting `xpixel` by `ypixel` pixels:
+/// the cell size the terminal under test divides its grid by
+/// (`docs/tui.md`, "Images").
+#[track_caller]
+pub(crate) fn open_with_pixels(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Terminal {
     let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
     rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC).unwrap();
     pty::grantpt(&main).unwrap();
@@ -258,8 +266,8 @@ pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
         rustix::termios::Winsize {
             ws_col: cols,
             ws_row: rows,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
+            ws_xpixel: xpixel,
+            ws_ypixel: ypixel,
         },
     )
     .unwrap();
@@ -381,6 +389,7 @@ pub(crate) struct Shared {
     parser: vt100::Parser,
     grid: Grid,
     queries: Vec<u8>,
+    graphics: bool,
     /// Whether a synchronized-output block is open: waits snapshot whole frames only.
     sync_open: bool,
     /// The last bytes seen, completing a marker split across two reads.
@@ -399,6 +408,11 @@ pub(crate) struct Shared {
 impl Shared {
     /// A blank `cols` by `rows` screen with no output.
     pub(crate) fn new(cols: u16, rows: u16) -> Self {
+        Self::new_with_graphics(cols, rows, None)
+    }
+
+    fn new_with_graphics(cols: u16, rows: u16, pixel_size: Option<(u16, u16)>) -> Self {
+        let graphics = pixel_size.is_some();
         let parser = vt100::Parser::new(rows, cols, 0);
         let grid = Grid::of(&parser);
         Self {
@@ -406,6 +420,7 @@ impl Shared {
             parser,
             grid,
             queries: Vec::new(),
+            graphics,
             sync_open: false,
             sync_tail: Vec::new(),
             pending_size: None,
@@ -420,7 +435,7 @@ impl Shared {
     /// written.
     pub(crate) fn replies(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.queries.extend_from_slice(bytes);
-        query_replies(&mut self.queries)
+        query_replies_with_graphics(&mut self.queries, self.graphics)
     }
 
     /// Publishes the chunk whose replies are already written: a pending
@@ -532,9 +547,15 @@ const CAPABILITIES: [(&[u8], &[u8]); 4] = [
     (b"\x1b[?996n", b"\x1b[?997;1n"),
 ];
 
+/// Kitty's graphics probe and an OK reply for pixel-reporting terminals.
+const GRAPHICS_CAPABILITY: (&[u8], &[u8]) = (
+    b"\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\",
+    b"\x1b_Gi=31;OK\x1b\\",
+);
+
 /// How many trailing bytes the query tail keeps for a query split across
-/// two reads: longer than the longest query above.
-const PENDING_KEEP: usize = 16;
+/// two reads: enough for the longest query, including the optional graphics probe.
+const PENDING_KEEP: usize = 64;
 
 /// Synchronized output's markers (DEC mode 2026): the terminal brackets
 /// every frame in them (`docs/tui.md`, "Performance").
@@ -548,19 +569,30 @@ const SYNC_KEEP: usize = 7;
 /// dropping the bytes through each answered query and keeping the tail
 /// for a query still arriving.
 pub(crate) fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
+    query_replies_with_graphics(pending, false)
+}
+
+/// Answers the ordinary capability queries and, when `graphics` is true,
+/// the kitty graphics probe used by a pixel-reporting pty.
+pub(crate) fn query_replies_with_graphics(pending: &mut Vec<u8>, graphics: bool) -> Vec<u8> {
     let mut replies = Vec::new();
     loop {
-        let mut first: Option<(usize, usize)> = None;
-        for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
+        let mut first: Option<(usize, usize, &[u8])> = None;
+        for (query, reply) in CAPABILITIES
+            .iter()
+            .chain(graphics.then_some(&GRAPHICS_CAPABILITY))
+        {
             if let Some(pos) = pending.windows(query.len()).position(|w| w == *query)
-                && first.is_none_or(|(best, _)| pos < best)
+                && first.is_none_or(|(best, _, _)| pos < best)
             {
-                first = Some((pos, at));
+                first = Some((pos, query.len(), reply));
             }
         }
-        let Some((pos, at)) = first else { break };
-        replies.extend_from_slice(CAPABILITIES[at].1);
-        pending.drain(..pos + CAPABILITIES[at].0.len());
+        let Some((pos, query_len, reply)) = first else {
+            break;
+        };
+        replies.extend_from_slice(reply);
+        pending.drain(..pos + query_len);
     }
     let drop = pending.len().saturating_sub(PENDING_KEEP);
     pending.drain(..drop);
@@ -612,7 +644,7 @@ impl Run {
         args: &[&str],
         env: &[(&str, &str)],
     ) -> Self {
-        Self::spawn_inner(setup, cols, rows, args, env, false)
+        Self::spawn_inner(setup, cols, rows, None, args, env, false)
     }
 
     /// Spawns with seeding import receipts: every other test's
@@ -625,7 +657,24 @@ impl Run {
         args: &[&str],
         env: &[(&str, &str)],
     ) -> Self {
-        Self::spawn_inner(setup, cols, rows, args, env, true)
+        Self::spawn_inner(setup, cols, rows, None, args, env, true)
+    }
+
+    /// Spawns with seeding import receipts on a terminal reporting
+    /// `xpixel` by `ypixel` pixels, for cell-size math under test
+    /// (`docs/tui.md`, "Images"). It also answers the kitty graphics
+    /// probe.
+    #[track_caller]
+    pub(crate) fn spawn_pixels(
+        setup: &Setup,
+        cols: u16,
+        rows: u16,
+        xpixel: u16,
+        ypixel: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_inner(setup, cols, rows, Some((xpixel, ypixel)), args, env, true)
     }
 
     /// Spawns `fiber` with `args` on a `cols` by `rows` pty: standard
@@ -635,12 +684,14 @@ impl Run {
     /// applies `env` in order, so the grid is a fixed dark xterm: the
     /// binary never reads the ambient terminal's kind or theme. The
     /// slave is dropped after the spawn, and the master is CLOEXEC, so
-    /// no hub `fiber` starts holds it open.
+    /// no hub `fiber` starts holds it open. A pixel size enables the
+    /// graphics probe; `None` keeps the ordinary pty capability set.
     #[track_caller]
     fn spawn_inner(
         setup: &Setup,
         cols: u16,
         rows: u16,
+        pixel_size: Option<(u16, u16)>,
         args: &[&str],
         env: &[(&str, &str)],
         seed_receipts: bool,
@@ -658,7 +709,8 @@ impl Run {
                 }
             }
         }
-        let terminal = open(cols, rows);
+        let pixels = pixel_size.unwrap_or((0, 0));
+        let terminal = open_with_pixels(cols, rows, pixels.0, pixels.1);
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -681,7 +733,9 @@ impl Run {
         drop(terminal.terminal);
         let deadline = setup.deadline;
         let main = fs::File::from(terminal.main);
-        let shared = Arc::new(Mutex::new(Shared::new(cols, rows)));
+        let shared = Arc::new(Mutex::new(Shared::new_with_graphics(
+            cols, rows, pixel_size,
+        )));
         let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
         let (reader, wakes) =
             Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
