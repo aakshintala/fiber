@@ -30,7 +30,7 @@ fn test_module(root: bool, stem: &str) -> Option<&str> {
 /// A top-level `#[path = "<lit>"] mod <ident>;` declaration: the file the
 /// literal resolves to (relative to the repository, `/` separators), with
 /// the file that declares it and the declared module name.
-type DeclarerIdent = (String, String);
+pub(super) type DeclarerIdent = (String, String);
 type PathDecl = (String, DeclarerIdent);
 
 /// The `<lit>` of a `path = <lit>` item in an attribute's tokens, if it
@@ -190,11 +190,87 @@ fn module_path(
     result
 }
 
+/// The test files' `#[path]` declarations indexed by the file they name,
+/// so the scope of a test file follows its declaring module.
+pub(super) fn index_path_decls(sources: &[RustFile]) -> BTreeMap<String, Vec<DeclarerIdent>> {
+    let mut by_target: BTreeMap<String, Vec<DeclarerIdent>> = BTreeMap::new();
+    for f in sources {
+        for (target, declarer) in path_decls(&f.path, &f.source) {
+            by_target.entry(target).or_default().push(declarer);
+        }
+    }
+    by_target
+}
+
+/// Where the tests in one test file run: a file directly in `tests/` is
+/// its own binary, a file under `src/` runs in the package's unit tests,
+/// and a file under `examples/<name>/` runs in that example's binary. A
+/// file in a subdirectory of `tests/` is a module those binaries include,
+/// so it has no scope of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Scope {
+    /// A file directly in `tests/`: its binary's file stem.
+    Binary(String),
+    /// A file under `src/`: the package's own tests.
+    Package,
+    /// A file under `examples/<name>/`: that example's directory name.
+    Example(String),
+}
+
+/// The package, scope and test-name prefix of the test file at `path`:
+/// `None` for any other path, including every file in a subdirectory of
+/// `tests/`. The binary arm selects the whole binary, so it carries no
+/// test-name prefix.
+pub(super) fn scope_of(
+    path: &str,
+    members: &Members,
+    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
+) -> Option<(String, Scope, String)> {
+    if !path.ends_with(".rs") {
+        return None;
+    }
+    let name = owner(path, members)?;
+    let member = members.get(name)?;
+    let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
+    if !is_test_file(rel) {
+        return None;
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts.as_slice() {
+        // Only a file directly in `tests/` is a binary; a file in a
+        // subdirectory of `tests/` is a module the binaries include,
+        // so it adds no term of its own.
+        ["tests", binary] => {
+            let binary = binary.strip_suffix(".rs").unwrap_or(binary);
+            Some((
+                name.to_owned(),
+                Scope::Binary(binary.to_owned()),
+                String::new(),
+            ))
+        }
+        ["src", modules @ .., file] => {
+            let prefix = test_prefix(path, modules, file, members, by_target);
+            Some((name.to_owned(), Scope::Package, prefix))
+        }
+        // An example directory is a binary of its own, named
+        // `<package>::example/<name>`.
+        ["examples", example, modules @ .., file] => {
+            let prefix = test_prefix(path, modules, file, members, by_target);
+            Some((
+                name.to_owned(),
+                Scope::Example((*example).to_owned()),
+                prefix,
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// The test-id prefix of the tests in the test file at `path`, whose
 /// directories under its binary's root are `modules` and whose name is
 /// `file`: the module a top-level `#[path]` declaration gives it, else the
 /// module its location gives it.
-fn test_prefix(
+pub(super) fn test_prefix(
     path: &str,
     modules: &[&str],
     file: &str,
@@ -230,48 +306,22 @@ pub(crate) fn test_filter(
     members: &Members,
     sources: &[RustFile],
 ) -> (String, Vec<String>) {
-    let mut by_target: BTreeMap<String, Vec<DeclarerIdent>> = BTreeMap::new();
-    for f in sources {
-        for (target, declarer) in path_decls(&f.path, &f.source) {
-            by_target.entry(target).or_default().push(declarer);
-        }
-    }
+    let by_target = index_path_decls(sources);
     let mut terms = Vec::new();
     let mut packages = BTreeSet::new();
     for path in files.iter().filter(|p| p.ends_with(".rs")) {
-        let Some(name) = owner(path, members) else {
+        let Some((name, scope, prefix)) = scope_of(path, members, &by_target) else {
             continue;
         };
-        let Some(member) = members.get(name) else {
-            continue;
-        };
-        let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
-        if !is_test_file(rel) {
-            continue;
-        }
-        let parts: Vec<&str> = rel.split('/').collect();
-        let term = match parts.as_slice() {
-            // Only a file directly in `tests/` is a binary; a file in a
-            // subdirectory of `tests/` is a module the binaries include,
-            // so it adds no term of its own.
-            ["tests", binary] => {
-                let binary = binary.strip_suffix(".rs").unwrap_or(binary);
-                format!("binary_id({name}::{binary})")
-            }
-            ["src", modules @ .., file] => {
-                let prefix = test_prefix(path, modules, file, members, &by_target);
-                format!("(package({name}) & test(/^{prefix}/))")
-            }
-            // An example directory is a binary of its own, named
-            // `<package>::example/<name>`.
-            ["examples", example, modules @ .., file] => {
-                let prefix = test_prefix(path, modules, file, members, &by_target);
+        let term = match scope {
+            Scope::Binary(binary) => format!("binary_id({name}::{binary})"),
+            Scope::Package => format!("(package({name}) & test(/^{prefix}/))"),
+            Scope::Example(example) => {
                 format!("(binary_id({name}::example/{example}) & test(/^{prefix}/))")
             }
-            _ => continue,
         };
         terms.push(term);
-        packages.insert(name.to_owned());
+        packages.insert(name);
     }
     (terms.join(" | "), packages.into_iter().collect())
 }
