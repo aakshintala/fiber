@@ -14,6 +14,7 @@
 //! closed event's non-null commit; tests pass a fake probe.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde_json::{Map, Value};
 
@@ -406,6 +407,248 @@ fn id(input: &Value, name: &str) -> Result<u64, String> {
             .ok_or_else(|| format!("flake-report: {name} is not a positive integer"))
     } else {
         Err(format!("flake-report: {name} is not a positive integer"))
+    }
+}
+
+/// The classification of one flake line for the writer: whether the
+/// failure belongs to the run's issue lookup, to a stale base or to
+/// the pull request itself. Stale is checked before pull-request
+/// ownership: a file both changed is stale, since the run tested the
+/// old base. The writer reads this before any open-issue lookup, so a
+/// stale or pull-request-owned title is skipped even when an open
+/// exact-title issue exists.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Class {
+    Lookup,
+    StaleBase,
+    PrOwned,
+}
+
+impl Class {
+    fn tag(self) -> &'static str {
+        match self {
+            Class::Lookup => "lookup",
+            Class::StaleBase => "stale-base",
+            Class::PrOwned => "pr-owned",
+        }
+    }
+}
+
+/// The run context a classification decides under: whether the event
+/// is a pull request, the tested commit every body names, the optional
+/// base and head parents of the merge commit, and the two file lists
+/// as raw text, one path per line.
+pub(crate) struct Run<'a> {
+    pub pull_request: bool,
+    pub tested_commit: &'a str,
+    pub base: &'a str,
+    pub head: &'a str,
+    pub compare_files: &'a str,
+    pub pr_files: &'a str,
+}
+
+/// One flaky-list file already read: the runner its file is named for
+/// and its raw text.
+pub(crate) struct Listed<'a> {
+    pub runner: &'a str,
+    pub text: &'a str,
+}
+
+/// One classified flake title: the writer's action, the test name and
+/// runner, the first occurrence's detail, the failing file when the
+/// detail names one, the base only on a stale base, the tested line
+/// and the issue title.
+pub(crate) struct Classified {
+    action: Class,
+    name: String,
+    runner: String,
+    detail: String,
+    failing: Option<String>,
+    base: Option<String>,
+    tested: String,
+    title: String,
+}
+
+impl Classified {
+    pub(crate) fn line(&self) -> String {
+        let mut map = Map::new();
+        map.insert(
+            "action".to_owned(),
+            Value::String(self.action.tag().to_owned()),
+        );
+        if let Some(base) = &self.base {
+            map.insert("base".to_owned(), Value::String(base.clone()));
+        }
+        map.insert("detail".to_owned(), Value::String(self.detail.clone()));
+        if let Some(failing) = &self.failing {
+            map.insert("failing".to_owned(), Value::String(failing.clone()));
+        }
+        map.insert("name".to_owned(), Value::String(self.name.clone()));
+        map.insert("runner".to_owned(), Value::String(self.runner.clone()));
+        map.insert("tested".to_owned(), Value::String(self.tested.clone()));
+        map.insert("title".to_owned(), Value::String(self.title.clone()));
+        Value::Object(map).to_string()
+    }
+}
+
+/// One classification per distinct title, in first-seen order across
+/// the lists and then the lines. A blank line carries no title and is
+/// skipped; a line that is only a TAB names the empty test, and a
+/// last line with no trailing newline is still read.
+pub(crate) fn classify(lists: &[Listed], run: &Run) -> Vec<Classified> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for list in lists {
+        for line in list.text.split('\n') {
+            if line.is_empty() {
+                continue;
+            }
+            let (name, detail) = match line.split_once('\t') {
+                Some((name, detail)) => (name, detail),
+                None => (line, ""),
+            };
+            let title = format!("Flaky test: {name}");
+            if seen.iter().any(|seen| seen == &title) {
+                continue;
+            }
+            seen.push(title.clone());
+            let failing = failing_file(detail).map(str::to_owned);
+            let action = match &failing {
+                Some(file)
+                    if run.pull_request
+                        && !run.base.is_empty()
+                        && run.compare_files.split('\n').any(|listed| listed == file) =>
+                {
+                    Class::StaleBase
+                }
+                Some(file)
+                    if run.pull_request
+                        && run.pr_files.split('\n').any(|listed| listed == file) =>
+                {
+                    Class::PrOwned
+                }
+                _ => Class::Lookup,
+            };
+            out.push(Classified {
+                base: if action == Class::StaleBase {
+                    Some(run.base.to_owned())
+                } else {
+                    None
+                },
+                action,
+                name: name.to_owned(),
+                runner: list.runner.to_owned(),
+                detail: detail.to_owned(),
+                failing,
+                tested: tested_line(run),
+                title,
+            });
+        }
+    }
+    out
+}
+
+/// The `flaky-tests-<runner>.txt` names among `names`, as
+/// `(runner, file name)` pairs sorted by file-name byte order. The
+/// runner is the text between the prefix and the suffix, empty for
+/// `flaky-tests-.txt`; anything shorter than the prefix plus the
+/// suffix holds no runner and is skipped.
+pub(crate) fn runner_lists(names: &[String]) -> Vec<(String, String)> {
+    const PREFIX: &str = "flaky-tests-";
+    const SUFFIX: &str = ".txt";
+    let mut kept: Vec<(String, String)> = names
+        .iter()
+        .filter_map(|name| {
+            if name.len() < PREFIX.len() + SUFFIX.len() {
+                return None;
+            }
+            if !name.starts_with(PREFIX) || !name.ends_with(SUFFIX) {
+                return None;
+            }
+            let runner = name[PREFIX.len()..name.len() - SUFFIX.len()].to_owned();
+            Some((runner, name.clone()))
+        })
+        .collect();
+    kept.sort_by(|a, b| a.1.cmp(&b.1));
+    kept
+}
+
+/// The runner lists under `dir`: its regular files named
+/// `flaky-tests-<runner>.txt`, in file-name byte order, each read as
+/// lossy UTF-8. A missing or unreadable directory, entry or file is an
+/// error naming what failed.
+pub(crate) fn read_lists(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("flake-classify: {}: {e}", dir.display()))?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("flake-classify: {}: {e}", dir.display()))?;
+        let is_file = entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    let mut out = Vec::new();
+    for (runner, name) in runner_lists(&names) {
+        let path = dir.join(&name);
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("flake-classify: {}: {e}", path.display()))?;
+        out.push((runner, String::from_utf8_lossy(&bytes).into_owned()));
+    }
+    Ok(out)
+}
+
+/// The file a failure names: `None` unless the detail carries a panic,
+/// else the first `path.rs:line` run with the trailing line number
+/// removed. The run is the maximal run of path characters ending in
+/// `.rs` and followed by a colon and a digit; at least one character
+/// must precede `.rs`.
+fn failing_file(detail: &str) -> Option<&str> {
+    if !detail.contains("panicked at") {
+        return None;
+    }
+    let bytes = detail.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !bytes.get(i).is_some_and(|byte| is_path_char(*byte)) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while bytes.get(i).is_some_and(|byte| is_path_char(*byte)) {
+            i += 1;
+        }
+        let run = &detail[start..i];
+        if run.len() > ".rs".len()
+            && run.ends_with(".rs")
+            && bytes.get(i) == Some(&b':')
+            && bytes.get(i + 1).is_some_and(|byte| byte.is_ascii_digit())
+        {
+            return Some(run);
+        }
+    }
+    None
+}
+
+fn is_path_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'/' | b'-')
+}
+
+/// The tested line every body names: the merge commit equals main plus
+/// head on a pull request run that knows both parents, else the tested
+/// commit alone.
+fn tested_line(run: &Run) -> String {
+    if run.pull_request && !run.base.is_empty() && !run.head.is_empty() {
+        format!(
+            "tested {} = main {} + head {}",
+            run.tested_commit, run.base, run.head
+        )
+    } else {
+        format!("tested {}", run.tested_commit)
     }
 }
 
