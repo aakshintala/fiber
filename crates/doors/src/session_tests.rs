@@ -2458,7 +2458,14 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     // A client attaching after quiesce is rejected: its line is never
     // read, so it gets end of file with no answer and no `clients` line.
     let late = Client::connect(&socket).unwrap();
-    late.send(&subscribe_line("c_late", "full")).unwrap();
+    // The session closes a rejected post-quiesce connection before the
+    // client's write, so the write itself can fail with `BrokenPipe`: a
+    // rejected line is never read either way.
+    match late.send(&subscribe_line("c_late", "full")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("the late client's send failed: {error:?}"),
+    }
     assert!(
         late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
         "no answer is written for a line never read"
