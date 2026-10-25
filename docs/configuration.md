@@ -723,6 +723,8 @@ report. Anything else unmapped — agents, hooks, permissions, sessions,
 history, todos, credentials — lands in left-behind with its category and
 reason; nothing is lost silently.
 
+Each source directory (`skills/`, `commands/`, `prompts/`) is read for at most 512 entries. A directory holding more keeps 512 of them, which 512 is unspecified, and adds one left-behind line for that item: "more than 512 entries, keeping the first 512". The kept entries are imported in name order.
+
 The import never overwrites: a colliding skill, command or server name is
 suffixed and reported, while a colliding instruction target is never
 suffixed, since a suffixed fixed name is never read — the existing file

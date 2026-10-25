@@ -84,11 +84,23 @@ fn six_hundred_skill_dirs_import_the_first_512_and_report_more_than_512() {
     }
     reset_write_count();
     let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    // docs/configuration.md, "Importing": at most 512 entries per source
+    // directory, one overflow line past 512, kept entries in name order,
+    // which 512 unspecified.
     assert_eq!(planned.skills.len(), 512);
     let report = planned.report();
     assert_eq!(
         reasons(&report),
         vec![("skills", "more than 512 entries, keeping the first 512",)],
+    );
+    assert!(
+        report
+            .imported
+            .skills
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1]),
+        "kept entries are imported in name order: {:?}",
+        report.imported.skills,
     );
     assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
@@ -104,9 +116,21 @@ fn five_hundred_twelve_skill_dirs_report_nothing() {
     }
     reset_write_count();
     let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    // docs/configuration.md, "Importing": at most 512 entries per source
+    // directory, no overflow line at or under 512, kept entries in name
+    // order, which 512 unspecified.
     assert_eq!(planned.skills.len(), 512);
     let report = planned.report();
     assert!(report.left_behind.is_empty(), "{report:?}");
+    assert!(
+        report
+            .imported
+            .skills
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1]),
+        "kept entries are imported in name order: {:?}",
+        report.imported.skills,
+    );
     assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
 
@@ -118,11 +142,23 @@ fn a_commands_dir_past_512_reports_under_its_own_name() {
     }
     reset_write_count();
     let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
+    // docs/configuration.md, "Importing": at most 512 entries per source
+    // directory, one overflow line past 512, kept entries in name order,
+    // which 512 unspecified.
     assert_eq!(planned.commands.len(), 512);
     let report = planned.report();
+    assert_eq!(
+        reasons(&report),
+        vec![("commands", "more than 512 entries, keeping the first 512",)],
+    );
     assert!(
-        reasons(&report).contains(&("commands", "more than 512 entries, keeping the first 512",)),
-        "{report:?}",
+        report
+            .imported
+            .commands
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1]),
+        "kept entries are imported in name order: {:?}",
+        report.imported.commands,
     );
     assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
@@ -136,12 +172,25 @@ fn a_source_home_past_512_reports_under_the_source_name() {
     reset_write_count();
     let planned = classify(&fixture.home(), &fixture.source(), ImportSource::ClaudeCode).unwrap();
     let report = planned.report();
-    // The 512 kept entries each land unmapped, and the 513th reports the
-    // cutoff under the source's own name.
-    assert_eq!(report.left_behind.len(), 513);
+    // docs/configuration.md, "Importing": one overflow line past 512 under
+    // the source's own name, kept entries in name order, which 512
+    // unspecified, so no total or membership is pinned.
+    let overflow = reasons(&report)
+        .iter()
+        .filter(|(item, reason)| {
+            *item == ".claude" && *reason == "more than 512 entries, keeping the first 512"
+        })
+        .count();
+    assert_eq!(overflow, 1, "{report:?}");
+    let unmapped: Vec<&str> = report
+        .left_behind
+        .iter()
+        .filter(|left| left.item != ".claude")
+        .map(|left| left.item.as_str())
+        .collect();
     assert!(
-        reasons(&report).contains(&(".claude", "more than 512 entries, keeping the first 512",)),
-        "{report:?}",
+        unmapped.windows(2).all(|pair| pair[0] <= pair[1]),
+        "kept entries are imported in name order: {unmapped:?}",
     );
     assert_eq!(write_count(), 0, "enumeration must write nothing");
 }
@@ -157,6 +206,8 @@ fn a_three_skill_import_writes_each_item_plus_the_receipt() {
     }
     reset_write_count();
     let report = fixture.run(ImportSource::ClaudeCode).unwrap();
+    // docs/configuration.md, "Importing": under 512 entries the full count
+    // is kept, in name order.
     assert_eq!(
         report.imported.skills,
         vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
