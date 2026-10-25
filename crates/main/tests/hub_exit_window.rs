@@ -175,6 +175,18 @@ impl World {
             guard.wait_gone();
         }
     }
+
+    /// `finish`, keeping a `wait_gone` failure's message and appending what
+    /// the logs say about the session's exit: a lingering process means the
+    /// session never reached its exit, so the next sighting needs the
+    /// session log's started/exited lines and the hub log's tail.
+    fn finish_with_exit_diagnostics(self) {
+        let diagnostics = exit_wait_diagnostics(&self);
+        let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.finish()));
+        if let Err(payload) = finished {
+            panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+        }
+    }
 }
 
 impl Drop for World {
@@ -290,6 +302,100 @@ fn line_summary_keeps_what_the_next_sighting_needs() {
         summarize_lines(&lines).lines().count(),
         lines.len(),
         "one summary line per socket line"
+    );
+}
+
+/// The session log's `fiber_started` and `fiber_exited` lines, one summary
+/// line each: the started lines say which runs existed, the exited lines
+/// say which reached their exit, and nothing else shapes that question.
+fn summarize_exit_lines(lines: &[Value]) -> String {
+    summarize_lines(
+        &lines
+            .iter()
+            .filter(|line| line["kind"] == "fiber_started" || line["kind"] == "fiber_exited")
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The context a workspace-exit wait failure carries: the session log's
+/// started/exited lines plus the hub log's tail. A missing or corrupt log
+/// contributes nothing, so building the context never hides the wait
+/// failure it annotates.
+fn exit_wait_diagnostics(world: &World) -> String {
+    let path = support::session_dir(&world.setup, &world.id).join("events.jsonl");
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    format!(
+        "session log started/exited lines:\n{}\nhub.log tail (last {} lines):\n{}",
+        summarize_exit_lines(&lines),
+        support::HUB_LOG_TAIL,
+        support::hub_log_tail(&world.setup.hub_log())
+    )
+}
+
+/// A caught `wait_gone` failure's message with the exit diagnostics
+/// appended: the hook prints a panic once, at its site, so a resumed payload
+/// would show the original message only, and the combined message must be
+/// raised as a new panic. A panic without a message still carries the
+/// diagnostics, so the wait failure is never silent about what the logs say.
+fn with_exit_diagnostics(payload: Box<dyn std::any::Any + Send>, diagnostics: &str) -> String {
+    match payload.downcast::<String>() {
+        Ok(failure) => format!("{failure}\n{diagnostics}"),
+        Err(_) => format!("<no message with the workspace-exit wait failure>\n{diagnostics}"),
+    }
+}
+
+#[test]
+fn exit_summary_keeps_only_started_and_exited_lines() {
+    let lines = vec![
+        json!({"kind": "fiber_started", "seq": 1}),
+        json!({"kind": "turn_started", "seq": 2}),
+        json!({"kind": "fiber_exited", "seq": 3}),
+        json!({"kind": "rewound", "seq": 4}),
+    ];
+    let summary = summarize_exit_lines(&lines);
+    for kept in ["fiber_started", "fiber_exited"] {
+        assert!(
+            summary.lines().any(|line| line.starts_with(kept)),
+            "the summary keeps {kept}: {summary}"
+        );
+    }
+    for dropped in ["turn_started", "rewound"] {
+        assert!(
+            !summary.contains(dropped),
+            "the summary drops {dropped}: {summary}"
+        );
+    }
+    assert_eq!(summary.lines().count(), 2, "one summary line per kept line");
+    assert_eq!(summarize_exit_lines(&[]), "");
+}
+
+#[test]
+fn exit_diagnostics_keep_the_failure_message_and_append_the_context() {
+    let payload =
+        std::panic::catch_unwind(|| panic!("{}", "waited for the lingering process")).unwrap_err();
+    let message = with_exit_diagnostics(payload, "session log started/exited lines:\n...");
+    assert!(
+        message.contains("waited for the lingering process"),
+        "the failure message survives: {message}"
+    );
+    assert!(
+        message.contains("session log started/exited lines:"),
+        "the diagnostics follow it: {message}"
+    );
+}
+
+#[test]
+fn exit_diagnostics_carry_the_context_without_a_failure_message() {
+    let payload = std::panic::catch_unwind(|| std::panic::panic_any(42_u32)).unwrap_err();
+    let message = with_exit_diagnostics(payload, "session log started/exited lines:\n...");
+    assert!(
+        message.contains("session log started/exited lines:"),
+        "the diagnostics survive: {message}"
     );
 }
 
@@ -439,7 +545,7 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
     assert_eq!(turns, 1, "the crashed prompt runs no turn: {log:?}");
     world.end_session();
     drop(first);
-    world.finish();
+    world.finish_with_exit_diagnostics();
 }
 
 /// The log's `fiber_started` lines: one for each process that ran.
