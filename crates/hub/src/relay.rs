@@ -168,7 +168,7 @@ pub(crate) fn from_session_message(
                 target.0
             ),
             FromSessionRefusal::SessionCommand { command, target } => format!(
-                "A connection from inside a session cannot send `{command}` to session `{}`. A session messages its delegates with delegate_message.",
+                "A connection from inside a session cannot send `{command}` to session `{}`.",
                 target.0
             ),
             FromSessionRefusal::PairingCode => {
@@ -435,6 +435,13 @@ pub(crate) fn route(
     let Some(bytes) = line_bytes(&stripped) else {
         return;
     };
+    // An initial route receives attribution from the accepted connection.
+    // A reroute can start in the relay thread or the queue pump, so recover
+    // the same immutable connection attribution from its Relays state.
+    let fallback_admit = (admit.is_none() && from.is_some())
+        .then(|| lock(relays).attribution.clone())
+        .flatten();
+    let admit = admit.or(fallback_admit.as_ref());
     let order = lock(relays).order.clone();
     // Both refusal classes run against a live target below. Unknown and
     // exited sessions keep their existing not-found behavior.

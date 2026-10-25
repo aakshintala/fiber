@@ -1047,7 +1047,7 @@ pub(crate) fn from_session_message(
                 target.0
             ),
             FromSessionRefusal::SessionCommand { command, target } => format!(
-                "A connection from inside a session cannot send `{command}` to session `{}`. A session messages its delegates with delegate_message.",
+                "A connection from inside a session cannot send `{command}` to session `{}`.",
                 target.0
             ),
         },

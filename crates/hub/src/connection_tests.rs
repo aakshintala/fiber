@@ -3717,9 +3717,7 @@ mod session_refusal_tests {
         "A connection from inside a session cannot ask for a pairing code.";
 
     fn session_command_refusal(command: &str, target: &str) -> String {
-        format!(
-            "A connection from inside a session cannot send `{command}` to session `{target}`. A session messages its delegates with delegate_message."
-        )
+        format!("A connection from inside a session cannot send `{command}` to session `{target}`.")
     }
 
     /// Scripted kernel reads: the hub's test seam answers from these
@@ -4264,6 +4262,7 @@ mod session_refusal_tests {
         let message = line["payload"]["message"].as_str().unwrap();
         assert!(message.contains(&UNREADABLE.to_string()), "{message}");
         assert!(message.contains("incomplete"), "{message}");
+        assert!(message.ends_with("`steer` is refused."), "{message}");
     }
 
     #[test]
@@ -4318,6 +4317,7 @@ mod session_refusal_tests {
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
         assert!(message.contains("injected credential failure"), "{message}");
+        assert!(message.ends_with("`reply` is refused."), "{message}");
     }
 
     /// A live client against a hub whose walk is scripted: the peer is
@@ -4699,5 +4699,23 @@ mod session_refusal_tests {
             crate::connection::lock(&old.kept).is_empty(),
             "nothing queues on the stale entry"
         );
+    }
+
+    #[test]
+    fn incomplete_connection_refusal_names_its_command() {
+        let attribution = Attribution::Incomplete {
+            peer_pid: None,
+            pid: None,
+            peer_error: Some("credential denied".to_owned()),
+        };
+        let target = contract::SessionId(OTHER.to_owned());
+        let message = crate::relay::from_session_message(
+            &attribution,
+            crate::relay::FromSessionRefusal::SessionCommand {
+                command: "steer",
+                target: &target,
+            },
+        );
+        assert!(message.ends_with("`steer` is refused."), "{message}");
     }
 }

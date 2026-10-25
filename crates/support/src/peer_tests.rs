@@ -1,7 +1,7 @@
 //! The peer credential, the ancestor walk, the predicate walk and both
 //! platform parsers. The `KERN_PROCARGS2` parser tests pin the exact word
-//! slicing; the predicate-walk tests pin owner-first reads, nearest-first
-//! matches and first-match stops.
+//! slicing; the predicate-walk tests pin owner-first reads and nearest-first
+//! matches.
 
 #![allow(
     clippy::unwrap_used,
@@ -218,7 +218,10 @@ fn the_caller_reads_its_own_kernel_identity() {
         assert_eq!(read.parent(pid).unwrap(), ppid);
         let argv = read.argv(pid).unwrap();
         assert!(!argv.is_empty());
-        assert!(!argv.first().unwrap().is_empty());
+        let expected: Vec<Vec<u8>> = std::env::args_os()
+            .map(|arg| arg.as_encoded_bytes().to_vec())
+            .collect();
+        assert_eq!(argv, expected);
     }
 }
 
@@ -417,27 +420,6 @@ fn walk_never_reads_a_foreign_owned_argv() {
             matched_pids: vec![1],
         }
     );
-    assert_eq!(read.argv_read.get(), 1);
-}
-
-#[test]
-fn walk_stops_on_the_first_match() {
-    let read = wanted_walk();
-    let stop_first = |argv: &[Vec<u8>]| {
-        if is_wanted(argv) == Visit::Match {
-            Visit::MatchStop
-        } else {
-            Visit::Skip
-        }
-    };
-    assert_eq!(
-        super::walk_ancestors(10, &read, stop_first).unwrap(),
-        super::ProcessWalk {
-            parent_pid: Some(20),
-            matched_pids: vec![20],
-        }
-    );
-    // The walk stopped at the first match: PID 30's vector was never read.
     assert_eq!(read.argv_read.get(), 1);
 }
 

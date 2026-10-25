@@ -102,8 +102,6 @@ pub enum Visit {
     Skip,
     /// A match: record the pid and keep walking toward PID 1.
     Match,
-    /// A match: record the pid and stop the walk here.
-    MatchStop,
 }
 
 /// A single kernel ancestry read, with the target's parent and every
@@ -183,13 +181,6 @@ where
         match predicate(&argv) {
             Visit::Skip => {}
             Visit::Match => matched_pids.push(ancestor.pid),
-            Visit::MatchStop => {
-                matched_pids.push(ancestor.pid);
-                return Ok(ProcessWalk {
-                    parent_pid,
-                    matched_pids,
-                });
-            }
         }
     }
     Ok(ProcessWalk {

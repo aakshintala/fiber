@@ -1000,9 +1000,15 @@ mod attribution_tests {
             pid: None,
             peer_error: Some("injected credential failure".to_owned()),
         };
-        let unknown =
-            from_session_message(&unknown, FromSessionRefusal::Approval { target: &target });
+        let unknown = from_session_message(
+            &unknown,
+            FromSessionRefusal::SessionCommand {
+                command: "steer",
+                target: &target,
+            },
+        );
         assert!(unknown.contains("injected credential failure"), "{unknown}");
+        assert!(unknown.ends_with("`steer` is refused."), "{unknown}");
         let unreadable = unreadable_target_message(&target, "steer");
         assert!(unreadable.contains("s_fedcba9876543210"), "{unreadable}");
     }

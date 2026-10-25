@@ -672,7 +672,10 @@ fn serve_from(
         }
         send(&writer, &hub, "hub_hello", hello_payload(&hub));
     }
-    let mut fresh = Relays::default();
+    let mut fresh = Relays {
+        attribution: Some(attribution.clone()),
+        ..Relays::default()
+    };
     // Replay timing rides this connection's hub: at debug the transfer
     // path stamps failures on its writer, at info nothing is kept.
     if hub.diag.debugging() {
@@ -755,6 +758,7 @@ fn serve_from(
 /// is known. An incomplete walk keeps a known peer pid so the direct-parent
 /// exception can still be checked; `None` never stands for a remote
 /// connection.
+#[derive(Clone)]
 pub(crate) enum Attribution {
     /// A local connection with its kernel peer pid and matching
     /// session-process pids.

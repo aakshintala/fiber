@@ -20,6 +20,83 @@ use super::*;
 use fakes::Deadline;
 
 #[test]
+fn a_reroute_uses_a_live_relay_with_a_strictly_newer_epoch() {
+    use std::sync::{Arc, Mutex};
+
+    const SID: &str = "s_0123456789abcdef";
+    let held = fakes::TempDir::new("epoch");
+    let hub = Arc::new(hub(&held));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    let (old_epoch, new_epoch) = {
+        let mut held = crate::connection::lock(&relays);
+        (held.mint(), held.mint())
+    };
+    let (stale_writer, mut stale_peer) = UnixStream::pair().unwrap();
+    stale_peer.set_nonblocking(true).unwrap();
+    let (writer, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let live_thread = std::thread::spawn(move || stop_rx.recv().unwrap());
+    crate::connection::lock(&relays).entries.extend([
+        Relay {
+            session: SID.to_owned(),
+            epoch: old_epoch,
+            writer: stale_writer,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: None,
+            retiring: None,
+            target: RelayTarget::Live { pid: 41 },
+        },
+        Relay {
+            session: SID.to_owned(),
+            epoch: new_epoch,
+            writer,
+            kept: Kept::default(),
+            replayed: Replayed::default(),
+            thread: Some(live_thread),
+            retiring: None,
+            target: RelayTarget::Live { pid: 42 },
+        },
+    ]);
+    let (client_writer, _client_reader) = UnixStream::pair().unwrap();
+    let client_writer = Arc::new(Mutex::new(client_writer));
+    let line = json!({"id": "c_1", "command": "steer", "args": {}})
+        .as_object()
+        .unwrap()
+        .clone();
+
+    route(
+        &contract::CommandId("c_1".to_owned()),
+        SID,
+        line,
+        &hub,
+        &client_writer,
+        &relays,
+        Some(old_epoch),
+        false,
+        None,
+    );
+
+    let mut text = String::new();
+    BufReader::new(peer).read_line(&mut text).unwrap();
+    let routed: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(routed["id"], "c_1", "the replacement epoch receives it");
+    assert_eq!(routed["command"], "steer");
+    let mut stale_byte = [0u8; 1];
+    assert!(
+        matches!(std::io::Read::read(&mut stale_peer, &mut stale_byte), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    stop_tx.send(()).unwrap();
+    crate::connection::lock(&relays).entries[1]
+        .thread
+        .take()
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
     fn entry(session: &str, epoch: u64) -> Relay {
         let (writer, _) = UnixStream::pair().unwrap();
@@ -2402,6 +2479,7 @@ struct Ended {
     _held: fakes::TempDir,
     dir: std::path::PathBuf,
     hub: std::sync::Arc<crate::connection::Hub>,
+    relays: std::sync::Arc<std::sync::Mutex<Relays>>,
     starter: crate::fake::FakeStarter,
     order: std::sync::Arc<crate::retire::AckOrder>,
     kept: Kept,
@@ -2497,6 +2575,7 @@ impl Ended {
             _held: held,
             dir,
             hub,
+            relays,
             starter,
             order,
             kept,
@@ -2544,6 +2623,14 @@ impl Ended {
             .collect()
     }
 
+    fn mark_session_owned_caller(&self) {
+        crate::connection::lock(&self.relays).attribution =
+            Some(crate::connection::Attribution::Local {
+                peer_pid: u32::MAX,
+                session_process_pids: vec![std::process::id()],
+            });
+    }
+
     fn say(&mut self, line: Value) {
         use std::io::Write;
         let mut text = line.to_string();
@@ -2571,6 +2658,34 @@ fn a_clean_exit_re_routes_a_sent_unanswered_command_once() {
 }
 
 /// `docs/invocation.md`, "Lifecycle": a command is delivered once; a second unanswered end, or a `closing` answer to it, is rejected `closing`.
+#[test]
+fn a_relay_thread_reroute_rechecks_the_connection_attribution() {
+    let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
+    ended.mark_session_owned_caller();
+    ended.say(rejection("c_1", "closing"));
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["code"], "from_session", "{line}");
+    assert!(
+        ended.starter.received().is_empty(),
+        "replacement gets no command"
+    );
+}
+
+#[test]
+fn a_queue_pump_reroute_rechecks_the_connection_attribution() {
+    let mut ended = Ended::start("fiber_exited", true, &[], &["c_1"]);
+    ended.mark_session_owned_caller();
+    ended.close_session();
+    let line = ended.line();
+    assert_eq!(line["kind"], "command_rejected", "{line}");
+    assert_eq!(line["payload"]["code"], "from_session", "{line}");
+    assert!(
+        ended.starter.received().is_empty(),
+        "replacement gets no command"
+    );
+}
+
 #[test]
 fn a_command_already_handed_once_is_rejected_closing_by_the_drain() {
     let mut ended = Ended::start("fiber_exited", true, &["c_1"], &[]);
