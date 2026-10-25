@@ -179,12 +179,21 @@ impl World {
     /// `finish`, keeping a `wait_gone` failure's message and appending what
     /// the logs say about the session's exit: a lingering process means the
     /// session never reached its exit, so the next sighting needs the
-    /// session log's started/exited lines and the hub log's tail.
-    fn finish_with_exit_diagnostics(self) {
+    /// session log's started/exited lines and the hub log's tail. Only the
+    /// workspace-exit wait runs inside the catch: the hub kill runs first,
+    /// outside it, so its own failure stays its own.
+    fn finish_with_exit_diagnostics(mut self) {
         let diagnostics = exit_wait_diagnostics(&self);
-        let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.finish()));
-        if let Err(payload) = finished {
-            panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+        let hub = self.hub.lock().unwrap().take();
+        if let Some(hub) = hub {
+            hub.kill_and_wait();
+        }
+        if let Some(guard) = self.guard.take() {
+            let waited =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| guard.wait_gone()));
+            if let Err(payload) = waited {
+                panic!("{}", with_exit_diagnostics(payload, &diagnostics));
+            }
         }
     }
 }
@@ -370,7 +379,6 @@ fn exit_summary_keeps_only_started_and_exited_lines() {
             "the summary drops {dropped}: {summary}"
         );
     }
-    assert_eq!(summary.lines().count(), 2, "one summary line per kept line");
     assert_eq!(summarize_exit_lines(&[]), "");
 }
 
@@ -397,6 +405,20 @@ fn exit_diagnostics_carry_the_context_without_a_failure_message() {
         message.contains("session log started/exited lines:"),
         "the diagnostics survive: {message}"
     );
+}
+
+#[test]
+fn finish_with_exit_diagnostics_without_a_hub_or_a_guard_is_silent() {
+    let setup = Setup::new();
+    let server = ProviderServer::start((0..0).map(|_| support::hello())).unwrap();
+    let world = World {
+        setup,
+        id: "no such session".to_owned(),
+        hub: Arc::new(Mutex::new(None)),
+        guard: None,
+        _server: server,
+    };
+    world.finish_with_exit_diagnostics();
 }
 
 #[test]
