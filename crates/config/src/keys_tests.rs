@@ -42,6 +42,10 @@ fn thinking_key_values_match_the_contract_levels() {
         let Kind::OneOf(allowed) = key.kind else {
             panic!("the `{path}` key accepts one of a fixed set");
         };
+        // Order is contractual (`docs/model-routing.md:1015-16`, "Thinking"):
+        // the doc lists the levels `off`, `minimal`, `low`, `medium`,
+        // `high`, `xhigh`, `max`, and the refusal/expected messages render
+        // them in that order.
         assert_eq!(
             allowed, names,
             "`{path}` accepts exactly the contract levels"
