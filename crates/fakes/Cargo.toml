@@ -22,10 +22,5 @@ serde_json.workspace = true
 [[example]]
 name = "provider-server"
 
-# The process-extension fixture both later parts drive and this part's
-# fixture tests run: the checked-in Rust program speaking the process wire.
-[[example]]
-name = "process-extension"
-
 [lints]
 workspace = true

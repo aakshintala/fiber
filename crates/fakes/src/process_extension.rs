@@ -21,6 +21,7 @@ use crate::deadline::Deadline;
 /// The example `cargo test` built beside the test binary
 /// (`target/<profile>/examples/process-extension`), so a test starts no
 /// cargo and waits on no build lock.
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 fn example_path() -> PathBuf {
     let mut path = std::env::current_exe().expect("the test binary knows its path");
     path.pop();

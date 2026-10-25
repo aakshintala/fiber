@@ -4,6 +4,8 @@
 //! Arbitrary JSON positions keep nested null and tell `{}` from `[]`; a
 //! present JSON null is a result, never an absent answer.
 
+#![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
+
 use contract::commands::{Command, CommandLine, ReplyAnswer};
 use contract::events::{CommandResult, Event, ExtensionReason};
 use contract::{CommandId, Envelope, RequestId, SessionId};
@@ -219,13 +221,11 @@ fn hello_and_request_read_as_ephemeral_process_kinds() {
         assert_eq!(event.kind(), "extension_hello");
         assert_eq!(event.class(), contract::events::Class::Ephemeral);
     }
-    assert!(matches!(
-        Event::from_envelope(&envelope(
-            "extension_hello",
-            serde_json::json!({"session_id": "s", "reason": "restart", "workspace": "/w", "data_dirs": {"machine": "/m", "project": "/p"}, "state": {}}),
-        )),
-        Err(_)
-    ));
+    assert!(Event::from_envelope(&envelope(
+        "extension_hello",
+        serde_json::json!({"session_id": "s", "reason": "restart", "workspace": "/w", "data_dirs": {"machine": "/m", "project": "/p"}, "state": {}}),
+    ))
+    .is_err());
     let event = Event::from_envelope(&envelope(
         "extension_request",
         serde_json::json!({"request_id": "r_A", "registration": "c_reg", "key": "run", "args": []}),
@@ -234,13 +234,13 @@ fn hello_and_request_read_as_ephemeral_process_kinds() {
     .unwrap();
     assert_eq!(event.kind(), "extension_request");
     assert_eq!(event.class(), contract::events::Class::Ephemeral);
-    assert!(matches!(
+    assert!(
         Event::from_envelope(&envelope(
             "extension_request",
             serde_json::json!({"request_id": "r_A", "registration": "c_reg", "key": "run"}),
-        )),
-        Err(_)
-    ));
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -253,6 +253,6 @@ fn extension_reasons_list_every_session_start() {
         ExtensionReason::Handoff,
     ];
     let words: Vec<String> =
-        serde_json::from_value(serde_json::to_value(&reasons).unwrap()).unwrap();
+        serde_json::from_value(serde_json::to_value(reasons).unwrap()).unwrap();
     assert_eq!(words, vec!["new", "resume", "fork", "rewind", "handoff"]);
 }
