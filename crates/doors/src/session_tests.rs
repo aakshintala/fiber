@@ -2510,30 +2510,34 @@ fn after_quiesce_a_client_waiting_for_the_shutdown_before_its_write_gets_no_answ
     drop(connected);
     // A client attaching after quiesce is rejected: the session shuts the
     // connection down without reading its line, then closes it as its
-    // accept thread finishes the rejection. The read below waits for the
-    // shutdown: end of file returns at once, while a hang consumes the
-    // whole deadline, so time left on it tells the shutdown apart from a
-    // timeout (`docs/testing.md`, "Waits and timeouts"). End of file
-    // proves the shutdown, not the close that follows it: a write in
-    // between still lands, so both outcomes below are the same rejection.
+    // accept thread finishes the rejection. A write in between still
+    // lands, so the test writes until the close lands: only `BrokenPipe`
+    // proves it did. `Ok` means the close is still on its way, so the
+    // loop yields and retries under the one deadline; its expiry fails
+    // naming the close, so a hang cannot pass as the rejection.
     let late = Client::connect(&socket).unwrap();
-    let eof = Deadline::after(DEADLINE);
-    assert!(
-        late.recv(eof).is_none(),
-        "a rejected post-quiesce connection ends with no answer"
-    );
-    assert!(
-        !eof.left().is_zero(),
-        "the server shut the connection down before the deadline"
-    );
-    // The write races the close that follows the shutdown: it lands when
-    // the close is still on its way and fails with `BrokenPipe` once the
-    // close has landed. A rejected line is never read either way.
-    match late.send(&subscribe_line("c_late", "full")) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-        Err(error) => panic!("the late client's send failed: {error:?}"),
+    let close = Deadline::after(DEADLINE);
+    loop {
+        match late.send(&subscribe_line("c_late", "full")) {
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
+            Err(error) => panic!("the late client's send failed: {error:?}"),
+            Ok(()) => {
+                assert!(
+                    !close.left().is_zero(),
+                    "the server closed the rejected post-quiesce connection before the deadline"
+                );
+                thread::yield_now();
+            }
+        }
     }
+    assert!(
+        late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "no answer is written for a line never read"
+    );
+    assert!(
+        late.recv(Deadline::after(DEADLINE)).is_none(),
+        "a subscribe after quiesce ends the connection"
+    );
     drop(late);
     close_within(opened.session, opened.log);
 }
