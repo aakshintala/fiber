@@ -2491,6 +2491,93 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
 }
 
 #[test]
+fn after_quiesce_a_client_waiting_for_the_close_before_its_write_gets_no_error() {
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    // The watcher blocks without a deadline, so its lines cross a channel
+    // and the reads below carry the deadline.
+    let mut watcher = opened.log.watch();
+    let (forward, lines) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = watcher.recv() {
+            if forward.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let mut connected = None;
+    let first = socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_| {
+            let client = Client::connect(&first).unwrap();
+            client.send(&subscribe_line("c_full", "full")).unwrap();
+            let _ack = recv(&client);
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    // The ack precedes the connection's own `clients` line, so the test
+    // reads that line before quiesce: one still unwritten would be taken
+    // for a line that followed quiesce.
+    let lines = fakes::within(
+        "the joining client's clients line",
+        Deadline::after(DEADLINE),
+        move || {
+            let wait = Deadline::after(DEADLINE);
+            loop {
+                let line = wait
+                    .recv(&lines)
+                    .expect("the joining client's clients line arrives");
+                if line.kind == "clients" {
+                    break;
+                }
+            }
+            lines
+        },
+    );
+    opened.session.quiesce();
+    drop(connected);
+    // A client attaching after quiesce is rejected. This one waits for the
+    // server's close before writing: the deadline-bounded end of file below
+    // proves the close happened, so the write races nothing.
+    let late = Client::connect(&socket).unwrap();
+    assert!(
+        late.recv(Deadline::after(DEADLINE)).is_none(),
+        "a rejected post-quiesce connection ends with no answer"
+    );
+    // The connection is already closed, so the write itself can fail with
+    // `BrokenPipe`: a rejected line is never read either way.
+    match late.send(&subscribe_line("c_late", "full")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
+        Err(error) => panic!("the late client's send failed: {error:?}"),
+    }
+    assert!(
+        late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
+        "no answer is written for a line never read"
+    );
+    assert!(
+        late.recv(Deadline::after(DEADLINE)).is_none(),
+        "a subscribe after quiesce ends the connection"
+    );
+    opened.log.append(&notice(), None, None).unwrap();
+    let _lines = fakes::within("the notice", Deadline::after(DEADLINE), move || {
+        let wait = Deadline::after(DEADLINE);
+        loop {
+            let line = wait.recv(&lines).expect("the notice arrives");
+            assert_ne!(line.kind, "clients", "a clients line followed quiesce");
+            if line.kind == "notice" {
+                break;
+            }
+        }
+        lines
+    });
+    drop(late);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
     reset();
     let opened = Opened::open(Vec::new());
