@@ -768,6 +768,10 @@ impl<B: Backend> Loop<B> {
         // kitty bytes wait for the post-draw drain: the draw queues the
         // frame's fetches.
         self.drain_images();
+        // A session change queued deletes for its shown images: they
+        // leave the terminal before the draw, so the next session never
+        // draws under a stale id (`docs/tui.md`, "Images").
+        self.drain_image_deletes();
         // The pre-draw sweep births in-frame pushes (page-in loads,
         // image failures) so the draw sees them; the post-draw sweep
         // births renderer-failure pushes before the arm, so a push
@@ -825,9 +829,20 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Writes the queued session-change deletes before the screen draw:
+    /// a later session reuses image ids from 1, so its first frame never
+    /// draws under a stale image (`docs/tui.md`, "Images").
+    fn drain_image_deletes(&mut self) {
+        let deletes = self.app.take_image_deletes();
+        if !deletes.is_empty() {
+            let mut tty = &self.tty;
+            tty.write_all(&deletes).unwrap_or(());
+        }
+    }
+
     /// Sends the display `read_file` commands the frame drew, and writes
-    /// the kitty bytes their answers queued, after the screen draw: each
-    /// posting reaches the terminal through one write
+    /// the kitty transmit and place bytes their answers queued, after the
+    /// screen draw: each posting reaches the terminal through one write
     /// (`docs/tui.md`, "Images").
     fn drain_display(&mut self) {
         let out = self.app.take_image_out();
@@ -877,8 +892,9 @@ impl<B: Backend> Loop<B> {
 
     /// Kitty's graphics reply: the probe's success records graphics
     /// support, so later frames may draw images inline (`docs/tui.md`,
-    /// "Images"). A transmit error fails only its display image, with no
-    /// notice: the line stays, and nothing asks again in this generation.
+    /// "Images"). An error fails only its matching display image, with
+    /// one notice: the line stays, and nothing asks again while its
+    /// session's layout lives.
     fn graphics(&mut self, id: u32, ok: bool) {
         if id == term::PROBE_ID {
             // The probe's success records graphics support; its error,
@@ -888,9 +904,9 @@ impl<B: Backend> Loop<B> {
             }
             return;
         }
-        // A transmit error fails only its display image, with no
-        // notice: the line stays, and nothing asks again in this
-        // generation (`docs/tui.md`, "Images").
+        // An error fails only its matching display image, with one
+        // notice: the line stays, and nothing asks again while its
+        // session's layout lives (`docs/tui.md`, "Images").
         if !ok {
             self.app.fail_display_image(id);
         }

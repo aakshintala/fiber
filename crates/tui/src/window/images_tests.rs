@@ -275,3 +275,65 @@ fn set_image_sizing_recounts_only_on_change() {
     pages.set_image_sizing(Sizing::Text);
     assert!(pages.recounts > recounts, "sizing back recounts");
 }
+
+#[test]
+fn flat_reports_text_and_draws_the_one_line() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let inline = pages.rows().len();
+    assert!(inline > 2, "the grid takes rows: {inline}");
+    // Flat reports text, so no display fetch goes out for the page.
+    pages.set_flat(true);
+    assert_eq!(pages.image_sizing(), Sizing::Text);
+    // The flat seam draws the image as its one clickable line.
+    let rows = pages.rows();
+    let found: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| line.to_string().contains("▣ a.png"))
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].0.to_string().ends_with("▣ a.png · 1280×800"));
+    assert!(rows.len() < inline, "the flat page loses the grid rows");
+}
+
+#[test]
+fn a_failed_image_recounts_to_its_one_line() {
+    use crate::image::Sizing;
+    let mut pages = pages();
+    for line in called("artifacts/a.png") {
+        pages.apply(&line);
+    }
+    assert!(
+        pages.open(&crate::app::Target::Group(crate::turn::target_id("a_t"))),
+        "the call's group opens"
+    );
+    pages.set_image_sizing(Sizing::Inline { cell: (10, 20) });
+    let inline = pages.rows().len();
+    assert!(inline > 2, "the grid takes rows: {inline}");
+    // Failing the image recounts its resident page to the one-line form.
+    let recounts = pages.recounts;
+    pages.fail_image(&SessionId(SESSION.to_owned()), "artifacts/a.png");
+    assert!(pages.recounts > recounts, "the failure recounts");
+    let rows = pages.rows();
+    assert!(rows.len() < inline, "the failed image loses the grid rows");
+    let found: Vec<_> = rows
+        .iter()
+        .filter(|(line, _)| line.to_string().contains("▣ a.png"))
+        .collect();
+    assert_eq!(found.len(), 1);
+    assert!(found[0].0.to_string().ends_with("▣ a.png · 1280×800"));
+    // The failure names one image in one session.
+    assert!(pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/a.png"));
+    assert!(!pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/b.png"));
+    // Clearing the session drops the failure with the layout.
+    pages.clear();
+    assert!(!pages.image_failed(&SessionId(SESSION.to_owned()), "artifacts/a.png"));
+}

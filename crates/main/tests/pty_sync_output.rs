@@ -18,7 +18,9 @@ use std::thread;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::pty::{KITTY_PUSH, TITLE};
-use support::{Deadline, hello_inline_completed as hello};
+use support::{
+    Deadline, function_call, hello as hello_text, hello_inline_completed as hello, stream,
+};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -315,4 +317,197 @@ fn the_harness_snapshots_a_stream_without_markers_after_each_read() {
         "the second read snapshots: {:?}",
         shared.grid().contents,
     );
+}
+
+/// Kitty's graphics-probe reply the test writes once the probe is on the
+/// wire: the harness answers the keyboard, attributes and theme queries,
+/// but nothing kitty-specific, so the test speaks for the terminal
+/// (`docs/tui.md`, "Images").
+const PROBE_REPLY: &[u8] = b"\x1b_Gi=31;OK\x07";
+
+/// The logo's bytes, compiled in: the read tool passes a PNG through at
+/// its own bytes, so the display transmit chunks them over the wire.
+const LOGO: &[u8] = include_bytes!("../../../research/site-prototype/fiber-logo.png");
+
+/// The logo's bytes: big enough to chunk once stored.
+fn logo_bytes() -> Vec<u8> {
+    LOGO.to_vec()
+}
+
+/// The provider answering a `read` of `pic.png`, then closing the turn.
+fn image_read_script() -> [fakes::Response; 2] {
+    [
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "pic.png"}),
+        )]),
+        hello_text(),
+    ]
+}
+
+/// Standard base64 of `bytes`: the test's only encoder, checked by the
+/// reassembly below against the hub's own encoding of the same file.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(ALPHABET[((word >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((word >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[((word >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(word & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// The transmit payloads on `wire` in order, asserting the chunk flags:
+/// the first chunk's control data carries the PNG format, every chunk
+/// but the last says more follow, and the last says none.
+fn transmit_payloads(wire: &str) -> Vec<&str> {
+    let first = wire.find("Ga=t,").expect("the transmit went out");
+    assert!(
+        wire[first..].starts_with("Ga=t,f=100,"),
+        "the transmit carries the PNG format: {wire:?}"
+    );
+    let mut at = first + wire[first..].find(';').expect("the control data ends") + 1;
+    assert!(
+        wire[first..at].ends_with("m=1;"),
+        "the first chunk says more: {wire:?}"
+    );
+    let mut payloads = Vec::new();
+    loop {
+        let tail = &wire[at..];
+        let end = at
+            + tail.find("\x1b\\").unwrap_or_else(|| {
+                panic!("each chunk ends: {at} in {} bytes: {tail:?}", wire.len())
+            });
+        payloads.push(&wire[at..end]);
+        at = end + "\x1b\\".len();
+        if wire[at..].starts_with("\x1b_Gm=0;") {
+            at += "\x1b_Gm=0;".len();
+            let end = at + wire[at..].find("\x1b\\").expect("the last chunk ends");
+            payloads.push(&wire[at..end]);
+            break;
+        }
+        assert!(
+            wire[at..].starts_with("\x1b_Gm=1;"),
+            "a middle chunk says more: {wire:?}"
+        );
+        at += "\x1b_Gm=1;".len();
+    }
+    payloads
+}
+
+/// An inline image's journey to the wire: with `tui.inline_images` on, a
+/// tool result carrying a PNG draws its placeholder grid, and the
+/// answered display fetch transmits the PNG in chunks and places it,
+/// with the placeholder cells in the frame (`docs/tui.md`, "Images").
+#[test]
+fn an_inline_image_transmits_places_and_draws_placeholders() {
+    let setup = support::Setup::new();
+    // Big enough to chunk: its thousands of bytes span more than one
+    // 4096-byte kitty chunk once stored.
+    let logo = logo_bytes();
+    assert!(
+        logo.len() > 3 * 1024,
+        "the logo spans chunks: {} bytes",
+        logo.len()
+    );
+    std::fs::write(setup.workspace().join("pic.png"), &logo).unwrap();
+    let server = ProviderServer::start(image_read_script()).unwrap();
+    provider(&setup, &server);
+    std::fs::write(
+        setup.home().join("config.json"),
+        json!({
+            "model": "fake/m",
+            "hub": {"idle_exit_ms": 1000},
+            "tui": {"inline_images": true},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut run = terminal(&setup, 60, 24, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    // The probe went out with setup: answer it, and the images size to
+    // the placeholder grid.
+    run.wait_bytes(0, SETUP_END, "the graphics probe");
+    run.write(PROBE_REPLY);
+    // The turn's tool result carries the PNG: its grid draws inline.
+    let from = run.output().len();
+    run.write(b"look at the logo\r");
+    run.turn_finished(from);
+    // The call's group opens, and the image draws its grid under the
+    // ledger row: only a drawn grid queues its display fetch. The grid,
+    // not the raw wire, carries the caption: the wire splits short
+    // mixed-style rows into positioned runs.
+    run.write(b"\x0f");
+    let grid = run.wait_screen("the inline grid", |grid| {
+        grid.contents.contains("· 640×160")
+    });
+    assert!(
+        grid.contents.contains("· 640×160"),
+        "the caption names the logged size"
+    );
+    // The place follows the whole transmit out of the post-draw drain, so
+    // waiting for it sees every chunk.
+    run.wait_bytes(from, b"Ga=p,", "the display place");
+    let wire = String::from_utf8_lossy(&run.output()).into_owned();
+    // Exactly one transmit goes out, however often the frame redraws.
+    assert_eq!(wire.matches("Ga=t,").count(), 1, "one transmit: {wire:?}");
+    // The transmit payload is the stored artifact's bytes in base64,
+    // chunked at 4096: reassemble the wire chunks and compare.
+    let id = support::journey::only_session(&setup);
+    let stored: Vec<std::path::PathBuf> =
+        std::fs::read_dir(support::session_dir(&setup, &id).join("artifacts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+    assert_eq!(stored.len(), 1, "one stored image: {stored:?}");
+    let expected = base64(&std::fs::read(&stored[0]).unwrap());
+    let payloads = transmit_payloads(&wire);
+    assert!(payloads.len() >= 2, "the payload chunks: {wire:?}");
+    assert_eq!(
+        payloads.concat(),
+        expected,
+        "the wire carries the artifact's bytes"
+    );
+    // The place follows the transmit, bound to the placeholders under
+    // the image's id: a 56-column conversation at a 10 by 20 cell grids
+    // 640 by 160 at 22 by 2.
+    let transmit = wire.find("Ga=t,").expect("the transmit went out");
+    let placed = wire.find("Ga=p,").expect("the place went out");
+    assert!(transmit < placed, "the place follows the transmit");
+    assert!(
+        wire[placed..].starts_with("Ga=p,U=1,i=1,c=22,r=2"),
+        "the place binds the placeholders: {wire:?}"
+    );
+    // The frame's placeholder cells drew: the image moves with the text
+    // through Unicode placeholders.
+    assert!(wire.contains("\u{10EEEE}"), "placeholder cells drew");
+    // Closing the session quits cleanly off the alternate screen.
+    run.write(b"/close\r");
+    support::pty::until_hub_exits(
+        setup.deadline,
+        &setup.session_socket(&id),
+        std::path::Path::new(""),
+        "the closed session to exit",
+    );
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
 }

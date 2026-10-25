@@ -2,7 +2,7 @@
 //! of ids paging hands out (`docs/tui.md`, "Images"). An image is one
 //! clickable line; inline rows arrive with kitty's graphics protocol.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contract::SessionId;
 use contract::shapes::ContentPart;
@@ -85,47 +85,46 @@ pub(crate) enum Sizing {
 /// and 12 rows, keeping the image's proportions (`docs/tui.md`,
 /// "Images"). A placeholder names its cell through the diacritics after
 /// it, so neither side runs past the diacritic table.
-#[allow(dead_code, reason = "the inline rows read the caps")]
 const MAX_ROWS: u16 = 12;
-#[allow(dead_code, reason = "the inline rows read the caps")]
-const MAX_DIACRITIC: u32 = 64;
+const MAX_DIACRITIC: u64 = 64;
 
 /// The placeholder grid for `part` in a `columns`-wide conversation
 /// with `cell` pixels per cell: the logged size in pixels, fit into the
 /// caps without decoding the image (`docs/tui.md`, "Images"). No upscale
 /// past the image's natural cells. Zero logged dimensions or no columns
-/// draw no grid: the caption line still counts the image's row.
-#[allow(dead_code, reason = "the inline rows read the grid")]
+/// draw no grid: the caption line still counts the image's row. The
+/// products run in 64 bits: the logged size is unbounded, so 32-bit
+/// cells times 32-bit pixels overflow.
 pub(crate) fn grid(part: &Part, columns: u16, cell: (u16, u16)) -> (u16, u16) {
     if part.width == 0 || part.height == 0 || columns == 0 {
         return (0, 0);
     }
-    let (cell_w, cell_h) = (u32::from(cell.0), u32::from(cell.1));
+    let (cell_w, cell_h) = (u64::from(cell.0), u64::from(cell.1));
     if cell_w == 0 || cell_h == 0 {
         return (0, 0);
     }
     // The width cap in cells, inside the diacritic table.
-    let max_cols = (u32::from(columns) * 40 / 100).clamp(1, MAX_DIACRITIC);
-    let (width, height) = (part.width, part.height);
+    let max_cols = (u64::from(columns) * 40 / 100).clamp(1, MAX_DIACRITIC);
+    let (width, height) = (u64::from(part.width), u64::from(part.height));
     // Natural cells, at least one: a small image draws as it is.
-    if width <= max_cols * cell_w && height <= u32::from(MAX_ROWS) * cell_h {
+    if width <= max_cols * cell_w && height <= u64::from(MAX_ROWS) * cell_h {
         let cols = (width / cell_w).max(1);
         let rows = (height / cell_h).max(1);
         return (
             u16::try_from(cols.min(MAX_DIACRITIC)).unwrap_or(u16::MAX),
-            u16::try_from(rows.min(u32::from(MAX_ROWS))).unwrap_or(u16::MAX),
+            u16::try_from(rows.min(u64::from(MAX_ROWS))).unwrap_or(u16::MAX),
         );
     }
     // The width binds when the width-capped box is narrower, by aspect,
     // than the row-capped box.
-    if max_cols * cell_w * height <= u32::from(MAX_ROWS) * cell_h * width {
+    if max_cols * cell_w * height <= u64::from(MAX_ROWS) * cell_h * width {
         let rows = (height * max_cols * cell_w / (width * cell_h)).max(1);
         (
             u16::try_from(max_cols).unwrap_or(u16::MAX),
-            u16::try_from(rows.min(u32::from(MAX_ROWS))).unwrap_or(u16::MAX),
+            u16::try_from(rows.min(u64::from(MAX_ROWS))).unwrap_or(u16::MAX),
         )
     } else {
-        let cols = (width * u32::from(MAX_ROWS) * cell_h / (height * cell_w)).max(1);
+        let cols = (width * u64::from(MAX_ROWS) * cell_h / (height * cell_w)).max(1);
         (
             u16::try_from(cols.min(max_cols.min(MAX_DIACRITIC))).unwrap_or(u16::MAX),
             MAX_ROWS,
@@ -143,6 +142,10 @@ pub(crate) struct Layout {
     pub(crate) parts: BTreeMap<u32, Part>,
     next: u32,
     pub(crate) sizing: Sizing,
+    /// The images whose display failed, by `(session, path)`: each keeps
+    /// its one clickable line, and no fetch asks for it again while this
+    /// layout lives (`docs/tui.md`, "Images").
+    failed: BTreeSet<(SessionId, String)>,
 }
 
 impl Layout {
@@ -169,6 +172,19 @@ impl Layout {
         self.parts.insert(id, part.clone());
         id
     }
+
+    /// Marks the image at `path` in `session` failed: it draws its one
+    /// line from now on, and no fetch asks for it again while this
+    /// layout lives (`docs/tui.md`, "Images").
+    pub(crate) fn fail(&mut self, session: &SessionId, path: &str) {
+        self.failed.insert((session.clone(), path.to_owned()));
+    }
+
+    /// Whether the image at `path` in `session` failed: one line, no
+    /// refetch (`docs/tui.md`, "Images").
+    pub(crate) fn failed(&self, session: &SessionId, path: &str) -> bool {
+        self.failed.contains(&(session.clone(), path.to_owned()))
+    }
 }
 
 /// Where an image's line sits.
@@ -183,22 +199,44 @@ pub(crate) enum Align {
 /// Draws `part` as its one line, cut to the columns left after its
 /// indent so it is always one row, carrying its click target. The line
 /// reads `▣ <name>` in the link look and ` · <dims>` dim
-/// (`docs/tui.md`, "Images", "Links").
+/// (`docs/tui.md`, "Images", "Links"). The prompt bubble and steering
+/// images always draw through here, never inline.
 pub(crate) fn rows(part: &Part, layout: &Layout, columns: u16, align: Align, out: &mut Rows) {
-    match layout.sizing {
-        Sizing::Text => text_rows(part, layout, columns, align, out),
-        Sizing::Inline { cell } => match align {
-            // Only a PNG under a call's ledger row draws inline: the
-            // prompt bubble and steering images stay their one line.
-            Align::Left { indent } if indent > 0 && part.mime_type == "image/png" => {
-                if let Some(id) = layout.id(&part.session, &part.path) {
-                    inline_rows(part, layout, id, columns, indent, cell, out);
-                } else {
-                    text_rows(part, layout, columns, align, out);
-                }
+    text_rows(part, layout, columns, align, out);
+}
+
+/// Draws `part` under a call's ledger row: its one line when the sizing
+/// is text, the flat seam shows, or its display failed; otherwise the
+/// placeholder grid with its caption for a noted PNG, and the one line
+/// for anything else (`docs/tui.md`, "Images").
+pub(crate) fn ledger_rows(
+    part: &Part,
+    layout: &Layout,
+    columns: u16,
+    align: Align,
+    out: &mut Rows,
+) {
+    let Sizing::Inline { cell } = layout.sizing else {
+        text_rows(part, layout, columns, align, out);
+        return;
+    };
+    // A failed image draws its one clickable line, and a flat page draws
+    // every image as its one line: neither fetches (`docs/tui.md`,
+    // "Images", "Screen readers").
+    if layout.failed(&part.session, &part.path) || out.seam.as_ref().is_some_and(|seam| seam.flat) {
+        text_rows(part, layout, columns, align, out);
+        return;
+    }
+    match align {
+        // Only a noted PNG under a call's ledger row draws inline.
+        Align::Left { indent } if indent > 0 && part.mime_type == "image/png" => {
+            if let Some(id) = layout.id(&part.session, &part.path) {
+                inline_rows(part, layout, id, columns, indent, cell, out);
+            } else {
+                text_rows(part, layout, columns, align, out);
             }
-            Align::Left { .. } | Align::Right => text_rows(part, layout, columns, align, out),
-        },
+        }
+        Align::Left { .. } | Align::Right => text_rows(part, layout, columns, align, out),
     }
 }
 
@@ -300,9 +338,9 @@ pub(crate) struct Out {
     /// Display `read_file` command lines the loop sends for the inline
     /// images the frame drew (`docs/tui.md`, "Images").
     pub(crate) display: Vec<String>,
-    /// Kitty bytes the loop writes after the screen draw: each answer's
-    /// transmit and place contiguously, and each shown image's delete
-    /// (`docs/tui.md`, "Images").
+    /// Kitty transmit and place bytes the loop writes after the screen
+    /// draw: each answer's transmit and place contiguously, never
+    /// deletes (`docs/tui.md`, "Images").
     pub(crate) kitty: Vec<u8>,
 }
 

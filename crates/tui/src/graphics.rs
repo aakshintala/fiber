@@ -23,7 +23,6 @@ const DIA: [char; 64] = [
 ];
 
 /// The base64 chunk an escape carries at most.
-#[allow(dead_code, reason = "answers transmit the fetched bytes")]
 const CHUNK: usize = 4096;
 
 /// Whether `symbol` is a placeholder cell: it starts with the base
@@ -46,8 +45,8 @@ pub(crate) fn cell(row: usize, col: usize, style: Style) -> Span<'static> {
 /// The transmit bytes for `id`'s PNG `payload`: the base64 forwarded as
 /// kitty's payload in 4096-byte chunks, `m=1` on all but the last.
 /// Transmit only: the image shows when its placeholders draw
-/// (`docs/tui.md`, "Images").
-#[allow(dead_code, reason = "answers transmit the fetched bytes")]
+/// (`docs/tui.md`, "Images"). The transmit carries no `U=1`: that flag
+/// binds a placement to its Unicode placeholders.
 pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut chunks = base64_png.as_bytes().chunks(CHUNK).peekable();
@@ -60,7 +59,7 @@ pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
         if first {
             out.extend_from_slice(
                 format!(
-                    "\x1b_Ga=t,U=1,f=100,i={id},q=2,m={more};{}",
+                    "\x1b_Ga=t,f=100,i={id},q=2,m={more};{}",
                     String::from_utf8_lossy(chunk)
                 )
                 .as_bytes(),
@@ -79,7 +78,6 @@ pub(crate) fn transmit(id: u32, base64_png: &str) -> Vec<u8> {
 /// The place bytes for `id` over its `cols` by `rows` grid: the image
 /// shows where its placeholders are, moved with the text
 /// (`docs/tui.md`, "Images").
-#[allow(dead_code, reason = "answers place the shown image")]
 pub(crate) fn place(id: u32, cols: u16, rows: u16) -> Vec<u8> {
     format!("\x1b_Ga=p,U=1,i={id},c={cols},r={rows}\x1b\\").into_bytes()
 }
@@ -87,11 +85,86 @@ pub(crate) fn place(id: u32, cols: u16, rows: u16) -> Vec<u8> {
 /// The delete bytes for `id`: its instances and its stored image go, so
 /// a later session never draws under a stale id (`docs/tui.md`,
 /// "Images").
-#[allow(dead_code, reason = "session changes delete the shown images")]
 pub(crate) fn delete(id: u32) -> Vec<u8> {
     format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").into_bytes()
 }
 
 #[cfg(test)]
-#[path = "graphics_tests.rs"]
-mod tests;
+mod tests {
+    //! Tests for kitty's graphics escapes: the place bytes pin `U=1`,
+    //! the transmit chunks, and the placeholder cells.
+
+    use ratatui::style::Style;
+
+    use super::{cell, delete, is_placeholder, place, transmit};
+
+    #[test]
+    fn place_pins_unicode_placement() {
+        // The terminal moves the image with the text, through the Unicode
+        // placeholders: always `U=1` under the image's id.
+        assert_eq!(place(7, 32, 12), b"\x1b_Ga=p,U=1,i=7,c=32,r=12\x1b\\");
+    }
+
+    #[test]
+    fn delete_clears_the_image() {
+        assert_eq!(delete(7), b"\x1b_Ga=d,d=I,i=7,q=2\x1b\\");
+    }
+
+    #[test]
+    fn transmit_carries_no_unicode_placement() {
+        // `U=1` binds a placement to its placeholders: the transmit
+        // carries the PNG format, the id, quiet and the last-chunk mark.
+        assert_eq!(
+            transmit(7, "AAAA"),
+            b"\x1b_Ga=t,f=100,i=7,q=2,m=0;AAAA\x1b\\"
+        );
+    }
+
+    #[test]
+    fn transmit_chunks_at_4096() {
+        let prefix = "\x1b_Ga=t,f=100,i=7,q=2,m=0;";
+        // Exactly one chunk still sends `m=0` once.
+        let full = "B".repeat(4096);
+        let bytes = transmit(7, &full);
+        assert_eq!(
+            bytes,
+            [prefix.as_bytes(), full.as_bytes(), b"\x1b\\"].concat()
+        );
+        assert!(transmit(7, "").is_empty());
+    }
+
+    #[test]
+    fn transmit_marks_every_chunk_but_the_last_with_more() {
+        let payload = "B".repeat(4097);
+        let text = String::from_utf8(transmit(7, &payload)).expect("escapes are text");
+        let parts: Vec<&str> = text.split("\x1b\\").collect();
+        assert_eq!(parts.len(), 3);
+        assert!(parts[0].starts_with("\x1b_Ga=t,f=100,i=7,q=2,m=1;"));
+        assert_eq!(parts[0].len(), "\x1b_Ga=t,f=100,i=7,q=2,m=1;".len() + 4096);
+        assert_eq!(parts[1], "\x1b_Gm=0;B");
+    }
+
+    #[test]
+    fn placeholder_cells_carry_row_and_column() {
+        let style = Style::new();
+        let first = cell(0, 0, style);
+        assert_eq!(first.content.as_ref(), "\u{10EEEE}\u{305}\u{305}");
+        assert_eq!(first.style, style);
+        let next = cell(1, 2, style);
+        assert_eq!(next.content.as_ref(), "\u{10EEEE}\u{30D}\u{30E}");
+        // Past the diacritic table reads as the bare base character, never
+        // panicking.
+        assert_eq!(
+            cell(64, 64, style).content.as_ref(),
+            "\u{10EEEE}\u{10EEEE}\u{10EEEE}"
+        );
+    }
+
+    #[test]
+    fn is_placeholder_names_only_placeholder_cells() {
+        assert!(is_placeholder("\u{10EEEE}\u{305}\u{305}"));
+        assert!(!is_placeholder(" "));
+        assert!(!is_placeholder("▣"));
+        assert!(!is_placeholder(""));
+    }
+}

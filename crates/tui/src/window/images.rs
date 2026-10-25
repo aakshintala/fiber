@@ -59,9 +59,14 @@ impl Pages {
     }
 
     /// How the images size: the one line, or the inline grid with its
-    /// cell size (`docs/tui.md`, "Images").
+    /// cell size (`docs/tui.md`, "Images"). A flat page reports text:
+    /// flat rendering never fetches (`docs/tui.md`, "Screen readers").
     pub(crate) fn image_sizing(&self) -> image::Sizing {
-        self.images.sizing
+        if self.ext.flat {
+            image::Sizing::Text
+        } else {
+            self.images.sizing
+        }
     }
 
     /// Sets the image sizing, recounting when it changes, so paging
@@ -73,6 +78,20 @@ impl Pages {
         }
         self.images.sizing = sizing;
         self.recount();
+    }
+
+    /// Marks the image at `path` in `session` failed and recounts: its
+    /// rows shrink to the one-line form, and no fetch asks for it again
+    /// while the session's layout lives (`docs/tui.md`, "Images").
+    pub(crate) fn fail_image(&mut self, session: &contract::SessionId, path: &str) {
+        self.images.fail(session, path);
+        self.recount();
+    }
+
+    /// Whether the image at `path` in `session` failed: one line, no
+    /// refetch (`docs/tui.md`, "Images").
+    pub(crate) fn image_failed(&self, session: &contract::SessionId, path: &str) -> bool {
+        self.images.failed(session, path)
     }
 }
 

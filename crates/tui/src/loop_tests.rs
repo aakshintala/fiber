@@ -377,6 +377,16 @@ fn a_session_change_deletes_the_shown_image_before_the_next_shows() {
     for envelope in image_session() {
         lp.app.on_line(Line::Session(envelope));
     }
+    // The delete drains before the next session's first frame draws: no
+    // frame runs between the attach and this drain.
+    lp.drain_image_deletes();
+    let text = String::from_utf8_lossy(&wire()).into_owned();
+    text.find("Ga=d,")
+        .expect("the delete drains before the draw");
+    assert!(
+        lp.app.take_image_deletes().is_empty(),
+        "the pre-draw drain empties the queue"
+    );
     let (lp, rx) = stepped(lp, rx, Input::Tick);
     let other = read_display_id(&theirs);
     let (lp, _) = stepped(lp, rx, display_answer(&other));

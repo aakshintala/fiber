@@ -1023,6 +1023,97 @@ fn ledger_with_an_inline_image() {
 }
 
 #[test]
+fn clicking_a_placeholder_opens_the_image_in_the_viewer() {
+    use serde_json::json;
+    // A call whose result carried a PNG draws its placeholder grid under
+    // its ledger row: clicking a placeholder cell opens the viewer, like
+    // the caption does (`docs/tui.md`, "Images").
+    let mut app = empty();
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        inline_images: true,
+        ..Default::default()
+    });
+    app.set_graphics();
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "look at this"));
+    app.on_line(at("step_started", None, 0, json!({})));
+    app.on_line(at(
+        "tool_call_requested",
+        Some("a_1"),
+        0,
+        json!({"name": "read", "arguments": {"path": "shot.png"}}),
+    ));
+    app.on_line(at(
+        "tool_call_completed",
+        Some("a_1"),
+        1_000,
+        json!({"status": "completed", "content": [
+            {"type": "text", "text": "saved"},
+            {"type": "image", "path": "artifacts/shot.png",
+                "mime_type": "image/png", "width": 1280, "height": 800},
+        ]}),
+    ));
+    app.on_line(at(
+        "turn_completed",
+        None,
+        2_000,
+        json!({"outcome": "completed"}),
+    ));
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let (buf, targets) = pointed(&mut app, 80, 24, None);
+    // The first placeholder cell: a grid cell, not the caption.
+    let mut cell = None;
+    for y in 0..24 {
+        for x in 0..80 {
+            if buf[(x, y)].symbol().starts_with('\u{10EEEE}') {
+                cell = Some((x, y));
+                break;
+            }
+        }
+        if cell.is_some() {
+            break;
+        }
+    }
+    let (x, y) = cell.expect("the grid draws placeholder cells");
+    let target = crate::mouse::hit(&targets, x, y).expect("the cell is a target");
+    assert!(
+        matches!(
+            target,
+            crate::mouse::TargetId::Line(crate::app::Target::Image(_))
+        ),
+        "the placeholder carries the image target: {target:?}"
+    );
+    let effect = app.on_click(target);
+    if let crate::app::Effect::Send(lines) = effect {
+        assert_eq!(lines.len(), 1);
+        let line: serde_json::Value = serde_json::from_str(&lines[0]).expect("a command line");
+        assert_eq!(
+            line.get("command").and_then(serde_json::Value::as_str),
+            Some("read_file")
+        );
+        assert_eq!(
+            line.get("args")
+                .and_then(|args| args.get("path"))
+                .and_then(serde_json::Value::as_str),
+            Some("artifacts/shot.png")
+        );
+    } else {
+        panic!("the click opens the viewer: {effect:?}");
+    }
+}
+
+#[test]
 fn tool_group_running_with_raw_arguments() {
     use serde_json::json;
     let mut app = empty();

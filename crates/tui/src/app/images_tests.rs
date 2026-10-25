@@ -561,7 +561,7 @@ fn a_draw_with_the_link_down_asks_nothing() {
 }
 
 #[test]
-fn a_rejected_display_answer_leaves_the_line_with_no_notice() {
+fn a_rejected_display_answer_notices_and_keeps_the_line() {
     let mut app = inline_app();
     started_with_image(&mut app, "artifacts/shot.png");
     let targets = drawn(1);
@@ -572,14 +572,20 @@ fn a_rejected_display_answer_leaves_the_line_with_no_notice() {
         .ok()
         .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
         .unwrap_or_default();
-    // The rejection lands on the display fetch: no notice, and the one
-    // line stays.
+    // The rejection lands on the display fetch: one notice says why, and
+    // the one clickable line stays.
     assert!(reject(&mut app, &id, "no such file.").is_empty());
-    assert_eq!(app.notice(), None);
+    assert_eq!(app.notice(), Some("Could not show shot.png: no such file."));
     assert!(app.take_image_out().display.is_empty());
-    // A failed image is not fetched again in this generation.
+    // A failed image is not fetched again while its session's layout
+    // lives: the draw finds it asked and failed.
     app.images_drawn(&targets);
     assert!(app.take_image_out().display.is_empty());
+    assert_eq!(
+        app.notice(),
+        Some("Could not show shot.png: no such file."),
+        "no second notice"
+    );
 }
 
 /// Queues the display fetch for image `id` and returns its command id.
@@ -608,7 +614,7 @@ fn an_accepted_png_answer_transmits_and_places() {
     let kitty = String::from_utf8(out.kitty).expect("escapes are text");
     // The transmit and the place post contiguously, over the grid the
     // answer sizes.
-    let transmit = "\x1b_Ga=t,U=1,f=100,i=1,q=2,m=0;QUJD\x1b\\";
+    let transmit = "\x1b_Ga=t,f=100,i=1,q=2,m=0;QUJD\x1b\\";
     assert!(kitty.starts_with(transmit), "{kitty:?}");
     // The place follows over the grid the answer sizes: a 56-column
     // conversation holds 22 columns, and the height follows at 6 rows.
@@ -644,13 +650,18 @@ fn a_second_answer_for_a_shown_image_posts_nothing() {
 }
 
 #[test]
-fn a_display_answer_without_png_bytes_fails_quietly() {
-    for (name, result) in [
-        ("missing", None),
-        ("empty", Some(json!({"data": "", "mime_type": "image/png"}))),
+fn a_display_answer_without_png_bytes_notices_and_keeps_the_line() {
+    for (name, result, reason) in [
+        ("missing", None, "the answer carried no file"),
+        (
+            "empty",
+            Some(json!({"data": "", "mime_type": "image/png"})),
+            "the answer carried no file",
+        ),
         (
             "non-png",
             Some(json!({"data": "QUJD", "mime_type": "image/jpeg"})),
+            "the answer was not a PNG image",
         ),
     ] {
         let mut app = inline_app();
@@ -661,10 +672,15 @@ fn a_display_answer_without_png_bytes_fails_quietly() {
             app.image_answered(&id, result.as_ref()),
             "{name}: the answer is ours"
         );
-        assert_eq!(app.notice(), None, "{name}: no notice");
+        assert_eq!(
+            app.notice(),
+            Some(format!("Could not show shot.png: {reason}.").as_str()),
+            "{name}: one notice says why"
+        );
         let out = app.take_image_out();
         assert!(out.kitty.is_empty(), "{name}: nothing posts");
-        // A failed image is not asked for again in this generation.
+        // A failed image is not asked for again while its session's
+        // layout lives.
         app.images_drawn(&drawn(1));
         assert!(
             app.take_image_out().display.is_empty(),
@@ -720,6 +736,11 @@ fn a_kitty_error_fails_only_its_image() {
         .expect("the ancestor's id");
     let kept = if failed == 1 { 2 } else { 1 };
     app.fail_display_image(failed);
+    // The kitty error fails only its image, with one notice naming it.
+    assert_eq!(
+        app.notice(),
+        Some("Could not show old.png: the terminal reported an error.")
+    );
     // Both answers land: the failed image's drops, the other's shows.
     let old = command_for(&out.display, "artifacts/old.png");
     let shot = command_for(&out.display, "artifacts/shot.png");
@@ -735,7 +756,24 @@ fn a_kitty_error_fails_only_its_image() {
         kitty.contains(&format!("i={kept},")),
         "only the kept image posts: {kitty:?}"
     );
+    // The failed image is not fetched again while its session's layout
+    // lives.
+    app.images_drawn(&[drawn(1), drawn(2)].concat());
+    let out = app.take_image_out();
+    assert!(out.display.is_empty(), "no refetch after the error");
+}
+
+#[test]
+fn a_kitty_error_for_an_unknown_id_posts_nothing() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    // No fetch is out: the error names no display image.
+    app.fail_display_image(7);
     assert_eq!(app.notice(), None);
+    assert!(app.take_image_out().kitty.is_empty());
+    // The drawn image still fetches: nothing failed.
+    app.images_drawn(&drawn(1));
+    assert_eq!(app.take_image_out().display.len(), 1);
 }
 
 #[test]
@@ -748,8 +786,8 @@ fn forgetting_a_shown_image_deletes_it() {
     // Attaching a new session deletes the shown image before its id
     // returns, and drops the old fetch.
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
-    let out = app.take_image_out();
-    assert_eq!(out.kitty, crate::graphics::delete(1));
+    assert_eq!(app.take_image_deletes(), crate::graphics::delete(1));
+    assert!(app.take_image_out().kitty.is_empty());
 }
 
 #[test]
@@ -759,6 +797,7 @@ fn forgetting_without_a_shown_image_deletes_nothing() {
     asked(&mut app, 1);
     // Asked but never shown: nothing reached the terminal.
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbbbbbb".to_owned()));
+    assert!(app.take_image_deletes().is_empty());
     assert!(app.take_image_out().kitty.is_empty());
 }
 

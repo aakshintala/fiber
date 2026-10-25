@@ -117,6 +117,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
         "research/provider-errors/raw/muse-responses.ok-stream.json",
         "main",
     ),
+    ("research/site-prototype/fiber-logo.png", "main"),
     (
         "research/anthropic-messages-probe/raw/beta.json",
         "provider",

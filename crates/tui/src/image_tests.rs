@@ -1,5 +1,7 @@
 //! Tests for one image part's line: what is kept, what the line
-//! names, and that it always draws one row.
+//! names, and that it always draws one row. Ledger rows draw the
+//! inline grid with its caption; the prompt and steering forms stay
+//! the one line.
 
 use contract::shapes::ContentPart;
 use ratatui::layout::Alignment;
@@ -282,7 +284,7 @@ fn an_inline_png_draws_placeholders_then_its_caption() {
     // placeholders, then the caption line.
     let part = sized(1280, 800);
     let mut out = Rows::default();
-    super::rows(
+    super::ledger_rows(
         &part,
         &inline_layout(&part, (10, 20)),
         80,
@@ -322,7 +324,7 @@ fn a_non_png_stays_its_one_line_when_sized_inline() {
     };
     let part = super::Part::from_content(&session(), &jpeg).expect("the jpeg is kept");
     let mut out = Rows::default();
-    super::rows(
+    super::ledger_rows(
         &part,
         &inline_layout(&part, (10, 20)),
         80,
@@ -340,7 +342,7 @@ fn the_bubble_and_steering_stay_one_line_when_sized_inline() {
     let layout = inline_layout(&part, (10, 20));
     for align in [Align::Right, Align::Left { indent: 0 }] {
         let mut out = Rows::default();
-        super::rows(&part, &layout, 80, align, &mut out);
+        super::ledger_rows(&part, &layout, 80, align, &mut out);
         let (rows, _) = out.into_parts();
         assert_eq!(rows.len(), 1, "the bubble and steering stay one line");
         assert!(
@@ -362,7 +364,7 @@ fn an_unnoted_part_falls_back_to_its_one_line() {
         ..Default::default()
     };
     let mut out = Rows::default();
-    super::rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    super::ledger_rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
@@ -372,7 +374,7 @@ fn an_unnoted_part_falls_back_to_its_one_line() {
 fn a_zero_grid_draws_only_its_caption() {
     let part = sized(0, 800);
     let mut out = Rows::default();
-    super::rows(
+    super::ledger_rows(
         &part,
         &inline_layout(&part, (10, 20)),
         80,
@@ -492,4 +494,90 @@ fn grid_draws_nothing_without_size_columns_or_cells() {
             "{width} by {height} at {columns} with {cell:?}"
         );
     }
+}
+
+#[test]
+fn rows_ignores_the_inline_sizing() {
+    // The prompt and steering forms call `rows`: even sized inline, a
+    // noted PNG stays its one line.
+    let part = sized(1280, 800);
+    let mut out = Rows::default();
+    super::rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+}
+
+#[test]
+fn a_failed_image_draws_its_one_line() {
+    // A failed display falls back to the clickable line: the grid never
+    // draws for it, and the target stays the image's.
+    let part = sized(1280, 800);
+    let mut layout = inline_layout(&part, (10, 20));
+    layout.fail(&session(), "artifacts/a.png");
+    let mut out = Rows::default();
+    super::ledger_rows(&part, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+    // Another path still draws inline: the failure names one image.
+    let other = super::Part::from_content(&session(), &image("artifacts/b.png", 1280, 800))
+        .expect("the image is kept");
+    layout.note(&other);
+    let mut out = Rows::default();
+    super::ledger_rows(&other, &layout, 80, Align::Left { indent: 4 }, &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 11, "the other image still draws its grid");
+}
+
+#[test]
+fn a_flat_seam_draws_the_one_line() {
+    // A flat page draws every image as its one line: the rows' seam
+    // says flat even where the sizing is inline.
+    let part = sized(1280, 800);
+    let ext = crate::ext::Ext {
+        flat: true,
+        ..Default::default()
+    };
+    let mut out = Rows::default().with_seam(ext.bind(0));
+    super::ledger_rows(
+        &part,
+        &inline_layout(&part, (10, 20)),
+        80,
+        Align::Left { indent: 4 },
+        &mut out,
+    );
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "    ▣ a.png · 1280×800");
+    assert!(matches!(rows[0].1, Some(Target::Image(1))));
+}
+
+#[test]
+fn grid_handles_the_largest_logged_size() {
+    // The widest logged size at the widest columns: the products stay
+    // inside 64 bits, and both caps still bind. At 65535 columns 40%
+    // clamps to the diacritic table's 64, and the row cap binds below
+    // the column cap.
+    assert_eq!(
+        super::grid(&sized(u32::MAX, u32::MAX), u16::MAX, (10, 20)),
+        (24, 12)
+    );
+    assert_eq!(
+        super::grid(&sized(u32::MAX, u32::MAX), u16::MAX, (1, 1)),
+        (12, 12)
+    );
+    // A maximum width with a small height still draws: the row cap
+    // binds, and neither side runs past the diacritic table.
+    assert_eq!(
+        super::grid(&sized(u32::MAX, 1), u16::MAX, (10, 20)),
+        (64, 1)
+    );
 }

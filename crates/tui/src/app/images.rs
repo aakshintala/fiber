@@ -21,8 +21,8 @@ struct Fetch {
 }
 
 /// Whether an inline image's bytes are asked for, shown, or failed:
-/// a shown or failed image is not asked for again in its session
-/// generation (`docs/tui.md`, "Images").
+/// a shown or failed image is not asked for again while its session's
+/// layout lives (`docs/tui.md`, "Images").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum DisplayState {
     Asked,
@@ -34,6 +34,7 @@ enum DisplayState {
 /// `read_file` command out, the placeholder id its answer draws under,
 /// and the session generation that asked, so a late answer draws
 /// nowhere stale.
+#[derive(Clone)]
 struct Display {
     /// The `read_file` command's id: the answer's dispatch key.
     command: String,
@@ -61,6 +62,9 @@ pub(crate) struct Images {
     refused: BTreeSet<(String, String)>,
     /// The inline images' display fetches, by `(session, path)`.
     display: BTreeMap<(String, String), Display>,
+    /// The session-change deletes queued for the loop's pre-draw drain:
+    /// shown images leave the terminal before the next session draws.
+    deletes: Vec<u8>,
     out: image::Out,
     generation: u64,
 }
@@ -118,8 +122,8 @@ impl App {
     /// Answers our `read_file` for a viewer open: queues the view for
     /// the loop's worker. A display fetch answers here too: its bytes
     /// transmit under the placeholders, and anything but PNG bytes
-    /// fails with no notice (`docs/tui.md`, "Images"). True when `id`
-    /// was ours.
+    /// fails its image with a notice (`docs/tui.md`, "Images"). True
+    /// when `id` was ours.
     pub(in crate::app) fn image_answered(&mut self, id: &str, result: Option<&Value>) -> bool {
         let display = self
             .images
@@ -156,16 +160,15 @@ impl App {
     }
 
     /// A `read_file` for a viewer open was rejected: one notice says
-    /// why, and nothing retries. A display fetch answers here too: the
-    /// image stays its one line with no notice, and is not asked for
-    /// again in this generation (`docs/tui.md`, "Images"). True when
-    /// `id` was ours.
+    /// why, and nothing retries. A display fetch answers here too: one
+    /// notice says why its image failed, which keeps its one line and is
+    /// not asked for again (`docs/tui.md`, "Images"). True when `id`
+    /// was ours.
     /// Answers our `read_file` for a display fetch: a PNG answer queues
     /// its transmit and its place over the placeholders, and marks the
-    /// image shown. Missing or empty bytes, a non-PNG answer, a stale
-    /// generation, or a second answer fail or drop the image with no
-    /// notice, and nothing asks again in this generation
-    /// (`docs/tui.md`, "Images").
+    /// image shown. Missing or empty bytes or a non-PNG answer fail the
+    /// image with one notice; a stale generation or a second answer
+    /// drops with none (`docs/tui.md`, "Images").
     fn display_answered(&mut self, key: (String, String), result: Option<&Value>) -> bool {
         let Some(fetch) = self.images.display.remove(&key) else {
             return false;
@@ -185,13 +188,11 @@ impl App {
             .and_then(|result| result.get("mime_type"))
             .and_then(Value::as_str);
         let (Some(data), Some("image/png")) = (png, mime) else {
-            self.images.display.insert(
-                key,
-                Display {
-                    state: DisplayState::Failed,
-                    ..fetch
-                },
-            );
+            let reason = match (png, mime) {
+                (None, _) => "the answer carried no file",
+                (_, _) => "the answer was not a PNG image",
+            };
+            self.fail_display(&key, reason, fetch);
             return true;
         };
         // The ask no longer applies: a later draw asks again.
@@ -225,17 +226,39 @@ impl App {
         true
     }
 
-    /// A kitty error reply for `id`: its display image fails with no
-    /// notice, and is not asked for again in this generation
-    /// (`docs/tui.md`, "Images").
+    /// Fails the display fetch `fetch` for `key` with one notice: the
+    /// image keeps its one clickable line, is not asked for again while
+    /// its session's layout lives, and resident pages recount to the
+    /// one-line form (`docs/tui.md`, "Images").
+    fn fail_display(&mut self, key: &(String, String), reason: &str, fetch: Display) {
+        let session = contract::SessionId(key.0.clone());
+        self.screen.pages_mut().fail_image(&session, &key.1);
+        self.images.display.insert(
+            key.clone(),
+            Display {
+                state: DisplayState::Failed,
+                ..fetch
+            },
+        );
+        let name = file_name(&key.1);
+        let reason = reason.strip_suffix('.').unwrap_or(reason);
+        self.notices
+            .push("io_failed", format!("Could not show {name}: {reason}."));
+    }
+
+    /// A kitty error reply for `id`: its display image fails with one
+    /// notice, and is not asked for again while its session's layout
+    /// lives (`docs/tui.md`, "Images").
     pub(crate) fn fail_display_image(&mut self, id: u32) {
-        for fetch in self
+        let failed: Vec<((String, String), Display)> = self
             .images
             .display
-            .values_mut()
-            .filter(|fetch| fetch.id == id)
-        {
-            fetch.state = DisplayState::Failed;
+            .iter()
+            .filter(|(_, fetch)| fetch.id == id && fetch.state != DisplayState::Failed)
+            .map(|(key, fetch)| (key.clone(), (*fetch).clone()))
+            .collect();
+        for (key, fetch) in failed {
+            self.fail_display(&key, "the terminal reported an error", fetch);
         }
     }
 
@@ -245,11 +268,10 @@ impl App {
             .display
             .iter()
             .find(|(_, fetch)| fetch.command == id)
-            .map(|(key, _)| key.clone());
-        if let Some(key) = failed {
-            if let Some(fetch) = self.images.display.get_mut(&key) {
-                fetch.state = DisplayState::Failed;
-            }
+            .map(|(key, fetch)| (key.clone(), (*fetch).clone()));
+        if let Some((key, fetch)) = failed {
+            self.images.display.remove(&key);
+            self.fail_display(&key, message, fetch);
             return true;
         }
         let Some(fetch) = self.images.fetches.remove(id) else {
@@ -296,8 +318,15 @@ impl App {
         std::mem::take(&mut self.images.out.view)
     }
 
-    /// The queued display commands and kitty bytes, for the post-draw
-    /// drain.
+    /// The queued session-change deletes, for the loop's pre-draw drain:
+    /// shown images leave the terminal before the next session draws.
+    pub(crate) fn take_image_deletes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.images.deletes)
+    }
+
+    /// The queued display commands and kitty transmit and place bytes,
+    /// for the post-draw drain. Deletes never ride along: the pre-draw
+    /// drain already wrote them.
     pub(crate) fn take_image_out(&mut self) -> image::Out {
         std::mem::take(&mut self.images.out)
     }
@@ -320,8 +349,9 @@ impl App {
         self.images.refused.clear();
         self.images.display.clear();
         self.images.out = image::Out::default();
+        self.images.deletes.clear();
         for id in shown {
-            self.images.out.kitty.extend(crate::graphics::delete(id));
+            self.images.deletes.extend(crate::graphics::delete(id));
         }
         self.images.generation = self.images.generation.saturating_add(1);
     }
@@ -329,7 +359,8 @@ impl App {
     /// Queues the display `read_file` commands for the inline images
     /// the frame drew, once each: the second draw of a redrawn frame
     /// finds them asked and queues nothing more (`docs/tui.md`,
-    /// "Images"). The one-line form needs no bytes and asks nothing.
+    /// "Images"). The one-line form needs no bytes and asks nothing, as
+    /// does a failed image while its session's layout lives.
     pub(crate) fn images_drawn(&mut self, targets: &[crate::mouse::Target]) {
         let crate::image::Sizing::Inline { .. } = self.screen.pages().image_sizing() else {
             return;
@@ -352,6 +383,9 @@ impl App {
             }
             let key = (part.session.0.clone(), part.path.clone());
             if self.images.display.contains_key(&key) {
+                continue;
+            }
+            if self.screen.pages().image_failed(&part.session, &part.path) {
                 continue;
             }
             let command_id = mint();
