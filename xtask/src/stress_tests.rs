@@ -1,4 +1,21 @@
 use super::*;
+use crate::select::TestRef;
+
+fn binary_test() -> TestRef {
+    TestRef {
+        package: "main".to_owned(),
+        binary: Some("main::completion".to_owned()),
+        name: "bash::registers".to_owned(),
+    }
+}
+
+fn unit_test() -> TestRef {
+    TestRef {
+        package: "log".to_owned(),
+        binary: None,
+        name: "writer::tests::flushes_on_drop".to_owned(),
+    }
+}
 
 #[test]
 fn an_empty_label_list_runs_the_pilot_default() {
@@ -97,5 +114,123 @@ fn the_summary_splits_minutes_and_seconds() {
     assert!(
         seconds.ends_with("count=30 tests=1 outcome=failure"),
         "{seconds}"
+    );
+}
+
+#[test]
+fn a_retry_list_line_matching_a_binary_scoped_test_fails() {
+    let touched = [binary_test()];
+    assert_eq!(
+        touched_retries("main::completion bash::registers\tfirst failure", &touched),
+        vec![
+            "touched-retries: main::completion bash::registers was added or changed by this pull request and passed only on retry"
+        ]
+    );
+}
+
+#[test]
+fn a_retry_list_line_with_another_binary_or_name_passes() {
+    let touched = [binary_test()];
+    assert_eq!(
+        touched_retries("main::other bash::registers\tfirst failure", &touched),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        touched_retries("main::completion bash::other\tfirst failure", &touched),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_retry_list_line_matching_a_package_scoped_test_fails() {
+    let touched = [unit_test()];
+    assert_eq!(
+        touched_retries(
+            "log writer::tests::flushes_on_drop\tfirst failure",
+            &touched
+        ),
+        vec![
+            "touched-retries: log writer::tests::flushes_on_drop was added or changed by this pull request and passed only on retry"
+        ]
+    );
+}
+
+#[test]
+fn a_retry_list_line_with_the_same_name_in_another_package_passes() {
+    let touched = [unit_test()];
+    assert_eq!(
+        touched_retries(
+            "other writer::tests::flushes_on_drop\tfirst failure",
+            &touched
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        touched_retries("other::log writer::tests::flushes_on_drop", &touched),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_empty_retry_list_has_no_failure() {
+    assert_eq!(touched_retries("", &[binary_test()]), Vec::<String>::new());
+    assert_eq!(
+        touched_retries("\n", &[binary_test(), unit_test()]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_retry_list_line_without_a_space_is_skipped() {
+    assert_eq!(
+        touched_retries("main::completion\tfirst failure", &[binary_test()]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        touched_retries("garbage", &[binary_test(), unit_test()]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_retry_list_head_matches_despite_detail_text() {
+    let touched = [binary_test(), unit_test()];
+    let list =
+        "main::completion bash::registers\tfirst failure with spaces\\nand an escaped newline";
+    assert_eq!(
+        touched_retries(list, &touched),
+        vec![
+            "touched-retries: main::completion bash::registers was added or changed by this pull request and passed only on retry"
+        ]
+    );
+}
+
+#[test]
+fn a_summary_with_no_tests_names_the_empty_selection() {
+    assert_eq!(
+        plan_summary(30, &[]),
+        "### Stress job: no test added or changed\n"
+    );
+}
+
+#[test]
+fn a_summary_with_one_test_uses_the_singular() {
+    assert_eq!(
+        plan_summary(100, &["main::completion bash::registers".to_owned()]),
+        "### Stress job: 1 test, 100 runs each\n```\nmain::completion bash::registers\n```\n"
+    );
+}
+
+#[test]
+fn a_summary_with_two_tests_uses_the_plural() {
+    assert_eq!(
+        plan_summary(
+            30,
+            &[
+                "loop::turns resumes_after_pause".to_owned(),
+                "log writer::tests::flushes_on_drop".to_owned(),
+            ]
+        ),
+        "### Stress job: 2 tests, 30 runs each\n```\nloop::turns resumes_after_pause\nlog writer::tests::flushes_on_drop\n```\n"
     );
 }
