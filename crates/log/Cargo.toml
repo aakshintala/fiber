@@ -13,6 +13,7 @@ grep-searcher.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+support = { path = "../support" }
 thiserror.workspace = true
 
 # The peak physical footprint for a `peak_memory` line (docs/dependencies.md).
