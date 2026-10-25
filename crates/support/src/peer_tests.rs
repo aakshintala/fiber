@@ -1,7 +1,7 @@
-//! The peer credential, the ancestor walk and both platform parsers. The
-//! macOS structure tests pin the `KERN_PROC_PID` offsets against the
-//! offsets derived from `bsd/sys/sysctl.h`; the macOS agreement tests pin
-//! those offsets against the running kernel.
+//! The peer credential, the ancestor walk, the predicate walk and both
+//! platform parsers. The `KERN_PROCARGS2` parser tests pin the exact word
+//! slicing; the predicate-walk tests pin owner-first reads, nearest-first
+//! matches and first-match stops.
 
 #![allow(
     clippy::unwrap_used,
@@ -13,20 +13,30 @@
 use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 
-use super::{IncompleteWalk, KernelProcessRead, ProcessInfo, ProcessRead, ReadError};
+use super::{IncompleteWalk, KernelProcessRead, ProcessInfo, ProcessRead, ReadError, Visit};
 
-/// A scripted process tree: parents and owners by pid, with named
-/// unreadable pids.
+/// A scripted process tree: parents, owners and argument vectors by pid,
+/// with named unreadable pids and a count of argument-vector reads.
 #[derive(Default)]
 struct Script {
     parents: HashMap<u32, u32>,
     euids: HashMap<u32, u32>,
+    argvs: HashMap<u32, Vec<Vec<u8>>>,
     unreadable_parent: Vec<u32>,
     unreadable_euid: Vec<u32>,
+    unreadable_argv: Vec<u32>,
+    unreadable_current: bool,
+    argv_read: std::cell::Cell<usize>,
 }
 
 impl ProcessRead for Script {
     fn current_euid(&self) -> Result<u32, ReadError> {
+        if self.unreadable_current {
+            return Err(ReadError::Unreadable {
+                pid: 0,
+                what: "euid",
+            });
+        }
         Ok(1000)
     }
 
@@ -56,8 +66,15 @@ impl ProcessRead for Script {
             })
     }
 
-    fn argv(&self, _pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
-        panic!("the walk never reads an argument vector")
+    fn argv(&self, pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
+        self.argv_read.set(self.argv_read.get() + 1);
+        if self.unreadable_argv.contains(&pid) {
+            return Err(ReadError::Unreadable { pid, what: "argv" });
+        }
+        self.argvs
+            .get(&pid)
+            .cloned()
+            .ok_or(ReadError::Unreadable { pid, what: "argv" })
     }
 }
 
@@ -343,70 +360,121 @@ fn procargs2_refuses_a_missing_or_empty_count_or_exec() {
     );
 }
 
-/// The offsets derived from `bsd/sys/sysctl.h`: the owner word and the
-/// parent word of the kernel's `kinfo_proc`.
+/// A 10 -> 20 -> 30 -> 1 walk: 20 and 30 share the caller's owner and carry
+/// the wanted word, while PID 1 is foreign-owned.
+fn wanted_walk() -> Script {
+    Script {
+        parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
+        euids: [(20, 1000), (30, 1000), (1, 0)].into_iter().collect(),
+        argvs: [
+            (20, vec![b"fiber".to_vec(), b"wanted".to_vec()]),
+            (30, vec![b"fiber".to_vec(), b"wanted".to_vec()]),
+        ]
+        .into_iter()
+        .collect(),
+        ..Script::default()
+    }
+}
+
+fn is_wanted(argv: &[Vec<u8>]) -> Visit {
+    if argv.iter().any(|word| word == b"wanted") {
+        Visit::Match
+    } else {
+        Visit::Skip
+    }
+}
+
 #[test]
-fn kinfo_layout_matches_the_header_derivation() {
-    assert_eq!(std::mem::size_of::<super::KinfoProc>(), 568);
+fn walk_collects_same_owner_matches_nearest_first() {
+    let read = wanted_walk();
     assert_eq!(
-        std::mem::offset_of!(super::KinfoProc, kp_eproc)
-            + std::mem::offset_of!(super::Eproc, e_ucred)
-            + std::mem::offset_of!(super::Ucred, cr_uid),
-        420
+        super::walk_ancestors(10, &read, is_wanted).unwrap(),
+        [20, 30]
     );
-    assert_eq!(
-        std::mem::offset_of!(super::KinfoProc, kp_eproc)
-            + std::mem::offset_of!(super::Eproc, e_ppid),
-        560
-    );
-}
-
-/// A synthetic `KERN_PROC_PID` buffer with the owner and parent words set.
-fn kinfo(ppid: i32, euid: u32) -> Vec<u8> {
-    let mut buffer = vec![0u8; std::mem::size_of::<super::KinfoProc>()];
-    let ppid_at = std::mem::offset_of!(super::KinfoProc, kp_eproc)
-        + std::mem::offset_of!(super::Eproc, e_ppid);
-    let euid_at = std::mem::offset_of!(super::KinfoProc, kp_eproc)
-        + std::mem::offset_of!(super::Eproc, e_ucred)
-        + std::mem::offset_of!(super::Ucred, cr_uid);
-    buffer
-        .get_mut(ppid_at..ppid_at + 4)
-        .unwrap()
-        .copy_from_slice(&ppid.to_ne_bytes());
-    buffer
-        .get_mut(euid_at..euid_at + 4)
-        .unwrap()
-        .copy_from_slice(&euid.to_ne_bytes());
-    buffer
+    // Both same-owner argument vectors were read, and only those two.
+    assert_eq!(read.argv_read.get(), 2);
 }
 
 #[test]
-fn kinfo_reads_the_parent_and_owner_words() {
-    assert_eq!(super::parse_kinfo(&kinfo(77, 501), 7).unwrap(), (77, 501));
+fn walk_never_reads_a_foreign_owned_argv() {
+    let read = Script {
+        parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
+        euids: [(20, 2000), (1, 1000)].into_iter().collect(),
+        argvs: [(1, vec![b"fiber".to_vec(), b"wanted".to_vec()])]
+            .into_iter()
+            .collect(),
+        ..Script::default()
+    };
+    // The foreign ancestor contributes nothing even without an entry: its
+    // arguments are never read, so only PID 1's vector is read.
+    assert_eq!(super::walk_ancestors(10, &read, is_wanted).unwrap(), [1]);
+    assert_eq!(read.argv_read.get(), 1);
 }
 
 #[test]
-fn kinfo_refuses_a_short_buffer_with_the_pid() {
-    assert_eq!(
-        super::parse_kinfo(kinfo(77, 501).get(..100).unwrap(), 7).unwrap_err(),
-        ReadError::Unreadable {
-            pid: 7,
-            what: "kinfo"
+fn walk_stops_on_the_first_match() {
+    let read = wanted_walk();
+    let stop_first = |argv: &[Vec<u8>]| {
+        if is_wanted(argv) == Visit::Match {
+            Visit::MatchStop
+        } else {
+            Visit::Skip
         }
+    };
+    assert_eq!(super::walk_ancestors(10, &read, stop_first).unwrap(), [20]);
+    // The walk stopped at the first match: PID 30's vector was never read.
+    assert_eq!(read.argv_read.get(), 1);
+}
+
+#[test]
+fn walk_returns_no_matches_for_a_plain_walk() {
+    let read = wanted_walk();
+    assert_eq!(
+        super::walk_ancestors(10, &read, |_| Visit::Skip).unwrap(),
+        Vec::<u32>::new()
     );
 }
 
-#[cfg(target_os = "macos")]
 #[test]
-fn kinfo_agrees_with_the_kernel_about_the_caller() {
-    let pid = std::process::id();
-    let info = super::kinfo_of(pid).unwrap();
-    let ppid = rustix::process::getppid().unwrap().as_raw_pid();
-    assert_eq!(info.kp_eproc.e_ppid, ppid);
+fn walk_names_an_unreadable_same_owner_argv() {
+    let read = Script {
+        unreadable_argv: vec![20],
+        ..wanted_walk()
+    };
     assert_eq!(
-        info.kp_eproc.e_ucred.cr_uid,
-        rustix::process::geteuid().as_raw()
+        super::walk_ancestors(10, &read, is_wanted).unwrap_err(),
+        IncompleteWalk { pid: 20 }
     );
-    let one = super::kinfo_of(1).unwrap();
-    assert_eq!(one.kp_eproc.e_ppid, 0);
+}
+
+#[test]
+fn walk_names_an_unreadable_owner_or_parent() {
+    let read = Script {
+        unreadable_euid: vec![20],
+        ..wanted_walk()
+    };
+    assert_eq!(
+        super::walk_ancestors(10, &read, is_wanted).unwrap_err(),
+        IncompleteWalk { pid: 20 }
+    );
+    let read = Script {
+        unreadable_parent: vec![30],
+        ..wanted_walk()
+    };
+    assert_eq!(
+        super::walk_ancestors(10, &read, is_wanted).unwrap_err(),
+        IncompleteWalk { pid: 30 }
+    );
+}
+
+#[test]
+fn walk_names_the_peer_when_the_caller_owner_is_unreadable() {
+    let read = Script {
+        unreadable_current: true,
+        ..wanted_walk()
+    };
+    assert_eq!(
+        super::walk_ancestors(10, &read, is_wanted).unwrap_err(),
+        IncompleteWalk { pid: 10 }
+    );
 }

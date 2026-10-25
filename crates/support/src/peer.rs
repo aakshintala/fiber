@@ -93,6 +93,19 @@ impl ProcessRead for KernelProcessRead {
     }
 }
 
+/// What the walk does after the predicate sees one ancestor's argument
+/// vector. The caller decides per ancestor whether to keep walking, so one
+/// walk serves both a first-match probe and a collect-every-match scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visit {
+    /// Not a match: keep walking toward PID 1.
+    Skip,
+    /// A match: record the pid and keep walking toward PID 1.
+    Match,
+    /// A match: record the pid and stop the walk here.
+    MatchStop,
+}
+
 /// Every strict ancestor of `pid` through PID 1, nearest first. Reads each
 /// ancestor's effective uid and parent pid but never an argument vector.
 /// An unreadable effective uid or parent pid ends the walk with that pid,
@@ -127,6 +140,44 @@ pub fn ancestors(pid: u32, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         ancestors.push(ProcessInfo { pid: parent, euid });
         child = parent;
     }
+}
+
+/// Every strict ancestor of `peer_pid` whose argument vector the
+/// `predicate` matches, nearest first. The caller's own effective uid is
+/// read first; an argument vector is read only for an ancestor sharing it,
+/// so a foreign-owned ancestor contributes nothing and its arguments are
+/// never read. An unreadable owner, parent, or same-owner argument vector
+/// names its pid. The accepted socket peer's own arguments are never read:
+/// only strict ancestors are walked.
+pub fn walk_ancestors<F>(
+    peer_pid: u32,
+    read: &dyn ProcessRead,
+    mut predicate: F,
+) -> Result<Vec<u32>, IncompleteWalk>
+where
+    F: FnMut(&[Vec<u8>]) -> Visit,
+{
+    let current = read
+        .current_euid()
+        .map_err(|_| IncompleteWalk { pid: peer_pid })?;
+    let mut matches = Vec::new();
+    for ancestor in ancestors(peer_pid, read)? {
+        if ancestor.euid != current {
+            continue;
+        }
+        let argv = read
+            .argv(ancestor.pid)
+            .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
+        match predicate(&argv) {
+            Visit::Skip => {}
+            Visit::Match => matches.push(ancestor.pid),
+            Visit::MatchStop => {
+                matches.push(ancestor.pid);
+                return Ok(matches);
+            }
+        }
+    }
+    Ok(matches)
 }
 
 #[cfg(target_os = "linux")]
@@ -265,183 +316,40 @@ fn argv_of(pid: u32) -> Result<Vec<Vec<u8>>, ReadError> {
     parse_cmdline_argv(&read_proc(pid, "cmdline")?, pid)
 }
 
-/// The kernel's `kinfo_proc` for one pid (`bsd/sys/sysctl.h`): only the
-/// prefix through the parent pid is read, but the structures mirror the
-/// header in full so the offsets stay auditable.
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct ExternProc {
-    p_un: [usize; 2],
-    p_vmspace: *const core::ffi::c_void,
-    p_sigacts: *const core::ffi::c_void,
-    p_flag: i32,
-    p_stat: i8,
-    p_pid: i32,
-    p_oppid: i32,
-    p_dupfd: i32,
-    user_stack: *const i8,
-    exit_thread: *mut core::ffi::c_void,
-    p_debugger: i32,
-    sigwait: u32,
-    p_estcpu: u32,
-    p_cpticks: i32,
-    p_pctcpu: u32,
-    p_wchan: *const core::ffi::c_void,
-    p_wmesg: *const i8,
-    p_swtime: u32,
-    p_slptime: u32,
-    p_realtimer: Itimerval,
-    p_rtime: Timeval,
-    p_uticks: u64,
-    p_sticks: u64,
-    p_iticks: u64,
-    p_traceflag: i32,
-    p_tracep: *const core::ffi::c_void,
-    p_siglist: i32,
-    p_textvp: *const core::ffi::c_void,
-    p_holdcnt: i32,
-    p_sigmask: u32,
-    p_sigignore: u32,
-    p_sigcatch: u32,
-    p_priority: u8,
-    p_usrpri: u8,
-    p_nice: i8,
-    p_comm: [i8; 17],
-    p_pgrp: *const core::ffi::c_void,
-    p_addr: *const core::ffi::c_void,
-    p_xstat: u16,
-    p_acflag: u16,
-    p_ru: *const core::ffi::c_void,
-}
-
-/// The kernel's `timeval` and `itimerval`: the scheduling prefix of
-/// [`ExternProc`]. Plain integers, so the layout holds on any LP64 host.
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Timeval {
-    tv_sec: i64,
-    tv_usec: i32,
-}
-
-/// The kernel's `itimerval`: two [`Timeval`]s.
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Itimerval {
-    it_interval: Timeval,
-    it_value: Timeval,
-}
-
-/// The kernel's `_pcred` (`bsd/sys/sysctl.h`): the credential pointers are
-/// never dereferenced; only the inline real and saved ids are read past.
-/// At 104 bytes with tail padding, it pushes `e_ucred` to 120 and `e_vm`
-/// to 200.
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Pcred {
-    pc_lock: [u8; 72],
-    pc_ucred: *const core::ffi::c_void,
-    p_ruid: u32,
-    p_svuid: u32,
-    p_rgid: u32,
-    p_svgid: u32,
-    p_refcnt: i32,
-}
-
-/// The kernel's `_ucred` (`bsd/sys/sysctl.h`): `cr_uid` is the effective
-/// uid. `NGROUPS` is 16 (`sys/param.h`).
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Ucred {
-    cr_ref: i32,
-    cr_uid: u32,
-    cr_ngroups: i16,
-    cr_groups: [u32; 16],
-}
-
-/// The kernel's `vmspace` (`bsd/sys/vm.h`): an opaque prefix the parent pid
-/// follows.
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Vmspace {
-    vm_refcnt: i32,
-    vm_shm: *const i8,
-    vm_rssize: i32,
-    vm_swrss: i32,
-    vm_tsize: i32,
-    vm_dsize: i32,
-    vm_ssize: i32,
-    vm_taddr: *const i8,
-    vm_daddr: *const i8,
-    vm_maxsaddr: *const i8,
-}
-
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct Eproc {
-    e_paddr: *const core::ffi::c_void,
-    e_sess: *const core::ffi::c_void,
-    e_pcred: Pcred,
-    e_ucred: Ucred,
-    e_vm: Vmspace,
-    e_ppid: i32,
-    e_pgid: i32,
-}
-
-#[cfg(any(target_os = "macos", test))]
-#[allow(
-    dead_code,
-    reason = "mirrors the kernel structure so the attribution offsets stay auditable; only the parent and owner prefix is read"
-)]
-#[repr(C)]
-struct KinfoProc {
-    kp_proc: ExternProc,
-    kp_eproc: Eproc,
-}
-
-/// The parent pid and effective uid from a `KERN_PROC_PID` buffer.
-#[cfg(test)]
+/// The parent pid and effective uid of one process from the kernel's
+/// `proc_bsdinfo` (`bsd/sys/proc_info.h`): `pbi_ppid` is the parent, and
+/// `pbi_uid` is the effective uid beside the real one.
+#[cfg(target_os = "macos")]
 #[allow(
     unsafe_code,
-    reason = "reads the parent and owner words of a test-sized KERN_PROC_PID buffer through the audited layout: the length check holds a full KinfoProc of plain data"
+    reason = "proc_pidinfo PROC_PIDTBSDINFO into a caller-sized proc_bsdinfo: the pid converts losslessly, the flavor and zero arg are fixed, and the buffer is exactly one structure the kernel fills or fails"
 )]
-fn parse_kinfo(bytes: &[u8], pid: u32) -> Result<(u32, u32), ReadError> {
-    if bytes.len() < std::mem::size_of::<KinfoProc>() {
-        return Err(ReadError::Unreadable { pid, what: "kinfo" });
+fn bsdinfo_of(pid: u32) -> Result<libc::proc_bsdinfo, ReadError> {
+    let pid_arg =
+        libc::c_int::try_from(pid).map_err(|_| ReadError::Unreadable { pid, what: "pid" })?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: `pid_arg` is the wanted pid, the flavor and zero arg select
+    // the bsd info of that pid, and `info` with `size` is one whole
+    // `proc_bsdinfo` of plain integers the kernel fills or fails.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid_arg,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast::<libc::c_void>(),
+            size,
+        )
+    };
+    if read != size {
+        return Err(ReadError::Unreadable {
+            pid,
+            what: "proc_bsdinfo",
+        });
     }
-    // SAFETY: the length check holds a full `KinfoProc`, and the structure
-    // is plain integers and pointers that are read, never dereferenced.
-    let info = unsafe { &*bytes.as_ptr().cast::<KinfoProc>() };
-    let ppid = u32::try_from(info.kp_eproc.e_ppid)
-        .map_err(|_| ReadError::Unreadable { pid, what: "kinfo" })?;
-    Ok((ppid, info.kp_eproc.e_ucred.cr_uid))
+    // SAFETY: the call above filled every byte or failed, and the size
+    // check holds a whole structure.
+    Ok(unsafe { info.assume_init() })
 }
 
 /// The next NUL-terminated word and what follows it.
@@ -503,43 +411,13 @@ fn sysctl_mib(pid: u32, second: libc::c_int) -> Result<[libc::c_int; 4], ReadErr
 }
 
 #[cfg(target_os = "macos")]
-#[allow(
-    unsafe_code,
-    reason = "sysctl KERN_PROC_PID with a fixed mib and a KinfoProc-sized buffer: the name pointer and count are fixed, and the out buffer is exactly one structure the kernel fills or fails"
-)]
-fn kinfo_of(pid: u32) -> Result<KinfoProc, ReadError> {
-    let mut mib = sysctl_mib(pid, libc::KERN_PROC_PID)?;
-    let mut info = std::mem::MaybeUninit::<KinfoProc>::zeroed();
-    let mut length = std::mem::size_of::<KinfoProc>() as libc::size_t;
-    // SAFETY: `mib` holds four valid ints, `info` is a full `KinfoProc`
-    // of plain data the kernel writes whole, and `length` carries its size.
-    let read = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            info.as_mut_ptr().cast::<libc::c_void>(),
-            &mut length,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if read != 0 || length as usize != std::mem::size_of::<KinfoProc>() {
-        return Err(ReadError::Unreadable { pid, what: "kinfo" });
-    }
-    // SAFETY: the call above filled every byte or failed, and the length
-    // check holds a whole structure.
-    Ok(unsafe { info.assume_init() })
-}
-
-#[cfg(target_os = "macos")]
 fn euid_of(pid: u32) -> Result<u32, ReadError> {
-    Ok(kinfo_of(pid)?.kp_eproc.e_ucred.cr_uid)
+    Ok(bsdinfo_of(pid)?.pbi_uid)
 }
 
 #[cfg(target_os = "macos")]
 fn parent_of(pid: u32) -> Result<u32, ReadError> {
-    let ppid = kinfo_of(pid)?.kp_eproc.e_ppid;
-    u32::try_from(ppid).map_err(|_| ReadError::Unreadable { pid, what: "kinfo" })
+    Ok(bsdinfo_of(pid)?.pbi_ppid)
 }
 
 #[cfg(target_os = "macos")]
