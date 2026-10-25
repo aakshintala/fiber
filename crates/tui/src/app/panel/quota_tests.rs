@@ -147,15 +147,22 @@ fn an_unrelated_rejection_does_not_refuse_the_quota_query() {
 fn a_turn_end_shares_the_branch_edge_and_is_not_held_during_a_flight() {
     let mut app = attached();
     let lines = commands(app.on_line(live(SESSION, json!({"state": "idle"}))));
-    assert_eq!(
+    // The introducing status queues its project's scoped ask beside the
+    // turn's own lines (`docs/tui.md:268`): assert only presence, not the
+    // outgoing order or count.
+    assert!(lines.iter().any(|v| v["command"] == "shell"));
+    assert!(lines.iter().any(|v| v["command"] == "quota"));
+    assert!(
         lines
             .iter()
-            .map(|v| v["command"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["shell", "quota"]
+            .any(|v| v["command"] == "recent" && v["args"]["project"] == "-w")
     );
-    let branch = lines[0]["id"].as_str().unwrap();
-    let quota = lines[1]["id"].as_str().unwrap();
+    let branch = lines.iter().find(|v| v["command"] == "shell").unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let quota = lines.iter().find(|v| v["command"] == "quota").unwrap()["id"]
+        .as_str()
+        .unwrap();
     app.on_line(session_line("command_accepted", json!({"command_id": branch,
         "result": {"output": "main\n", "process": {"exit_code": 0, "signal": null, "timed_out": false}}})));
     answer(&mut app, quota);
