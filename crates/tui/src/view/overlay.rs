@@ -187,6 +187,46 @@ pub(crate) fn choices(choices: &[(&str, &str)], focused: usize, inner: u16) -> V
     rows
 }
 
+/// Builds the common centred question body: one dim line, the choice rows
+/// with their click targets, and the footer.
+pub(crate) fn choice_question(
+    title: &str,
+    body: String,
+    close: TargetId,
+    options: &[(&str, &str, TargetId)],
+    footer: &str,
+) -> Overlay {
+    let labels: Vec<(&str, &str)> = options
+        .iter()
+        .map(|(key, label, _)| (*key, *label))
+        .collect();
+    let mut rows = vec![
+        Row {
+            spans: vec![Span::styled(body, Style::new().add_modifier(Modifier::DIM))],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        },
+        Row {
+            spans: Vec::new(),
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        },
+    ];
+    rows.extend(choices(&labels, 0, 67));
+    for (row, (_, _, target)) in rows.iter_mut().skip(2).zip(options) {
+        row.targets.push((0, u16::MAX, *target));
+    }
+    Overlay {
+        title: Some((title.to_owned(), Some(Span::raw("✕")))),
+        close: Some(close),
+        body: rows,
+        footer: Some(hint(footer)),
+        prefer: 71,
+    }
+}
+
 /// A legend footer: each key bold and its label dim, joined by " · ".
 pub(crate) fn legend(items: &[(&str, &str)]) -> Row {
     let mut spans = Vec::new();

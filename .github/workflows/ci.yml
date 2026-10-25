@@ -914,28 +914,42 @@ jobs:
             ten_turns=(--skip-ten-turns)
           fi
           # A pull request measures the head and base binaries' timing
-          # samples in alternation inside one harness run: the base runs
-          # only the timing benchmarks the selection chooses, named by
-          # base_skip, in the same job on the same runner, so a timing
-          # comparison never crosses runners. Memory and exact rows compare
-          # against the backstop's stored results, looked up
-          # by scripts/stored-results. A base that does not build and has
-          # no stored ancestor leaves no base binary (scripts/release-size):
-          # its timings are skipped, and bench-report shows the missing
-          # base file. A base run that writes no file is reported by
-          # bench-report, not here.
+          # samples in alternation inside one harness run: the head and
+          # the base run only the timing benchmarks the selection
+          # chooses, named by base_skip, in the same job on the same
+          # runner, so a timing comparison never crosses runners. A row
+          # the diff does not select runs on neither side; memory and
+          # exact rows no skipped row feeds still run on the head and
+          # compare against the backstop's stored results, looked up by
+          # scripts/stored-results. A push runs every row. The
+          # `--skip-rows` flag is set on every pull request run and does
+          # not depend on a base binary: with no base binary the harness
+          # runs one pass and still skips its unselected rows. A base
+          # that does not build and has no stored ancestor leaves no base
+          # binary (scripts/release-size): its timings are skipped, and
+          # bench-report shows the missing base file. A base run that
+          # writes no file is reported by bench-report, not here.
           base_flags=()
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -f "$RUNNER_TEMP/release/base/fiber" ]; then
-            base_flags=(--base-fiber "$RUNNER_TEMP/release/base/fiber" --base-out "$out/base.json" --skip-rows "$BASE_SKIP")
+            base_flags=(--base-fiber "$RUNNER_TEMP/release/base/fiber" --base-out "$out/base.json")
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_flags+=(--base-paging "$RUNNER_TEMP/release/base/paging")
             fi
+          fi
+          # The skip list rides on neither the base binary nor the other
+          # flags: on a pull request the head and the base pass over the
+          # same skip list, on a push the list stays empty. An empty
+          # `BASE_SKIP` reads as skipping nothing.
+          skip_flags=()
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            skip_flags=(--skip-rows "$BASE_SKIP")
           fi
           start=$SECONDS
           "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all \
             "${runs[@]}" \
             "${ten_turns[@]}" \
             --paging "$RUNNER_TEMP/release/head/paging" \
+            "${skip_flags[@]}" \
             "${base_flags[@]}"
           echo "bench wall time: $((SECONDS - start)) s"
       - name: Print the attach stages

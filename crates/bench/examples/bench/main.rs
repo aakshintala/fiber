@@ -98,11 +98,11 @@ struct Args {
     /// under `skipped`, so the judge reports it instead of failing the
     /// missing metric.
     skip_ten_turns: bool,
-    /// The timing workloads the base pass leaves out: CI passes this on
-    /// a pull request whose diff selects only some timing rows
-    /// (`docs/ci.md`, "Selection"). The results file records the skip
-    /// under `skipped`, after the 10-busy-turns workload when both are
-    /// skipped, so the judge reports them instead of failing the
+    /// The timing workloads the head and base passes leave out: CI
+    /// passes this on a pull request whose diff selects only some timing
+    /// rows (`docs/ci.md`, "Selection"). The results file records the
+    /// skip under `skipped`, after the 10-busy-turns workload when both
+    /// are skipped, so the judge reports them instead of failing the
     /// missing metrics.
     skip_rows: Vec<String>,
     /// The base side of a paired pull-request run: its binary, its
@@ -276,7 +276,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         })
         // The selection runs the 10-busy-turns workload only on a pull
         // request whose diff touches what it measures, and always on a
-        // push (`docs/ci.md`, "Selection"). The base pass leaves out
+        // push (`docs/ci.md`, "Selection"). Both passes leave out
         // the timing rows the diff did not select, after the `only` filter.
         .filter(|(workload, _, _)| !(args.skip_ten_turns && workload.name == busy::TEN_TURNS_NAME))
         .filter(|(workload, _, _)| !args.skip_rows.iter().any(|name| name == workload.name))
@@ -308,11 +308,11 @@ impl Pass {
     }
 }
 
-/// The head's selection and, with `--base-fiber`, the base's. The base
-/// runs the timing rows the selection keeps, so `--skip-rows` filters
-/// the base list only and the head runs every row at its place in head
-/// order; a missing base list leaves the single run's selection, and its
-/// `--skip-rows` filtering, exactly as before.
+/// The head's selection and, with `--base-fiber`, the base's. Both
+/// sides run the timing rows the selection keeps, so `--skip-rows`
+/// filters the head and base lists alike; a missing base list leaves the
+/// single run's selection, and its `--skip-rows` filtering, exactly as
+/// before.
 fn sides(args: &Args) -> (Args, Option<Args>) {
     let rebuild = |fiber: &PathBuf,
                    out: &PathBuf,
@@ -352,7 +352,7 @@ fn sides(args: &Args) -> (Args, Option<Args>) {
                 args.only,
                 &args.paging,
                 args.skip_ten_turns,
-                Vec::new(),
+                args.skip_rows.clone(),
             ),
             Some(rebuild(
                 &base.fiber,
@@ -425,8 +425,9 @@ fn sample_total(workload: &idle::Workload, runs: u32) -> u32 {
 /// both sides. A repeated row therefore alternates by sample, and a
 /// sampled row alternates by sample too: head sample s, then the base
 /// sample s, for s in 1..=the row's samples, with no other row's call
-/// between. A row runs on the base only when the base's selection holds
-/// it; any other row runs on the head alone, at its place in head order.
+/// between. The walk holds the head's rows: a row the head's selection
+/// lacks runs on neither side; a row the base's selection lacks runs on
+/// the head alone, at its place in head order.
 /// A side whose call errs ends that side's row, its samples for the row
 /// discarded, while the other side still runs its remaining calls of
 /// the row, without the failed side.
