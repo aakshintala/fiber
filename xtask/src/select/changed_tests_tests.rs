@@ -965,6 +965,46 @@ fn a_pub_restriction_keeps_the_stack() {
 }
 
 #[test]
+fn a_non_qualifier_word_clears_the_stack() {
+    // Only `pub`, `unsafe`, `async`, `extern` and `const` keep a pending
+    // `#[test]` stack across to the `fn`: any other word clears it, so the
+    // following `fn` is not a test and neither hunk selects anything.
+    // Replacing the guard with `true` keeps the stack across `bogus` too,
+    // making `cleared` a test spanning lines 1 to 3, so both hunks would
+    // wrongly select it. (`bogus` is a bare word on purpose: a line like
+    // `let x = 1;` reaches `=`/`;` punctuation, which clears the stack even
+    // with the mutated guard, so it cannot tell the two apart.)
+    for word in ["pub", "unsafe", "async", "extern", "const"] {
+        let sources = vec![file(
+            "log",
+            "crates/log/src/qual_tests.rs",
+            &format!("#[test]\n{word} fn kept() {{}}\n"),
+        )];
+        let diff = diff_file(
+            "crates/log/src/qual_tests.rs",
+            "@@ -2,1 +2,1 @@\n-fn kept() {}\n+fn kept() {}\n",
+        );
+        assert_eq!(
+            selected(&diff, &sources),
+            vec![refer("log", None, true, "qual::tests::kept")],
+            "word {word}"
+        );
+    }
+    let sources = vec![file(
+        "log",
+        "crates/log/src/qual_tests.rs",
+        "#[test]\nbogus\nfn cleared() {}\n",
+    )];
+    for line in [2, 3] {
+        let diff = diff_file(
+            "crates/log/src/qual_tests.rs",
+            &format!("@@ -{line},1 +{line},1 @@\n-old\n+new\n"),
+        );
+        assert_eq!(selected(&diff, &sources), vec![], "line {line}");
+    }
+}
+
+#[test]
 fn an_added_line_in_a_zero_new_count_hunk_is_an_error_naming_the_path() {
     // The hunk holds two old lines and no new ones, yet its body adds one:
     // the `+` line finds no remaining new line and errors. Without the
