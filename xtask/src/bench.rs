@@ -82,7 +82,10 @@ pub(crate) struct Stored {
 /// `performance`, the text of `docs/performance.md`. `base` is the base
 /// result file's text, or why it could not be read. `stored` is the
 /// backstop's stored results the memory and exact rows compare against.
-/// `base_commit` names the commit the base binary is from.
+/// `base_commit` names the commit the base binary is from. Test-only: the
+/// CLI judges through `report_with_extra`, while the unit tests pin the
+/// first pass through this shorthand.
+#[cfg(test)]
 pub(crate) fn report(
     performance: &str,
     head: &str,

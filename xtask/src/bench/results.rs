@@ -241,9 +241,7 @@ pub(super) fn merge_remeasure(
                 ));
             }
             for sample in extra_samples {
-                let valid = sample
-                    .as_f64()
-                    .is_some_and(|n| n.is_finite() && n >= 0.0);
+                let valid = sample.as_f64().is_some_and(|n| n.is_finite() && n >= 0.0);
                 if !valid {
                     return Err(format!(
                         "{id}: extra run holds a sample that is not a finite, \

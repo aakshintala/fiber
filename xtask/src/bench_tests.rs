@@ -5040,10 +5040,16 @@ fn merged_extras_judge_seven_samples_per_side() {
     assert_eq!(merged.runs_of("session_start_ms"), 3);
     // Counts are not samples: they never merge, so the merge preserves
     // the first pass's entries whatever their undocumented count.
-    let counts_before = parsed(&h).metrics["paging_counts"].as_array().unwrap().len();
+    let counts_before = parsed(&h).metrics["paging_counts"]
+        .as_array()
+        .unwrap()
+        .len();
     let merged = super::results::merge_remeasure(&parsed(&h), &parsed(&he), &["paging"])
         .expect("clean extras merge");
-    assert_eq!(merged.metrics["paging_counts"].as_array().unwrap().len(), counts_before);
+    assert_eq!(
+        merged.metrics["paging_counts"].as_array().unwrap().len(),
+        counts_before
+    );
 }
 
 #[test]
@@ -5153,7 +5159,10 @@ fn malformed_extra_samples_keep_the_first_pass_failure() {
     let (he, be) = clean_extras();
     let merged = super::results::merge_remeasure(&first, &parsed(&he), &["paging"])
         .expect("clean extras merge");
-    assert_eq!(merged.metrics["paging_width_ms"].as_array().unwrap().len(), 7);
+    assert_eq!(
+        merged.metrics["paging_width_ms"].as_array().unwrap().len(),
+        7
+    );
     let out = judged_extra(&h, &b, &he, Some(&be), &doc_106());
     assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
 }

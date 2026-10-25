@@ -435,18 +435,10 @@ fn run(args: &[String]) -> Result<bool, String> {
                     return Err("--head-extra and --base-extra must be given together".to_owned());
                 }
             };
-            let out = match extra {
-                Some(extra) => bench::report_with_extra(
-                    &doc,
-                    &head,
-                    base,
-                    stored,
-                    event,
-                    &base_commit,
-                    Some(extra),
-                ),
-                None => bench::report(&doc, &head, base, stored, event, &base_commit),
-            };
+            // `report` is `report_with_extra` without extras, so one call
+            // covers both arms: `None` judges the first pass alone.
+            let out =
+                bench::report_with_extra(&doc, &head, base, stored, event, &base_commit, extra);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             // The skip list for the remeasure run: only when a gated timing
