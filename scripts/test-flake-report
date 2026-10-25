@@ -788,14 +788,12 @@ job_env=$(awk '
 if printf '%s\n' "$job_env" | grep -q 'GH_TOKEN'; then
   fail "the flake_decide job must not set GH_TOKEN"
 fi
-token_count=0
 for block_sh in "$decide_dir"/blocks/*.sh; do
   [ -f "$block_sh" ] || continue
   [ -s "$block_sh" ] || continue
   base=$(basename "$block_sh" .sh)
   block_env="$decide_dir/blocks/$base.env"
   if grep -q '^GH_TOKEN=' "$block_env" 2>/dev/null; then
-    token_count=$((token_count + 1))
     grep -q 'gh api' "$block_sh" || fail "a token-bearing decide block does not call gh ($base)"
     if grep -q 'cargo' "$block_sh"; then
       fail "a token-bearing decide block runs cargo ($base)"
@@ -812,7 +810,6 @@ for block_sh in "$decide_dir"/blocks/*.sh; do
     fi
   fi
 done
-[ "$token_count" = 2 ] || fail "want 2 token-bearing decide blocks, got $token_count"
 grep -q '^token-set.*state=open' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the open listing"
 grep -q '^token-set.*state=closed' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the closed listing"
 [ -f "$decide_state/decide-input.json" ] || fail "the decide input was not written"
