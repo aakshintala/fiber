@@ -233,10 +233,17 @@ pub(super) fn draw(
 
 // Panel text replaces controls with spaces before placement, and the shared
 // placer gives each visual row a contiguous number. A gap row cannot reach
-// this comparison, so changing this guard has no consumer-visible effect.
+// this lookup, so changing the row match has no consumer-visible effect.
 #[cfg_attr(false, mutants::skip)]
-fn row_is_at(row: u16, position: usize) -> bool {
-    usize::from(row) == position
+fn current_row(
+    rows: &[(u16, String, usize, usize)],
+    at: usize,
+    position: usize,
+) -> Option<&(u16, String, usize, usize)> {
+    match rows.get(at) {
+        Some(row) if usize::from(row.0) == position => Some(row),
+        _ => None,
+    }
 }
 
 /// Draws `panel` as `draw` does and notes its text rows for the
@@ -295,8 +302,8 @@ pub(super) fn draw_noted(
             while shown.get(at).is_some_and(|row| usize::from(row.0) < prow) {
                 at = at.saturating_add(1);
             }
-            let (text, join) = match shown.get(at) {
-                Some(row) if row_is_at(row.0, prow) => {
+            let (text, join) = match current_row(&shown, at, prow) {
+                Some(row) => {
                     let gap = if prow == 0 {
                         ""
                     } else {
