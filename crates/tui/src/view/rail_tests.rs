@@ -234,6 +234,24 @@ fn word_and_tone_per_state() {
     }
 }
 
+/// A row whose latest status accepted `close` reads CLOSING, dim: the
+/// fold path from a restarted terminal's first status, with no
+/// closed-session list involved.
+#[test]
+fn a_closing_status_reads_closing_dim() {
+    let Line::Session(envelope) = status(B, json!({"closing": true})) else {
+        panic!("session line");
+    };
+    let row = crate::home::from_status(&envelope);
+    assert_eq!(
+        row.status.as_ref().map(|status| status.closing),
+        Some(true),
+        "the fold keeps closing"
+    );
+    assert_eq!(word(&row), "CLOSING");
+    assert_eq!(tone(&row), Role::Muted);
+}
+
 /// The fill colour of `B`'s bar at `pct` percent of a 100-token window.
 fn bar_fill(pct: u64) -> Option<ratatui::style::Color> {
     let app = two(20.0, json!({"context": {"tokens": pct, "window": 100}}));
