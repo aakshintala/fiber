@@ -34,6 +34,7 @@ mod shutdown;
 mod startup_log;
 mod switch;
 mod theme_setting;
+mod tui_extensions;
 
 #[cfg(test)]
 #[path = "command_reference_tests.rs"]
@@ -1036,19 +1037,19 @@ fn terminal(
         }
     };
     // `tui.hover`, defaulting to on (`docs/configuration.md`, "Keys").
-    let config = match ::cli::project_of(&home, &workspace)
-        .map_err(Failure::from)
-        .and_then(|(_, project)| {
-            Config::load(Sources {
-                home: home.clone(),
-                workspace: workspace.clone(),
-                project,
-                overrides: Vec::new(),
-            })
-            .map_err(|e| failed(e.code(), e))
-        }) {
+    let project = match ::cli::project_of(&home, &workspace) {
+        Ok((_, project)) => project,
+        Err(error) => return fail(Failure::from(error)),
+    };
+    let sources = Sources {
+        home: home.clone(),
+        workspace: workspace.clone(),
+        project,
+        overrides: Vec::new(),
+    };
+    let config = match Config::load(sources.clone()) {
         Ok(config) => config,
-        Err(e) => return fail(e),
+        Err(error) => return fail(failed(error.code(), error)),
     };
     // A listed hub owns no startup notice: the client's own ignored keys
     // print once to stderr before the terminal takes the screen, while a
@@ -1112,6 +1113,10 @@ fn terminal(
     });
     launch.models = Some(models);
     launch.configure = Some(seam);
+    launch.extensions = Some(Arc::new(tui_extensions::Loader::new(
+        sources,
+        Arc::clone(&clock),
+    )));
     // The interactive door's report writer: `cli::feedback::write`
     // behind the contract seam, beside the model-list reader. It captures
     // the launch directory, so a later `/feedback` reports the same

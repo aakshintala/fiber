@@ -393,7 +393,7 @@ the lines that carry it.
 | `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") | — |
 | `switch_pending` | notice | a model or level choice sent while a turn runs: it applies when the turn ends, and the chips hold the old model and level until the session accepts it (`docs/tui.md`, "Notices") | condition |
 | `timeout` | extension call, tool call, job, diagnostic log | a deadline passed | — |
-| `too_large` | extension call, tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB | — |
+| `too_large` | extension call, tool call, hub command, driver command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB; or Ctrl+G configuration text exceeds 64 KiB; or a process call's result would exceed the 64 MiB framing cap after base64 (`docs/extensions.md`, "Process extensions") | — |
 | `tool_error` | tool call, extension call | the tool itself failed, or its effects function errored | — |
 | `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") | — |
 | `unknown_command` | driver command, hub command | a driver or hub command Fiber does not have, or a `command` naming one no extension registered (`docs/invocation.md`, "Driver commands") | — |
@@ -409,10 +409,10 @@ Notices, for a failure outside any action or a login a person must finish:
 
 | Code | Class | Meaning |
 |---|---|---|
-| `command_conflict` | event | two extensions registered the same command name |
+| `command_conflict` | event | two extensions registered the same command name, replaced the same TUI slot, or bound the same key |
 | `config_key_ignored` | event | an unknown key, a key a repository may not set, a configured `thinking` level the session's model does not declare (`docs/model-routing.md`, "Thinking"), or `tools."tool_search".deferred`, which has no effect (`docs/tools.md`, "Tool search") |
-| `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; the message names which (`docs/extensions.md`, "Installing") |
-| `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
+| `extension_failed` | event | an extension failed to start or missed its deadline, its `init.lua` registered a provider, or its install record is missing or unreadable, so loading skipped it; or loading skipped one of its registrations; or a provider's `providers/<name>.lua` failed to load on first use; or one of its commands failed; or a TUI extension failed to load or passed its loading timeout, or a timeout switched it off until `/reload`; the message names which (`docs/extensions.md`, "Installing") |
+| `extension_incompatible` | event | an extension needs a newer `fiber` or a different extension API version, so loading skipped it; or a TUI extension draws nothing for a session whose session half it does not support; the message names both versions when present, or the TUI version plus "not loaded" for an omitted half |
 | `extension_missing` | event | configuration declares hooks but the `hooks` extension is not installed, so its declared hooks will not run; the message says to run `fiber extension install hooks` |
 | `extension_shadowed` | event | a repository's approved copy of an extension loads in place of the personal install of the same name, or in place of another version of it that another of the repository's extensions brings; the message names both versions |
 | `hook_failed` | event | a `non-blocking` hook, a watcher, or an extension delegate's `run` failed; or an approved non-required repository hook's pinned copy could not be made: it is skipped with a notice naming it (`docs/extensions.md`, "Hooks") |

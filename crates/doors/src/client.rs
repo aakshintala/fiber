@@ -35,6 +35,8 @@ const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
 pub(crate) const DUPLICATE: &str = "A command with this id was already accepted.";
 pub(crate) const ALREADY: &str = "This connection is already subscribed at this level.";
 pub(crate) const UNFIT: &str = "The arguments do not fit this command.";
+/// A process extension's own command on an ordinary client connection.
+const PROCESS_ONLY: &str = "`call` and `ready` ride a process extension's own pipe.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
 pub(crate) const ENDED: &str = "The session ended before answering.";
@@ -339,6 +341,13 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         }
         Command::Message(args) => crate::message::run(conn, id, args),
         Command::Reply(reply) => crate::reply::route(conn, id, reply),
+        Command::Call(_) | Command::Ready => {
+            // `call` and `ready` ride the process extension's own pipe:
+            // an ordinary client connection is refused (`docs/invocation.md`,
+            // "Driver commands"). The supervised pipe admits them through the
+            // extensions' own path, never through this dispatch.
+            reject(conn, Some(id), ErrorCode::InvalidArguments, PROCESS_ONLY);
+        }
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
         Command::ProposeNotes(args) => crate::notes::run(conn, id, args),
