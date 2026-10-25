@@ -544,8 +544,18 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         first.stdout
     );
 
-    // The first run returns without waiting: the list is fresh on the
-    // next run, once the detached child has rewritten the cache and exited.
+    // The first run returns without waiting: the detached child refreshes
+    // in the background. Its request reaching the server is the positive
+    // signal that it ran: an exit wait alone passes when no child was ever
+    // listed, so the file check below would blame a child that never ran.
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the refresh child never requested the model list: expected 1 request, saw {} (refresh child pids: {:?})",
+        server.requests().len(),
+        fakes::matching(&setup.refresh_pattern()),
+    );
+    // The list is fresh on the next run, once the detached child has
+    // rewritten the cache and exited.
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     assert!(
         std::fs::read(&file).unwrap() != old,
