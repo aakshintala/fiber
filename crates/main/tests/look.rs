@@ -25,8 +25,8 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, WAITING_TITLE, Writer,
-    contains, exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params,
-    until_hub_exits, until_hub_exits_with,
+    contains, exact_end, hub_gone, hub_pids, list_processes, query_replies,
+    query_replies_with_graphics, sgr_params, until_hub_exits, until_hub_exits_with,
 };
 use support::{Deadline, KillGroup, Setup, TRUECOLOUR};
 
@@ -275,14 +275,30 @@ fn query_replies_answers_in_stream_order_and_keeps_its_tail() {
         b"\x1b]11;rgb:0000/0000/0000\x1b\\"
     );
     assert!(pending.is_empty());
-    // A 16-byte non-query tail is kept whole for the next read, and a
-    // 17-byte one is cut to its last 16.
-    let mut pending = vec![b'x'; 16];
+    // A 64-byte non-query tail is kept whole for the next read, and a
+    // 65-byte one is cut to its last 64.
+    let mut pending = vec![b'x'; 64];
     assert!(query_replies(&mut pending).is_empty());
-    assert_eq!(pending.len(), 16);
-    let mut pending = vec![b'x'; 17];
+    assert_eq!(pending.len(), 64);
+    let mut pending = vec![b'x'; 65];
     assert!(query_replies(&mut pending).is_empty());
-    assert_eq!(pending, vec![b'x'; 16]);
+    assert_eq!(pending, vec![b'x'; 64]);
+}
+
+#[test]
+fn graphics_probe_is_answered_only_for_pixel_reporting_terminals() {
+    let probe = b"\x1b_Gi=31,a=q,s=1,v=1,f=24,m=0;AAAA\x1b\\";
+    let reply = b"\x1b_Gi=31;OK\x1b\\";
+    let (first, second) = probe.split_at(probe.len() / 2);
+    let mut pending = first.to_vec();
+    assert!(query_replies_with_graphics(&mut pending, true).is_empty());
+    pending.extend_from_slice(second);
+    assert_eq!(query_replies_with_graphics(&mut pending, true), reply);
+    assert!(pending.is_empty());
+
+    let mut pending = probe.to_vec();
+    assert!(query_replies(&mut pending).is_empty());
+    assert_eq!(pending, probe);
 }
 
 #[test]
