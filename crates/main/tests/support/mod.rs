@@ -930,6 +930,70 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
     lines
 }
 
+/// The `hub.log` lines a startup-failure report shows, matching the
+/// installed-hub start helper's tail.
+const HUB_LOG_TAIL: usize = 20;
+
+/// The tail of `log`: its last [`HUB_LOG_TAIL`] lines, or the whole log
+/// when shorter. An empty log stays empty.
+fn hub_log_tail(log: &str) -> String {
+    let lines: Vec<&str> = log.lines().collect();
+    lines[lines.len().saturating_sub(HUB_LOG_TAIL)..].join("\n")
+}
+
+#[test]
+fn hub_log_tail_shows_an_empty_log_empty() {
+    assert_eq!(hub_log_tail(""), "");
+}
+
+#[test]
+fn hub_log_tail_shows_a_short_log_whole() {
+    assert_eq!(hub_log_tail("a\nb"), "a\nb");
+}
+
+#[test]
+fn hub_log_tail_shows_twenty_lines_whole() {
+    let log = (1..=20)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(hub_log_tail(&log), log);
+}
+
+#[test]
+fn hub_log_tail_shows_the_last_twenty_lines() {
+    let log = (1..=25)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail = hub_log_tail(&log);
+    let lines: Vec<&str> = tail.lines().collect();
+    assert_eq!(lines.len(), 20);
+    assert_eq!(lines.first(), Some(&"line 6"));
+    assert_eq!(lines.last(), Some(&"line 25"));
+}
+
+/// What a hub that did not start left behind: the child status a
+/// `try_wait` snapshots (`None` for a hub still running or never spawned)
+/// and the tail of `hub.log`. The snapshot neither waits on the child nor
+/// kills it; the watchdog `HubProc::spawn_command` arms stays the teardown
+/// owner.
+fn hub_start_report(setup: &Setup, hub: &Mutex<Option<HubProc>>) -> String {
+    let status = hub
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_mut()
+        .and_then(|process| process.child.try_wait().ok().flatten());
+    let state = match status {
+        Some(status) => format!("exited ({status})"),
+        None => "was still running".to_owned(),
+    };
+    format!(
+        "{state}; hub.log tail (last {HUB_LOG_TAIL} lines):\n{}",
+        hub_log_tail(&setup.hub_log())
+    )
+}
+
 /// Connects to the hub through `doors::hub::connect`, starting
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
@@ -1002,13 +1066,19 @@ pub(crate) fn connect_hub_within(
             .unwrap();
     });
     let connected = match Deadline::after(wait).recv(&connected) {
-        Ok(connected) => connected.unwrap(),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            panic!("waited {wait:?} for the hub to start and say hub_hello")
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the hub connect thread ended without a result")
-        }
+        Ok(Ok(connected)) => connected,
+        Ok(Err(error)) => panic!(
+            "hub connect failed with {error} waiting for the hub to start and say hub_hello: the hub {}",
+            hub_start_report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+            "waited {wait:?} for the hub to start and say hub_hello: the hub {}",
+            hub_start_report(setup, hub)
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "the hub connect thread ended without a result: the hub {}",
+            hub_start_report(setup, hub)
+        ),
     };
     let hello = serde_json::to_value(&connected.1).unwrap();
     (Socket::from(deadline, connected.0), hello)
