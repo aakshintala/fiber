@@ -5500,6 +5500,7 @@ fn close_ends_the_writers_while_another_handle_keeps_the_log() {
 }
 
 /// `docs/invocation.md`, "Lifecycle": a client that disconnected has its commands dropped, never delivered.
+/// `docs/events.md`, "`clients`": `count` is the `full` connections attached, so the hang-up's detach writes `count` 0.
 #[test]
 fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_completes() {
     reset();
@@ -5508,7 +5509,9 @@ fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_comple
     let client = subscribed_client(&opened);
     // The detach below runs only after the reader's read sees end of
     // file, so the zero-clients line proves the server consumed the
-    // hang-up: the peer's FIN arrived. A line appended before that can
+    // hang-up: the peer's FIN arrived (`docs/events.md`, "`clients`":
+    // `count` is the `full` connections attached, so 0 means none
+    // remain). A line appended before that can
     // reach the writer while the FIN is still in flight; its write
     // succeeds into the closing socket and the writer parks at the stop
     // with nothing left to fail it. Appending after the zero-clients
