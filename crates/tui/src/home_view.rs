@@ -265,7 +265,31 @@ fn import_rows(question: &str, area: Rect) -> Vec<super::overlay::Row> {
 /// Draws the import offer over `area`: the frame centred with its
 /// title, the head and one row per source, and its footer, beside
 /// the delete frame's drawing.
+/// The import question as drawn, without selection noting: tests draw
+/// it standalone, while `render` notes through
+/// `draw_import_question_noted`.
+#[cfg(test)]
 fn draw_import_question(
+    question: &str,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Rect {
+    draw_import_question_inner(None, question, area, buf, targets)
+}
+
+fn draw_import_question_noted(
+    app: &App,
+    question: &str,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) -> Rect {
+    draw_import_question_inner(Some(app), question, area, buf, targets)
+}
+
+fn draw_import_question_inner(
+    app: Option<&App>,
     question: &str,
     area: Rect,
     buf: &mut Buffer,
@@ -281,6 +305,25 @@ fn draw_import_question(
     };
     let before = targets.len();
     let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    // The head wraps onto following rows with a space where the wrap
+    // dropped one; a source row starts its own line.
+    let inner = super::overlay::question_inner(area.width);
+    let mut joins: Vec<crate::rows::Join> = crate::format::wrap_joined(question, inner)
+        .into_iter()
+        .map(|(_, join)| join)
+        .collect();
+    joins.resize(framed.body.len(), crate::rows::Join::Break);
+    if let Some(app) = app {
+        super::overlay::note_overlay(
+            app,
+            buf,
+            slab,
+            &framed,
+            area,
+            super::overlay::Place::Centre,
+            &joins,
+        );
+    }
     // One slab-wide target over every frame row, under the frame's
     // own targets: the ✕ keeps its click, and every other frame cell
     // swallows its click instead of reaching the rows under it.
@@ -346,6 +389,7 @@ pub(crate) fn max_question_scroll(_app: &App, screen: &HomeScreen, area: Rect) -
 /// title, the window of body rows at `scroll`, and its footer, so the
 /// title row and the footer stay visible while the body scrolls.
 fn draw_delete_question(
+    app: &App,
     question: &str,
     scroll: usize,
     area: Rect,
@@ -355,6 +399,17 @@ fn draw_delete_question(
     let rows = question_rows(question, area);
     let capacity = super::overlay::question_capacity(area.height);
     let max = rows.len().saturating_sub(capacity);
+    // The head's wrap joins read from the same wrap the rows keep.
+    let inner = super::overlay::question_inner(area.width);
+    let (head, _) = split_question(question);
+    let mut head_joins: Vec<crate::rows::Join> = crate::format::wrap_joined(head, inner)
+        .into_iter()
+        .map(|(_, join)| join)
+        .collect();
+    head_joins.resize(rows.len(), crate::rows::Join::Break);
+    let start = scroll.min(max);
+    let body: Vec<super::overlay::Row> = rows.into_iter().skip(start).take(capacity).collect();
+    let joins: Vec<crate::rows::Join> = head_joins.into_iter().skip(start).take(capacity).collect();
     let (_, footer) = split_question(question);
     let legend = match footer {
         DeleteFooter::Delete => super::overlay::legend(&[("Enter", "delete"), ("Esc", "keep")]),
@@ -365,16 +420,21 @@ fn draw_delete_question(
     let framed = super::overlay::Overlay {
         title: Some(("Delete session".to_owned(), Some(Span::raw("✕")))),
         close: Some(TargetId::Home(Spot::Keep)),
-        body: rows
-            .into_iter()
-            .skip(scroll.min(max))
-            .take(capacity)
-            .collect(),
+        body,
         footer: Some(legend),
         prefer: 71,
     };
     let before = targets.len();
     let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    super::overlay::note_overlay(
+        app,
+        buf,
+        slab,
+        &framed,
+        area,
+        super::overlay::Place::Centre,
+        &joins,
+    );
     // One slab-wide target over every frame row, under the frame's own
     // targets: the ✕ keeps its click, and every other frame cell
     // swallows its click instead of reaching the rows under it.
@@ -597,6 +657,43 @@ fn draw_list(
         let left = ratatui::text::Line::from(row.left.clone());
         buf.set_line(placed.x, y, &left, body.saturating_sub(right_width));
         buf.set_line(right_x, y, &right, right_width);
+        // A session row reads as one line: the left spans, then the
+        // right spans at their drawn offset. The ✕ is a button and the
+        // focus bar a highlight; neither is copyable text.
+        {
+            let left_shown = body.saturating_sub(right_width);
+            let left_text: String = row.left.iter().map(|span| span.content.as_ref()).collect();
+            let mut text = cut(&left_text, usize::from(left_shown));
+            let right_text: String = row.right.iter().map(|span| span.content.as_ref()).collect();
+            if !right_text.is_empty() {
+                let gap =
+                    usize::from(right_x.saturating_sub(placed.x)).saturating_sub(width(&text));
+                text.push_str(&" ".repeat(gap));
+                text.push_str(&cut(&right_text, usize::from(right_width)));
+            }
+            if !text.is_empty() {
+                let end = placed.x.saturating_add(to_u16(width(&text)));
+                app.note_surface(crate::app::NotedSurface {
+                    surface: crate::app::SurfaceId::Home,
+                    rows: vec![crate::app::SpanRow {
+                        y,
+                        x: placed.x,
+                        end,
+                        text,
+                        join: crate::rows::Join::Break,
+                    }],
+                });
+                for rect in app.selection_cells(
+                    crate::app::SurfaceId::Home,
+                    Rect::new(placed.x, y, placed.width, 1),
+                ) {
+                    buf.set_style(
+                        rect.intersection(area),
+                        crate::view::marks::selection_style(),
+                    );
+                }
+            }
+        }
         if let Some(spot) = row.spot {
             let entry_width = placed.width.saturating_sub(u16::from(row.stop));
             if entry_width > 1 {
@@ -771,6 +868,31 @@ pub(super) fn render(
             put_prompt(buf, area, text_x, y, row, placed.inner, false);
         }
     }
+    // The draft's selection paints over the shown rows with the same
+    // tint every surface uses, and the shown text slab notes for the
+    // press and drag mapping, as the conversation's input box does
+    // (`docs/tui.md`, "Selection and copy").
+    {
+        let shown = to_u16(placed.shown.len());
+        let text_w = placed.inner;
+        if shown != 0 {
+            app.note_input_area(
+                Rect::new(text_x, placed.draft_top, text_w, shown),
+                placed.top,
+            );
+        }
+        let full = Rect::new(
+            text_x,
+            placed.draft_top.saturating_sub(to_u16(placed.top)),
+            text_w,
+            to_u16(placed.top).saturating_add(shown),
+        );
+        let slab = Rect::new(text_x, placed.draft_top, text_w, shown);
+        for rect in app.selection_cells(crate::app::SurfaceId::Input, full) {
+            let clipped = rect.intersection(slab);
+            buf.set_style(clipped, crate::view::marks::selection_style());
+        }
+    }
     // The cursor is a drawn dim `█` at the draft's cursor while nothing
     // takes the keyboard (`docs/tui.md`, "The input box"). A focused
     // chip keeps it there: the chip is the input box's keyboard. The
@@ -847,6 +969,7 @@ pub(super) fn render(
     if let Some(picker) = &screen.picker {
         let slab = match &picker.typed {
             Some(typed) => draw_typed_picker(
+                app,
                 typed,
                 &picker.recents,
                 picker.focus,
@@ -872,6 +995,7 @@ pub(super) fn render(
                 let at = start.saturating_add(off);
                 if let Some(window) = items.get(at..at.saturating_add(take)) {
                     draw_picker(
+                        app,
                         window,
                         at,
                         selected,
@@ -937,9 +1061,16 @@ pub(super) fn render(
     }
     if let Some(question) = &screen.question {
         let slab = if screen.question_import {
-            draw_import_question(question, area, buf, &mut targets)
+            draw_import_question_noted(app, question, area, buf, &mut targets)
         } else {
-            draw_delete_question(question, screen.question_scroll, area, buf, &mut targets)
+            draw_delete_question(
+                app,
+                question,
+                screen.question_scroll,
+                area,
+                buf,
+                &mut targets,
+            )
         };
         app.frames().note(Surface::DeleteQuestion, slab);
     }
@@ -1106,7 +1237,12 @@ fn picker_footer(escapes: bool) -> super::overlay::Row {
 /// it clear of the input box's top row `box_top`; otherwise, when it
 /// fits above the box, its bottom edge sits on the row above the box.
 /// A screen too short for that keeps it centred, over the box.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a picker draw needs its window, place and targets"
+)]
 fn draw_typed_picker(
+    app: &App,
     typed: &TypedScreen,
     recents: &[String],
     focus: Option<usize>,
@@ -1230,13 +1366,23 @@ fn draw_typed_picker(
         footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, place, targets)
+    let slab = super::overlay::draw(buf, area, &framed, place, targets);
+    // Picker rows are cut to one visual row each; each starts its own
+    // line.
+    let joins = vec![crate::rows::Join::Break; framed.body.len()];
+    super::overlay::note_overlay(app, buf, slab, &framed, area, place, &joins);
+    slab
 }
 
 /// Draws the workspace picker over `area`: `window` with the selection
 /// barred, in the overlay frame centred across and down home. A long
 /// path is cut on the right; rows keep their pick targets.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a picker draw needs its window, place and targets"
+)]
 fn draw_picker(
+    app: &App,
     window: &[String],
     start: usize,
     selected: usize,
@@ -1278,7 +1424,20 @@ fn draw_picker(
         footer: Some(picker_footer(escapes)),
         prefer: 55,
     };
-    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets)
+    let slab = super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+    // Picker rows are cut to one visual row each; each starts its own
+    // line.
+    let joins = vec![crate::rows::Join::Break; framed.body.len()];
+    super::overlay::note_overlay(
+        app,
+        buf,
+        slab,
+        &framed,
+        area,
+        super::overlay::Place::Centre,
+        &joins,
+    );
+    slab
 }
 
 /// A target over each paste token's label the home box shows.

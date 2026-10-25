@@ -1204,3 +1204,42 @@ fn the_window_extends_upward_to_exactly_the_rows_that_fit() {
     // One row fewer drops `m2`.
     assert_eq!(window(&view, 5), (2, 4));
 }
+
+/// A drag over a chosen chip copies the level without its brackets: a
+/// span that is nothing but `[text]` is a chosen chip, and any other
+/// brackets stay as drawn (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_a_chosen_chip_copies_the_level_without_brackets() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = choosing(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let text = crate::view::text(&buffer(&app, 80, 24));
+    let (y, line) = find_row(&text, "[high]");
+    let x = cell_x(&line, "[high]");
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 5, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 5, y),
+        crate::app::Effect::Copy("high".to_owned())
+    );
+}
+
+/// A chip is `[text]` with a non-empty spaceless middle: `[]`, open
+/// brackets, spaced middles and bare text all copy as drawn
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn chips_need_a_spaceless_middle() {
+    assert!(super::is_chip("[high]"));
+    assert!(!super::is_chip("[]"));
+    assert!(!super::is_chip("[a b]"));
+    assert!(!super::is_chip("high"));
+    assert!(!super::is_chip("["));
+    assert!(!super::is_chip("]"));
+}

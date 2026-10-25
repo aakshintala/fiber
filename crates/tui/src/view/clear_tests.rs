@@ -217,3 +217,67 @@ fn clear_draws_over_the_session_screen() {
         "{shown}"
     );
 }
+
+/// A drag over the Clear question selects its visible wait text and
+/// copies it on release through the full-screen renderer.
+#[test]
+fn clear_wait_text_can_be_drag_selected_and_copied() {
+    let session = "s_aaaaaaaaaaaaaaaa";
+    let mut app = home(80, 24, session);
+    app.on_line(waiting(session));
+    enter(&mut app, "/clear");
+
+    let area = Rect::new(0, 0, 80, 24);
+    let text = "review #688 waits on an approval.";
+    let mut initial = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut initial, None);
+    let row = (0..24)
+        .find(|y| row_text(&initial, *y, 80).contains(text))
+        .expect("the Clear wait text is drawn");
+    let line = row_text(&initial, row, 80);
+    let col =
+        u16::try_from(line.find(text).expect("the wait text column")).expect("a screen column");
+    let end = col.saturating_add(u16::try_from(text.len()).expect("text width")) - 1;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut pointer = Pointer::default();
+
+    let press = Mouse {
+        kind: MouseKind::Press(Button::Left),
+        col,
+        row,
+    };
+    assert_eq!(
+        app.on_mouse(&press, &targets, &mut pointer, true, now),
+        Effect::None
+    );
+    let drag = Mouse {
+        kind: MouseKind::Drag(Button::Left),
+        col: end,
+        row,
+    };
+    assert_eq!(
+        app.on_mouse(&drag, &targets, &mut pointer, true, now),
+        Effect::None
+    );
+
+    let mut selected = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut selected, None);
+    assert_eq!(
+        selected[(col, row)].bg,
+        crate::theme::Role::Selection.color(),
+        "the full-screen Clear renderer paints the selected wait text"
+    );
+    assert_eq!(
+        app.on_mouse(
+            &Mouse {
+                kind: MouseKind::Release,
+                ..drag
+            },
+            &targets,
+            &mut pointer,
+            true,
+            now,
+        ),
+        Effect::Copy(text.to_owned())
+    );
+}

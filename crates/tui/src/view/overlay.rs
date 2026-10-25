@@ -15,6 +15,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use super::marks;
+use crate::app::{App, NotedSurface, SpanRow, SurfaceId};
 use crate::format::{cut, width as cells, wrap_joined};
 use crate::mouse::{Target, TargetId};
 use crate::rows::Join;
@@ -60,6 +62,7 @@ pub(crate) struct Overlay {
 }
 
 /// Where the frame sits in its area.
+#[derive(Clone, Copy)]
 pub(crate) enum Place {
     /// Centred across and down the area.
     Centre,
@@ -94,6 +97,13 @@ pub(crate) fn width(content: u16, prefer: u16, area: u16) -> u16 {
 /// The text columns inside an overlay `width` wide.
 pub(crate) fn inner(width: u16) -> u16 {
     width.saturating_sub(4)
+}
+
+/// The text columns inside the drawn `slab`, with the first text
+/// column: what a drag maps through
+/// (`docs/tui.md`, "Selection and copy").
+pub(crate) fn inner_width(slab: Rect) -> (u16, u16) {
+    (slab.x.saturating_add(PAD), inner(slab.width))
 }
 
 /// The question-class frame's wrap width in `area_w` columns: the
@@ -385,6 +395,7 @@ struct Line {
 }
 
 /// The frame's stack of rows, top to bottom.
+#[derive(Clone, Copy)]
 enum Slot {
     EdgeTop,
     PadTop,
@@ -397,19 +408,12 @@ enum Slot {
     EdgeBottom,
 }
 
-/// Draws `overlay` in `area` of `buf` at `place`: the slab tint and both
-/// edge rows, the padded title, body and footer, and no cell outside the
-/// slab. Every position is relative to `area`, never to the buffer's
-/// origin. Returns the slab rect clipped to `area`, which may be empty.
-pub(crate) fn draw(
-    buf: &mut Buffer,
-    area: Rect,
-    overlay: &Overlay,
-    place: Place,
-    targets: &mut Vec<Target>,
-) -> Rect {
+/// The slab an overlay takes and its rows' screen rows: the stack the
+/// draw keeps, with each kept slot's row. Shared by the draw and the
+/// selection noting, so a drag maps the same rows the frame drew.
+fn layout(overlay: &Overlay, area: Rect, place: Place) -> (Rect, Vec<(Slot, u16)>) {
     if area.is_empty() {
-        return Rect::new(area.x, area.y, 0, 0);
+        return (Rect::new(area.x, area.y, 0, 0), Vec::new());
     }
     // The content's width is the widest row's, the left text and its
     // right end a column apart when both show.
@@ -444,7 +448,6 @@ pub(crate) fn draw(
             width(content, overlay.prefer, area.width)
         }
     };
-    let inner_w = inner(slab_w);
     // The full stack, then chrome gives way until it fits: body rows from
     // the bottom, the footer and its gap, the title's gap, the pad rows
     // with the bottom one first, and the top edge before the bottom one.
@@ -510,7 +513,7 @@ pub(crate) fn draw(
     }
     let slab_h = stack_height(&stack);
     if slab_h == 0 {
-        return Rect::new(area.x, area.y, 0, 0);
+        return (Rect::new(area.x, area.y, 0, 0), Vec::new());
     }
     let (slab_x, slab_y) = match place {
         Place::Centre => (
@@ -530,6 +533,150 @@ pub(crate) fn draw(
         ),
     };
     let slab = Rect::new(slab_x, slab_y, slab_w, slab_h);
+    let mut y = slab_y;
+    let mut out = Vec::with_capacity(stack.len());
+    for slot in stack {
+        out.push((slot, y));
+        y = y.saturating_add(1);
+    }
+    (slab, out)
+}
+
+/// `spans` cut to `room` columns and joined: the drawn cells as text.
+pub(crate) fn cut_text(spans: &[Span<'static>], room: usize) -> String {
+    cut_spans(spans, room)
+        .iter()
+        .map(|span| span.content.clone())
+        .collect()
+}
+
+/// A body row's drawn text at `room` inner columns: its left spans cut
+/// to what fits past its right end, as the draw cuts them, with the
+/// choice gutter and the focus mark left out. The `right` end follows
+/// after the drawn gap, so a copy reads what the row shows
+/// (`docs/tui.md`, "Selection and copy"). A gutter the cut removed
+/// stays removed: the text never exceeds what fits.
+pub(crate) fn body_text(row: &Row, room: usize) -> String {
+    let right_w = spans_width(&row.right);
+    let right = cut_spans(&row.right, room.min(right_w));
+    let left = cut_spans(&row.spans, room.saturating_sub(spans_width(&right)));
+    // The choice rows open with their gutter: `› ` on the focused
+    // choice, two blanks elsewhere (`docs/tui.md`, "Selection and
+    // copy": the focus gutter and mark never copy). A continuation
+    // row's padding goes with it. Any other row keeps its cells.
+    let mut left = left;
+    if left
+        .first()
+        .is_some_and(|span| span.content == "› " || span.content == "  ")
+    {
+        left.remove(0);
+        if left.first().is_some_and(|span| {
+            !span.content.is_empty() && span.content.chars().all(|ch| ch == ' ')
+        }) {
+            left.remove(0);
+        }
+    }
+    let mut text: String = left.iter().map(|span| span.content.clone()).collect();
+    if !right.is_empty() {
+        let gap = room
+            .saturating_sub(cells(&text))
+            .saturating_sub(spans_width(&right));
+        text.push_str(&" ".repeat(gap));
+        text.extend(right.iter().map(|span| span.content.clone()));
+    }
+    text
+}
+
+/// Notes an overlay's kept body rows with their copy text and paints
+/// the selection over them: each row's drawn cells with the choice
+/// gutter left out, titles, key-hint footers and blank gaps never
+/// copied (`docs/tui.md`, "Selection and copy"). `joins` runs parallel
+/// to the frame's body, saying how each row's text follows the row
+/// before it.
+pub(crate) fn note_overlay(
+    app: &App,
+    buf: &mut Buffer,
+    slab: Rect,
+    framed: &Overlay,
+    area: Rect,
+    place: Place,
+    joins: &[Join],
+) {
+    if slab.is_empty() {
+        return;
+    }
+    let (text_x, inner) = inner_width(slab);
+    let (_, placed) = body_rows(framed, area, place);
+    let mut noted = Vec::with_capacity(placed.len());
+    for (y, at) in placed {
+        let (Some(row), Some(join)) = (framed.body.get(at), joins.get(at)) else {
+            continue;
+        };
+        if row.spans.is_empty() {
+            continue;
+        }
+        let text = body_text(row, usize::from(inner));
+        // The copy drops the choice gutter, so the noted text starts
+        // past it (`docs/tui.md`, "Selection and copy").
+        let mut x = text_x;
+        if row
+            .spans
+            .first()
+            .is_some_and(|span| span.content == "› " || span.content == "  ")
+        {
+            x = x.saturating_add(PAD);
+        }
+        noted.push(SpanRow {
+            y,
+            x,
+            end: slab.x.saturating_add(slab.width),
+            text,
+            join: *join,
+        });
+    }
+    app.note_surface(NotedSurface {
+        surface: SurfaceId::Overlay,
+        rows: noted,
+    });
+    marks::paint_selection(app, buf, SurfaceId::Overlay, slab);
+}
+
+/// The slab an overlay takes and its drawn body rows' screen rows with
+/// their body indices: what a drag maps through
+/// (`docs/tui.md`, "Selection and copy"). The draw keeps the same rows.
+pub(crate) fn body_rows(overlay: &Overlay, area: Rect, place: Place) -> (Rect, Vec<(u16, usize)>) {
+    let (slab, placed) = layout(overlay, area, place);
+    let mut rows = Vec::new();
+    for (slot, y) in placed {
+        if let Slot::Body(at) = slot
+            && overlay.body.get(at).is_some()
+        {
+            rows.push((y, at));
+        }
+    }
+    (slab, rows)
+}
+
+/// Draws `overlay` in `area` of `buf` at `place`: the slab tint and both
+/// edge rows, the padded title, body and footer, and no cell outside the
+/// slab. Every position is relative to `area`, never to the buffer's
+/// origin. Returns the slab rect clipped to `area`, which may be empty.
+pub(crate) fn draw(
+    buf: &mut Buffer,
+    area: Rect,
+    overlay: &Overlay,
+    place: Place,
+    targets: &mut Vec<Target>,
+) -> Rect {
+    // The slab and its kept rows come from the shared layout, so the
+    // selection notes the rows the frame draws.
+    let (slab, placed) = layout(overlay, area, place);
+    if slab.is_empty() {
+        return Rect::new(area.x, area.y, 0, 0);
+    }
+    let stack: Vec<Slot> = placed.iter().map(|(slot, _)| *slot).collect();
+    let (slab_x, slab_y, slab_w) = (slab.x, slab.y, slab.width);
+    let inner_w = inner(slab_w);
     // The tint covers the slab's text rows, with only the edges the
     // height stack kept: a trimmed edge row would draw above or below
     // the slab, outside the area.
@@ -568,10 +715,8 @@ pub(crate) fn draw(
             }
         }
     }
-    let mut y = slab_y;
-    for slot in &stack {
-        let row_y = y;
-        y = y.saturating_add(1);
+    for (slot, row_y) in &placed {
+        let row_y = *row_y;
         let line = match slot {
             Slot::Title => overlay
                 .title
