@@ -149,6 +149,18 @@ fn another_sessions_widget_is_not_folded() {
     assert!(app.panel_state().widgets().is_empty());
 }
 
+/// A `session_started` for `session`, with an optional worktree.
+fn session_started(session: &str, worktree: Option<serde_json::Value>) -> Line {
+    let mut payload = serde_json::json!({
+        "workspace": "/w/tree",
+        "variables": {"path": "", "names": [], "source": "inherited"},
+    });
+    if let Some(worktree) = worktree {
+        payload["worktree"] = worktree;
+    }
+    session_line(session, "session_started", payload)
+}
+
 /// A `session_status` naming `model` in `workspace`.
 fn status_line(workspace: &str, model: &str) -> Line {
     session_line(
@@ -241,6 +253,31 @@ fn budget_line(budget: Option<f64>) -> Line {
         payload["budget"] = budget.into();
     }
     session_line(SESSION, "preamble_built", payload)
+}
+
+/// Worktree ownership folds only from the attached session's
+/// `session_started` event and a later event can clear it
+/// (`docs/tui.md`, "Clearing").
+#[test]
+fn session_started_folds_and_replaces_worktree_state() {
+    let mut app = attached();
+    app.on_line(session_started(
+        OTHER,
+        Some(serde_json::json!({
+            "path": "/w/other", "branch": "other", "repository": "/w/.git",
+        })),
+    ));
+    assert!(!app.panel_state().worktree());
+
+    app.on_line(session_started(
+        SESSION,
+        Some(serde_json::json!({
+            "path": "/w/tree", "branch": "fiber/tree", "repository": "/w/.git",
+        })),
+    ));
+    assert!(app.panel_state().worktree());
+    app.on_line(session_started(SESSION, None));
+    assert!(!app.panel_state().worktree());
 }
 
 #[test]

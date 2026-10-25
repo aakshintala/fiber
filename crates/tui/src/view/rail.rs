@@ -119,9 +119,13 @@ pub(crate) fn elapsed(since_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// A card's state word (`docs/tui.md`, "State glyphs"): a crashed card
-/// is CRASHED whatever its last state.
+/// A card's state word (`docs/tui.md`, "State glyphs"): a row whose
+/// latest status accepted `close` is CLOSING while it stays live, and a
+/// crashed card is CRASHED whatever its last state.
 pub(crate) fn word(row: &Row) -> &'static str {
+    if row.status.as_ref().is_some_and(|status| status.closing) {
+        return "CLOSING";
+    }
     match (&row.left, &row.state) {
         (Some(Left::Crashed), _) => "CRASHED",
         (_, State::Working | State::Jobs) => "WORKING",
@@ -132,9 +136,13 @@ pub(crate) fn word(row: &Row) -> &'static str {
     }
 }
 
-/// A card's state colour (`docs/tui.md`, "State glyphs"): a crashed card
-/// is the error colour whatever its last state.
+/// A card's state colour (`docs/tui.md`, "State glyphs"): a closing row
+/// is dim, and a crashed card is the error colour whatever its last
+/// state.
 pub(crate) fn tone(row: &Row) -> Role {
+    if row.status.as_ref().is_some_and(|status| status.closing) {
+        return Role::Muted;
+    }
     match (&row.left, &row.state) {
         (Some(Left::Crashed), _) => Role::Error,
         (_, State::Working | State::Jobs) => Role::Accent,
@@ -349,7 +357,7 @@ pub(crate) fn cannot_attach(row: &Row) -> bool {
 fn first_row(app: &App, row: &Row, text: usize) -> Vec<Span<'static>> {
     let number = app
         .rail_state()
-        .number(row.key)
+        .number(&row.id)
         .map(|number| number.to_string())
         .unwrap_or_default();
     let right = if has_x(row) {
