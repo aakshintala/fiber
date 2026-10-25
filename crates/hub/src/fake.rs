@@ -1102,7 +1102,6 @@ impl crate::Machine for FakeMachine {
             freed: 0,
             total: 0,
             failures: Vec::new(),
-            started: false,
         }))
     }
 }

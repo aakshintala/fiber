@@ -224,7 +224,6 @@ fn prune_routes_args_and_maps_every_outcome() {
             freed: 1048576,
             total: 0,
             failures: Vec::new(),
-            started: false,
         }),
         Ok(PruneOutcome {
             lines: Vec::new(),
@@ -241,7 +240,6 @@ fn prune_routes_args_and_maps_every_outcome() {
                 code: ErrorCode::StaleRequest,
                 message: "changed".to_owned(),
             }],
-            started: true,
         }),
         Err(Failure {
             code: ErrorCode::IoFailed,

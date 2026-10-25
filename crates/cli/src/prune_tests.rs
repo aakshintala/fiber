@@ -1171,7 +1171,7 @@ fn project_session(home: &std::path::Path, project: &str, id: &str, from: Option
 }
 
 #[test]
-fn delete_sessions_invokes_the_callback_per_delete_in_send_order() {
+fn delete_sessions_passes_each_previewed_expect_set_to_the_callback() {
     use std::collections::{BTreeMap, BTreeSet};
     let deletes = vec![
         super::sessions::Delete {
@@ -1205,6 +1205,8 @@ fn delete_sessions_invokes_the_callback_per_delete_in_send_order() {
     };
     let results = delete_sessions(&deletes, &expects, &mut delete);
     // An empty set stays unconstrained; a full one travels as `expect`.
+    // Compared as a set: no area doc promises the callback order.
+    calls.sort();
     assert_eq!(
         calls,
         [
@@ -1219,12 +1221,16 @@ fn delete_sessions_invokes_the_callback_per_delete_in_send_order() {
             ),
         ]
     );
-    assert_eq!(results.len(), 2);
-    assert!(results[0].is_ok());
-    assert_eq!(
-        results[1].as_ref().unwrap_err().code,
-        ErrorCode::SessionHeld
-    );
+    // One outcome per delete, compared as a set for the same reason.
+    let mut outcomes: Vec<String> = results
+        .iter()
+        .map(|result| match result {
+            Ok(()) => "ok".to_owned(),
+            Err(failure) => format!("err:{:?}", failure.code),
+        })
+        .collect();
+    outcomes.sort();
+    assert_eq!(outcomes, ["err:SessionHeld".to_owned(), "ok".to_owned()]);
 }
 
 #[test]
@@ -1358,6 +1364,8 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
     let mut calls = Vec::new();
     let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
         calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        // Reached only when the reselect regresses: the confirm must skip
+        // `c4` before the callback.
         if id.0 == "s_00000000000000c4" {
             Err(Failure {
                 code: ErrorCode::SessionNotFound,
@@ -1369,24 +1377,30 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
             Ok(())
         }
     };
-    let removed = remove_for_hub(&setup.home(), &want, false, clock().as_ref(), &mut delete);
-    assert!(removed.started);
+    let removed = remove_for_hub(
+        &setup.home(),
+        &want,
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    );
     assert_eq!(removed.total, 2 + 1 + 1 + 2);
-    // The cascade set travels as `expect`; the plain session goes
-    // unconstrained.
+    // The cascade set travels as `expect`; the missing session never
+    // reaches the callback. Compared as a set: no area doc promises the
+    // callback order.
+    calls.sort();
     assert_eq!(
         calls,
-        [
-            (
-                "s_00000000000000a1".to_owned(),
-                true,
-                BTreeSet::from([
-                    SessionId("s_00000000000000a1".into()),
-                    SessionId("s_00000000000000b2".into())
-                ])
-            ),
-            ("s_00000000000000c4".to_owned(), false, BTreeSet::new()),
-        ]
+        [(
+            "s_00000000000000a1".to_owned(),
+            true,
+            BTreeSet::from([
+                SessionId("s_00000000000000a1".into()),
+                SessionId("s_00000000000000b2".into())
+            ])
+        ),]
     );
     assert_eq!(removed.freed, listed + 10);
     assert_eq!(
@@ -1409,8 +1423,8 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
             ),
             (
                 "s_00000000000000c4".to_owned(),
-                ErrorCode::SessionNotFound,
-                "gone".to_owned()
+                ErrorCode::StaleRequest,
+                "s_00000000000000c4 is no longer selected; nothing was removed".to_owned()
             ),
         ]
     );
@@ -1422,4 +1436,246 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
         root.join("events.jsonl").is_file(),
         "the recording callback removes nothing"
     );
+}
+
+#[test]
+fn local_prune_numbers_each_delete_command_differently() {
+    let setup = Setup::new();
+    setup.session("s_00000000000000a1", None, 0);
+    setup.session("s_00000000000000b2", None, 0);
+    let mut hub = FakeHub::accept_all();
+    let (_, _, got) = run_prune(
+        &setup,
+        &mut hub,
+        &args(Some("30d"), false, false, true),
+        true,
+        false,
+        &mut Unread,
+    );
+    got.unwrap();
+    // The hub answers by command id, so two deletes sharing one id would
+    // still match their answers in order: the ids must differ.
+    let received = hub.received.lock().unwrap();
+    let ids: Vec<String> = received
+        .iter()
+        .filter_map(|line| line.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(ids.len(), 2, "both deletes went out");
+    assert_ne!(ids[0], ids[1], "each delete carries its own command id");
+}
+
+/// A kept git worktree under `projects/<project>/worktrees/<name>`, on
+/// its own branch, with listed bytes.
+fn git_worktree(setup: &Setup, project: &str, name: &str) -> PathBuf {
+    let repo = setup.root.path().join(format!("repo-{name}"));
+    fs::create_dir_all(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    fs::write(repo.join("file.txt"), "x").unwrap();
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    let dir = setup
+        .home()
+        .join("projects")
+        .join(project)
+        .join("worktrees")
+        .join(name);
+    fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    fakes::git::git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &format!("fiber/{name}"),
+            dir.to_str().unwrap(),
+        ],
+    );
+    dir
+}
+
+/// A 64-hex-digit content hash no tree holds.
+const UNMATCHED_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A pinned copy of `hash` owned by `key`'s project record, with listed
+/// bytes, and a session giving the owner a recorded identity in
+/// `identity`, so the hub-wide selection judges it removable.
+fn unmatched_copy(setup: &Setup, key: &str, hash: &str, identity: &std::path::Path) {
+    let servers = setup.home().join("projects").join(key).join("servers");
+    fs::create_dir_all(&servers).unwrap();
+    fs::write(servers.join(hash), b"").unwrap();
+    let dir = setup.home().join("pinned").join(hash);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("file.txt"), b"0123456789").unwrap();
+    let session = setup
+        .home()
+        .join("projects")
+        .join(key)
+        .join("sessions")
+        .join("s_00000000000000d4");
+    fs::create_dir_all(&session).unwrap();
+    let first = json!({"kind": "session_started", "seq": 0,
+        "session_id": "s_00000000000000d4", "ts": 0, "schema_version": 1,
+        "payload": {"workspace": identity.to_str().unwrap(),
+            "variables": {"path": "", "names": [], "source": "login_shell"}}});
+    let last = json!({"kind": "x", "session_id": "s_00000000000000d4",
+        "ts": 0, "schema_version": 1, "payload": {}});
+    fs::write(session.join("events.jsonl"), format!("{first}\n{last}\n")).unwrap();
+}
+
+/// An identity directory with a project key of its own, holding a file
+/// no pinned hash matches.
+fn identity_with_key(setup: &Setup) -> (PathBuf, String) {
+    let raw = setup.root.path().join("identity");
+    fs::create_dir_all(&raw).unwrap();
+    fs::write(raw.join("tree.txt"), b"tree").unwrap();
+    let identity = fs::canonicalize(&raw).unwrap();
+    let key = log::project_key(&identity);
+    (identity, key)
+}
+
+#[test]
+fn select_for_hub_sums_worktree_pinned_and_crash_bytes() {
+    let setup = Setup::new();
+    let worktree = git_worktree(&setup, "wt", "w1");
+    let worktree_bytes = log::session_bytes(&worktree);
+    assert!(worktree_bytes > 0);
+    let (identity, key) = identity_with_key(&setup);
+    unmatched_copy(&setup, &key, UNMATCHED_HASH, &identity);
+    let pinned_bytes = log::session_bytes(&setup.home().join("pinned").join(UNMATCHED_HASH));
+    assert!(pinned_bytes > 0);
+    setup.diag(
+        "crashes",
+        "old.crash",
+        b"1234567",
+        Duration::from_secs(31 * 24 * 60 * 60),
+    );
+    let selection = select_for_hub(&setup.home(), None, false, false, wall(), clock().as_ref());
+    assert!(selection.sessions.is_empty());
+    assert_eq!(selection.worktrees, [worktree.display().to_string()]);
+    assert_eq!(selection.pinned, [UNMATCHED_HASH.to_owned()]);
+    assert!(
+        selection
+            .diagnostics
+            .iter()
+            .any(|path| path.ends_with("old.crash"))
+    );
+    // Every side contributes its bytes: a dropped or multiplied addend
+    // shows here.
+    assert_eq!(selection.would_free, worktree_bytes + pinned_bytes + 7);
+    assert!(
+        selection.lines.iter().any(|line| line.contains("w1")),
+        "{:?}",
+        selection.lines
+    );
+    assert!(
+        selection
+            .lines
+            .iter()
+            .any(|line| line.contains(UNMATCHED_HASH))
+    );
+    assert!(
+        selection
+            .lines
+            .iter()
+            .any(|line| line.contains("old.crash"))
+    );
+}
+
+#[test]
+fn remove_for_hub_frees_previewed_worktree_and_pinned_bytes() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let worktree = git_worktree(&setup, "wt", "w1");
+    let worktree_bytes = log::session_bytes(&worktree);
+    assert!(worktree_bytes > 0);
+    let (identity, key) = identity_with_key(&setup);
+    unmatched_copy(&setup, &key, UNMATCHED_HASH, &identity);
+    let pinned_bytes = log::session_bytes(&setup.home().join("pinned").join(UNMATCHED_HASH));
+    assert!(pinned_bytes > 0);
+    let want = HubPruneWant {
+        sessions: BTreeMap::new(),
+        worktrees: BTreeSet::from([worktree.display().to_string()]),
+        pinned: BTreeSet::from([UNMATCHED_HASH.to_owned()]),
+        diagnostics: BTreeSet::new(),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    let removed = remove_for_hub(
+        &setup.home(),
+        &want,
+        None,
+        false,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    );
+    assert!(calls.is_empty());
+    assert!(removed.failures.is_empty());
+    assert_eq!(removed.total, 2);
+    // Both removals free their listed bytes: a subtracted addend shows
+    // here.
+    assert_eq!(removed.freed, worktree_bytes + pinned_bytes);
+    assert!(!worktree.exists(), "the previewed worktree is gone");
+    assert!(
+        !setup.home().join("pinned").join(UNMATCHED_HASH).exists(),
+        "the previewed copy is gone"
+    );
+}
+
+#[test]
+fn remove_for_hub_skips_a_session_that_left_the_selection() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let dir = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(SessionId("s_00000000000000a1".into()), BTreeSet::new());
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::new(),
+    };
+    // The session runs again while confirmation is open: its last line
+    // is now, younger than `--older-than`.
+    let clock = clock();
+    let now_ms = contract::clock::wall_ms(clock.wall());
+    let fresh = json!({"kind": "x", "ts": now_ms});
+    let mut log = fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("events.jsonl"))
+        .unwrap();
+    writeln!(log, "{fresh}").unwrap();
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned()));
+        Ok(())
+    };
+    let removed = remove_for_hub(
+        &setup.home(),
+        &want,
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        false,
+        false,
+        clock.as_ref(),
+        &mut delete,
+    );
+    assert!(
+        calls.is_empty(),
+        "a skipped session never reaches the callback"
+    );
+    assert_eq!(removed.total, 1);
+    assert_eq!(removed.freed, 0);
+    assert_eq!(
+        removed.failures,
+        [(
+            "s_00000000000000a1".to_owned(),
+            ErrorCode::StaleRequest,
+            "s_00000000000000a1 is no longer selected; nothing was removed".to_owned(),
+        )]
+    );
+    assert!(dir.join("events.jsonl").is_file(), "nothing was removed");
 }

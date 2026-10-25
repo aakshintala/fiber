@@ -1450,7 +1450,6 @@ fn seam_prune_dry_run_previews_across_projects_without_removing() {
             &mut delete,
         )
         .unwrap();
-    assert!(!outcome.started);
     assert!(calls.is_empty(), "a dry run deletes nothing");
     assert_eq!(outcome.items.sessions.len(), 1);
     assert_eq!(outcome.items.sessions[0].id.0, "s_00000000000000a1");
@@ -1527,7 +1526,6 @@ fn seam_prune_confirm_removes_previewed_items_through_the_callback() {
             &mut delete,
         )
         .unwrap();
-    assert!(outcome.started);
     // Each session arrives with its previewed cascade set as `expect`.
     assert_eq!(
         calls,
@@ -1669,7 +1667,6 @@ fn seam_prune_running_worktree_survives_and_skips_stale() {
             &mut delete,
         )
         .unwrap();
-    assert!(outcome.started);
     assert_eq!(outcome.total, 1);
     assert_eq!(outcome.freed, 0);
     assert_eq!(outcome.failures.len(), 1);

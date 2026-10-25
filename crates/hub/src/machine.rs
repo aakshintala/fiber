@@ -80,24 +80,26 @@ pub trait Machine: Send + Sync {
     ) -> Result<PruneOutcome, Failure>;
 }
 
-/// What a `prune` run answers: the preview lines and items, the space
-/// freed, how many items prune tried to remove, and each item that failed
-/// or was skipped. `started` is false for a dry run, which removes
-/// nothing, and true once a confirmed run has computed its selection.
+/// What a `prune` run answers: the preview lines and items for a dry
+/// run, which removes nothing, or the space freed, how many items the
+/// confirmed run tried to remove, and each item that failed or was
+/// skipped. The caller knows which mode it asked for, so no flag
+/// distinguishes them: a dry run leaves the confirmed fields empty, and
+/// a confirmed run leaves the preview fields empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PruneOutcome {
-    /// The printable preview lines, in print order.
+    /// The printable preview lines, in print order: set on a dry run.
     pub lines: Vec<String>,
-    /// The previewed items, each named as the dry run names it.
+    /// The previewed items, each named as the dry run names it: set on
+    /// a dry run.
     pub items: PruneExpect,
     /// The bytes removed, or the bytes the preview would free.
     pub freed: u64,
     /// How many items the confirmed run tried to remove.
     pub total: usize,
-    /// Each item that failed or was skipped, in removal order.
+    /// Each item that failed or was skipped, in removal order: set on
+    /// a confirmed run.
     pub failures: Vec<PruneFailure>,
-    /// Whether the run removed anything: false for a dry run.
-    pub started: bool,
 }
 
 /// One prune item that failed or was skipped: what stayed, its code and

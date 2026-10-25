@@ -130,6 +130,10 @@ pub(crate) fn recorded_identity<'a>(
     repository.or(workspace)
 }
 
+#[cfg(test)]
+#[path = "resolve_tests.rs"]
+mod tests;
+
 fn opening(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<Opening> {
     let mut lines = crate::lines(dir).ok()?;
     let first = lines.next()?;

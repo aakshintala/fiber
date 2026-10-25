@@ -103,8 +103,6 @@ pub struct HubPruneRemoved {
     pub failures: Vec<(String, ErrorCode, String)>,
     /// How many items the confirm tried to remove.
     pub total: usize,
-    /// Whether the confirm ran its removals: false for a dry run.
-    pub started: bool,
 }
 
 /// `fiber sessions prune`'s arguments.
@@ -290,7 +288,7 @@ fn prune_run(
         }
     };
     let mut read = BufReader::new(stream);
-    // Today's sends carry no `expect`, exactly as before.
+    // The local path sends deletes with no `expect`.
     let none: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
     let mut sent = 0_usize;
     let mut send = |id: &SessionId, cascade: bool, _expect: Option<&BTreeSet<SessionId>>| {
@@ -483,6 +481,8 @@ pub fn select_for_hub(
 pub fn remove_for_hub(
     home: &Path,
     want: &HubPruneWant,
+    older_than: Option<Duration>,
+    cascade: bool,
     force: bool,
     clock: &dyn Clock,
     delete: &mut HubDelete<'_>,
@@ -570,30 +570,53 @@ pub fn remove_for_hub(
     let removed_pinned = pinned::remove_planned(home, &pinned_plan, clock, &mut |_| {});
     freed += removed_pinned.freed;
     failures.extend(removed_pinned.failures);
-    // Sessions delete through the passed callback, each with its previewed
-    // cascade set as `expect`. Listed bytes are read before each delete,
-    // so a removed session counts exactly the bytes its set held.
-    let deletes: Vec<sessions::Delete> = want
-        .sessions
+    // Sessions reselect against `older_than` first, as the worktrees do
+    // against their locks: a previewed session that no longer qualifies
+    // is skipped and reported, and only the intersection reaches the
+    // callback. Each delete carries its previewed cascade set as
+    // `expect`, so a set that changed mid-prompt fails that one session
+    // without failing the prune; an empty set deletes unconstrained.
+    // Listed bytes are read before each delete, so a removed session
+    // counts exactly the bytes its set held.
+    let reselected = sessions::select_scoped(
+        home,
+        &started_sessions,
+        Scope::HubWide,
+        older_than,
+        cascade,
+        now,
+    );
+    let live: BTreeSet<&SessionId> = reselected.deletes.iter().map(|delete| &delete.id).collect();
+    let mut deletes: Vec<sessions::Delete> = Vec::with_capacity(want.sessions.len());
+    for (id, set) in &want.sessions {
+        if live.contains(id) {
+            deletes.push(sessions::Delete {
+                id: id.clone(),
+                cascade: !set.is_empty(),
+            });
+        } else {
+            failures.push((
+                id.0.clone(),
+                ErrorCode::StaleRequest,
+                format!("{} is no longer selected; nothing was removed", id.0),
+            ));
+        }
+    }
+    let listed: BTreeMap<&SessionId, u64> = deletes
         .iter()
-        .map(|(id, set)| sessions::Delete {
-            id: id.clone(),
-            cascade: !set.is_empty(),
-        })
-        .collect();
-    let listed: BTreeMap<&SessionId, u64> = want
-        .sessions
-        .iter()
-        .map(|(id, set)| {
+        .map(|one| {
             // The set names its root too, so the root is counted once.
-            let mut members: BTreeSet<&SessionId> = set.iter().collect();
-            members.insert(id);
+            let mut members: BTreeSet<&SessionId> = BTreeSet::new();
+            if let Some(set) = want.sessions.get(&one.id) {
+                members.extend(set.iter());
+            }
+            members.insert(&one.id);
             let bytes = members
                 .into_iter()
                 .filter_map(|member| log::find_logged_session(home, member))
                 .map(|(_, dir)| log::session_bytes(&dir))
                 .sum();
-            (id, bytes)
+            (&one.id, bytes)
         })
         .collect();
     let results = delete_sessions(&deletes, &want.sessions, delete);
@@ -611,7 +634,6 @@ pub fn remove_for_hub(
         freed,
         failures,
         total,
-        started: true,
     }
 }
 

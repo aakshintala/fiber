@@ -153,7 +153,6 @@ fn a_dry_run_answers_the_preview_and_deletes_nothing() {
         freed: 1048576,
         total: 0,
         failures: Vec::new(),
-        started: false,
     })]);
     let scripted: Arc<dyn crate::Machine> = machine.clone();
     let answers = exchange(scripted, vec![command("p_1", json!({"dry_run": true}))]);
@@ -178,7 +177,7 @@ fn a_dry_run_answers_the_preview_and_deletes_nothing() {
 }
 
 #[test]
-fn a_started_run_answers_freed_total_and_failures() {
+fn a_confirmed_run_answers_freed_total_and_failures() {
     let machine = Arc::new(FakeMachine::default());
     lock(&machine.prunes).extend([Ok(PruneOutcome {
         lines: Vec::new(),
@@ -197,7 +196,6 @@ fn a_started_run_answers_freed_total_and_failures() {
                 message: "gone".to_owned(),
             },
         ],
-        started: true,
     })]);
     let expect = json!({
         "sessions": [{"id": id(1), "cascade": [id(1)]}],
@@ -238,7 +236,7 @@ fn a_started_run_answers_freed_total_and_failures() {
 }
 
 #[test]
-fn an_unstarted_failure_is_rejected_with_its_code() {
+fn a_failed_run_is_rejected_with_its_code() {
     let machine = Arc::new(FakeMachine::default());
     lock(&machine.prunes).extend([Err(Failure {
         code: ErrorCode::InvalidArguments,
@@ -338,7 +336,6 @@ impl crate::Machine for InvokeMachine {
                 freed: 0,
                 total: 0,
                 failures: Vec::new(),
-                started: true,
             });
         };
         let mut total = 0;
@@ -353,7 +350,6 @@ impl crate::Machine for InvokeMachine {
             freed: 0,
             total,
             failures: Vec::new(),
-            started: true,
         })
     }
 }
