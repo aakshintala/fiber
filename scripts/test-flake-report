@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# The self-test for the flake report's write step (.github/workflows/ci.yml,
-# job flake_report; docs/testing/running.md, "Flaky tests"). It runs that
-# step's own script, cut from the workflow file, against a stub `gh` that
-# records each write and answers each read from the case's fixture, a
-# minimal `jq` fake answering only the step's fixed queries, plus a
-# decision artifact the case writes. Every write path is proven: a new
+# The self-test for the flake report (.github/workflows/ci.yml, jobs
+# flake_decide and flake_report; docs/testing/running.md, "Flaky tests").
+# It runs the decide job's classify block for real, cut from the workflow
+# file, with a `git` shim answering history from the case's fixture, and
+# the writer step's own script, cut the same way, against a stub `gh`
+# that records each write and answers each read from the case's fixture,
+# plus the classification and decision artifacts the case stages. A
+# minimal `jq` fake answers only the steps' fixed queries. Every write
+# path is proven: a new
 # issue carrying the test-only label, a comment on an open issue, a pull
 # request comment for a failing file the pull request owns, and a validated
 # reopen with its sighting comment and needs-triage. Every no-write path
-# is proven: stale and source-aware unknown actions, the four reopen
+# is proven: stale-base and PR-owned classifications that skip the open
+# lookup, stale and source-aware unknown actions, the four reopen
 # predicate mismatches, a fetch that fails, a recheck that fails or finds
 # an open issue before reopen or create, a failed open lookup, an invalid
-# or missing decision, and the fail-closed guards on the decision result,
-# the decision artifact and the flake lists. A duplicate title writes
-# once. It also exercises scripts/flaky-tests on malformed XML, proving
-# collection fails with no list (the incomplete marker path) instead of a
-# complete empty list. Each body names the tested commit:
+# or unrecognised classification, an invalid or missing decision, and the
+# fail-closed guards on the decision result, the decision artifact and
+# the classification, including a missing history input. A duplicate title
+# writes once. A throwaway repo proves the two three-dot diffs, including
+# a rebased and a force-pushed head. The script also exercises
+# scripts/flaky-tests on malformed XML, proving collection fails with no
+# list (the incomplete marker path) instead of a complete empty list.
+# Each body names the tested commit from the classification record:
 # `tested <sha> = main <base> + head <head>` on a pull request run with
 # two parents, and `tested <sha>` on a push run or a pull request run with
 # one parent. Nothing reaches the GitHub API.
@@ -23,6 +30,7 @@
 # Usage: scripts/test-flake-report
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+toplevel=$(pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -33,6 +41,16 @@ orig_path=$PATH
 real_jq=$(command -v jq || true)
 [ -n "$real_jq" ] || {
   echo "scripts/test-flake-report: jq is required for the flake decide self-check" >&2
+  exit 1
+}
+real_git=$(command -v git || true)
+[ -n "$real_git" ] || {
+  echo "scripts/test-flake-report: git is required for the classify self-check" >&2
+  exit 1
+}
+real_cargo=$(command -v cargo || true)
+[ -n "$real_cargo" ] || {
+  echo "scripts/test-flake-report: cargo is required for the classify self-check" >&2
   exit 1
 }
 
@@ -63,15 +81,14 @@ grep -Fq 'open_number() {' "$tmp/step.sh" || fail "the flake report step's open 
 # `reopen <number>`; a label file holds `label <number> <label>`. The open
 # lookup answers $STUB_OPEN every call, or $STUB_OPEN_FIRST once then
 # $STUB_OPEN_REST; STUB_OPEN_FAIL fails every open call and
-# STUB_OPEN_REST_FAIL fails the calls after the first.
+# STUB_OPEN_REST_FAIL fails the calls after the first. Any history call
+# (`commits`, `compare`, `pulls`) is unexpected: the file lists come from
+# the classification, never from the API.
 cat >"$tmp/stub.sh" <<'EOF'
 gh() {
   case "$1" in
     api)
       case "$*" in
-        *"/commits/"*) printf '%s\n' "$STUB_PARENTS" ;;
-        *"/compare/"*) printf '%s\n' "$STUB_COMPARE" ;;
-        *"/pulls/"*) printf '%s\n' "$STUB_PR_FILES" ;;
         *"state=open"*)
           n=0
           if [ -f "$STUB_CALLS/../open-calls" ]; then n=$(cat "$STUB_CALLS/../open-calls"); fi
@@ -131,6 +148,71 @@ gh() {
 }
 EOF
 cat "$tmp/stub.sh" "$tmp/step.sh" >"$tmp/run.sh"
+
+# The decide job's classify block, cut with the same shape: the step is
+# the one whose name is given below. The writer cases run it for real
+# through `classify_case`.
+awk '
+  index($0, "- name: Classify the flaky tests by failing file") { armed = 1; next }
+  armed && !started && $0 ~ /^ *run: \|$/ { started = 1; match($0, /[^ ]/); indent = RSTART - 1; next }
+  started {
+    if ($0 ~ /^ *$/) { print ""; next }
+    match($0, /[^ ]/)
+    if (RSTART - 1 <= indent) exit
+    print
+  }
+' .github/workflows/ci.yml >"$tmp/classify.sh"
+grep -Fq 'flake-classify' "$tmp/classify.sh" || fail "the classify step's script was not found in .github/workflows/ci.yml"
+grep -Fq 'git diff --name-only' "$tmp/classify.sh" || fail "the classify step's file lists were not found in .github/workflows/ci.yml"
+
+# The `git` shim answers only the classify block's fixed history queries
+# from the case's fixture and runs the real git for anything else. The
+# main-side `diff --name-only` call is the one whose range ends in
+# `origin/main`; it prints STUB_COMPARE, the other prints STUB_PR_FILES.
+# `rev-parse <sha>^1` prints the first STUB_PARENTS word, `^2` the second,
+# or nothing when the run has one parent.
+mkdir -p "$tmp/gitbin"
+cat >"$tmp/gitbin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = rev-parse ] && [ $# -eq 2 ]; then
+  case "$2" in
+    *^1) printf '%s\n' "${STUB_PARENTS%% *}" ;;
+    *^2)
+      if [ -n "${STUB_REVPARSE_FAIL:-}" ]; then
+        echo "stub git: fatal: unknown revision '$2'" >&2
+        exit 128
+      fi
+      case "$STUB_PARENTS" in
+        *" "*) printf '%s\n' "${STUB_PARENTS##* }" ;;
+        *) printf '\n' ;;
+      esac
+      ;;
+    *) echo "stub git: unexpected rev-parse: $*" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
+if [ "${1:-}" = diff ] && [ "${2:-}" = --name-only ] && [ $# -eq 3 ]; then
+  if [ -n "${STUB_DIFF_FAIL:-}" ]; then
+    echo "stub git: fatal: unable to read tree ($3)" >&2
+    exit 128
+  fi
+  case "$3" in
+    *...origin/main)
+      if [ -n "${STUB_NO_ORIGIN_MAIN:-}" ]; then
+        echo "stub git: fatal: no such ref 'origin/main'" >&2
+        exit 128
+      fi
+      list=$STUB_COMPARE
+      ;;
+    *) list=$STUB_PR_FILES ;;
+  esac
+  if [ -n "$list" ]; then printf '%s\n' "$list"; fi
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$tmp/gitbin/git"
 
 # `jq` is absent on the Linux runners (docs/testing/running.md, "Running
 # tests"), so the writer's fixed queries run against this minimal fake. It
@@ -215,9 +297,11 @@ elif fil == "select(.title == $t)":
     for doc in read_docs():
         if isinstance(doc, dict) and doc.get("title") == title:
             print(json.dumps(doc, sort_keys=True))
-elif fil in (".action // empty", ".issue // empty", ".source // empty"):
-    # One field of the selected decision line.
-    key = fil.split()[0][1:]
+elif fil.startswith(".") and fil.endswith(" // empty"):
+    # One field of a classification record or a selected decision line:
+    # action, title, name, runner, detail, failing, base, tested, issue,
+    # source. Absent fields print nothing.
+    key = fil[1:].split()[0]
     for doc in read_docs():
         value = doc.get(key) if isinstance(doc, dict) else None
         if isinstance(value, str):
@@ -270,38 +354,68 @@ body() {
 }
 
 # setup_case DIR: the sandbox for one case. The writer reads the
-# combined artifact layout: the decisions plus the runner lists in one
-# directory.
+# combined artifact layout: the classification plus the decisions in one
+# directory; the classify block reads the flaky lists from another.
 setup_case() {
   dir=$tmp/$1
-  mkdir -p "$dir/temp/report-data" "$dir/calls"
-  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/report-data/flaky-tests-linux.txt"
+  mkdir -p "$dir/temp/flaky" "$dir/temp/report-data" "$dir/calls"
+  printf '%s\t%s\n' "$name" "$detail" >"$dir/temp/flaky/flaky-tests-linux.txt"
 }
 
-# run_step DIR EVENT PR PARENTS COMPARE PR_FILES OPEN ISSUE DECISIONS
-# EXTRA...: runs the step and prints its exit code. OPEN is the open-issue
-# list fixture, ISSUE the single-issue fixture, DECISIONS the JSON-lines
-# decision artifact; further VAR=value arguments reach the environment.
+# classify_case DIR EVENT PARENTS COMPARE PR_FILES EXTRA...: runs the real
+# extracted classify block with the git shim answering history from the
+# case fixtures (the main-side diff is the call whose range ends in
+# origin/main) and cargo xtask for real, then lays out the writer's
+# artifact: the produced flake-classes.jsonl plus the case's
+# decisions.jsonl, both under $dir/temp/report-data. Prints the block's
+# exit code. STUB_REVPARSE_FAIL, STUB_DIFF_FAIL and STUB_NO_ORIGIN_MAIN
+# fail the matching history call instead, for the fail-closed cases.
+classify_case() {
+  dir=$1
+  event=$2
+  parents=$3
+  compare=$4
+  pr_files=$5
+  shift 5
+  code=0
+  mkdir -p "$dir/temp/flake-report-data" "$dir/temp/report-data"
+  cp "$dir/decisions.jsonl" "$dir/temp/report-data/decisions.jsonl"
+  # shellcheck disable=SC2086
+  env -i PATH="$tmp/gitbin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+    RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$event" \
+    GH_REPO=aakshintala/fiber REAL_GIT="$real_git" \
+    STUB_PARENTS="$parents" STUB_COMPARE="$compare" STUB_PR_FILES="$pr_files" \
+    "$@" \
+    bash --noprofile --norc -eo pipefail "$tmp/classify.sh" >"$dir/classify-out" 2>"$dir/classify-err" || code=$?
+  if [ "$code" -ne 0 ]; then
+    echo "$code"
+    return 0
+  fi
+  cp "$dir/temp/flake-report-data/flake-classes.jsonl" "$dir/temp/report-data/flake-classes.jsonl"
+  echo "$code"
+}
+
+# run_step DIR EVENT PR OPEN ISSUE DECISIONS EXTRA...: runs the writer
+# step and prints its exit code. OPEN is the open-issue list fixture,
+# ISSUE the single-issue fixture, DECISIONS the JSON-lines decision file
+# under the report-data dir; further VAR=value arguments reach the
+# environment.
 run_step() {
   dir=$1
   event=$2
   pr=$3
-  parents=$4
-  compare=$5
-  pr_files=$6
-  open=$7
-  issue=$8
-  decisions=$9
-  shift 9
+  open=$4
+  issue=$5
+  decisions=$6
+  shift 6
   code=0
   # shellcheck disable=SC2086
   env -i PATH="$PATH" HOME="$dir" \
     RUNNER_TEMP="$dir/temp" GITHUB_SHA="$sha" GITHUB_EVENT_NAME="$event" \
     GITHUB_RUN_ID=1 GITHUB_STEP_SUMMARY="$dir/summary" \
     GH_REPO=aakshintala/fiber GH_TOKEN=test RUN_URL="$url" PR="$pr" \
-    STUB_PARENTS="$parents" STUB_COMPARE="$compare" STUB_PR_FILES="$pr_files" \
     STUB_OPEN="$open" STUB_ISSUE="$issue" STUB_CALLS="$dir/calls" \
-    DECIDE_RESULT=success DECIDE_FLAKES=true DECISIONS="$dir/$decisions" \
+    DECIDE_RESULT=success DECIDE_FLAKES=true DECISIONS="$dir/temp/report-data/$decisions" CLASSES="$dir/temp/report-data/flake-classes.jsonl" \
     "$@" \
     bash --noprofile --norc -eo pipefail "$tmp/run.sh" 2>"$dir/err" || code=$?
   [ -s "$dir/err" ] && { cat "$dir/err" >&2; fail "$dir: the step printed to stderr"; }
@@ -366,22 +480,41 @@ decide_unknown='{"action": "unknown", "source": "closed", "title": "'"$title"'"}
 decide_unknown_bare='{"action": "unknown", "title": "'"$title"'"}'
 
 sighting=$(printf 'comment 9\n%s' "$(body "$plain" "$push_tested")")
+probe_file=crates/main/tests/flaky_probe.rs
+detail_nofile='thread fails_once_then_passes panicked at nowhere'
+detail_nopanic="thread failed at $probe_file:10: some output"
 
-# A push run: a new issue carrying the test-only label, then a comment on
-# the open one.
+# A push run with both file lists present and the failing file in both:
+# a new issue carrying the test-only label, then a comment on the open
+# one. The lists are ignored off a pull request event.
 setup_case push-create
 printf '%s\n' "$decide_new" >"$tmp/push-create/decisions.jsonl"
-code=$(run_step "$tmp/push-create" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/push-create" push "" "$probe_file" "$probe_file")
+expect_exit push-create-classify "$code" 0
+code=$(run_step "$tmp/push-create" push "" "$empty_open" "" decisions.jsonl)
 expect_exit push-create "$code" 0
 expect_writes "$tmp/push-create" 1
 expect_write "$tmp/push-create" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$plain" "$push_tested")")"
 
 setup_case push-comment
 : >"$tmp/push-comment/decisions.jsonl"
-code=$(run_step "$tmp/push-comment" push "" "" "" "" "$open7" "" decisions.jsonl)
+code=$(classify_case "$tmp/push-comment" push "" "" "")
+expect_exit push-comment-classify "$code" 0
+code=$(run_step "$tmp/push-comment" push "" "$open7" "" decisions.jsonl)
 expect_exit push-comment "$code" 0
 expect_writes "$tmp/push-comment" 1
 expect_write "$tmp/push-comment" 0 "$(printf 'comment 7\n%s' "$(body "$plain" "$push_tested")")"
+
+# A line with no TAB names the whole line and files without a fence.
+setup_case push-no-tab
+printf '%s\n' "$name" >"$tmp/push-no-tab/temp/flaky/flaky-tests-linux.txt"
+printf '%s\n' "$decide_new" >"$tmp/push-no-tab/decisions.jsonl"
+code=$(classify_case "$tmp/push-no-tab" push "" "" "")
+expect_exit push-no-tab-classify "$code" 0
+code=$(run_step "$tmp/push-no-tab" push "" "$empty_open" "" decisions.jsonl)
+expect_exit push-no-tab "$code" 0
+expect_writes "$tmp/push-no-tab" 1
+expect_write "$tmp/push-no-tab" 0 "$(printf 'create %s\n%s\n%s\nlabel=test-only' "$title" "$plain" "$push_tested")"
 
 # A pull request run with two parents, main then the pull request head: a
 # new issue naming the pull request, a comment on the open one, a comment
@@ -389,36 +522,102 @@ expect_write "$tmp/push-comment" 0 "$(printf 'comment 7\n%s' "$(body "$plain" "$
 # for a failing file main changed since the base.
 setup_case pr-create
 printf '%s\n' "$decide_new" >"$tmp/pr-create/decisions.jsonl"
-code=$(run_step "$tmp/pr-create" pull_request 12 "$base $head" "" "other/file.rs" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/pr-create" pull_request "$base $head" "" "other/file.rs")
+expect_exit pr-create-classify "$code" 0
+code=$(run_step "$tmp/pr-create" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-create "$code" 0
 expect_writes "$tmp/pr-create" 1
 expect_write "$tmp/pr-create" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$see_pr" "$pr_tested")")"
 
 setup_case pr-sighting
 : >"$tmp/pr-sighting/decisions.jsonl"
-code=$(run_step "$tmp/pr-sighting" pull_request 12 "$base $head" "" "other/file.rs" "$open7" "" decisions.jsonl)
+code=$(classify_case "$tmp/pr-sighting" pull_request "$base $head" "" "other/file.rs")
+expect_exit pr-sighting-classify "$code" 0
+code=$(run_step "$tmp/pr-sighting" pull_request 12 "$open7" "" decisions.jsonl)
 expect_exit pr-sighting "$code" 0
 expect_writes "$tmp/pr-sighting" 1
 expect_write "$tmp/pr-sighting" 0 "$(printf 'comment 7\n%s' "$(body "$see_pr" "$pr_tested")")"
 
 setup_case pr-comment
 : >"$tmp/pr-comment/decisions.jsonl"
-code=$(run_step "$tmp/pr-comment" pull_request 12 "$base $head" "" "crates/main/tests/flaky_probe.rs" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/pr-comment" pull_request "$base $head" "" "$probe_file")
+expect_exit pr-comment-classify "$code" 0
+code=$(run_step "$tmp/pr-comment" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-comment "$code" 0
 expect_writes "$tmp/pr-comment" 1
 expect_write "$tmp/pr-comment" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
 
 setup_case pr-stale-base
 : >"$tmp/pr-stale-base/decisions.jsonl"
-code=$(run_step "$tmp/pr-stale-base" pull_request 12 "$base $head" "crates/main/tests/flaky_probe.rs" "other/file.rs" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/pr-stale-base" pull_request "$base $head" "$probe_file" "other/file.rs")
+expect_exit pr-stale-base-classify "$code" 0
+code=$(run_step "$tmp/pr-stale-base" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-stale-base "$code" 0
 expect_writes "$tmp/pr-stale-base" 0
-expect_summary "$tmp/pr-stale-base" "stale base: main changed crates/main/tests/flaky_probe.rs since $base"
+expect_summary "$tmp/pr-stale-base" "stale base: main changed $probe_file since $base"
+
+# A stale base wins when both lists hold the failing file.
+setup_case pr-stale-before-pr-owned
+: >"$tmp/pr-stale-before-pr-owned/decisions.jsonl"
+code=$(classify_case "$tmp/pr-stale-before-pr-owned" pull_request "$base $head" "$probe_file" "$probe_file")
+expect_exit pr-stale-before-pr-owned-classify "$code" 0
+code=$(run_step "$tmp/pr-stale-before-pr-owned" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-stale-before-pr-owned "$code" 0
+expect_writes "$tmp/pr-stale-before-pr-owned" 0
+expect_summary "$tmp/pr-stale-before-pr-owned" "stale base: main changed $probe_file since $base"
+
+# A stale base skips the open lookup: an open exact-title issue gets no
+# comment and nothing is written.
+setup_case pr-stale-base-open-issue
+: >"$tmp/pr-stale-base-open-issue/decisions.jsonl"
+code=$(classify_case "$tmp/pr-stale-base-open-issue" pull_request "$base $head" "$probe_file" "other/file.rs")
+expect_exit pr-stale-base-open-issue-classify "$code" 0
+code=$(run_step "$tmp/pr-stale-base-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
+expect_exit pr-stale-base-open-issue "$code" 0
+expect_writes "$tmp/pr-stale-base-open-issue" 0
+expect_summary "$tmp/pr-stale-base-open-issue" "stale base: main changed $probe_file since $base"
+
+# A PR-owned file comments on the pull request only: the open issue gets
+# no comment.
+setup_case pr-owned-open-issue
+: >"$tmp/pr-owned-open-issue/decisions.jsonl"
+code=$(classify_case "$tmp/pr-owned-open-issue" pull_request "$base $head" "" "$probe_file")
+expect_exit pr-owned-open-issue-classify "$code" 0
+code=$(run_step "$tmp/pr-owned-open-issue" pull_request 12 "$open7" "" decisions.jsonl)
+expect_exit pr-owned-open-issue "$code" 0
+expect_writes "$tmp/pr-owned-open-issue" 1
+expect_write "$tmp/pr-owned-open-issue" 0 "$(printf 'comment 12\n%s' "$(body "$belongs" "$pr_tested")")"
+
+# A panic with no `.rs:N` line files normally, even with a file in the
+# lists: there is no failing file to check.
+setup_case pr-panic-without-file
+printf '%s\t%s\n' "$name" "$detail_nofile" >"$tmp/pr-panic-without-file/temp/flaky/flaky-tests-linux.txt"
+printf '%s\n' "$decide_new" >"$tmp/pr-panic-without-file/decisions.jsonl"
+code=$(classify_case "$tmp/pr-panic-without-file" pull_request "$base $head" "other/file.rs" "")
+expect_exit pr-panic-without-file-classify "$code" 0
+code=$(run_step "$tmp/pr-panic-without-file" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-panic-without-file "$code" 0
+expect_writes "$tmp/pr-panic-without-file" 1
+expect_write "$tmp/pr-panic-without-file" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nofile" body "$see_pr" "$pr_tested")")"
+
+# A `.rs:N` path with no panic never names a failing file, even with the
+# file in both lists: the title goes on to the lookup.
+setup_case pr-no-panic-text
+printf '%s\t%s\n' "$name" "$detail_nopanic" >"$tmp/pr-no-panic-text/temp/flaky/flaky-tests-linux.txt"
+printf '%s\n' "$decide_new" >"$tmp/pr-no-panic-text/decisions.jsonl"
+code=$(classify_case "$tmp/pr-no-panic-text" pull_request "$base $head" "$probe_file" "$probe_file")
+expect_exit pr-no-panic-text-classify "$code" 0
+code=$(run_step "$tmp/pr-no-panic-text" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-no-panic-text "$code" 0
+expect_writes "$tmp/pr-no-panic-text" 1
+expect_write "$tmp/pr-no-panic-text" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(detail="$detail_nopanic" body "$see_pr" "$pr_tested")")"
 
 # A pull request run whose commit has one parent falls back to the push line.
 setup_case pr-one-parent
 printf '%s\n' "$decide_new" >"$tmp/pr-one-parent/decisions.jsonl"
-code=$(run_step "$tmp/pr-one-parent" pull_request 12 "$base" "" "other/file.rs" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/pr-one-parent" pull_request "$base" "" "other/file.rs")
+expect_exit pr-one-parent-classify "$code" 0
+code=$(run_step "$tmp/pr-one-parent" pull_request 12 "$empty_open" "" decisions.jsonl)
 expect_exit pr-one-parent "$code" 0
 expect_writes "$tmp/pr-one-parent" 1
 expect_write "$tmp/pr-one-parent" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$see_pr" "$push_tested")")"
@@ -428,7 +627,9 @@ expect_write "$tmp/pr-one-parent" 0 "$(printf 'create %s\n%s\nlabel=test-only' "
 # content, wherever it lands; no total counts a transport order.
 setup_case decide-reopen
 printf '%s\n' "$decide_reopen" >"$tmp/decide-reopen/decisions.jsonl"
-code=$(run_step "$tmp/decide-reopen" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl)
+code=$(classify_case "$tmp/decide-reopen" push "" "" "")
+expect_exit decide-reopen-classify "$code" 0
+code=$(run_step "$tmp/decide-reopen" push "" "$empty_open" "$issue9" decisions.jsonl)
 expect_exit decide-reopen "$code" 0
 expect_present "$tmp/decide-reopen" "reopen 9"
 expect_present "$tmp/decide-reopen" "$sighting"
@@ -438,21 +639,27 @@ expect_present "$tmp/decide-reopen" "label 9 needs-triage"
 # summary, naming the failed lookup.
 setup_case decide-stale
 printf '%s\n' "$decide_stale" >"$tmp/decide-stale/decisions.jsonl"
-code=$(run_step "$tmp/decide-stale" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/decide-stale" push "" "" "")
+expect_exit decide-stale-classify "$code" 0
+code=$(run_step "$tmp/decide-stale" push "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-stale "$code" 0
 expect_writes "$tmp/decide-stale" 0
 expect_summary "$tmp/decide-stale" "stale fix: $title stays closed: its fix is not in the tested commit"
 
 setup_case decide-unknown
 printf '%s\n' "$decide_unknown" >"$tmp/decide-unknown/decisions.jsonl"
-code=$(run_step "$tmp/decide-unknown" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/decide-unknown" push "" "" "")
+expect_exit decide-unknown-classify "$code" 0
+code=$(run_step "$tmp/decide-unknown" push "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-unknown "$code" 0
 expect_writes "$tmp/decide-unknown" 0
 expect_summary "$tmp/decide-unknown" "unknown closed: $title stays closed: the closed lookup failed, so nothing is filed"
 
 setup_case decide-unknown-no-source
 printf '%s\n' "$decide_unknown_bare" >"$tmp/decide-unknown-no-source/decisions.jsonl"
-code=$(run_step "$tmp/decide-unknown-no-source" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/decide-unknown-no-source" push "" "" "")
+expect_exit decide-unknown-no-source-classify "$code" 0
+code=$(run_step "$tmp/decide-unknown-no-source" push "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-unknown-no-source "$code" 0
 expect_writes "$tmp/decide-unknown-no-source" 0
 expect_summary "$tmp/decide-unknown-no-source" "unknown fix: $title stays closed: a lookup failed, so nothing is filed"
@@ -461,28 +668,36 @@ expect_summary "$tmp/decide-unknown-no-source" "unknown fix: $title stays closed
 # issue, another title, and a missing flake label.
 setup_case reopen-is-pr
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-is-pr/decisions.jsonl"
-code=$(run_step "$tmp/reopen-is-pr" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": [{"name": "test-only"}], "pull_request": {}}' decisions.jsonl)
+code=$(classify_case "$tmp/reopen-is-pr" push "" "" "")
+expect_exit reopen-is-pr-classify "$code" 0
+code=$(run_step "$tmp/reopen-is-pr" push "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": [{"name": "test-only"}], "pull_request": {}}' decisions.jsonl)
 expect_exit reopen-is-pr "$code" 0
 expect_writes "$tmp/reopen-is-pr" 0
 expect_summary "$tmp/reopen-is-pr" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
 
 setup_case reopen-is-open
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-is-open/decisions.jsonl"
-code=$(run_step "$tmp/reopen-is-open" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "open", "labels": [{"name": "test-only"}]}' decisions.jsonl)
+code=$(classify_case "$tmp/reopen-is-open" push "" "" "")
+expect_exit reopen-is-open-classify "$code" 0
+code=$(run_step "$tmp/reopen-is-open" push "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "open", "labels": [{"name": "test-only"}]}' decisions.jsonl)
 expect_exit reopen-is-open "$code" 0
 expect_writes "$tmp/reopen-is-open" 0
 expect_summary "$tmp/reopen-is-open" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
 
 setup_case reopen-title-differs
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-title-differs/decisions.jsonl"
-code=$(run_step "$tmp/reopen-title-differs" push "" "" "" "" "$empty_open" '{"number": 9, "title": "Flaky test: other", "state": "closed", "labels": [{"name": "test-only"}]}' decisions.jsonl)
+code=$(classify_case "$tmp/reopen-title-differs" push "" "" "")
+expect_exit reopen-title-differs-classify "$code" 0
+code=$(run_step "$tmp/reopen-title-differs" push "" "$empty_open" '{"number": 9, "title": "Flaky test: other", "state": "closed", "labels": [{"name": "test-only"}]}' decisions.jsonl)
 expect_exit reopen-title-differs "$code" 0
 expect_writes "$tmp/reopen-title-differs" 0
 expect_summary "$tmp/reopen-title-differs" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
 
 setup_case reopen-unlabelled
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-unlabelled/decisions.jsonl"
-code=$(run_step "$tmp/reopen-unlabelled" push "" "" "" "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": []}' decisions.jsonl)
+code=$(classify_case "$tmp/reopen-unlabelled" push "" "" "")
+expect_exit reopen-unlabelled-classify "$code" 0
+code=$(run_step "$tmp/reopen-unlabelled" push "" "$empty_open" '{"number": 9, "title": "'"$title"'", "state": "closed", "labels": []}' decisions.jsonl)
 expect_exit reopen-unlabelled "$code" 0
 expect_writes "$tmp/reopen-unlabelled" 0
 expect_summary "$tmp/reopen-unlabelled" "validation mismatch: issue 9 is not a closed test-only issue titled $title, so nothing is filed"
@@ -490,7 +705,9 @@ expect_summary "$tmp/reopen-unlabelled" "validation mismatch: issue 9 is not a c
 # A reopen target that cannot be fetched stays closed.
 setup_case reopen-fetch-fails
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-fetch-fails/decisions.jsonl"
-code=$(run_step "$tmp/reopen-fetch-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_ISSUE_FAIL=1)
+code=$(classify_case "$tmp/reopen-fetch-fails" push "" "" "")
+expect_exit reopen-fetch-fails-classify "$code" 0
+code=$(run_step "$tmp/reopen-fetch-fails" push "" "$empty_open" "" decisions.jsonl STUB_ISSUE_FAIL=1)
 expect_exit reopen-fetch-fails "$code" 0
 expect_writes "$tmp/reopen-fetch-fails" 0
 expect_summary "$tmp/reopen-fetch-fails" "unknown reopen target: issue 9 could not be fetched, so $title stays closed"
@@ -498,14 +715,18 @@ expect_summary "$tmp/reopen-fetch-fails" "unknown reopen target: issue 9 could n
 # A recheck that fails files nothing, before reopen and before create.
 setup_case reopen-recheck-fails
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-recheck-fails/decisions.jsonl"
-code=$(run_step "$tmp/reopen-recheck-fails" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl STUB_OPEN_REST_FAIL=1)
+code=$(classify_case "$tmp/reopen-recheck-fails" push "" "" "")
+expect_exit reopen-recheck-fails-classify "$code" 0
+code=$(run_step "$tmp/reopen-recheck-fails" push "" "$empty_open" "$issue9" decisions.jsonl STUB_OPEN_REST_FAIL=1)
 expect_exit reopen-recheck-fails "$code" 0
 expect_writes "$tmp/reopen-recheck-fails" 0
 expect_summary "$tmp/reopen-recheck-fails" "unknown open lookup: the recheck for $title failed, so nothing is filed"
 
 setup_case create-recheck-fails
 printf '%s\n' "$decide_new" >"$tmp/create-recheck-fails/decisions.jsonl"
-code=$(run_step "$tmp/create-recheck-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_OPEN_REST_FAIL=1)
+code=$(classify_case "$tmp/create-recheck-fails" push "" "" "")
+expect_exit create-recheck-fails-classify "$code" 0
+code=$(run_step "$tmp/create-recheck-fails" push "" "$empty_open" "" decisions.jsonl STUB_OPEN_REST_FAIL=1)
 expect_exit create-recheck-fails "$code" 0
 expect_writes "$tmp/create-recheck-fails" 0
 expect_summary "$tmp/create-recheck-fails" "unknown open lookup: the recheck for $title failed, so nothing is filed"
@@ -514,14 +735,18 @@ expect_summary "$tmp/create-recheck-fails" "unknown open lookup: the recheck for
 # reopen and before create.
 setup_case reopen-open-appears
 printf '%s\n' "$decide_reopen" >"$tmp/reopen-open-appears/decisions.jsonl"
-code=$(run_step "$tmp/reopen-open-appears" push "" "" "" "" "$empty_open" "$issue9" decisions.jsonl "STUB_OPEN_REST=$open7")
+code=$(classify_case "$tmp/reopen-open-appears" push "" "" "")
+expect_exit reopen-open-appears-classify "$code" 0
+code=$(run_step "$tmp/reopen-open-appears" push "" "$empty_open" "$issue9" decisions.jsonl "STUB_OPEN_REST=$open7")
 expect_exit reopen-open-appears "$code" 0
 expect_writes "$tmp/reopen-open-appears" 0
 expect_summary "$tmp/reopen-open-appears" "an open issue for $title appeared before the reopen, so nothing is filed"
 
 setup_case create-open-appears
 printf '%s\n' "$decide_new" >"$tmp/create-open-appears/decisions.jsonl"
-code=$(run_step "$tmp/create-open-appears" push "" "" "" "" "$empty_open" "" decisions.jsonl "STUB_OPEN_REST=$open7")
+code=$(classify_case "$tmp/create-open-appears" push "" "" "")
+expect_exit create-open-appears-classify "$code" 0
+code=$(run_step "$tmp/create-open-appears" push "" "$empty_open" "" decisions.jsonl "STUB_OPEN_REST=$open7")
 expect_exit create-open-appears "$code" 0
 expect_writes "$tmp/create-open-appears" 0
 expect_summary "$tmp/create-open-appears" "an open issue for $title appeared before the create, so nothing is filed"
@@ -529,7 +754,9 @@ expect_summary "$tmp/create-open-appears" "an open issue for $title appeared bef
 # A failed open lookup files nothing.
 setup_case open-lookup-fails
 printf '%s\n' "$decide_new" >"$tmp/open-lookup-fails/decisions.jsonl"
-code=$(run_step "$tmp/open-lookup-fails" push "" "" "" "" "$empty_open" "" decisions.jsonl STUB_OPEN_FAIL=1)
+code=$(classify_case "$tmp/open-lookup-fails" push "" "" "")
+expect_exit open-lookup-fails-classify "$code" 0
+code=$(run_step "$tmp/open-lookup-fails" push "" "$empty_open" "" decisions.jsonl STUB_OPEN_FAIL=1)
 expect_exit open-lookup-fails "$code" 0
 expect_writes "$tmp/open-lookup-fails" 0
 expect_summary "$tmp/open-lookup-fails" "unknown open lookup: the open-issue search for $title failed, so nothing is filed"
@@ -538,14 +765,18 @@ expect_summary "$tmp/open-lookup-fails" "unknown open lookup: the open-issue sea
 # nothing.
 setup_case decide-other-title
 printf '%s\n' '{"action": "file-new", "title": "Flaky test: other"}' >"$tmp/decide-other-title/decisions.jsonl"
-code=$(run_step "$tmp/decide-other-title" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/decide-other-title" push "" "" "")
+expect_exit decide-other-title-classify "$code" 0
+code=$(run_step "$tmp/decide-other-title" push "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-other-title "$code" 0
 expect_writes "$tmp/decide-other-title" 0
 expect_summary "$tmp/decide-other-title" "invalid decision for $title: no write"
 
 setup_case decide-bad-action
 printf '%s\n' '{"action": "comment", "issue": 7, "title": "'"$title"'"}' >"$tmp/decide-bad-action/decisions.jsonl"
-code=$(run_step "$tmp/decide-bad-action" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/decide-bad-action" push "" "" "")
+expect_exit decide-bad-action-classify "$code" 0
+code=$(run_step "$tmp/decide-bad-action" push "" "$empty_open" "" decisions.jsonl)
 expect_exit decide-bad-action "$code" 0
 expect_writes "$tmp/decide-bad-action" 0
 expect_summary "$tmp/decide-bad-action" "invalid decision for $title: no write"
@@ -555,42 +786,194 @@ expect_summary "$tmp/decide-bad-action" "invalid decision for $title: no write"
 # writes.
 setup_case guard-decide-failed
 printf '%s\n' "$decide_new" >"$tmp/guard-decide-failed/decisions.jsonl"
-code=$(run_step "$tmp/guard-decide-failed" push "" "" "" "" "$empty_open" "" decisions.jsonl DECIDE_RESULT=failure)
+code=$(classify_case "$tmp/guard-decide-failed" push "" "" "")
+expect_exit guard-decide-failed-classify "$code" 0
+code=$(run_step "$tmp/guard-decide-failed" push "" "$empty_open" "" decisions.jsonl DECIDE_RESULT=failure)
 expect_exit guard-decide-failed "$code" 1
 expect_writes "$tmp/guard-decide-failed" 0
 expect_summary "$tmp/guard-decide-failed" "flake_decide did not decide flakes (result failure, has_flakes true): no write"
 
 setup_case guard-no-flakes
 printf '%s\n' "$decide_new" >"$tmp/guard-no-flakes/decisions.jsonl"
-code=$(run_step "$tmp/guard-no-flakes" push "" "" "" "" "$empty_open" "" decisions.jsonl DECIDE_FLAKES=false)
+code=$(classify_case "$tmp/guard-no-flakes" push "" "" "")
+expect_exit guard-no-flakes-classify "$code" 0
+code=$(run_step "$tmp/guard-no-flakes" push "" "$empty_open" "" decisions.jsonl DECIDE_FLAKES=false)
 expect_exit guard-no-flakes "$code" 1
 expect_writes "$tmp/guard-no-flakes" 0
 expect_summary "$tmp/guard-no-flakes" "flake_decide did not decide flakes (result success, has_flakes false): no write"
 
 setup_case guard-no-artifact
-code=$(run_step "$tmp/guard-no-artifact" push "" "" "" "" "$empty_open" "" missing.jsonl)
+code=$(run_step "$tmp/guard-no-artifact" push "" "$empty_open" "" missing.jsonl)
 expect_exit guard-no-artifact "$code" 1
 expect_writes "$tmp/guard-no-artifact" 0
 expect_summary "$tmp/guard-no-artifact" "the flake-report-data artifact is missing: no write"
 
-setup_case guard-no-lists
-printf '%s\n' "$decide_new" >"$tmp/guard-no-lists/decisions.jsonl"
-rm -f "$tmp/guard-no-lists/temp/report-data"/flaky-tests-*.txt
-code=$(run_step "$tmp/guard-no-lists" push "" "" "" "" "$empty_open" "" decisions.jsonl)
-expect_exit guard-no-lists "$code" 1
-expect_writes "$tmp/guard-no-lists" 0
-expect_summary "$tmp/guard-no-lists" "flake_decide found flakes but their lists are missing: no write"
+# A missing or empty classification file exits 1 with no writes: the
+# decide step produced no classification.
+setup_case guard-no-classes
+printf '%s\n' "$decide_new" >"$tmp/guard-no-classes/decisions.jsonl"
+code=$(classify_case "$tmp/guard-no-classes" push "" "" "")
+expect_exit guard-no-classes-classify "$code" 0
+rm -f "$tmp/guard-no-classes/temp/report-data/flake-classes.jsonl"
+code=$(run_step "$tmp/guard-no-classes" push "" "$empty_open" "" decisions.jsonl)
+expect_exit guard-no-classes "$code" 1
+expect_writes "$tmp/guard-no-classes" 0
+expect_summary "$tmp/guard-no-classes" "flake_decide found flakes but their classification is missing: no write"
+
+# An unrecognised classification action writes nothing.
+setup_case class-invalid
+printf '%s\n' "$decide_new" >"$tmp/class-invalid/decisions.jsonl"
+code=$(classify_case "$tmp/class-invalid" push "" "" "")
+expect_exit class-invalid-classify "$code" 0
+printf '{"action":"bogus","title":"%s"}\n' "$title" >"$tmp/class-invalid/temp/report-data/flake-classes.jsonl"
+code=$(run_step "$tmp/class-invalid" push "" "$empty_open" "" decisions.jsonl)
+expect_exit class-invalid "$code" 0
+expect_writes "$tmp/class-invalid" 0
+expect_summary "$tmp/class-invalid" "invalid classification for $title: no write"
 
 # A duplicate title across runner lists writes once.
 setup_case duplicate-title
-printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name" "$detail" >"$tmp/duplicate-title/temp/report-data/flaky-tests-linux.txt"
-printf '%s\t%s\n' "$name" "$detail" >"$tmp/duplicate-title/temp/report-data/flaky-tests-arm.txt"
+printf '%s\t%s\n%s\t%s\n' "$name" "$detail" "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-linux.txt"
+printf '%s\t%s\n' "$name" "$detail" >"$tmp/duplicate-title/temp/flaky/flaky-tests-arm.txt"
 printf '%s\n' "$decide_new" >"$tmp/duplicate-title/decisions.jsonl"
-code=$(run_step "$tmp/duplicate-title" push "" "" "" "" "$empty_open" "" decisions.jsonl)
+code=$(classify_case "$tmp/duplicate-title" push "" "" "")
+expect_exit duplicate-title-classify "$code" 0
+code=$(run_step "$tmp/duplicate-title" push "" "$empty_open" "" decisions.jsonl)
 expect_exit duplicate-title "$code" 0
 expect_writes "$tmp/duplicate-title" 1
 arm_plain="The test \`$name\` passed after a retry on arm: $url."
 expect_write "$tmp/duplicate-title" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$title" "$(body "$arm_plain" "$push_tested")")"
+
+# A missing history input fails the decide step, and the writer then
+# files nothing: a failed rev-parse of the second parent, a failed diff,
+# and a missing origin/main ref each end the classify block non-zero
+# with the missing input named, and the writer exits 1 with no writes.
+setup_case pr-missing-revparse
+printf '%s\n' "$decide_new" >"$tmp/pr-missing-revparse/decisions.jsonl"
+code=$(classify_case "$tmp/pr-missing-revparse" pull_request "$base $head" "" "" STUB_REVPARSE_FAIL=1)
+[ "$code" -ne 0 ] || fail "pr-missing-revparse: the classify block must fail without the second parent"
+[ ! -e "$tmp/pr-missing-revparse/temp/flake-report-data/flake-classes.jsonl" ] || fail "pr-missing-revparse: no classification may be written"
+grep -q 'unknown revision' "$tmp/pr-missing-revparse/classify-err" || fail "pr-missing-revparse: the failure must name the missing revision"
+code=$(run_step "$tmp/pr-missing-revparse" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-missing-revparse "$code" 1
+expect_writes "$tmp/pr-missing-revparse" 0
+expect_summary "$tmp/pr-missing-revparse" "flake_decide found flakes but their classification is missing: no write"
+
+setup_case pr-missing-diff
+printf '%s\n' "$decide_new" >"$tmp/pr-missing-diff/decisions.jsonl"
+code=$(classify_case "$tmp/pr-missing-diff" pull_request "$base $head" "" "" STUB_DIFF_FAIL=1)
+[ "$code" -ne 0 ] || fail "pr-missing-diff: the classify block must fail without the diff"
+[ ! -e "$tmp/pr-missing-diff/temp/flake-report-data/flake-classes.jsonl" ] || fail "pr-missing-diff: no classification may be written"
+grep -q 'unable to read tree' "$tmp/pr-missing-diff/classify-err" || fail "pr-missing-diff: the failure must name the missing input"
+code=$(run_step "$tmp/pr-missing-diff" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-missing-diff "$code" 1
+expect_writes "$tmp/pr-missing-diff" 0
+expect_summary "$tmp/pr-missing-diff" "flake_decide found flakes but their classification is missing: no write"
+
+setup_case pr-missing-origin-main
+printf '%s\n' "$decide_new" >"$tmp/pr-missing-origin-main/decisions.jsonl"
+code=$(classify_case "$tmp/pr-missing-origin-main" pull_request "$base $head" "" "" STUB_NO_ORIGIN_MAIN=1)
+[ "$code" -ne 0 ] || fail "pr-missing-origin-main: the classify block must fail without origin/main"
+[ ! -e "$tmp/pr-missing-origin-main/temp/flake-report-data/flake-classes.jsonl" ] || fail "pr-missing-origin-main: no classification may be written"
+grep -q "no such ref 'origin/main'" "$tmp/pr-missing-origin-main/classify-err" || fail "pr-missing-origin-main: the failure must name the missing ref"
+code=$(run_step "$tmp/pr-missing-origin-main" pull_request 12 "$empty_open" "" decisions.jsonl)
+expect_exit pr-missing-origin-main "$code" 1
+expect_writes "$tmp/pr-missing-origin-main" 0
+expect_summary "$tmp/pr-missing-origin-main" "flake_decide found flakes but their classification is missing: no write"
+
+# classify-real-git: the two three-dot diffs against a throwaway repo.
+# main advances on another file after the PR branches, so the merge of
+# old-main and the PR head lists a main-side file (stale-base) and a
+# PR-side file (pr-owned). A second merge built from a rebased PR branch
+# lists only the rebased changes, and a force-pushed head with the same
+# tree lists the same. The ref layout matches a full-history checkout:
+# refs/remotes/origin/main at the new main tip. cargo runs from the real
+# checkout, since the block's working directory is the throwaway repo.
+realgit=$tmp/real-git
+mkdir -p "$realgit/work" "$realgit/temp/flaky" "$realgit/bin"
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com
+export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+g() { "$real_git" -C "$realgit/work" "$@"; }
+g init -q -b main
+printf 'base\n' >"$realgit/work/base.txt"
+g add base.txt
+g commit -qm M1
+m1=$(g rev-parse HEAD)
+g checkout -qb pr
+printf 'pr\n' >"$realgit/work/pr.rs"
+g add pr.rs
+g commit -qm P1
+p1=$(g rev-parse HEAD)
+g checkout -q main
+printf 'main\n' >"$realgit/work/main.rs"
+g add main.rs
+g commit -qm M2
+m2=$(g rev-parse HEAD)
+g update-ref refs/remotes/origin/main "$m2"
+g checkout -qb mg1 "$m1"
+g merge -q --no-ff -m "merge pr" "$p1"
+mg1=$(g rev-parse HEAD)
+cat >"$realgit/bin/cargo" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = xtask ] || { echo "stub cargo: unexpected call: \$*" >&2; exit 1; }
+shift
+exec "$real_cargo" run --quiet --manifest-path "$toplevel/xtask/Cargo.toml" -- "\$@"
+EOF
+chmod +x "$realgit/bin/cargo"
+classify_real() {
+  rdir=$1
+  rsha=$2
+  code=0
+  mkdir -p "$rdir/temp/flake-report-data"
+  # The block's working directory is the throwaway repo, as in CI the
+  # checkout is the working directory; cargo is redirected to the real
+  # checkout by the wrapper on PATH.
+  cd "$rdir/work" || fail "classify-real-git: cannot enter the throwaway repo"
+  env -i PATH="$realgit/bin:$orig_path" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+    RUNNER_TEMP="$rdir/temp" GITHUB_SHA="$rsha" GITHUB_EVENT_NAME=pull_request \
+    GH_REPO=aakshintala/fiber \
+    bash --noprofile --norc -eo pipefail "$tmp/classify.sh" >"$rdir/classify-out" 2>"$rdir/classify-err" || code=$?
+  cd "$toplevel" || fail "classify-real-git: cannot return to the checkout"
+  [ "$code" = 0 ] || { cat "$rdir/classify-err" >&2; fail "classify-real-git: the classify block exited $code"; }
+}
+classify_action() {
+  "$real_jq" -r --arg t "$2" "select(.title == \$t) | .action // empty" "$1"
+}
+# merge-head: the merge of old-main and the PR head.
+printf 'main::old\tthread old panicked at main.rs:10\nmain::new\tthread new panicked at pr.rs:3\nmain::other\tthread other panicked at other.rs:5\n' >"$realgit/temp/flaky/flaky-tests-linux.txt"
+classify_real "$realgit" "$mg1"
+classes=$realgit/temp/flake-report-data/flake-classes.jsonl
+[ "$(classify_action "$classes" 'Flaky test: main::old')" = stale-base ] || fail "classify-real-git merge-head: main.rs must be stale-base"
+[ "$(classify_action "$classes" 'Flaky test: main::new')" = pr-owned ] || fail "classify-real-git merge-head: pr.rs must be pr-owned"
+[ "$(classify_action "$classes" 'Flaky test: main::other')" = lookup ] || fail "classify-real-git merge-head: other.rs must be lookup"
+[ "$("$real_jq" -r --arg t 'Flaky test: main::new' "select(.title == \$t) | .tested // empty" "$classes")" = "tested $mg1 = main $m1 + head $p1" ] || fail "classify-real-git merge-head: the tested line must name both parents"
+# rebased-head: the PR branch rebased onto the new main and merged again.
+# The new ^1...^2 range lists only the rebased changes.
+g checkout -qb pr2 "$m2"
+printf 'pr2\n' >"$realgit/work/pr2.rs"
+g add pr2.rs
+g commit -qm P2
+p2=$(g rev-parse HEAD)
+g checkout -qb mg2 "$m2"
+g merge -q --no-ff -m "merge reprised" "$p2"
+mg2=$(g rev-parse HEAD)
+printf 'main::rebased\tthread rebased panicked at pr2.rs:3\nmain::oldpr\tthread oldpr panicked at pr.rs:3\nmain::main\tthread main panicked at main.rs:10\n' >"$realgit/temp/flaky/flaky-tests-linux.txt"
+classify_real "$realgit" "$mg2"
+[ "$(classify_action "$classes" 'Flaky test: main::rebased')" = pr-owned ] || fail "classify-real-git rebased-head: pr2.rs must be pr-owned"
+[ "$(classify_action "$classes" 'Flaky test: main::oldpr')" = lookup ] || fail "classify-real-git rebased-head: pr.rs must be lookup, not pr-owned"
+[ "$(classify_action "$classes" 'Flaky test: main::main')" = lookup ] || fail "classify-real-git rebased-head: main.rs must be lookup, not stale"
+# force-pushed-head: the same tree reached by a force-push, so the merge
+# commit differs only in its ^2; the lists match the rebased case.
+g checkout -qb mg3 "$m2"
+g merge -q --no-ff -m "merge force-pushed" "$p2"
+mg3=$(g rev-parse HEAD)
+[ "$mg3" != "$mg2" ] || fail "classify-real-git: the force-pushed merge must differ"
+[ "$(g rev-parse "$mg3^{tree}")" = "$(g rev-parse "$mg2^{tree}")" ] || fail "classify-real-git: the force-pushed merge must hold the same tree"
+classify_real "$realgit" "$mg3"
+[ "$(classify_action "$classes" 'Flaky test: main::rebased')" = pr-owned ] || fail "classify-real-git force-pushed-head: pr2.rs must be pr-owned"
+[ "$(classify_action "$classes" 'Flaky test: main::oldpr')" = lookup ] || fail "classify-real-git force-pushed-head: pr.rs must be lookup"
+[ "$(classify_action "$classes" 'Flaky test: main::main')" = lookup ] || fail "classify-real-git force-pushed-head: main.rs must be lookup"
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
 # A malformed JUnit file fails collection with no list, so the producer
 # marks the collection incomplete instead of a complete empty list. An
@@ -695,6 +1078,7 @@ done
 decide_state=$decide_dir/state
 decide_runner=$decide_dir/runner-temp
 : >"$decide_state/gh-calls.log"
+: >"$decide_state/classify-args.log"
 : >"$decide_runner/output"
 : >"$decide_runner/summary"
 printf 'Flaky test: probe\n' >"$decide_runner/flake-titles.txt"
@@ -728,6 +1112,9 @@ if [ "${1:-}" = "xtask" ] && [ "${2:-}" = "flake-report-events" ]; then
 elif [ "${1:-}" = "xtask" ] && [ "${2:-}" = "flake-report" ]; then
   cat >"${DECIDE_STATE_DIR:?}/decide-input.json"
   printf '[]\n'
+  exit 0
+elif [ "${1:-}" = "xtask" ] && [ "${2:-}" = "flake-classify" ]; then
+  printf '%s\n' "$*" >>"${DECIDE_STATE_DIR:?}/classify-args.log"
   exit 0
 else
   echo "stub cargo: unexpected call: $*" >&2
@@ -812,6 +1199,23 @@ for block_sh in "$decide_dir"/blocks/*.sh; do
 done
 grep -q '^token-set.*state=open' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the open listing"
 grep -q '^token-set.*state=closed' "$decide_state/gh-calls.log" || fail "the token-bearing blocks did not fetch the closed listing"
+# The classify block ran without a token and without the API: it only
+# decides. Its arguments name the flaky dir, the event and the tested
+# commit; the block itself never calls gh.
+[ -s "$decide_state/classify-args.log" ] || fail "the classify block did not run cargo xtask flake-classify"
+grep -q -- '--flaky-dir' "$decide_state/classify-args.log" || fail "the classify block must name --flaky-dir"
+grep -q -- '--event' "$decide_state/classify-args.log" || fail "the classify block must name --event"
+grep -q -- '--tested-commit' "$decide_state/classify-args.log" || fail "the classify block must name --tested-commit"
+for block_sh in "$decide_dir"/blocks/*.sh; do
+  [ -f "$block_sh" ] || continue
+  [ -s "$block_sh" ] || continue
+  base=$(basename "$block_sh" .sh)
+  if grep -q 'flake-classify' "$block_sh"; then
+    if grep -q 'gh api' "$block_sh"; then
+      fail "the classify block calls gh ($base)"
+    fi
+  fi
+done
 [ -f "$decide_state/decide-input.json" ] || fail "the decide input was not written"
 closed_count=$("$real_jq" -e '.closed.issues | length' "$decide_state/decide-input.json" 2>/dev/null) || fail "the decide input has no closed issues"
 [ "$closed_count" = 2000 ] || fail "want 2000 closed issues in the decide input, got $closed_count"
