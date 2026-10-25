@@ -52,11 +52,11 @@ pub use read::{
     Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_session, kind_of,
     last_kind, lines, lines_from, read, tail_lines,
 };
-pub use resolve::{most_recent, resolve};
+pub use resolve::{most_recent, opening_ts, resolve};
 pub use scan::{
     FirstLineError, Hold, MalformedWorktree, SessionLock, SessionStarted, Started, last_line_where,
     last_ts, remaining, session_bytes, started_first, started_sessions, started_sessions_in,
-    try_hold,
+    try_hold, try_hold_existing,
 };
 pub use search::{Identity, SessionScan};
 pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};

@@ -142,6 +142,7 @@ fn run(
 ) -> Result<(), CliError> {
     let command = HubCommand::Sessions(SessionsArgs {
         project: (!all && project.in_repository).then(|| log::project_key(&project.path)),
+        active: None,
     });
     let (stream, _) = connect().map_err(CliError::Hub)?;
     let result = request_value(&mut BufReader::new(stream), LIST_ID, command)?;
@@ -175,7 +176,10 @@ pub fn resolve_listed(
     let result = request_value(
         &mut BufReader::new(stream),
         LIST_ID,
-        HubCommand::Sessions(SessionsArgs { project: None }),
+        HubCommand::Sessions(SessionsArgs {
+            project: None,
+            active: None,
+        }),
     )?;
     let answer: Answer = serde_json::from_value(result).map_err(CliError::SessionsAnswer)?;
     let ids = answer
