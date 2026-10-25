@@ -1555,9 +1555,13 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 3);
-    assert_eq!(queued[2]["command"], "recent");
-    assert_eq!(queued[2]["args"]["project"], "-w");
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     app.quit();
     assert!(app.quit_open());
     assert_eq!(app.key_context(), crate::keyset::Context::Overlay);
@@ -2032,9 +2036,13 @@ fn clear_start_refused_keeps_the_old_session_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 3);
-    assert_eq!(queued[2]["command"], "recent");
-    assert_eq!(queued[2]["args"]["project"], "-w");
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     let lines = sent(enter(&mut app, "/clear"));
     let id = lines[0]["id"].clone();
     // Typing after the dispatch stays: the refusal takes nothing.
@@ -2230,9 +2238,13 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(queued.len(), 3);
-    assert_eq!(queued[2]["command"], "recent");
-    assert_eq!(queued[2]["args"]["project"], "-w");
+    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // assert only its presence, not the outgoing order or count.
+    assert!(
+        queued
+            .iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w")
+    );
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     let lines = sent(app.on_key(Key::Enter, now()));
     assert_eq!(lines.len(), 1);

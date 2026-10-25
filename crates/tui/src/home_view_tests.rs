@@ -447,6 +447,7 @@ fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
         .iter()
         .map(parse)
         .collect();
+    // `docs/tui.md:268` (one scoped ask for the newly seen project).
     assert!(!fanout.is_empty(), "the unscoped answer fans out");
     for line in &fanout {
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
@@ -1686,6 +1687,7 @@ fn home_stop_flow_keeps_the_home_list_drawn() {
     app.on_line(left(&third, "exited"));
     let frame = screen(&app, 80, 24);
     assert!(frame.contains("exited · 1"), "{frame}");
+    // `docs/tui.md:254-255` (one exited row beneath two live ones draws one `○`).
     assert_eq!(frame.matches('○').count(), 1, "{frame}");
     insta::assert_snapshot!("home_stop_flow_keeps_the_home_list_drawn_80x24", frame);
 }

@@ -192,6 +192,7 @@ fn hold_total(app: &mut App, rows: Value, total: usize) {
         .collect();
     assert!(!fanout.is_empty(), "the unscoped answer fans out");
     for line in &fanout {
+        // `docs/invocation.md:1091` (scoped `recent` for the project).
         assert_eq!(line["command"], "recent");
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
         assert!(

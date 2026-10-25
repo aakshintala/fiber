@@ -752,9 +752,9 @@ impl Sessions {
     /// stay untouched. A feed duplicate is skipped, as is an id an
     /// earlier page already listed, so scoped pages accumulate newest
     /// first. Never touches the unscoped cursor or `more()`.
-    pub(crate) fn scoped(&mut self, _project: &str, rows: Vec<Row>) {
+    pub(crate) fn scoped(&mut self, rows: Vec<Row>) {
         // The hub already scoped the page to the project, so the fold
-        // only deduplicates: `_project` names whose page this is.
+        // only deduplicates.
         for mut row in rows {
             if self.feed.iter().any(|feed| feed.id == row.id)
                 || self.recent.iter().any(|recent| recent.id == row.id)

@@ -217,7 +217,9 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
+    // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
+    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
@@ -258,7 +260,9 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
         .unwrap_or_else(|| panic!("recent id"));
     // The empty page still fans out the live row's project.
     let fanout = commands(app.on_line(accepted(recent, json!({"sessions": []}))));
+    // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
+    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
@@ -298,7 +302,9 @@ fn a_home_launch_never_focuses_the_list() {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
+    // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
+    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     drawn(&mut app);
     assert_eq!(app.focused(), None);
@@ -798,7 +804,9 @@ fn home_with_row() -> App {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
+    // `docs/tui.md:268` (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
+    // `docs/tui.md:233-234` and `docs/tui.md:268` (one per project).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     app
 }

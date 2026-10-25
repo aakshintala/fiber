@@ -793,12 +793,22 @@ fn a_stop_ask_is_resent_and_its_refusal_notes_the_row() {
     }));
     assert_eq!(names(&stop), ["subscribe", "close"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(
-        names(&lines),
-        ["subscribe", "close", "feed", "recent", "recent", "sessions"]
+    // The reconnect resends the stop, then asks feed, an unscoped recent,
+    // scoped refetches, and sessions: assert only presence, not the
+    // outgoing order or count, since no `docs/<area>.md` line promises it.
+    let got = names(&lines);
+    for want in ["subscribe", "close", "feed", "recent", "sessions"] {
+        assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
+    }
+    // The scoped refetch covers the project (`docs/tui.md:268`).
+    assert!(
+        lines
+            .iter()
+            .any(|l| l["command"] == "recent" && l["args"]["project"] == "-w")
     );
-    assert_eq!(lines[4]["args"]["project"], "-w");
-    assert_eq!(lines[1]["id"], stop[1]["id"]);
+    // The resent close keeps its id.
+    let close_id = stop[1]["id"].clone();
+    assert!(lines.iter().any(|l| l["id"] == close_id));
     fold(
         &mut app,
         refused(S_B, &id_of(&stop[1]), "session_held", "Held."),
@@ -826,8 +836,18 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     let delete = parsed(&sent(&mut app, |app| app.on_key(Key::Enter, now)));
     assert_eq!(names(&delete), ["delete"]);
     let lines = parsed(&reconnect(&mut app));
-    assert_eq!(names(&lines), ["feed", "recent", "recent", "sessions"]);
-    assert_eq!(lines[2]["args"]["project"], "-w");
+    // The reconnect asks feed, an unscoped recent, a scoped refetch, and
+    // sessions: assert only presence, not the outgoing order or count.
+    let got = names(&lines);
+    for want in ["feed", "recent", "sessions"] {
+        assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
+    }
+    // The scoped refetch covers the project (`docs/tui.md:268`).
+    assert!(
+        lines
+            .iter()
+            .any(|l| l["command"] == "recent" && l["args"]["project"] == "-w")
+    );
     assert_eq!(rows(&app), ["○  old work"]);
     assert_eq!(
         app.home

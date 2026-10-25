@@ -1799,7 +1799,9 @@ fn opening_a_row_by_key_calls_on_attach() {
     feed(&mut lp, vec![Input::Hub(Line::Session(status))]);
     // The introducing status queues its project's scoped ask.
     let (reader, scoped) = command(reader, "the scoped command");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -1873,7 +1875,9 @@ fn an_exit_sends_its_lines_then_quits() {
     assert_eq!(recent["command"], "recent");
     // The introducing status queues its project's scoped ask.
     let (reader, scoped) = command(reader, "the scoped");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
@@ -2093,7 +2097,8 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
         .unwrap_or_else(|err| panic!("flush: {err}"));
     // All five reads run under one deadline: the far end reads the close
     // lines the quit question sent, with the introducing status's scoped
-    // ask between the recent and the subscribe.
+    // ask between the recent and the subscribe (`docs/tui.md:268`: one
+    // scoped ask for the newly seen project, making five reads total).
     let hub = BufReader::new(held);
     let (feed, recent, scoped, subscribe, close) =
         fakes::within("the close commands", Deadline::after(DEADLINE), move || {
@@ -2119,7 +2124,9 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
         });
     assert_eq!(feed["command"], "feed");
     assert_eq!(recent["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["command"], "recent");
+    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1091`).
     assert_eq!(scoped["args"]["project"], "-w");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["args"]["level"], "summary");

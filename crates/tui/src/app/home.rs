@@ -377,7 +377,7 @@ impl App {
         let mut list = Vec::new();
         let wall = self.rail_state().wall();
         for section in sections {
-            let hidden_exited = section.hidden();
+            let count = section.total.unwrap_or(section.exited.len());
             let section_spend = section
                 .live
                 .iter()
@@ -453,18 +453,8 @@ impl App {
             }
             // The header draws the hub's total when one is held,
             // counting loaded rows only before the first scoped answer.
-            match section.total {
-                Some(total) if total > 0 => {
-                    list.push(ListLine::ExitedHead { count: total });
-                }
-                Some(_) => {}
-                None => {
-                    if !section.exited.is_empty() {
-                        list.push(ListLine::ExitedHead {
-                            count: section.exited.len(),
-                        });
-                    }
-                }
+            if count > 0 {
+                list.push(ListLine::ExitedHead { count });
             }
             for row in section.exited.iter().take(section.shown_exited) {
                 list.push(ListLine::Exited {
@@ -481,22 +471,11 @@ impl App {
             }
             // `More` draws total-minus-shown when a total is held,
             // saturating so a total below loaded rows never underflows.
-            match section.total {
-                Some(total) if total > section.shown_exited => {
-                    list.push(ListLine::More {
-                        key: more,
-                        count: total.saturating_sub(section.shown_exited),
-                    });
-                }
-                Some(_) => {}
-                None => {
-                    if let Some(row) = section.exited.get(section.shown_exited) {
-                        list.push(ListLine::More {
-                            key: row.key,
-                            count: hidden_exited,
-                        });
-                    }
-                }
+            if count > section.shown_exited {
+                list.push(ListLine::More {
+                    key: more,
+                    count: count.saturating_sub(section.shown_exited),
+                });
             }
         }
         let header = Header {
@@ -740,6 +719,27 @@ impl App {
                                 .get("result")
                                 .map(recent_rows)
                                 .unwrap_or_default();
+                            // Projects on home before this page folds, for a later
+                            // page only: the first page fans out for every
+                            // project lacking a total (a live-only project
+                            // has no scoped ask yet), while a later page
+                            // earns an ask only for a project first
+                            // appearing here, so ordinary pagination never
+                            // retries an already-seen project.
+                            let before: std::collections::BTreeSet<String> = if first {
+                                std::collections::BTreeSet::new()
+                            } else {
+                                self.home
+                                    .as_ref()
+                                    .map(|home| {
+                                        home.sessions
+                                            .sections(home.launch_project())
+                                            .into_iter()
+                                            .map(|section| section.project.to_owned())
+                                            .collect()
+                                    })
+                                    .unwrap_or_default()
+                            };
                             if let Some(home) = self.home.as_mut() {
                                 home.sessions.recent(rows, first);
                                 home.refill_picker();
@@ -747,7 +747,7 @@ impl App {
                             self.list_answered(first, true);
                             // Every unscoped page fans out one scoped
                             // first page per newly seen project.
-                            return Some(self.fan_out_scoped());
+                            return Some(self.fan_out_scoped(&before));
                         } else {
                             let code = refusal_code(&hub.payload);
                             self.notices.push(&code, refusal(&hub.payload));
@@ -1246,10 +1246,13 @@ impl App {
         vec![recent_line(&id, Some(project), None)]
     }
 
-    /// One scoped `recent` first page per project on home lacking a
-    /// stored total and an in-flight scoped ask: projects first appearing
-    /// on any unscoped page.
-    fn fan_out_scoped(&mut self) -> Vec<String> {
+    /// One scoped `recent` first page per project lacking a stored total
+    /// and an in-flight scoped ask, skipping projects in `before`: the
+    /// first page passes an empty `before` and fans out for every project,
+    /// a later page passes the projects already on home and fans out only
+    /// for a project first appearing there, so ordinary pagination never
+    /// retries an already-seen project without a new trigger.
+    fn fan_out_scoped(&mut self, before: &std::collections::BTreeSet<String>) -> Vec<String> {
         let projects: Vec<String> = self
             .home
             .as_ref()
@@ -1259,6 +1262,7 @@ impl App {
                     .into_iter()
                     .filter(|section| {
                         !section.project.is_empty()
+                            && !before.contains(section.project)
                             && home.sessions.total_for(section.project).is_none()
                             && !home
                                 .scoped_asks
@@ -1308,10 +1312,8 @@ impl App {
             return Vec::new();
         };
         if let Some(home) = self.home.as_mut() {
-            home.sessions.scoped(&project, rows);
-            if let Some(total) = total {
-                home.sessions.note_total(&project, total);
-            }
+            home.sessions.scoped(rows);
+            home.sessions.note_total(&project, total);
             home.refill_picker();
         }
         let dirty = self
@@ -1501,21 +1503,22 @@ impl App {
 
 /// A scoped `recent` answer's rows and total: `None` when the payload
 /// carries no readable command answer (a missing, null or foreign
-/// `result`, or foreign `sessions`), following the `malformed` notice
-/// path.
+/// `result`, a missing or foreign `sessions`, or a missing or foreign
+/// `total`), following the `malformed` notice path. The hub contract
+/// carries both (`docs/invocation.md`, "The hub" and `docs/events.md`,
+/// "`command_accepted`").
 fn scoped_result(
     payload: &serde_json::Map<String, Value>,
-) -> Option<(Vec<crate::home::Row>, Option<usize>)> {
+) -> Option<(Vec<crate::home::Row>, usize)> {
     let result = payload.get("result")?;
     if !result.is_object() {
         return None;
     }
-    if let Some(sessions) = result.get("sessions")
-        && !sessions.is_array()
-    {
+    if result.get("sessions").and_then(Value::as_array).is_none() {
         return None;
     }
-    Some(recent_rows(result))
+    let (rows, total) = recent_rows(result);
+    Some((rows, total?))
 }
 
 /// The key `More` carries for its section: the first hidden loaded

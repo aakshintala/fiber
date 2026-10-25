@@ -1292,6 +1292,7 @@ fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
     app.on_line(left(B, "exited"));
     app.home.as_mut().unwrap().sessions.note_total("-w", 4);
     let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    // `docs/tui.md:268` (no extra scoped ask without a new trigger: one subscribe).
     assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
     assert!(app.on_home());
     let area = ratatui::layout::Rect::new(0, 0, 200, 40);
@@ -1314,6 +1315,7 @@ fn clicking_done_with_a_total_but_no_loaded_rows_lands_unfocused() {
     let mut app = opened(&[A, B], A);
     app.home.as_mut().unwrap().sessions.note_total("-w", 3);
     let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
+    // `docs/tui.md:268` (no extra scoped ask without a new trigger: one subscribe).
     assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
     assert!(app.on_home());
     assert_eq!(rail_focus(&app), None);
