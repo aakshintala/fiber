@@ -25,7 +25,9 @@ use crate::resume::not_found;
 /// `delete`: removes `session`, and with `cascade` every session that
 /// continues it, dependents first. With `cascade`, `expect` holds the set
 /// the person confirmed; without `cascade` it is checked but not compared.
-/// Accepted with no `result`.
+/// With `dry_run`, answers `sessions`, the ids the delete would remove,
+/// and deletes nothing. Accepted with no `result`, except the dry run's
+/// answer.
 pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Value>, Refused> {
     let parsed = parse(args).ok_or_else(invalid)?;
     let session = parsed.session;
@@ -33,35 +35,10 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     let expect = parsed.expect;
     // No resume starts a process for a session while it is deleted.
     let _gate = support::lock(&hub.resume_gate);
-    let Some(dir) = session_dir(hub, &session) else {
-        return Err(not_found(&session));
-    };
-    let dependents = log::dependents(&hub.home, &session);
-    if !cascade && !dependents.is_empty() {
-        let mut names: Vec<String> = dependents.iter().map(|id| format!("`{}`", id.0)).collect();
-        names.sort();
-        return Err(Refused {
-            code: ErrorCode::SessionHasDependents,
-            message: format!(
-                "Session `{}` has sessions that continue it: {}. `--cascade` deletes them too.",
-                session.0,
-                names.join(", ")
-            ),
-        });
-    }
-    let mut set = vec![(session, dir)];
-    // A dependent whose directory went since the walk is not deleted.
-    set.extend(
-        dependents
-            .into_iter()
-            .filter_map(|id| session_dir(hub, &id).map(|dir| (id, dir))),
-    );
-    if cascade && let Some(expect) = &expect {
-        let set_ids: BTreeSet<&SessionId> = set.iter().map(|(id, _)| id).collect();
-        let wanted: BTreeSet<&SessionId> = expect.iter().collect();
-        confirm(&set_ids, &wanted)?;
-    }
-    // Held until every removal ends.
+    let set = resolve(hub, &session, cascade, expect.as_ref())?;
+    // Held until every removal ends. The dry run takes the locks too, so a
+    // session another process holds is refused exactly as a real delete
+    // refuses it; they are released when this returns, nothing is removed.
     let mut locks = Vec::with_capacity(set.len());
     for (id, dir) in &set {
         match log::try_hold(dir) {
@@ -75,6 +52,10 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
             Err(error) => return Err(io_failed(id, &error)),
         }
     }
+    if parsed.dry_run {
+        let ids: Vec<&str> = set.iter().map(|(id, _)| id.0.as_str()).collect();
+        return Ok(Some(serde_json::json!({"sessions": ids})));
+    }
     // Discovery order puts each session after the one it continues, so in
     // reverse no survivor points at a removed session.
     for ((id, dir), lock) in set.iter().zip(locks.iter()).rev() {
@@ -83,6 +64,47 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     }
     drop(locks);
     Ok(None)
+}
+
+/// The sessions a delete would remove: `session` first, then every session
+/// that continues it, each with its directory. Refuses a missing session,
+/// dependents without `cascade`, and a confirmed set that differs, exactly
+/// as the removing path does. Takes no lock and removes nothing.
+fn resolve(
+    hub: &Hub,
+    session: &SessionId,
+    cascade: bool,
+    expect: Option<&BTreeSet<SessionId>>,
+) -> Result<Vec<(SessionId, PathBuf)>, Refused> {
+    let Some(dir) = session_dir(hub, session) else {
+        return Err(not_found(session));
+    };
+    let dependents = log::dependents(&hub.home, session);
+    if !cascade && !dependents.is_empty() {
+        let mut names: Vec<String> = dependents.iter().map(|id| format!("`{}`", id.0)).collect();
+        names.sort();
+        return Err(Refused {
+            code: ErrorCode::SessionHasDependents,
+            message: format!(
+                "Session `{}` has sessions that continue it: {}. `--cascade` deletes them too.",
+                session.0,
+                names.join(", ")
+            ),
+        });
+    }
+    let mut set = vec![(session.clone(), dir)];
+    // A dependent whose directory went since the walk is not deleted.
+    set.extend(
+        dependents
+            .into_iter()
+            .filter_map(|id| session_dir(hub, &id).map(|dir| (id, dir))),
+    );
+    if cascade && let Some(expect) = expect {
+        let set_ids: BTreeSet<&SessionId> = set.iter().map(|(id, _)| id).collect();
+        let wanted: BTreeSet<&SessionId> = expect.iter().collect();
+        confirm(&set_ids, &wanted)?;
+    }
+    Ok(set)
 }
 
 /// `session` (a minted id), `cascade` (default false) and `expect` (an
@@ -94,12 +116,13 @@ struct DeleteArgs {
     session: SessionId,
     cascade: bool,
     expect: Option<BTreeSet<SessionId>>,
+    dry_run: bool,
 }
 
 fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
     if args
         .keys()
-        .any(|key| key != "session" && key != "cascade" && key != "expect")
+        .any(|key| key != "session" && key != "cascade" && key != "expect" && key != "dry_run")
     {
         return None;
     }
@@ -110,6 +133,11 @@ fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
     let cascade = match args.get("cascade") {
         None => false,
         Some(Value::Bool(cascade)) => *cascade,
+        Some(_) => return None,
+    };
+    let dry_run = match args.get("dry_run") {
+        None => false,
+        Some(Value::Bool(dry_run)) => *dry_run,
         Some(_) => return None,
     };
     let expect = match args.get("expect") {
@@ -131,6 +159,7 @@ fn parse(args: &Map<String, Value>) -> Option<DeleteArgs> {
         session: SessionId(session.to_owned()),
         cascade,
         expect,
+        dry_run,
     })
 }
 

@@ -84,6 +84,12 @@ fn refused(hub: &Hub, value: serde_json::Value) -> Refused {
     delete(hub, &args(value)).unwrap_err()
 }
 
+fn dry_run(hub: &Hub, value: serde_json::Value) -> Value {
+    delete(hub, &args(value))
+        .unwrap()
+        .expect("a dry run answers")
+}
+
 /// Sends one line on a served connection and returns the answer after
 /// `hub_hello`.
 fn over_the_wire(hub: &Arc<Hub>, line: &str) -> Value {
@@ -180,6 +186,9 @@ fn arguments_that_do_not_fit_are_invalid_and_remove_nothing() {
         json!({"session": id(1), "cascade": true, "expect": ["../x"]}),
         json!({"session": id(1), "cascade": true, "expect": ["s_0123"]}),
         json!({"session": id(1), "cascade": true, "expect": [format!("../{}", id(1))]}),
+        json!({"session": id(1), "dry_run": "yes"}),
+        json!({"session": id(1), "dry_run": null}),
+        json!({"session": id(1), "dry_run": 1}),
     ] {
         let refused = refused(&hub, bad.clone());
         assert_eq!(refused.code, ErrorCode::InvalidArguments, "{bad}");
@@ -225,6 +234,99 @@ fn a_linked_session_directory_is_not_found_and_its_target_is_untouched() {
     assert_eq!(refused.code, ErrorCode::SessionNotFound);
     assert!(target.join("events.jsonl").is_file());
     assert!(target.join("artifacts/a_1.txt").is_file());
+}
+
+#[test]
+fn a_dry_run_answers_the_set_and_deletes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let other = temp.session("-p", 3, None);
+    let hub = temp.hub();
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(answer, json!({"sessions": [id(1), id(2)]}));
+    for dir in [&root, &fork, &other] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+        assert!(dir.join("session.lock").is_file(), "{}", dir.display());
+    }
+    assert!(fork.join("artifacts/a_1.txt").is_file());
+    // Without `cascade` the dry run names only the session itself.
+    let answer = dry_run(&hub, json!({"session": id(3), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(3)]}));
+    assert!(other.join("events.jsonl").is_file());
+}
+
+#[test]
+fn a_dry_run_keeps_the_refusals_and_still_removes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let hub = temp.hub();
+    // Dependents without `cascade` refuse, as a real delete does.
+    let dependents = refused(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(dependents.code, ErrorCode::SessionHasDependents);
+    // A divergent confirmed set refuses, as a real delete does.
+    let stale = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "expect": [id(1)], "dry_run": true}),
+    );
+    assert_eq!(stale.code, ErrorCode::StaleRequest);
+    // A held session refuses, as a real delete does.
+    let _lock = hold(&root);
+    let held = refused(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(held.code, ErrorCode::SessionHeld);
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn a_dry_run_over_the_wire_answers_the_sessions() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    temp.session("-p", 2, Some(1));
+    let hub = temp.hub();
+    let line = json!({
+        "id": "c_dry",
+        "command": "delete",
+        "args": {"session": id(1), "cascade": true, "dry_run": true}
+    });
+    let answer = over_the_wire(&hub, &line.to_string());
+    assert_eq!(answer["kind"], "command_accepted");
+    assert_eq!(answer["payload"]["command_id"], "c_dry");
+    assert_eq!(
+        answer["payload"]["result"],
+        json!({"sessions": [id(1), id(2)]})
+    );
+}
+
+#[test]
+fn a_dry_run_keeps_the_feed_entry() {
+    let temp = Temp::new();
+    temp.session("-p", 1, None);
+    let row = RecentRow {
+        session_id: SessionId(id(1)),
+        ts: 1,
+        project: "-p".to_owned(),
+        workspace: "/w".to_owned(),
+        name: "n".to_owned(),
+        how: crate::Left::Crashed,
+        status: Some(serde_json::from_value(status("n", "/w", "idle", None)).unwrap()),
+    };
+    recent::append(&temp.dir, &row).unwrap();
+    let hub = temp.hub();
+    hub.feed.start();
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)]}));
+    // The entry is still in the feed: nothing was forgotten.
+    assert_eq!(hub.feed.dismiss(&args(json!({"session": id(1)}))), Ok(None));
+    hub.feed.stop();
 }
 
 #[test]
