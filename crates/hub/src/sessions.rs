@@ -32,32 +32,57 @@ pub(crate) fn answer(
     // no start read of its own; without a callable no clock is read.
     let started = timing.map(|_| clock.now());
     let _timer = timing.and_then(|timing| timing(Op::SessionsList, None, started));
-    let project = project_arg(args)?;
+    let (project, active) = session_args(args)?;
     feed.settled();
-    Ok(Some(list(feed.live(), home, project)))
+    Ok(Some(list_with_active(feed.live(), home, project, active)))
 }
 
-/// `project`, the only key: absent, or a string.
-fn project_arg(args: &Map<String, Value>) -> Result<Option<&str>, Refused> {
-    match (args.len(), args.get("project")) {
-        (0, _) => Ok(None),
-        (1, Some(Value::String(project))) => Ok(Some(project)),
-        _ => Err(invalid()),
+/// `project` (a string keeping only its sessions) and `active` (a boolean
+/// adding each entry's activity): both optional, absent reads as off.
+/// Any other key, a wrong type, or an explicit `null` is rejected, so the
+/// default listing never opens a session log.
+fn session_args(args: &Map<String, Value>) -> Result<(Option<&str>, bool), Refused> {
+    let mut project = None;
+    let mut active = false;
+    for (key, value) in args {
+        match (key.as_str(), value) {
+            ("project", Value::String(kept)) => project = Some(kept.as_str()),
+            ("active", Value::Bool(wanted)) => active = *wanted,
+            _ => return Err(invalid()),
+        }
     }
+    Ok((project, active))
 }
 
 /// The answer from a captured `live` snapshot and `home`'s `recent.jsonl`
-/// as it reads now.
+/// as it reads now, without opening any session log: the default listing.
+/// Test-only: the wire path goes through [`answer`], and the unit tests pin
+/// this default.
+#[cfg(test)]
 pub(crate) fn list(
     live: Vec<(String, SessionStatus)>,
     home: &Path,
     project: Option<&str>,
+) -> Value {
+    list_with_active(live, home, project, false)
+}
+
+/// The same answer, but with `active` every entry also carries its
+/// activity, read from that entry's session log.
+fn list_with_active(
+    live: Vec<(String, SessionStatus)>,
+    home: &Path,
+    project: Option<&str>,
+    active: bool,
 ) -> Value {
     let running: BTreeSet<String> = live.iter().map(|(id, _)| id.clone()).collect();
     let live: Vec<Value> = live
         .into_iter()
         .filter(|(_, status)| project.is_none_or(|key| status.project == key))
         .map(|(id, status)| {
+            if !active {
+                return json!({"session_id": id, "status": status});
+            }
             let dir = log::session_dir(home, &status.project, &SessionId(id.clone()));
             json!({"session_id": id, "status": status, "active": active_of(&dir)})
         })
@@ -66,10 +91,12 @@ pub(crate) fn list(
         .into_iter()
         .filter(|row| !running.contains(&row.session_id.0))
         .map(|row| {
-            let dir = log::session_dir(home, &row.project, &row.session_id);
             let mut entry = serde_json::to_value(&row).unwrap_or(Value::Null);
-            if let Value::Object(ref mut map) = entry {
-                map.insert("active".to_owned(), active_of(&dir));
+            if active {
+                let dir = log::session_dir(home, &row.project, &row.session_id);
+                if let Value::Object(ref mut map) = entry {
+                    map.insert("active".to_owned(), active_of(&dir));
+                }
             }
             entry
         })

@@ -2440,6 +2440,90 @@ fn sessions_over_the_wire_answers_live_and_exited_once() {
     stop_within(&hub.feed);
 }
 
+#[test]
+fn sessions_default_listing_omits_active() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // A live session whose log ran on, and an exited row with a readable
+    // log: neither answer names any activity without `active: true`.
+    let live = "s_00000000000000a1";
+    let session = crate::fake::FakeSession::bind(&temp.dir, live);
+    session.say(&crate::fake::status_line(
+        live,
+        &crate::fake::status("n", "/w", "idle", None),
+    ));
+    write_log(
+        &temp,
+        "-w",
+        live,
+        &format!(
+            "{}{}",
+            started_line(live, 100),
+            log_line("session_status", live, 9000)
+        ),
+    );
+    let exited = "s_00000000000000b2";
+    exited_row(&temp, exited, "p", 3, None);
+    write_log(
+        &temp,
+        "p",
+        exited,
+        &format!(
+            "{}{}",
+            started_line(exited, 50),
+            log_line("fiber_exited", exited, 7000)
+        ),
+    );
+    hub.feed.start();
+    assert!(session.await_subscribed(1, DEADLINE));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    // Missing `active` and `active: false` both list without activity.
+    for (id, args) in [("c_1", json!({})), ("c_2", json!({"active": false}))] {
+        client.send(&command(id, "sessions", args));
+        let (echoed, result) = accepted(&client.next("the listing"));
+        assert_eq!(echoed, id);
+        for entries in ["live", "exited"] {
+            let rows = result.get(entries).unwrap().as_array().unwrap();
+            assert_eq!(rows.len(), 1, "{entries}");
+            assert_eq!(rows[0].get("active"), None, "{entries} {id}");
+        }
+    }
+    stop_within(&hub.feed);
+}
+
+#[test]
+fn sessions_rejects_a_misshaped_active_arg() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    hub.feed.start();
+    for (id, args) in [
+        ("c_1", json!({"active": "yes"})),
+        ("c_2", json!({"active": Value::Null})),
+        ("c_3", json!({"active": 1})),
+        ("c_4", json!({"project": "p", "active": "yes"})),
+        ("c_5", json!({"active": true, "extra": 1})),
+    ] {
+        client.send(&command(id, "sessions", args));
+        let (code, echoed, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "invalid_arguments", "{id}");
+        assert_eq!(echoed.as_deref(), Some(id));
+    }
+    // A project filter composes with `active: true`.
+    client.send(&command(
+        "c_6",
+        "sessions",
+        json!({"project": "p", "active": true}),
+    ));
+    let (echoed, result) = accepted(&client.next("the filtered listing"));
+    assert_eq!(echoed, "c_6");
+    assert_eq!(result.get("live"), Some(&json!([])));
+    assert_eq!(result.get("exited"), Some(&json!([])));
+    stop_within(&hub.feed);
+}
+
 /// A `session_started` first line for `id` at `ts`, as a session writes it.
 fn started_line(id: &str, ts: u64) -> String {
     let line = json!({
@@ -2518,7 +2602,7 @@ fn sessions_entries_carry_the_last_line_ts_never_since_or_row_ts() {
     assert!(session.await_subscribed(1, DEADLINE));
     let mut client = Client::connect(&hub);
     client.hello();
-    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
     let (echoed, result) = accepted(&client.next("the listing"));
     assert_eq!(echoed, "c_1");
     let live_entries = result.get("live").unwrap().as_array().unwrap();
@@ -2547,7 +2631,7 @@ fn sessions_torn_tail_uses_the_last_complete_line() {
     hub.feed.start();
     let mut client = Client::connect(&hub);
     client.hello();
-    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
     let (_, result) = accepted(&client.next("the listing"));
     let exited_entries = result.get("exited").unwrap().as_array().unwrap();
     assert_eq!(exited_entries.len(), 1);
@@ -2576,7 +2660,7 @@ fn sessions_ts_less_tail_falls_back_to_the_opening_ts() {
     hub.feed.start();
     let mut client = Client::connect(&hub);
     client.hello();
-    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
     let (_, result) = accepted(&client.next("the listing"));
     let exited_entries = result.get("exited").unwrap().as_array().unwrap();
     assert_eq!(exited_entries.len(), 1);
@@ -2616,7 +2700,7 @@ fn sessions_row_ts_never_decides_active_either_direction() {
     hub.feed.start();
     let mut client = Client::connect(&hub);
     client.hello();
-    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
     let (_, result) = accepted(&client.next("the listing"));
     let exited_entries = result.get("exited").unwrap().as_array().unwrap();
     assert_eq!(exited_entries.len(), 2);
@@ -2657,7 +2741,7 @@ fn sessions_empty_log_lists_with_null_active_and_skips_delegates() {
     hub.feed.start();
     let mut client = Client::connect(&hub);
     client.hello();
-    client.send(&json!({"id": "c_1", "command": "sessions"}));
+    client.send(&json!({"id": "c_1", "command": "sessions", "args": {"active": true}}));
     let (_, result) = accepted(&client.next("the listing"));
     let exited_entries = result.get("exited").unwrap().as_array().unwrap();
     assert_eq!(exited_entries.len(), 1);
