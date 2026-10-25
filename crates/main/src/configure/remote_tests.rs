@@ -1618,7 +1618,7 @@ fn seam_prune_older_than_boundary_and_invalid_duration() {
 }
 
 #[test]
-fn seam_prune_running_worktree_survives_and_skips_stale() {
+fn seam_prune_running_worktree_mismatch_rejects_before_any_removal() {
     let dirs = Dirs::new();
     let home = dirs.home();
     let clock = fakes::clock::FakeClock::new();
@@ -1648,9 +1648,15 @@ fn seam_prune_running_worktree_survives_and_skips_stale() {
         .unwrap();
     lock.try_lock().unwrap();
     let seam = Seam::new(home.clone());
-    let mut delete = |_: &SessionId, _: bool, _: Option<&BTreeSet<SessionId>>| Ok(());
+    let mut calls = 0;
+    let mut delete = |_: &SessionId, _: bool, _: Option<&BTreeSet<SessionId>>| {
+        calls += 1;
+        Ok(())
+    };
     let key = worktree.display().to_string();
-    let outcome = seam
+    // The previewed worktree is no longer selectable: the whole
+    // request rejects before any removal.
+    let refused = seam
         .prune(
             &home,
             Some("30d".to_owned()),
@@ -1666,12 +1672,9 @@ fn seam_prune_running_worktree_survives_and_skips_stale() {
             clock,
             &mut delete,
         )
-        .unwrap();
-    assert_eq!(outcome.total, 1);
-    assert_eq!(outcome.freed, 0);
-    assert_eq!(outcome.failures.len(), 1);
-    assert_eq!(outcome.failures[0].code, ErrorCode::StaleRequest);
-    assert!(outcome.failures[0].item.contains("w1"));
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert_eq!(calls, 0, "no session reaches the callback on mismatch");
     assert!(worktree.is_dir(), "the running worktree survives");
     drop(lock);
 }

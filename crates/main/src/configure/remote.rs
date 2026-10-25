@@ -724,9 +724,10 @@ impl hub::Machine for Seam {
             diagnostics: expect.diagnostics.into_iter().collect(),
         });
         // The hub-supplied callback passes through untouched: no loopback
-        // connection, no hub socket path. The confirm reselects against
-        // the same `older_than` and `cascade`, so a previewed session
-        // that no longer qualifies is skipped, not deleted.
+        // connection, no hub socket path. The confirm preflights the
+        // exact previewed selection first: any mismatch is `stale_request`
+        // with nothing removed, and the callback runs only after the
+        // preflight succeeds.
         let removed = cli::remove_for_hub(
             home,
             want.as_ref(),
@@ -735,7 +736,7 @@ impl hub::Machine for Seam {
             force,
             clock.as_ref(),
             delete,
-        );
+        )?;
         Ok(hub::PruneOutcome {
             lines: Vec::new(),
             items: contract::commands::hub::PruneExpect {

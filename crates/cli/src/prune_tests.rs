@@ -1307,7 +1307,7 @@ fn select_for_hub_lists_every_project_with_matching_lines_and_bytes() {
 }
 
 #[test]
-fn remove_for_hub_removes_only_previewed_items_and_reports() {
+fn remove_for_hub_rejects_a_newly_selectable_item_before_any_removal() {
     use std::collections::{BTreeMap, BTreeSet};
     let setup = Setup::new();
     let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
@@ -1317,7 +1317,8 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
         "s_00000000000000b2",
         Some("s_00000000000000a1"),
     );
-    // Newly selectable but never previewed: left alone.
+    // Selectable at confirm time but never previewed: the preview was
+    // taken before this session qualified.
     let fresh = project_session(&setup.home(), "alpha", "s_00000000000000c3", None);
     setup.diag(
         "logs",
@@ -1325,7 +1326,12 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
         b"0123456789",
         Duration::from_secs(31 * 24 * 60 * 60),
     );
-    let listed = log::session_bytes(&root) + log::session_bytes(&fork);
+    let old_log = setup
+        .home()
+        .join("logs")
+        .join("old.log")
+        .display()
+        .to_string();
     let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
     sessions.insert(
         SessionId("s_00000000000000a1".into()),
@@ -1334,50 +1340,20 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
             SessionId("s_00000000000000b2".into()),
         ]),
     );
-    // Previewed without cascade: deleted unconstrained.
-    sessions.insert(SessionId("s_00000000000000c4".into()), BTreeSet::new());
     let want = HubPruneWant {
         sessions,
-        worktrees: BTreeSet::from(["/gone/worktree".to_owned()]),
-        pinned: BTreeSet::from(["gone-hash".to_owned()]),
-        diagnostics: BTreeSet::from([
-            setup
-                .home()
-                .join("logs")
-                .join("old.log")
-                .display()
-                .to_string(),
-            setup
-                .home()
-                .join("logs")
-                .join("missing.log")
-                .display()
-                .to_string(),
-        ]),
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::from([old_log]),
     };
-    let missing_diag = setup
-        .home()
-        .join("logs")
-        .join("missing.log")
-        .display()
-        .to_string();
     let mut calls = Vec::new();
     let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
         calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
-        // Reached only when the reselect regresses: the confirm must skip
-        // `c4` before the callback.
-        if id.0 == "s_00000000000000c4" {
-            Err(Failure {
-                code: ErrorCode::SessionNotFound,
-                message: "gone".to_owned(),
-                provider: None,
-                retry_after_ms: None,
-            })
-        } else {
-            Ok(())
-        }
+        Ok(())
     };
-    let removed = remove_for_hub(
+    // A newly selectable item rejects the whole request: no callback,
+    // no removal anywhere.
+    let refused = remove_for_hub(
         &setup.home(),
         Some(&want),
         Some(Duration::from_secs(30 * 24 * 60 * 60)),
@@ -1385,56 +1361,19 @@ fn remove_for_hub_removes_only_previewed_items_and_reports() {
         false,
         clock().as_ref(),
         &mut delete,
-    );
-    assert_eq!(removed.total, 2 + 1 + 1 + 2);
-    // The cascade set travels as `expect`; the missing session never
-    // reaches the callback. Compared as a set: no area doc promises the
-    // callback order.
-    calls.sort();
-    assert_eq!(
-        calls,
-        [(
-            "s_00000000000000a1".to_owned(),
-            true,
-            BTreeSet::from([
-                SessionId("s_00000000000000a1".into()),
-                SessionId("s_00000000000000b2".into())
-            ])
-        ),]
-    );
-    assert_eq!(removed.freed, listed + 10);
-    assert_eq!(
-        removed.failures,
-        [
-            (
-                missing_diag.clone(),
-                ErrorCode::StaleRequest,
-                format!("{missing_diag} is no longer selected; nothing was removed"),
-            ),
-            (
-                "worktree /gone/worktree".to_owned(),
-                ErrorCode::StaleRequest,
-                "worktree /gone/worktree is no longer selected; nothing was removed".to_owned(),
-            ),
-            (
-                "pinned gone-hash".to_owned(),
-                ErrorCode::StaleRequest,
-                "pinned gone-hash is no longer selected; nothing was removed".to_owned(),
-            ),
-            (
-                "s_00000000000000c4".to_owned(),
-                ErrorCode::StaleRequest,
-                "s_00000000000000c4 is no longer selected; nothing was removed".to_owned()
-            ),
-        ]
-    );
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
     assert!(
-        fresh.join("events.jsonl").is_file(),
-        "never previewed, left alone"
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
     );
+    for dir in [&root, &fork, &fresh] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
     assert!(
-        root.join("events.jsonl").is_file(),
-        "the recording callback removes nothing"
+        setup.home().join("logs").join("old.log").is_file(),
+        "no diagnostic is removed on mismatch"
     );
 }
 
@@ -1612,7 +1551,8 @@ fn remove_for_hub_frees_previewed_worktree_and_pinned_bytes() {
         false,
         clock().as_ref(),
         &mut delete,
-    );
+    )
+    .unwrap();
     assert!(calls.is_empty());
     assert!(removed.failures.is_empty());
     assert_eq!(removed.total, 2);
@@ -1627,7 +1567,7 @@ fn remove_for_hub_frees_previewed_worktree_and_pinned_bytes() {
 }
 
 #[test]
-fn remove_for_hub_skips_a_session_that_left_the_selection() {
+fn remove_for_hub_rejects_a_session_that_left_the_selection() {
     use std::collections::{BTreeMap, BTreeSet};
     let setup = Setup::new();
     let dir = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
@@ -1654,7 +1594,9 @@ fn remove_for_hub_skips_a_session_that_left_the_selection() {
         calls.push((id.0.clone(), cascade, expect.cloned()));
         Ok(())
     };
-    let removed = remove_for_hub(
+    // A previewed session that no longer qualifies rejects the whole
+    // request: no callback, nothing removed.
+    let refused = remove_for_hub(
         &setup.home(),
         Some(&want),
         Some(Duration::from_secs(30 * 24 * 60 * 60)),
@@ -1662,22 +1604,63 @@ fn remove_for_hub_skips_a_session_that_left_the_selection() {
         false,
         clock.as_ref(),
         &mut delete,
-    );
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
     assert!(
         calls.is_empty(),
-        "a skipped session never reaches the callback"
-    );
-    assert_eq!(removed.total, 1);
-    assert_eq!(removed.freed, 0);
-    assert_eq!(
-        removed.failures,
-        [(
-            "s_00000000000000a1".to_owned(),
-            ErrorCode::StaleRequest,
-            "s_00000000000000a1 is no longer selected; nothing was removed".to_owned(),
-        )]
+        "no session reaches the callback on mismatch"
     );
     assert!(dir.join("events.jsonl").is_file(), "nothing was removed");
+}
+
+#[test]
+fn remove_for_hub_rejects_a_changed_cascade_set_before_any_removal() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let setup = Setup::new();
+    let root = project_session(&setup.home(), "alpha", "s_00000000000000a1", None);
+    // A fork made while confirmation is open: the cascade set the
+    // preview named no longer matches.
+    let fork = project_session(
+        &setup.home(),
+        "beta",
+        "s_00000000000000b2",
+        Some("s_00000000000000a1"),
+    );
+    let mut sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = BTreeMap::new();
+    sessions.insert(
+        SessionId("s_00000000000000a1".into()),
+        BTreeSet::from([SessionId("s_00000000000000a1".into())]),
+    );
+    let want = HubPruneWant {
+        sessions,
+        worktrees: BTreeSet::new(),
+        pinned: BTreeSet::new(),
+        diagnostics: BTreeSet::new(),
+    };
+    let mut calls = Vec::new();
+    let mut delete = |id: &SessionId, cascade: bool, expect: Option<&BTreeSet<SessionId>>| {
+        calls.push((id.0.clone(), cascade, expect.cloned().unwrap_or_default()));
+        Ok(())
+    };
+    let refused = remove_for_hub(
+        &setup.home(),
+        Some(&want),
+        Some(Duration::from_secs(30 * 24 * 60 * 60)),
+        true,
+        false,
+        clock().as_ref(),
+        &mut delete,
+    )
+    .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StaleRequest);
+    assert!(
+        calls.is_empty(),
+        "no session reaches the callback on mismatch"
+    );
+    for dir in [&root, &fork] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
 }
 
 #[test]
@@ -1713,7 +1696,8 @@ fn remove_for_hub_without_expect_removes_the_current_selection() {
         false,
         clock().as_ref(),
         &mut delete,
-    );
+    )
+    .unwrap();
     // The cascade set travels as `expect`, as with a preview.
     assert_eq!(
         calls,

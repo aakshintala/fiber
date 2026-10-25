@@ -96,6 +96,7 @@ pub struct HubPruneWant {
 
 /// What a confirmed hub prune removed: the space freed, each item that
 /// failed or was skipped, and how many items it tried to remove.
+#[derive(Debug)]
 pub struct HubPruneRemoved {
     /// The bytes removed.
     pub freed: u64,
@@ -494,17 +495,29 @@ fn expect_sets(selected: &sessions::Selected) -> BTreeMap<SessionId, BTreeSet<Se
         .collect()
 }
 
+/// The whole-request rejection when a `Some` confirm's preview no longer
+/// matches the reselected sets: nothing was removed.
+fn stale_selection() -> Failure {
+    Failure {
+        code: ErrorCode::StaleRequest,
+        message: "the prune selection changed since the preview; nothing was removed".to_owned(),
+        provider: None,
+        retry_after_ms: None,
+    }
+}
+
 /// Removes `want` across every project under `home`: diagnostics, then
-/// worktrees, then pinned copies, then sessions through `delete`. With
-/// `Some`, each side reselects first and acts only on items in both the
-/// reselection and `want`: a newly selectable item is left alone, and a
-/// previewed item that no longer qualifies is skipped and reported.
+/// worktrees, then pinned copies, then sessions through `delete`. Every
+/// side reselects before the first removal. With `Some`, the confirm
+/// preflights the exact previewed item sets and every session cascade
+/// set against the reselection: a newly selectable item, a previewed
+/// item that no longer qualifies, or a changed cascade set rejects the
+/// whole request as `stale_request` before anything is removed.
 /// With `None` (`--yes`, no preview and no `expect`, as locally) the
 /// confirm removes the current selection: everything each side's
 /// reselection still lists.
-/// Sessions delete with their cascade set as `expect`, so a set
-/// that changed mid-prompt fails that one session without failing the
-/// prune; an empty set deletes unconstrained.
+/// Sessions delete with their cascade set as `expect`; an empty set
+/// deletes unconstrained.
 pub fn remove_for_hub(
     home: &Path,
     want: Option<&HubPruneWant>,
@@ -513,11 +526,13 @@ pub fn remove_for_hub(
     force: bool,
     clock: &dyn Clock,
     delete: &mut HubDelete<'_>,
-) -> HubPruneRemoved {
+) -> Result<HubPruneRemoved, Failure> {
     let now = clock.wall();
     let started_sessions = log::started_sessions(home);
     let mut freed = 0_u64;
     let mut failures = Vec::new();
+    // Reselect every side before the first removal, so a `Some`
+    // preflight compares the whole selection before anything changes.
     // Diagnostics first, as the local path removes them first.
     let (logs, crashes) = (
         old_diagnostics(&config::logs_dir(home), now),
@@ -528,20 +543,60 @@ pub fn remove_for_hub(
         .chain(crashes.iter())
         .map(|file| file.path.display().to_string())
         .collect();
+    // Worktrees reselect with their locks held, as the local confirm does.
+    let mut planned =
+        worktrees::select_scoped(home, &started_sessions, Scope::HubWide, force, false, now);
+    let selected_worktrees: BTreeSet<String> = planned
+        .removals
+        .iter()
+        .map(|removal| removal.dir.display().to_string())
+        .collect();
+    // Pinned copies reselect the same way.
+    let mut pinned_plan = pinned::select_scoped(home, &started_sessions, Scope::HubWide, clock);
+    let selected_pinned: BTreeSet<String> = pinned_plan
+        .removals
+        .iter()
+        .map(|removal| removal.hash.clone())
+        .collect();
+    // Sessions reselect against `older_than` first, as the worktrees do
+    // against their locks.
+    let reselected = sessions::select_scoped(
+        home,
+        &started_sessions,
+        Scope::HubWide,
+        older_than,
+        cascade,
+        now,
+    );
+    let current_sessions = expect_sets(&reselected);
     // Without `expect` the confirm removes the current selection:
-    // every diagnostic the reselect still lists.
+    // everything each side's reselection still lists. With `Some`,
+    // the confirm preflights the exact previewed item sets and every
+    // session cascade set: any mismatch rejects the whole request
+    // before anything is removed.
     let wanted_diagnostics: BTreeSet<String> = match want {
         Some(want) => want.diagnostics.clone(),
         None => present.clone(),
     };
-    for key in &wanted_diagnostics {
-        if !present.contains(key) {
-            failures.push((
-                key.clone(),
-                ErrorCode::StaleRequest,
-                format!("{key} is no longer selected; nothing was removed"),
-            ));
-        }
+    let wanted_worktrees: BTreeSet<String> = match want {
+        Some(want) => want.worktrees.clone(),
+        None => selected_worktrees.clone(),
+    };
+    let wanted_pinned: BTreeSet<String> = match want {
+        Some(want) => want.pinned.clone(),
+        None => selected_pinned.clone(),
+    };
+    let wanted_sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = match want {
+        Some(want) => want.sessions.clone(),
+        None => current_sessions.clone(),
+    };
+    if let Some(want) = want
+        && (want.diagnostics != present
+            || want.worktrees != selected_worktrees
+            || want.pinned != selected_pinned
+            || want.sessions != current_sessions)
+    {
+        return Err(stale_selection());
     }
     let kept: Vec<OldFile> = logs
         .into_iter()
@@ -556,96 +611,31 @@ pub fn remove_for_hub(
             .into_iter()
             .map(|(path, message)| (path, ErrorCode::IoFailed, message)),
     );
-    // Worktrees reselect with their locks held, as the local confirm does.
-    let mut planned =
-        worktrees::select_scoped(home, &started_sessions, Scope::HubWide, force, false, now);
-    let selected: BTreeSet<String> = planned
-        .removals
-        .iter()
-        .map(|removal| removal.dir.display().to_string())
-        .collect();
-    let wanted_worktrees: BTreeSet<String> = match want {
-        Some(want) => want.worktrees.clone(),
-        None => selected.clone(),
-    };
-    for key in &wanted_worktrees {
-        if !selected.contains(key) {
-            failures.push((
-                format!("worktree {key}"),
-                ErrorCode::StaleRequest,
-                format!("worktree {key} is no longer selected; nothing was removed"),
-            ));
-        }
-    }
     planned
         .removals
         .retain(|removal| wanted_worktrees.contains(&removal.dir.display().to_string()));
     let removed_worktrees = worktrees::remove_planned(home, &mut planned, force, &mut |_| {});
     freed += removed_worktrees.freed;
     failures.extend(removed_worktrees.failures);
-    // Pinned copies reselect the same way.
-    let mut pinned_plan = pinned::select_scoped(home, &started_sessions, Scope::HubWide, clock);
-    let selected: BTreeSet<String> = pinned_plan
-        .removals
-        .iter()
-        .map(|removal| removal.hash.clone())
-        .collect();
-    let wanted_pinned: BTreeSet<String> = match want {
-        Some(want) => want.pinned.clone(),
-        None => selected.clone(),
-    };
-    for key in &wanted_pinned {
-        if !selected.contains(key) {
-            failures.push((
-                format!("pinned {key}"),
-                ErrorCode::StaleRequest,
-                format!("pinned {key} is no longer selected; nothing was removed"),
-            ));
-        }
-    }
     pinned_plan
         .removals
         .retain(|removal| wanted_pinned.contains(&removal.hash));
     let removed_pinned = pinned::remove_planned(home, &pinned_plan, clock, &mut |_| {});
     freed += removed_pinned.freed;
     failures.extend(removed_pinned.failures);
-    // Sessions reselect against `older_than` first, as the worktrees do
-    // against their locks: a previewed session that no longer qualifies
-    // is skipped and reported, and only the intersection reaches the
-    // callback. Each delete carries its previewed cascade set as
-    // `expect`, so a set that changed mid-prompt fails that one session
-    // without failing the prune; an empty set deletes unconstrained.
+    // The preflight above guarantees every wanted session is still
+    // selected, so every delete reaches the callback. Each delete
+    // carries its cascade set as `expect`, so a set that changed after
+    // preflight fails that one session without failing the prune; an
+    // empty set deletes unconstrained.
     // Listed bytes are read before each delete, so a removed session
     // counts exactly the bytes its set held.
-    let reselected = sessions::select_scoped(
-        home,
-        &started_sessions,
-        Scope::HubWide,
-        older_than,
-        cascade,
-        now,
-    );
-    // Without `expect` the confirm removes the current selection:
-    // every delete the reselect still lists, with its cascade set.
-    let wanted_sessions: BTreeMap<SessionId, BTreeSet<SessionId>> = match want {
-        Some(want) => want.sessions.clone(),
-        None => expect_sets(&reselected),
-    };
-    let live: BTreeSet<&SessionId> = reselected.deletes.iter().map(|delete| &delete.id).collect();
     let mut deletes: Vec<sessions::Delete> = Vec::with_capacity(wanted_sessions.len());
     for (id, set) in &wanted_sessions {
-        if live.contains(id) {
-            deletes.push(sessions::Delete {
-                id: id.clone(),
-                cascade: !set.is_empty(),
-            });
-        } else {
-            failures.push((
-                id.0.clone(),
-                ErrorCode::StaleRequest,
-                format!("{} is no longer selected; nothing was removed", id.0),
-            ));
-        }
+        deletes.push(sessions::Delete {
+            id: id.clone(),
+            cascade: !set.is_empty(),
+        });
     }
     let listed: BTreeMap<&SessionId, u64> = deletes
         .iter()
@@ -675,14 +665,14 @@ pub fn remove_for_hub(
             }
         }
     }
-    HubPruneRemoved {
+    Ok(HubPruneRemoved {
         freed,
         failures,
         total: wanted_diagnostics.len()
             + wanted_worktrees.len()
             + wanted_pinned.len()
             + wanted_sessions.len(),
-    }
+    })
 }
 
 /// One session row, fields separated by two spaces.

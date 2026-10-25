@@ -76,13 +76,25 @@ fn list_with_active(
     active: bool,
 ) -> Value {
     let running: BTreeSet<String> = live.iter().map(|(id, _)| id.clone()).collect();
+    if !active {
+        // The default listing opens no session log: typed rows straight
+        // into the answer, as before opt-in activity, so the listing
+        // keeps the `sessions_list_ms` budget.
+        let live: Vec<Value> = live
+            .into_iter()
+            .filter(|(_, status)| project.is_none_or(|key| status.project == key))
+            .map(|(id, status)| json!({"session_id": id, "status": status}))
+            .collect();
+        let exited: Vec<recent::RecentRow> = recent::listed(home, project)
+            .into_iter()
+            .filter(|row| !running.contains(&row.session_id.0))
+            .collect();
+        return json!({"live": live, "exited": exited});
+    }
     let live: Vec<Value> = live
         .into_iter()
         .filter(|(_, status)| project.is_none_or(|key| status.project == key))
         .map(|(id, status)| {
-            if !active {
-                return json!({"session_id": id, "status": status});
-            }
             let dir = log::session_dir(home, &status.project, &SessionId(id.clone()));
             json!({"session_id": id, "status": status, "active": active_of(&dir)})
         })
@@ -92,11 +104,9 @@ fn list_with_active(
         .filter(|row| !running.contains(&row.session_id.0))
         .map(|row| {
             let mut entry = serde_json::to_value(&row).unwrap_or(Value::Null);
-            if active {
-                let dir = log::session_dir(home, &row.project, &row.session_id);
-                if let Value::Object(ref mut map) = entry {
-                    map.insert("active".to_owned(), active_of(&dir));
-                }
+            let dir = log::session_dir(home, &row.project, &row.session_id);
+            if let Value::Object(ref mut map) = entry {
+                map.insert("active".to_owned(), active_of(&dir));
             }
             entry
         })
