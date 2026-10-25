@@ -494,6 +494,15 @@ fn field<'a>(record: &'a Value, key: &str) -> Option<&'a str> {
     record.get(key).and_then(Value::as_str)
 }
 
+/// The record for test `name`, found by its title: the writer loop handles
+/// each record on its own, so record order is not part of the contract.
+fn titled<'a>(out: &'a [Value], name: &str) -> &'a Value {
+    let title = format!("Flaky test: {name}");
+    out.iter()
+        .find(|record| field(record, "title") == Some(title.as_str()))
+        .unwrap_or_else(|| panic!("no record titled {title}"))
+}
+
 #[test]
 fn a_panic_with_a_file_goes_on_to_the_lookup() {
     let line = format!("main::t\t{PANIC}");
@@ -573,15 +582,15 @@ fn only_a_stale_base_record_names_the_base() {
         &pr_run(BASE_SHA, HEAD_SHA, "crates/old.rs", "crates/new.rs"),
     );
     assert_eq!(out.len(), 3);
-    for record in &out {
-        let want = (field(record, "action") == Some("stale-base")).then_some(BASE_SHA);
-        assert_eq!(field(record, "base"), want, "{record}");
+    for (name, action, base) in [
+        ("main::old", "stale-base", Some(BASE_SHA)),
+        ("main::new", "pr-owned", None),
+        ("main::other", "lookup", None),
+    ] {
+        let record = titled(&out, name);
+        assert_eq!(field(record, "action"), Some(action), "{record}");
+        assert_eq!(field(record, "base"), base, "{record}");
     }
-    let actions: Vec<_> = out.iter().map(|record| field(record, "action")).collect();
-    assert_eq!(
-        actions,
-        vec![Some("stale-base"), Some("pr-owned"), Some("lookup")]
-    );
 }
 
 #[test]
@@ -620,15 +629,15 @@ fn a_line_that_is_only_a_tab_names_the_empty_test() {
 fn blank_lines_are_skipped() {
     let out = classified(&[("linux", "main::a\n\nmain::b\n")], &push_run());
     assert_eq!(out.len(), 2);
-    assert_eq!(field(&out[0], "title"), Some("Flaky test: main::a"));
-    assert_eq!(field(&out[1], "title"), Some("Flaky test: main::b"));
+    titled(&out, "main::a");
+    titled(&out, "main::b");
 }
 
 #[test]
 fn a_last_line_without_a_newline_is_kept() {
     let out = classified(&[("linux", "main::a\nmain::b")], &push_run());
     assert_eq!(out.len(), 2);
-    assert_eq!(field(&out[1], "title"), Some("Flaky test: main::b"));
+    titled(&out, "main::b");
 }
 
 #[test]
@@ -669,9 +678,9 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
 
 #[test]
 fn list_files_are_read_in_name_byte_order() {
-    // The runner and detail of a repeated title come from its first
-    // occurrence in file-name byte order, as the old shell writer read
-    // them: ticket #3318 requires the same outputs. `-` (0x2d) sorts
+    // docs/testing/running.md, "Flaky tests", promises this order: "a
+    // repeated title takes its runner and detail from its first
+    // occurrence in file-name byte order". `-` (0x2d) sorts
     // before `.` (0x2e), so the arm file is read first and its
     // occurrence wins the dedupe.
     let names = vec![
