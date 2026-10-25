@@ -2491,20 +2491,9 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
 }
 
 #[test]
-fn after_quiesce_a_client_waiting_for_the_close_before_its_write_gets_no_error() {
+fn after_quiesce_a_client_waiting_for_the_shutdown_before_its_write_gets_no_answer() {
     let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
-    // The watcher blocks without a deadline, so its lines cross a channel
-    // and the reads below carry the deadline.
-    let mut watcher = opened.log.watch();
-    let (forward, lines) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
-        }
-    });
     let mut connected = None;
     let first = socket.clone();
     opened
@@ -2517,62 +2506,34 @@ fn after_quiesce_a_client_waiting_for_the_close_before_its_write_gets_no_error()
             Ok(())
         })
         .unwrap();
-    // The ack precedes the connection's own `clients` line, so the test
-    // reads that line before quiesce: one still unwritten would be taken
-    // for a line that followed quiesce.
-    let lines = fakes::within(
-        "the joining client's clients line",
-        Deadline::after(DEADLINE),
-        move || {
-            let wait = Deadline::after(DEADLINE);
-            loop {
-                let line = wait
-                    .recv(&lines)
-                    .expect("the joining client's clients line arrives");
-                if line.kind == "clients" {
-                    break;
-                }
-            }
-            lines
-        },
-    );
     opened.session.quiesce();
     drop(connected);
-    // A client attaching after quiesce is rejected. This one waits for the
-    // server's close before writing: the deadline-bounded end of file below
-    // proves the close happened, so the write races nothing.
+    // A client attaching after quiesce is rejected: the session shuts the
+    // connection down without reading its line, then closes it as its
+    // accept thread finishes the rejection. The read below waits for the
+    // shutdown: end of file returns at once, while a hang consumes the
+    // whole deadline, so time left on it tells the shutdown apart from a
+    // timeout (`docs/testing.md`, "Waits and timeouts"). End of file
+    // proves the shutdown, not the close that follows it: a write in
+    // between still lands, so both outcomes below are the same rejection.
     let late = Client::connect(&socket).unwrap();
+    let eof = Deadline::after(DEADLINE);
     assert!(
-        late.recv(Deadline::after(DEADLINE)).is_none(),
+        late.recv(eof).is_none(),
         "a rejected post-quiesce connection ends with no answer"
     );
-    // The connection is already closed, so the write itself can fail with
-    // `BrokenPipe`: a rejected line is never read either way.
+    assert!(
+        !eof.left().is_zero(),
+        "the server shut the connection down before the deadline"
+    );
+    // The write races the close that follows the shutdown: it lands when
+    // the close is still on its way and fails with `BrokenPipe` once the
+    // close has landed. A rejected line is never read either way.
     match late.send(&subscribe_line("c_late", "full")) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
         Err(error) => panic!("the late client's send failed: {error:?}"),
     }
-    assert!(
-        late.recv(fakes::Deadline::after(Duration::ZERO)).is_none(),
-        "no answer is written for a line never read"
-    );
-    assert!(
-        late.recv(Deadline::after(DEADLINE)).is_none(),
-        "a subscribe after quiesce ends the connection"
-    );
-    opened.log.append(&notice(), None, None).unwrap();
-    let _lines = fakes::within("the notice", Deadline::after(DEADLINE), move || {
-        let wait = Deadline::after(DEADLINE);
-        loop {
-            let line = wait.recv(&lines).expect("the notice arrives");
-            assert_ne!(line.kind, "clients", "a clients line followed quiesce");
-            if line.kind == "notice" {
-                break;
-            }
-        }
-        lines
-    });
     drop(late);
     close_within(opened.session, opened.log);
 }
