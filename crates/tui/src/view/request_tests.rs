@@ -1337,3 +1337,154 @@ fn long_feedback_keeps_the_cursor_on_the_deny_row() {
     // The next row is the blank one: the stripe alone.
     assert_eq!(rows[9], "▌", "{shown}");
 }
+
+/// A drag over a question form copies its rows' text: the prompt's
+/// wrapped rows join with the space the wrap dropped, and a blank row
+/// between the prompt and the options starts its own line
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_a_question_form_copies_its_wrapped_prompt() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = asking(four_long_options(), 80, 24);
+    let (screen, _) = screen(&app, 80, 24);
+    let (y, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("description long"))
+        .map(|(y, line)| (u16::try_from(y).unwrap_or(u16::MAX), line.to_owned()))
+        .expect("the wrapped description draws");
+    // The column counts cells, not bytes: the row's marks are multibyte.
+    let prefix = line.split("description").next().unwrap_or_default();
+    let x = crate::text::to_u16(crate::format::width(prefix));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let _ = screen;
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), x, y);
+    let _ = report(MouseKind::Drag(Button::Left), x + 10, y);
+    assert_eq!(
+        report(MouseKind::Release, x + 10, y),
+        crate::app::Effect::Copy("description".to_owned())
+    );
+}
+
+/// A drag across two of the form's lines breaks between them: each
+/// line starts its own line in the copy (`docs/tui.md`, "Selection
+/// and copy").
+#[test]
+fn a_drag_across_two_lines_breaks_between_them() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = asking(base_and_name(false), 80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let (screen, _) = screen(&app, 80, 24);
+    let find_row = |needle: &str| {
+        screen
+            .lines()
+            .position(|line| line.contains(needle))
+            .map(|y| u16::try_from(y).unwrap_or(u16::MAX))
+            .unwrap_or_else(|| panic!("{needle} draws: {screen}"))
+    };
+    let find_col = |needle: &str, y: u16| {
+        let line = screen.lines().nth(usize::from(y)).unwrap_or_default();
+        let at = line
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} on row {y}"));
+        u16::try_from(line[..at].chars().count()).unwrap_or(u16::MAX)
+    };
+    let y0 = find_row("Which branch?");
+    // The first option draws two rows below its question.
+    let y1 = y0 + 2;
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), find_col("Which", y0), y0);
+    let _ = report(MouseKind::Drag(Button::Left), 10, y1);
+    let effect = report(MouseKind::Release, 10, y1);
+    let Effect::Copy(copy) = effect else {
+        panic!("the drag copies, got {effect:?}");
+    };
+    assert_eq!(copy, "Which branch?\n\n\u{25b8} 1 ( ) m");
+}
+
+/// A drag across a wrapped row keeps the space the wrap dropped: the
+/// continuation joins with the space, and a break inside a word joins
+/// with nothing (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_across_a_wrap_keeps_the_dropped_space() {
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = asking(four_long_options(), 30, 24);
+    let area = Rect::new(0, 0, 30, 24);
+    let (screen, _) = screen(&app, 30, 24);
+    let y0 = screen
+        .lines()
+        .position(|line| line.contains("description"))
+        .map(|y| u16::try_from(y).unwrap_or(u16::MAX))
+        .unwrap_or_else(|| panic!("the description draws: {screen}"));
+    let line = screen
+        .lines()
+        .nth(usize::from(y0))
+        .unwrap_or_default()
+        .to_owned();
+    let byte = line
+        .find("description")
+        .unwrap_or_else(|| panic!("description on row {y0}: {line:?}"));
+    let col = u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX);
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), col, y0);
+    let _ = report(MouseKind::Drag(Button::Left), col + 4, y0 + 2);
+    let effect = report(MouseKind::Release, col + 4, y0 + 2);
+    let Effect::Copy(copy) = effect else {
+        panic!("the drag copies, got {effect:?}");
+    };
+    assert_eq!(copy, "description long enough to wrap at forty columns");
+}
+
+/// A drag across a line scrolled half off the panel copies the
+/// rows still shown: the note skips the paragraph rows above the
+/// drawn ones (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_scrolled_line_copies_its_shown_text() {
+    use crate::keys::Key;
+    use crate::keys::{Button, Mouse, MouseKind};
+    let mut app = asking(four_long_options(), 30, 10);
+    for _ in 0..3 {
+        app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    }
+    let area = Rect::new(0, 0, 30, 10);
+    let (screen, _) = screen(&app, 30, 10);
+    assert!(
+        screen
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("columns")),
+        "the first option's last row stays on top: {screen}"
+    );
+    let mut pointer = crate::mouse::Pointer::default();
+    let now = fakes::clock::FakeClock::new().now();
+    let mut report = |kind: MouseKind, col: u16, row: u16| {
+        let mut buf = Buffer::empty(area);
+        let targets = crate::view::render(&app, area, &mut buf, None);
+        app.on_mouse(&Mouse { kind, col, row }, &targets, &mut pointer, true, now)
+    };
+    let _ = report(MouseKind::Press(Button::Left), 2, 0);
+    let _ = report(MouseKind::Drag(Button::Left), 10, 1);
+    let effect = report(MouseKind::Release, 10, 1);
+    assert_eq!(effect, Effect::Copy("columns\n  2 ( ) t".to_owned()));
+}

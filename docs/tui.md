@@ -1492,11 +1492,28 @@ The other interactions, `confirm`, `select`, `multi_select` and `text_input`, ra
 
 ### Selection and copy
 
-Dragging selects conversation text, unwrapped and excluding the panel, and
-copies on release. "Copied" shows in `info` in the conversation's top-right
-corner, below the search box when it is open. The selection is on the
-`selection` tint. The terminal owns Cmd+C (Ghostty binds
+Dragging selects text on any surface that shows it, and copies on release,
+as the conversation does today. That covers the input box, notices, panel
+cards, overlays (pickers, the login overlay, `/settings`), the approval
+panel, question forms and swapped views. The press claims the surface it
+starts on: a drag selects within that surface and does not spill into a
+neighbour, even when the pointer leaves the window. "Copied" shows in
+`info` in the conversation's top-right corner, below the search box when
+it is open. The selection is on the `selection` tint, painted over every
+surface's own rects. The terminal owns Cmd+C (Ghostty binds
 `super+c=copy_to_clipboard`), which is why release copies.
+
+A surface's renderer already draws its text as spans, the same spans that
+make selection, copy and search work in the conversation. Every surface
+uses that span shape. A span is either text or decoration. What a
+selection copies is the text spans that fall inside it. Decoration never
+goes into the copy: stripes, half-block edges, chips' brackets, key
+hints, the focus gutter and mark, borders, the scroll bar, and the "…"
+a cut adds. A selected paste token or image copies its visible label,
+never its hidden payload or bytes. A row that wraps onto the next is
+joined with no newline; a line break in the text is a newline. Trailing
+spaces on each row are dropped. A cut element copies what is drawn,
+without the "…". Its whole text is one click away, in the overlay.
 
 The copy goes through OSC 52 and, on a local session, the system clipboard
 command as well. tmux's default `set-clipboard external` drops OSC 52
@@ -1519,6 +1536,24 @@ reply to copy in this view."
 
 Shift-drag stays the terminal's native selection. A selection's highlight
 counts as open, so Esc clears it before it can interrupt the turn.
+
+The input box keeps the selection as the editor's selection too. Typing
+or a paste replaces it, and Backspace or Delete removes it. An unshifted
+cursor key clears it: ← and Home leave the cursor at the selection's
+start, and → and End at its end; ↑ and ↓ clear it and then move as usual.
+A click in the box clears the selection and places the cursor. Shift with
+the arrow keys stays out of this rule. Release still copies.
+
+A press-and-release with no movement is still a click, so mouse targets
+keep working. A drag that starts on a target selects instead of clicking:
+once the pointer leaves the press's cell the click is disarmed and the
+release clicks nothing. Rail and panel edge drags keep resizing and never
+start a text selection.
+
+A notice that would fade, or an overlay that would close by itself, waits
+while a drag is in progress. On release the copy happens first, then the
+waiting fade or close. A close the person asks for, such as Esc or a
+click, is never part of a drag, so this rule does not touch it.
 
 ### Search
 

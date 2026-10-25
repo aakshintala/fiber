@@ -548,3 +548,59 @@ fn wrap_runs_drops_a_space_before_a_word_after_a_newline() {
     let rows = super::wrap_runs(&[("x ".to_owned(), plain), ("\nabc".to_owned(), plain)], 10);
     assert_eq!(row_texts(&rows), ["x", "abc"]);
 }
+
+#[test]
+fn wrapped_rows_join_as_the_source_reads() {
+    use crate::rows::Join;
+    use ratatui::style::Style;
+    let rows = super::wrap_joined_runs(&[("ab cd ef".to_owned(), Style::new())], 5);
+    let plain: Vec<(String, Join)> = rows
+        .into_iter()
+        .map(|(spans, join)| {
+            (
+                spans.iter().map(|span| span.content.clone()).collect(),
+                join,
+            )
+        })
+        .collect();
+    assert_eq!(
+        plain,
+        vec![
+            ("ab cd".to_owned(), Join::Break),
+            ("ef".to_owned(), Join::WrapSpace),
+        ]
+    );
+    // A word broken mid-word joins with nothing.
+    let rows = super::wrap_joined_runs(&[("abcdefgh".to_owned(), Style::new())], 5);
+    let plain: Vec<(String, Join)> = rows
+        .into_iter()
+        .map(|(spans, join)| {
+            (
+                spans.iter().map(|span| span.content.clone()).collect(),
+                join,
+            )
+        })
+        .collect();
+    assert_eq!(
+        plain,
+        vec![
+            ("abcde".to_owned(), Join::Break),
+            ("fgh".to_owned(), Join::Wrap),
+        ]
+    );
+    // A newline breaks the line even with no blank row drawn.
+    let rows = super::wrap_joined_runs(&[("a\nb".to_owned(), Style::new())], 10);
+    let plain: Vec<(String, Join)> = rows
+        .into_iter()
+        .map(|(spans, join)| {
+            (
+                spans.iter().map(|span| span.content.clone()).collect(),
+                join,
+            )
+        })
+        .collect();
+    assert_eq!(
+        plain,
+        vec![("a".to_owned(), Join::Break), ("b".to_owned(), Join::Break)]
+    );
+}
