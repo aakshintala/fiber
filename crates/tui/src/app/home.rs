@@ -686,7 +686,10 @@ impl App {
                             home.recent_ask = None;
                         }
                         if accepted {
-                            let rows = hub
+                            // The unscoped answer's `total` is never
+                            // stored: only a scoped answer sets a
+                            // project's count.
+                            let (rows, _) = hub
                                 .payload
                                 .get("result")
                                 .map(recent_rows)
