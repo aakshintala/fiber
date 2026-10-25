@@ -184,14 +184,12 @@ fn serve_with_hub_at(
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    let idle_seam: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(|_| {});
-    serve_with_hub_at_peak_between_and_starter(
+    serve_with_hub_at_peak_and_starter(
         temp,
         idle,
         clock,
         level,
         log::diag::peak_kib,
-        idle_seam,
         FakeStarter::hang(&temp.dir),
     )
 }
@@ -204,31 +202,20 @@ fn serve_with_hub_at_and_starter(
     level: Level,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    let idle_seam: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(|_| {});
-    serve_with_hub_at_peak_between_and_starter(
-        temp,
-        idle,
-        clock,
-        level,
-        log::diag::peak_kib,
-        idle_seam,
-        starter,
-    )
+    serve_with_hub_at_peak_and_starter(temp, idle, clock, level, log::diag::peak_kib, starter)
 }
 
-/// [`serve_with_hub_at`] reading the peak memory with `peak` and running
-/// `between` between the stop lines' two appends. Tests use them to
-/// force the stop-pair race with a deterministic `peak_memory` value.
-fn serve_with_hub_at_peak_between_and_starter(
+/// [`serve_with_hub_at`] reading the peak memory with `peak`. Tests use
+/// it to check the stop pair with a deterministic `peak_memory` value.
+fn serve_with_hub_at_peak_and_starter(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
     level: Level,
     peak: fn() -> Option<u64>,
-    between: Arc<dyn Fn(bool) + Send + Sync>,
     starter: FakeStarter,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
-    // Keeps its own hub: the diag carries the test's level, peak reader and between hook.
+    // Keeps its own hub: the diag carries the test's level and peak reader.
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
@@ -237,8 +224,7 @@ fn serve_with_hub_at_peak_between_and_starter(
         Arc::clone(&timed),
         crate::diag::open(&temp.dir, timed)
             .with_level(level)
-            .with_peak(peak)
-            .with_between(between),
+            .with_peak(peak),
     ));
     hub.diag
         .line(Severity::Info, None, "hub_started", "The hub started.");
@@ -1119,22 +1105,12 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
 fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    // The seam runs between the stop lines' two appends and reports
-    // whether the log's lock is still held, which only the single-lock
-    // implementation can satisfy. No threads, no waits: the property
-    // is read directly off the lock.
-    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let between: Arc<dyn Fn(bool) + Send + Sync> = Arc::new({
-        let calls = Arc::clone(&calls);
-        move |held| calls.lock().unwrap().push(held)
-    });
-    let (hub, got, done) = serve_with_hub_at_peak_between_and_starter(
+    let (hub, got, done) = serve_with_hub_at_peak_and_starter(
         &temp,
         IDLE,
         Arc::clone(&clock),
         Level::Debug,
         || Some(9),
-        between,
         FakeStarter::hang(&temp.dir),
     );
     await_idle_park(&clock, clock.origin(), "at start");
@@ -1149,7 +1125,6 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
         143
     );
     drop(client);
-    assert_eq!(*calls.lock().unwrap(), [true]);
     let lines: Vec<serde_json::Value> = temp
         .log()
         .lines()
