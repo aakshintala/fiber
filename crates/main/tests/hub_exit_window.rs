@@ -245,6 +245,54 @@ fn position(lines: &[Value], id: &str) -> usize {
         .unwrap_or_else(|| panic!("no answer for {id}; got {lines:?}"))
 }
 
+/// One short line per socket line for failure output: the kind plus
+/// `payload.command_id`, `payload.code`, and `seq` where present. Large
+/// env/prompt payloads are what truncated the original `{lines:?}` dump, so
+/// the summary carries only what the next sighting's triage needs.
+fn summarize_lines(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let mut summary = line["kind"].as_str().unwrap_or("?").to_owned();
+            if let Some(command_id) = line["payload"]["command_id"].as_str() {
+                summary.push_str(&format!(" command_id={command_id}"));
+            }
+            if let Some(code) = line["payload"]["code"].as_str() {
+                summary.push_str(&format!(" code={code}"));
+            }
+            if let Some(seq) = line["seq"].as_u64() {
+                summary.push_str(&format!(" seq={seq}"));
+            }
+            summary
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn line_summary_keeps_what_the_next_sighting_needs() {
+    let lines = vec![
+        json!({"kind": "command_rejected", "payload": {"command_id": "c_p", "code": "closing"}}),
+        json!({"kind": "command_rejected", "payload": {"command_id": "c_p", "code": "indeterminate"}}),
+        json!({"kind": "fiber_exited"}),
+        json!({"kind": "command_accepted", "payload": {"command_id": "c_after"}, "seq": 7}),
+        json!({"payload": {"command_id": "c_x"}}),
+    ];
+    assert_eq!(
+        summarize_lines(&lines),
+        "command_rejected command_id=c_p code=closing\n\
+         command_rejected command_id=c_p code=indeterminate\n\
+         fiber_exited\n\
+         command_accepted command_id=c_after seq=7\n\
+         ? command_id=c_x"
+    );
+    assert_eq!(
+        summarize_lines(&lines).lines().count(),
+        lines.len(),
+        "one summary line per socket line"
+    );
+}
+
 #[test]
 fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     let world = World::new(2);
@@ -458,8 +506,20 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
         1,
         "exactly one answer for the prompt: {lines:?}"
     );
-    assert_eq!(prompted[0]["kind"], "command_rejected", "{lines:?}");
-    assert_eq!(prompted[0]["payload"]["code"], "closing", "{lines:?}");
+    assert_eq!(
+        prompted[0]["kind"],
+        "command_rejected",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
+    assert_eq!(
+        prompted[0]["payload"]["code"],
+        "closing",
+        "prompted[0] = {}\nlines:\n{}",
+        prompted[0],
+        summarize_lines(&lines)
+    );
     assert!(
         position(&lines, "c_q") < position(&lines, "c_q2")
             && position(&lines, "c_q2") < position(&lines, "c_p"),
