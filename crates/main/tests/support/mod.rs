@@ -932,11 +932,11 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
 
 /// The `hub.log` lines a startup-failure report shows, matching the
 /// installed-hub start helper's tail.
-const HUB_LOG_TAIL: usize = 20;
+pub(crate) const HUB_LOG_TAIL: usize = 20;
 
 /// The tail of `log`: its last [`HUB_LOG_TAIL`] lines, or the whole log
 /// when shorter. An empty log stays empty.
-fn hub_log_tail(log: &str) -> String {
+pub(crate) fn hub_log_tail(log: &str) -> String {
     let lines: Vec<&str> = log.lines().collect();
     lines[lines.len().saturating_sub(HUB_LOG_TAIL)..].join("\n")
 }
