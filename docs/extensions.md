@@ -1363,8 +1363,23 @@ extension among the others.
 A repository may declare hooks in its layer of these settings. Each one runs
 only after a person approves it, pinned to its exact content ("Code a
 repository ships"); one nobody has approved is withheld from what the
-extension reads. A repository cannot set `hooks.order` or a hook timeout
-override, so the order within a phase and every timeout stay the person's.
+extension reads, so the person's entry of that name runs unchanged. An
+approved entry merges key by key in normal layer order: the person's
+project and run layers still beat it. A repository cannot set `hooks.order`
+or a hook timeout override, so the order within a phase and every timeout
+stay the person's; an entry-local `timeout` is the hook's own.
+A hook's `command` and `args` strings that name repository files run from
+the pinned copy in Fiber home, never the repository: Inside paths map to
+their pinned files, Outside strings (including absolute symlink spellings)
+and unmapped names, flags and missing paths stay exactly as written, and
+gathered Inside symlink resolutions stay frozen. Only approved entries are
+installed, each through a blocking copy that rebuilds a pruned copy; a copy
+that cannot be made fails only that hook, classified by the repository's
+`required`. A skipped, unapproved or failed replacement never removes a
+running snapshot: only an approved and materialized replacement swaps it,
+and the old copy stays held until then. Watchers use the same authorized
+mapping and holds. A pinned script runs in the workspace, reads live
+workspace files outside its copy, and sees none of its unpinned siblings.
 
 ## Watchers
 
