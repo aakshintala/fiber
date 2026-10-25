@@ -516,7 +516,7 @@ fn a_panic_with_a_file_goes_on_to_the_lookup() {
 #[test]
 fn a_panic_without_a_rs_line_has_no_failing_file() {
     let line = "main::t\tthread fails_once_then_passes panicked at nowhere";
-    let out = classified(&[("linux", &line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
+    let out = classified(&[("linux", line)], &pr_run(BASE_SHA, HEAD_SHA, FILE, FILE));
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "action"), Some("lookup"));
     assert_eq!(field(&out[0], "failing"), None);
@@ -637,7 +637,7 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
     assert_eq!(out.len(), 1);
     assert_eq!(field(&out[0], "detail"), Some(PANIC));
     let out = classified(
-        &[("zeta", &second), ("alpha", &first)],
+        &[("zeta", second), ("alpha", &first)],
         &Run {
             pull_request: false,
             tested_commit: SHA,
@@ -768,13 +768,13 @@ fn list_membership_is_whole_line() {
     // whole line counts.
     let line = "main::t\tthread t panicked at crates/a/b.rs:10";
     let run = pr_run(BASE_SHA, HEAD_SHA, "crates/a/b.rs", "crates/a/b.rs");
-    let out = classified(&[("linux", &line)], &run);
+    let out = classified(&[("linux", line)], &run);
     assert_eq!(field(&out[0], "action"), Some("stale-base"));
     let short = pr_run(BASE_SHA, HEAD_SHA, "b.rs", "b.rs");
-    let out = classified(&[("linux", &line)], &short);
+    let out = classified(&[("linux", line)], &short);
     assert_eq!(field(&out[0], "action"), Some("lookup"));
     let prefixed = pr_run(BASE_SHA, HEAD_SHA, "xcrates/a/b.rs", "xcrates/a/b.rs");
-    let out = classified(&[("linux", &line)], &prefixed);
+    let out = classified(&[("linux", line)], &prefixed);
     assert_eq!(field(&out[0], "action"), Some("lookup"));
 }
 
