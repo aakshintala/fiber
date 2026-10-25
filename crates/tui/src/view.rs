@@ -315,6 +315,15 @@ pub(crate) fn render(
         {
             let slab = crate::swapped::draw(app, conversation, buf, &mut targets);
             note_swapped(app, slab);
+            // The call's view keeps the find bar over its rows: the
+            // bar's state opens through Ctrl+F while the view is open
+            // and its count names the view's matches. Conversation
+            // marks stay off (see `find_marks`): the view's frame
+            // paints its own scoped marks, so mapping the hidden rows
+            // here would spray wrong cells over the view.
+            if app.call_view_open() {
+                marks::draw(app, conversation, buf, &mut targets, None);
+            }
             let slab = notice_rows::overlay(app, conversation, buf, &mut targets);
             app.frames().note(Surface::Notice, slab);
         }

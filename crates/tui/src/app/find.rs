@@ -198,6 +198,12 @@ impl App {
         &self,
         area: ratatui::layout::Rect,
     ) -> Vec<(ratatui::layout::Rect, bool)> {
+        // While the call's view is open its frame paints the view's own
+        // scoped marks; the hidden conversation rows would map to wrong
+        // cells over it, so no marks come from here.
+        if self.call_view_open() {
+            return Vec::new();
+        }
         if !self.find.is_open()
             || !self.find.due()
             || self.find.query().is_empty()

@@ -331,7 +331,7 @@ impl CallView {
 
 impl App {
     /// Whether the call's view is open.
-    pub(in crate::app) fn call_view_open(&self) -> bool {
+    pub(crate) fn call_view_open(&self) -> bool {
         self.call_view().is_some()
     }
 

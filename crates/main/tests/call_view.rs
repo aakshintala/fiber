@@ -246,9 +246,9 @@ fn a_cut_shell_call_pages_to_the_end_with_both_markers() {
     });
     assert_view_chrome(&grid, "Shell", "awk", true);
     assert_snapshot!("call_view_open", snapshot_text(&setup, &grid, &[]));
-    // Search stays scoped to the view: the tail hit counts once, and the
-    // ledger's thought behind the view counts never.
-    scoped_search(&mut run);
+    // Search stays scoped to the view: the tail hit and the echoed
+    // command count, and the ledger's thought behind the view never does.
+    scoped_search(&mut run, "1 of 2");
     // `y` copies the call's whole output text as the tool returned it.
     let from = run.output().len();
     run.write(b"y");
@@ -372,18 +372,20 @@ fn any_marked(grid: &Grid) -> bool {
 }
 
 /// Types into the view's find bar and asserts the scoped hit through
-/// the rows' match marks and the find-bar count: the tail output row
-/// marks with a `1 of 1` count, while the ledger's thought behind the
-/// view marks nothing and its miss counts `no matches`, with its marks
-/// clearing once the rescan lands.
-fn scoped_search(run: &mut Run) {
+/// the rows' match marks and the find-bar count `hit`: the tail output
+/// row marks, while the ledger's thought behind the view marks nothing
+/// and its miss counts `no matches`, with its marks clearing once the
+/// rescan lands. The shell case counts twice: the echoed command holds
+/// `TAIL` as well as the tail output row. The fetch case has no command
+/// row, so its tail counts once.
+fn scoped_search(run: &mut Run, hit: &str) {
     run.write(b"\x06TAIL");
     let grid = run.wait_screen("the scoped tail hit", |grid| {
-        tail_row_marked(grid) && grid.rows.iter().any(|row| row.contains("1 of 1"))
+        tail_row_marked(grid) && grid.rows.iter().any(|row| row.contains(hit))
     });
     assert!(
-        grid.rows.iter().any(|row| row.contains("1 of 1")),
-        "the tail hit counts once"
+        grid.rows.iter().any(|row| row.contains(hit)),
+        "the tail hit counts {hit}"
     );
     run.write(b"\x7f\x7f\x7f\x7fDoing");
     let grid = run.wait_screen("the scoped miss", |grid| {
@@ -590,7 +592,7 @@ fn a_head_only_fetch_cut_pages_with_one_marker() {
     );
     // Search stays scoped to the view: the tail hit counts once, and the
     // ledger's thought behind the view counts never.
-    scoped_search(&mut run);
+    scoped_search(&mut run, "1 of 1");
     // `y` copies the call's whole output text as the tool returned it.
     let from = run.output().len();
     run.write(b"y");

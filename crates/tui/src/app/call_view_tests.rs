@@ -1095,6 +1095,48 @@ fn closing_the_view_restores_conversation_search() {
     assert_eq!(bar.count, "1 of 1", "{bar:?}");
 }
 
+/// Conversation marks stay off while the view is open: the frame
+/// paints the view's own scoped marks, so the hidden conversation
+/// rows would land on wrong cells. A search from before the view
+/// opened keeps its count, but its marks wait for the view to close.
+#[test]
+fn conversation_marks_stay_off_while_the_view_is_open() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    // The conversation holds "zebra stripes"; the view holds none of it.
+    app.on_line(envelope(
+        "assistant_message_delta",
+        json!({"text": "zebra stripes"}),
+        Some("m_1"),
+    ));
+    app.on_line(envelope(
+        "text_completed",
+        json!({"text": "zebra stripes"}),
+        Some("m_1"),
+    ));
+    app.on_line(envelope(
+        "assistant_message_completed",
+        json!({"outcome": "completed"}),
+        Some("m_1"),
+    ));
+    let id = shell_whole(&mut app, ACTION);
+    open_inline(&mut app, id);
+    // A conversation search first: the bar stays open with its hit.
+    type_query(&mut app, "zebra");
+    app.settle_find();
+    assert!(
+        !app.find_marks(Rect::new(0, 0, 80, 24)).is_empty(),
+        "the conversation marks before the view opens"
+    );
+    // The view opens under the open bar, keeping its query and count.
+    assert_eq!(app.open_call_view(id), Effect::None);
+    assert!(app.find_bar().is_some());
+    assert!(
+        app.find_marks(Rect::new(0, 0, 80, 24)).is_empty(),
+        "no conversation marks over the view"
+    );
+}
+
 #[test]
 fn opening_needs_the_call_on_the_attached_screen() {
     // No session, no call: nothing opens and nothing sends.
