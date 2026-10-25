@@ -787,6 +787,14 @@ fn seed_hub_sessions(a: &support::Setup) {
     until_socket(a.deadline, &a.hub_socket(), false, "the hub to idle out");
 }
 
+/// Arms the guard for the seeded `other` workspace: a hub-continued
+/// session resumes there, and the PTY exit leaves that resumed process
+/// alive. Dropping the guard kills it; the watchdog covers a panic,
+/// so the leak scan stays clean either way.
+fn guard_other(a: &support::Setup) -> support::SessionGuard {
+    support::SessionGuard::arm(a.deadline, &a.root.path().join("other").to_string_lossy())
+}
+
 /// Serves `a`'s hub on a test port and pairs a fresh client to it as
 /// `box`: the client selects `box` by default when `default` holds.
 fn paired_client(a: &support::Setup, default: bool) -> (support::Setup, hub_start::Served) {
@@ -832,6 +840,9 @@ fn reap_served(served: hub_start::Served) {
 fn continue_hub_opens_the_latest_session_across_projects() {
     let a = support::Setup::new();
     seed_hub_sessions(&a);
+    // The resumed session lives in `other`: arm before the PTY flow
+    // starts so its process dies with this test, pass or panic.
+    let _resumed = guard_other(&a);
     let (b, served) = paired_client(&a, false);
     let mut run = terminal(&b, 120, 32, &["continue", "--hub", "box"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
@@ -864,7 +875,9 @@ fn continue_without_a_flag_uses_the_configured_hub() {
     let a = support::Setup::new();
     seed_hub_sessions(&a);
     let (b, served) = paired_client(&a, true);
-    // No `--hub`: `hub.default=box` selects the listed hub.
+    // No `--hub`: `hub.default=box` selects the listed hub; the resumed
+    // session lives in `other`, so guard it like the explicit-flag test.
+    let _resumed = guard_other(&a);
     let mut run = terminal(&b, 120, 32, &["continue"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
