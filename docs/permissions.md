@@ -639,6 +639,8 @@ A connection that belongs to a session is refused `from_session` when it:
    delegate that session started with `delegate_spawn` or `delegate_fork`;
 3. asks for `pairing_code`.
 
+A `message` is a session message, logged with its sender, not a person's words, so none of these refusals covers it.
+
 The second refusal exempts the delegate's own client. It does not apply
 when the connecting process is the target session's parent process, as the
 kernel reports it. That is exactly a session process's own messages to the
@@ -662,7 +664,8 @@ outside the session's tree, so the walk no longer sees it. Attaching a
 debugger to the session process where the system allows it (inside the Linux
 Yama `ptrace_scope`, or with the macOS debugger entitlement) reaches the
 session the same way. Both are deliberate escapes, and the known limit of
-this check.
+this check. When Fiber cannot read a process it needs for this check, it
+refuses these commands rather than allowing them.
 
 ## Not settled here
 

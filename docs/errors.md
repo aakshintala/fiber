@@ -336,7 +336,6 @@ the lines that carry it.
 | `extension_unavailable` | tool call | the extension providing the tool died twice | — |
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") | — |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) | — |
-| `from_session` | hub command, driver command | a connection from inside a session is refused the command: an approval `reply`, a `prompt`, `steer` or `reply` to its own session or its delegate, or `pairing_code` (`docs/permissions.md`, "Sessions on the sockets") | — |
 | `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") | condition |
 | `hook_failed` | tool call, turn, handoff, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails") | event |
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
