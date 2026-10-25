@@ -121,6 +121,10 @@ pub struct Resumed {
     /// runs in, when Fiber created one for it or for the session it
     /// continues (`docs/events.md`, `session_started`).
     pub worktree: Option<contract::shapes::Worktree>,
+    /// The own log's first-line `session_started.supervised`: a resumed
+    /// supervised session stays unanswerable (`docs/permissions.md`,
+    /// "Supervised sessions"). Absent on old lines means false.
+    pub supervised: bool,
     /// What an earlier process left open in the own segment: the requests
     /// and extension asks `fiber_exited` still reports. The ledger stays
     /// empty: each process reports its own calls (`docs/events.md`,
@@ -335,6 +339,7 @@ impl Loop {
             settings,
             model: recorded_model,
             exit,
+            supervised,
             ..
         } = resumed;
         let mut lines = crate::history::read_window(&session.log, window, end)?;
@@ -425,7 +430,7 @@ impl Loop {
                 summary: exit,
                 carry,
                 chosen: thinking.and_then(|level| level.parse().ok()),
-                is_delegate,
+                mode: crate::Mode::of(is_delegate, supervised),
             },
         )?;
         let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;

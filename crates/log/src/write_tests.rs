@@ -475,6 +475,7 @@ fn status(name: &str) -> Event {
         project: "-w".into(),
         clients: 0,
         closing: false,
+        supervised: false,
     })
 }
 

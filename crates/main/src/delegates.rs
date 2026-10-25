@@ -624,6 +624,9 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         delegate_id: Some(launched.job_id.clone()),
         depth: Some(launched.depth),
         login_shell: r#loop::variables_source() == VariablesSource::LoginShell,
+        // Delegates are never supervised: they answer to their parent
+        // session, not to a program outside Fiber.
+        supervised: false,
     };
     let mut command = Command::new(fiber);
     command.args(args.to_argv());

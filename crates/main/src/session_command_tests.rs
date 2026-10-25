@@ -85,6 +85,18 @@ fn a_failure_with_no_signal_is_reported() {
     assert!(stderr.contains("fiber: x"), "{stderr}");
 }
 
+#[test]
+fn effective_answerable_keeps_the_base_only_when_not_supervised() {
+    use super::effective_answerable;
+    // A fresh or resumed session a person may answer stays answerable.
+    assert!(effective_answerable(true, false));
+    // A supervised session never answers, new or resumed, even when the
+    // base run would: `fiber ask` stays unanswerable either way.
+    assert!(!effective_answerable(true, true));
+    assert!(!effective_answerable(false, false));
+    assert!(!effective_answerable(false, true));
+}
+
 /// Installs the signals, records a real SIGTERM to this process when
 /// `signalled`, then reports an `io_failed` failure and exits with what
 /// `report` returns.

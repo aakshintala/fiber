@@ -488,7 +488,16 @@ fn a_label_bearing_subscribe_past_an_exited_process_starts_the_session_on_it() {
     temp.append("fiber_exited");
     // A session whose log is gone answers `subscribe` `closing` too.
     let dying = FakeStarter::closing_every_command(&temp.dir);
-    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None, &[], false, None);
+    let started = crate::Starter::start(
+        &dying,
+        &sid(),
+        &temp.workspace(),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
     assert!(started.is_ok(), "the closing session binds");
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
@@ -697,9 +706,11 @@ fn a_resume_in_flight_is_refused_within_one_pass_of_the_store() {
             overrides: &[&str],
             worktree: bool,
             continues: Option<&SessionId>,
+            supervised: bool,
         ) -> std::io::Result<Box<dyn Started>> {
-            self.inner
-                .start(id, workspace, model, overrides, worktree, continues)
+            self.inner.start(
+                id, workspace, model, overrides, worktree, continues, supervised,
+            )
         }
         fn resume(
             &self,
@@ -1090,6 +1101,7 @@ impl crate::Starter for HandResume {
         _: &[&str],
         _: bool,
         _: Option<&SessionId>,
+        _: bool,
     ) -> std::io::Result<Box<dyn crate::Started>> {
         Err(std::io::Error::other("only resumes are expected"))
     }
@@ -1503,7 +1515,16 @@ fn a_connection_that_never_subscribed_gets_no_replay() {
 /// `subscribe` with `closing` until the test stops it.
 fn closing_session(temp: &Temp) -> FakeStarter {
     let dying = FakeStarter::closing(&temp.dir);
-    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None, &[], false, None);
+    let started = crate::Starter::start(
+        &dying,
+        &sid(),
+        &temp.workspace(),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
     assert!(started.is_ok(), "the closing session binds");
     dying
 }
@@ -2084,7 +2105,16 @@ fn a_subscribe_answered_closing_after_fiber_exited_is_sent_once() {
     temp.append("fiber_exited");
     // A session whose log is gone answers `subscribe` `closing` too.
     let dying = FakeStarter::closing_every_command(&temp.dir);
-    let started = crate::Starter::start(&dying, &sid(), &temp.workspace(), None, &[], false, None);
+    let started = crate::Starter::start(
+        &dying,
+        &sid(),
+        &temp.workspace(),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
     assert!(started.is_ok(), "the closing session binds");
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
@@ -2210,8 +2240,16 @@ fn a_subscribe_through_the_hub_to_a_running_delegate_is_relayed() {
     let temp = Temp::new();
     temp.delegate_log(parent());
     let running = FakeStarter::bind_and_hold(&temp.dir);
-    let started =
-        crate::Starter::start(&running, &sid(), &temp.workspace(), None, &[], false, None);
+    let started = crate::Starter::start(
+        &running,
+        &sid(),
+        &temp.workspace(),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
     assert!(started.is_ok(), "the delegate binds");
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
@@ -2697,6 +2735,7 @@ impl Starter for MissingStarter {
         _overrides: &[&str],
         _worktree: bool,
         _continues: Option<&SessionId>,
+        _supervised: bool,
     ) -> std::io::Result<Box<dyn Started>> {
         panic!("no start in the missing-target tests")
     }
@@ -3077,8 +3116,16 @@ fn a_full_subscribe_bypasses_a_live_relay_for_an_exited_delegate() {
     let temp = Temp::new();
     temp.delegate_log(parent());
     let running = FakeStarter::bind_and_hold(&temp.dir);
-    let started =
-        crate::Starter::start(&running, &sid(), &temp.workspace(), None, &[], false, None);
+    let started = crate::Starter::start(
+        &running,
+        &sid(),
+        &temp.workspace(),
+        None,
+        &[],
+        false,
+        None,
+        false,
+    );
     assert!(started.is_ok(), "the delegate binds");
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());

@@ -47,6 +47,7 @@ fn initial(setup: &Setup, id: &str, parent: Option<Point>) -> log::Log {
             forked_from: parent,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,

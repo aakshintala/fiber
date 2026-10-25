@@ -273,6 +273,7 @@ fn create_log(home: &Home, id: &str) -> Result<log::Log, String> {
             forked_from: None,
             rewind: None,
             worktree: None,
+            supervised: false,
         }),
         None,
         None,
