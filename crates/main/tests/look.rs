@@ -838,22 +838,15 @@ fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     // anywhere, since quitting is taken in any state.
     run.ready();
     run.write(b"say hi\r");
-    // A drawn-turn miss carries the hub log: the #2602 sighting showed
-    // the hub never bound, and the log says whether the hub was slow or
-    // failed to start. The wait still fails with its screen.
+    // A drawn-turn miss carries the hub log: the tail tells whether the
+    // hub was slow or failed to start. The wait still fails with its
+    // screen.
     let screen = run.wait_screen_reporting("the drawn turn", turn_drawn, || {
         let tail = support::hub_log_tail(&setup.hub_log());
-        if tail.is_empty() {
-            format!(
-                "hub.log tail (last {} lines):\n(empty)",
-                support::HUB_LOG_TAIL
-            )
-        } else {
-            format!(
-                "hub.log tail (last {} lines):\n{tail}",
-                support::HUB_LOG_TAIL
-            )
-        }
+        format!(
+            "hub.log tail (last {} lines):\n{tail}",
+            support::HUB_LOG_TAIL
+        )
     });
     let output = run.output();
     run.write(b"\x03\x03\r");
