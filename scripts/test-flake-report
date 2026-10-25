@@ -834,13 +834,22 @@ seen = set()
 for index, item in enumerate(issues):
     want_number = index + 1
     want_title = "x" * 100
+    want_closed_at = "2026-10-24T00:00:00Z"
     got_number = item.get("number") if isinstance(item, dict) else None
     got_title = item.get("title") if isinstance(item, dict) else None
-    if got_number != want_number or got_title != want_title:
-        print(f"closed issue mismatch at index {index}: want number={want_number} title={want_title} got number={got_number} title={got_title}", file=sys.stderr)
+    got_closed_at = item.get("closed_at") if isinstance(item, dict) else None
+    if got_number != want_number or got_title != want_title or got_closed_at != want_closed_at:
+        bad = []
+        if got_number != want_number:
+            bad.append("number")
+        if got_title != want_title:
+            bad.append("title")
+        if got_closed_at != want_closed_at:
+            bad.append("closed_at")
+        print(f"closed issue mismatch at index {index}: {','.join(bad)}", file=sys.stderr)
         sys.exit(1)
     if got_number in seen:
-        print(f"duplicate closed issue at index {index}: number={got_number}", file=sys.stderr)
+        print(f"duplicate closed issue at index {index}", file=sys.stderr)
         sys.exit(1)
     seen.add(got_number)
 PY_EOF
