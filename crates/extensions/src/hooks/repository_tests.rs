@@ -511,6 +511,97 @@ fn failed_gather_retains_running_snapshot_and_hold() {
 }
 
 #[test]
+fn approved_replacement_copy_failure_retains_running_snapshot_and_hold() {
+    // Only an approved and materialized replacement swaps the running
+    // snapshot (`docs/extensions.md`, "Hooks declared in configuration"):
+    // when the approved replacement's copy cannot be made, the failure is
+    // classified in `hook_failures` and the old snapshot and hold survive.
+    // Removing the `hook_failures` disjunct in `reload_repository` drops
+    // the old snapshot and fails this test; removing the hold push loses
+    // the hold.
+    let setup = Setup::new();
+    setup.write("scripts/v1.sh", "#!/bin/sh\necho v1\n");
+    setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/v1.sh", "timeout": 1000, "on_failure": "non-blocking", "required": true}}));
+    let v1_hash = setup.approve("fmt");
+    let config = setup.config(&[]);
+    let session = setup.load(&config, setup.set(&empty_skipped()));
+    let v1_command = session
+        .hooks_config(&config)
+        .extensions()
+        .get(&config::full_name("hooks"), &["hooks"], "hooks.fmt.command")
+        .unwrap()
+        .unwrap();
+    let v1_path = v1_command.as_str().unwrap().to_owned();
+    assert!(v1_path.contains(&v1_hash));
+    let holds_before = session.holds.len();
+    assert!(!session.hook_snapshots.is_empty());
+    // Approve the replacement, then break its copy: the gather still
+    // succeeds, so the failure lands in `hook_failures`, never the gather
+    // flag.
+    setup.write("scripts/v2.sh", "#!/bin/sh\necho v2\n");
+    setup.hooks(&json!({"fmt": {"point": "after_tool", "command": "scripts/v2.sh", "timeout": 1000, "on_failure": "non-blocking", "required": true}}));
+    let v2_hash = setup.approve("fmt");
+    assert_ne!(v1_hash, v2_hash);
+    fs::remove_dir_all(setup.home().join("pinned").join(&v2_hash)).unwrap();
+    fs::remove_file(setup.home().join("pinned").join(format!("{v2_hash}.ready"))).unwrap();
+    fs::create_dir(setup.home().join("pinned").join(format!("{v2_hash}.ready"))).unwrap();
+    let failed = setup.set(&empty_skipped());
+    assert!(
+        !failed.hooks_failed,
+        "the gather succeeds: the copy failure is classified, not gathered"
+    );
+    assert!(
+        failed
+            .hook_failures
+            .iter()
+            .any(|f| f.name == "fmt" && f.required),
+        "the approved replacement's copy failure: {:?}",
+        failed
+            .hook_failures
+            .iter()
+            .map(|f| &f.name)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !failed.hooks.contains_key("fmt"),
+        "no approved replacement materialized"
+    );
+    let reloaded = session.reload_repository(
+        &setup.home(),
+        &config,
+        FakeClock::new(),
+        Arc::new(fakes::FakeLock::new()),
+        failed,
+    );
+    // The required gate still reports the copy failure ...
+    let (name, _) = reloaded
+        .first_hook_required_failure()
+        .expect("the required copy failure");
+    assert_eq!(name, "fmt");
+    // ... but the old snapshot and hold survive it.
+    let kept = reloaded
+        .hooks_config(&config)
+        .extensions()
+        .get(&config::full_name("hooks"), &["hooks"], "hooks.fmt.command")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        kept, v1_command,
+        "a failed replacement keeps the old snapshot"
+    );
+    assert!(
+        reloaded.hook_snapshots.contains_key("fmt"),
+        "the old snapshot survives the failed replacement"
+    );
+    assert!(
+        reloaded.holds.len() >= holds_before,
+        "the old copy stays held: {} -> {}",
+        holds_before,
+        reloaded.holds.len()
+    );
+}
+
+#[test]
 fn required_copy_failures_are_queryable_by_repository_required() {
     let setup = Setup::new();
     setup.write("scripts/fmt.sh", "x\n");

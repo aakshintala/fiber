@@ -252,7 +252,7 @@ pub(crate) fn parts_in(
     // entry fail the start closed, so a guard never fails open. The hooks
     // gate reads the session's filtered repository contribution, so an
     // unapproved entry stays withheld.
-    session_extensions::missing_hooks(&extensions.hooks_config(&config), &extensions)?;
+    session_extensions::missing_hooks(&config, &extensions)?;
     // The session's diagnostics, installed after load and before any
     // provider work: at debug the installed writer observes eligible
     // provider HTTP and times non-tool hook chains, and the retained sink

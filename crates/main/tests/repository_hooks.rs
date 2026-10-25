@@ -186,6 +186,108 @@ impl Setup {
     }
 }
 
+/// A running `fiber session` with a `full` client attached: the binary
+/// gate for an offer the client answers `skip`. Every wait takes the
+/// test's deadline (`docs/testing.md`, "Waits and timeouts").
+struct Interactive {
+    child: std::process::Child,
+    guard: support::KillGroup,
+    watchdog: fakes::Watchdog,
+    reader: std::thread::JoinHandle<()>,
+    client: support::Socket,
+}
+
+impl Interactive {
+    fn start(setup: &Setup, id: &str) -> Self {
+        use std::io::{BufRead, BufReader};
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args([
+                "session",
+                "--id",
+                id,
+                "--workspace",
+                setup.workspace().to_str().unwrap(),
+            ])
+            .current_dir(setup.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", setup.root.path())
+            .env("FIBER_HOME", setup.home())
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = support::spawn_watched(&mut command);
+        let guard = support::KillGroup(child.id());
+        let stdout = child.stdout.take().unwrap();
+        let (tx, lines) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        support::first_line(setup.deadline, &lines);
+        let client = support::Socket::connect(setup.deadline, &setup.home().join("run").join(id));
+        client.send(r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#);
+        // `clients` is written when the `full` connection attaches, with no
+        // order against the startup events: the wait returns once both
+        // `clients` and `extensions_loaded` have arrived.
+        let mut seen_clients = false;
+        let mut seen_extensions = false;
+        support::until(&client, "startup", |line| {
+            if line["kind"] == "clients" {
+                seen_clients = true;
+            }
+            if line["kind"] == "extensions_loaded" {
+                seen_extensions = true;
+            }
+            seen_clients && seen_extensions
+        });
+        Self {
+            child,
+            guard,
+            watchdog,
+            reader,
+            client,
+        }
+    }
+
+    fn wait(&self, what: &str, kind: &str) -> Value {
+        support::until(&self.client, what, |line| line["kind"] == kind)
+            .last()
+            .unwrap()
+            .clone()
+    }
+
+    fn finish(self, setup: &Setup) -> bool {
+        let Self {
+            mut child,
+            guard,
+            watchdog,
+            reader,
+            client,
+        } = self;
+        client.send(r#"{"id":"close","command":"close"}"#);
+        support::until_close(&client);
+        let group = child.id();
+        let (tx, done) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            tx.send(child.wait()).unwrap();
+        });
+        let status = setup.deadline.recv(&done).unwrap().unwrap();
+        assert!(!fakes::group_alive(group));
+        std::mem::forget(guard);
+        watchdog.stand_down(setup.deadline.cleanup_phase());
+        reader.join().unwrap();
+        status.success()
+    }
+}
+
 fn sh_entry(script: &str, on_failure: &str) -> Value {
     json!({
         "point": "session_start",
@@ -600,4 +702,59 @@ fn deliberately_skipped_required_does_not_fail() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn deliberately_skipped_required_starts_at_the_binary_gate() {
+    // The session-state case above proves the required gate sees no
+    // failure for a skipped required replacement; this case proves the
+    // binary starts through the same offer at its own gate
+    // (`docs/extensions.md`, "Hooks declared in configuration": a skipped
+    // replacement never fails the run). Every wait takes the test's
+    // deadline (`docs/testing.md`, "Waits and timeouts").
+    let setup = Setup::new();
+    let server = ProviderServer::start([support::hello()]).unwrap();
+    setup.provider(&server);
+    setup.install_hooks();
+    setup.git_init();
+    setup.write_repo("scripts/v1.sh", "#!/bin/sh\necho v1\n");
+    setup.declare_hooks(&json!({"fmt": {
+        "point": "session_start",
+        "command": "/bin/sh",
+        "args": ["scripts/v1.sh"],
+        "timeout": 10000,
+        "on_failure": "non-blocking",
+        "required": true,
+    }}));
+    setup.approve();
+    setup.write_repo("scripts/v2.sh", "#!/bin/sh\necho v2\n");
+    setup.declare_hooks(&json!({"fmt": {
+        "point": "session_start",
+        "command": "/bin/sh",
+        "args": ["scripts/v2.sh"],
+        "timeout": 10000,
+        "on_failure": "non-blocking",
+        "required": true,
+    }}));
+    let id = doors::mint("s_");
+    let session = Interactive::start(&setup, &id);
+    session.client.send(
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let offered = session.wait("the offer", "repository_code_offered");
+    let items = offered["payload"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{offered:?}");
+    assert_eq!(items[0]["name"], "fmt", "{offered:?}");
+    assert_eq!(items[0]["kind"], "hook", "{offered:?}");
+    let request = offered["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    session.client.send(
+        &json!({"id":"c_reply","command":"reply","args":{"request_id":request,"decisions":["skip"]}}).to_string(),
+    );
+    let resolved = session.wait("the resolution", "repository_code_resolved");
+    assert_eq!(resolved["payload"]["decisions"], json!(["skip"]));
+    session.wait("the turn", "turn_completed");
+    assert!(session.finish(&setup), "the skipped required hook starts");
 }
