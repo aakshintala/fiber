@@ -21,10 +21,10 @@ resume and a new answer. Four are in `crates/main/tests/journeys.rs`: an image
 pasted, answered, closed and resumed; the model picker matched by display name,
 switched and answered on the new model; a question form answered, then the
 session's second form declined; and an interrupted turn followed by a turn
-whose failed model call Fiber retries. One is in
-`crates/main/tests/inline_images.rs`: an inline image transmitted once across
-a redraw and a scroll away and back, its caption clicked through to the
-viewer, then deleted on the session change with nothing written after.
+whose failed model call Fiber retries. The journey in
+`crates/main/tests/inline_images.rs` scrolls and clicks an inline PNG, opens
+the viewer, and asserts one transmit and place before a session-change delete,
+with no later image writes.
 
 The journeys in `journeys.rs` snapshot the settled grid with `insta` at named
 moments, as its text rows and cursor state. The cursor line holds the

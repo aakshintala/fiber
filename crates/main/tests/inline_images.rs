@@ -16,14 +16,11 @@
 
 mod support;
 
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
-
-use serde_json::{Value, json};
-use support::pty::Run;
-use support::{Deadline, Setup, TRUECOLOUR, write_json};
+use support::pty::{Grid, Run};
+use support::{Setup, TRUECOLOUR, write_json};
 
 /// The first row containing `needle`.
 fn find_row(rows: &[String], needle: &str) -> Option<u16> {
@@ -32,75 +29,60 @@ fn find_row(rows: &[String], needle: &str) -> Option<u16> {
         .map(|y| u16::try_from(y).expect("the screen fits in a u16"))
 }
 
+/// A solid-colour 120 by 80 PNG fixture.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x50, 0x08, 0x02, 0x00, 0x00, 0x00, 0x5d, 0xf9, 0x26,
+    0xde, 0x00, 0x00, 0x00, 0x82, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0xed, 0xd0, 0x31, 0x0d, 0x00,
+    0x00, 0x08, 0x03, 0xb0, 0xbd, 0xb8, 0xc5, 0x27, 0xa6, 0x70, 0x41, 0x38, 0x9a, 0x54, 0x41, 0x53,
+    0x3d, 0x1c, 0x88, 0x02, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0xb4, 0x05, 0xd1, 0xa2, 0x11, 0x2d, 0x5a,
+    0xb4, 0x05, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68, 0x44, 0x8b,
+    0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1, 0xa2, 0x45,
+    0x23, 0x5a, 0x34, 0xa2, 0x45, 0x8b, 0x46, 0xb4, 0x68, 0x44, 0x8b, 0x16, 0x8d, 0x68, 0xd1, 0x88,
+    0x16, 0x2d, 0x1a, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68, 0x44,
+    0x8b, 0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1, 0xa2,
+    0x45, 0x23, 0x5a, 0x34, 0xa2, 0x45, 0x8b, 0x46, 0xb4, 0x68, 0x44, 0x8b, 0x16, 0x8d, 0x68, 0xd1,
+    0x88, 0x16, 0x2d, 0x1a, 0xd1, 0xa2, 0x11, 0x2d, 0x5a, 0x34, 0xa2, 0x45, 0x23, 0x5a, 0xb4, 0x68,
+    0x44, 0x8b, 0x46, 0xb4, 0x68, 0xd1, 0x88, 0x16, 0x8d, 0x68, 0xd1, 0xa2, 0x11, 0x2d, 0x1a, 0xd1,
+    0xa2, 0x45, 0x23, 0x5a, 0x34, 0xa2, 0xff, 0x58, 0xd9, 0xb8, 0x78, 0xc2, 0xab, 0x96, 0xaa, 0xe8,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
 /// A click at cell (`x`, `y`).
 fn click(run: &mut Run, x: u16, y: u16) {
     run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
-/// A solid-colour PNG `width` by `height`: signature, IHDR, stored
-/// deflate IDATs, IEND, each with its CRC.
-fn png(width: u32, height: u32) -> Vec<u8> {
-    fn crc32(bytes: &[u8]) -> u32 {
-        let mut crc = 0xFFFF_FFFF_u32;
-        for byte in bytes {
-            crc ^= u32::from(*byte);
-            for _ in 0..8 {
-                crc = if crc & 1 == 1 {
-                    0xEDB8_8320 ^ (crc >> 1)
-                } else {
-                    crc >> 1
-                };
-            }
-        }
-        !crc
-    }
-    fn chunk(kind: &[u8; 4], data: &[u8], out: &mut Vec<u8>) {
-        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
-        out.extend_from_slice(kind);
-        out.extend_from_slice(data);
-        let mut body = kind.to_vec();
-        body.extend_from_slice(data);
-        out.extend_from_slice(&crc32(&body).to_be_bytes());
-    }
-    fn adler32(bytes: &[u8]) -> u32 {
-        let (mut a, mut b) = (1u32, 0u32);
-        for byte in bytes {
-            a = (a + u32::from(*byte)) % 65521;
-            b = (b + a) % 65521;
-        }
-        (b << 16) | a
-    }
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
-    chunk(b"IHDR", &ihdr, &mut out);
-    // One filter byte plus RGB triples per row, in stored blocks.
-    let mut raw = Vec::new();
-    for _ in 0..height {
-        raw.push(0);
-        raw.extend_from_slice(&[9, 112, 203].repeat(width as usize));
-    }
-    let mut stored = vec![0x78, 0x01];
-    for (at, block) in raw.chunks(65535).enumerate() {
-        let last = at == raw.chunks(65535).len() - 1;
-        stored.push(if last { 0x01 } else { 0x00 });
-        let len = u16::try_from(block.len()).expect("a chunk holds 65535 bytes");
-        stored.extend_from_slice(&len.to_le_bytes());
-        stored.extend_from_slice(&(!len).to_le_bytes());
-        stored.extend_from_slice(block);
-    }
-    stored.extend_from_slice(&adler32(&raw).to_be_bytes());
-    chunk(b"IDAT", &stored, &mut out);
-    chunk(b"IEND", &[], &mut out);
-    out
+/// Clicks the first cell of `text` on `grid`.
+fn click_text(run: &mut Run, grid: &Grid, text: &str) {
+    let row = find_row(&grid.rows, text).expect("the text row");
+    let col = u16::try_from(
+        grid.rows[usize::from(row)]
+            .find(text)
+            .expect("the text column"),
+    )
+    .expect("the row fits in a u16");
+    click(run, col, row);
 }
+
+/// Scrolls one page up or down.
+fn wheel(run: &mut Run, up: bool) {
+    let event: &[u8] = if up {
+        b"\x1b[<64;51;16M"
+    } else {
+        b"\x1b[<65;51;16M"
+    };
+    for _ in 0..10 {
+        run.write(event);
+    }
+}
+
+const FRAME_END: &[u8] = b"\x1b[?2026l";
 
 /// The scripted turns: a `read` of the PNG, its closing text with a
 /// long tail below the image, then the same session's text-only turn.
 fn script(setup: &Setup, inline: bool) {
-    fs::write(setup.workspace().join("pic.png"), png(120, 80)).unwrap();
+    fs::write(setup.workspace().join("pic.png"), PNG).unwrap();
     let tail = (1..=30)
         .map(|n| format!("- T{n:04}"))
         .collect::<Vec<_>>()
@@ -150,7 +132,7 @@ fn terminal(setup: &Setup, env: &[(&str, &str)]) -> Run {
 /// done signal is the turn's completed row, which the follow keeps in
 /// view no matter how long the turn's tail grows.
 fn started(run: &mut Run) {
-    let from = run.ready();
+    let mut from = run.ready();
     run.write(b"go\r");
     loop {
         let grid = run.wait_screen("approval or done", |grid| {
@@ -159,6 +141,8 @@ fn started(run: &mut Run) {
         if grid.contents.contains("▣ completed") {
             break;
         }
+        let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+        from = run.wait_bytes(approval, FRAME_END, "the approval frame");
         run.write(b"\r");
     }
     run.turn_finished(from);
@@ -177,37 +161,18 @@ fn sessions(setup: &Setup) -> Vec<PathBuf> {
     ids
 }
 
-/// Waits under the setup's [`Deadline`] until `path` exists, showing
-/// the terminal on expiry.
-fn until_file(run: &mut Run, deadline: Deadline, path: &Path, what: &str) {
-    let path = path.to_owned();
-    let (done, reached) = mpsc::channel();
-    thread::spawn(move || {
-        while !path.exists() {
-            thread::yield_now();
-        }
-        done.send(()).unwrap_or(());
-    });
-    assert!(
-        deadline.recv(&reached).is_ok(),
-        "waited until the deadline for {what}; screen: {}",
-        run.screen().contents
-    );
-}
-
-/// Opens the ledger's `read` call so its image rows draw.
-fn open_call(run: &mut Run, name: &str) {
+/// Opens the ledger's `read` call after the terminal emits its scrolled
+/// row. The closed call draws no placeholder until after this click.
+fn open_call(run: &mut Run, from: usize, name: &str) -> usize {
+    let row = run.wait_bytes(from, name.as_bytes(), "the call row");
+    run.wait_bytes(row, FRAME_END, "the call row frame");
     let grid = run.wait_screen("the ledger call", |grid| {
         grid.rows.iter().any(|row| row.contains(name))
     });
-    let row = find_row(&grid.rows, name).expect("the call row");
-    let col = u16::try_from(
-        grid.rows[usize::from(row)]
-            .find(name)
-            .expect("the call row"),
-    )
-    .expect("the row fits in a u16");
-    click(run, col, row);
+    let click_from = run.output().len();
+    click_text(run, &grid, name);
+    run.wait_bytes(click_from, FRAME_END, "the opened call frame");
+    click_from
 }
 
 /// One placeholder cell on the wire: the harness grid parser drops the
@@ -235,17 +200,15 @@ fn find_at(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// read pipeline stores the image under a fresh stem, so the test
 /// reads the logged path back instead of guessing it.
 fn image_size(setup: &Setup, events: &Path) -> (String, u64, u64) {
-    loop {
-        if let Ok(text) = fs::read_to_string(events)
-            && let Some(found) = logged_image(&text)
-        {
-            return found;
-        }
-        if setup.deadline.left().is_zero() {
-            panic!("waited until the deadline for the logged image");
-        }
-        thread::yield_now();
-    }
+    let events = events.to_owned();
+    let waiting = events.clone();
+    fakes::wait_until("the logged image", setup.deadline, move || {
+        fs::read_to_string(&waiting)
+            .ok()
+            .is_some_and(|text| logged_image(&text).is_some())
+    });
+    let text = fs::read_to_string(events).expect("the session log");
+    logged_image(&text).expect("the logged image")
 }
 
 /// The logged path and size of the first image part in `events`' tool
@@ -300,70 +263,108 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
     assert_eq!(sessions.len(), 1, "one session ran");
     let (path, width, height) = image_size(&setup, &sessions[0].join("events.jsonl"));
     let caption = caption_of(&path, width, height);
-    // The turn ends following the tail, with the call off-screen: wheel
-    // back up so its row draws, then open it.
-    run.write(&b"\x1b[<64;51;16M".repeat(10));
-    run.wait_screen("the call row", |grid| {
-        grid.rows.iter().any(|row| row.contains("Read 1 file"))
-    });
-    // The opened grid sits above the caption: its rows render at the
-    // top, then its placeholders reach the wire.
-    let mut from = run.output().len();
-    open_call(&mut run, "Read 1 file");
-    // The opened grid sits above the caption: wheel up to the top so
-    // its rows render, then its placeholders reach the wire.
-    run.write(&b"\x1b[<64;51;16M".repeat(10));
-    run.wait_bytes(from, PLACEHOLDER, "the placeholder grid");
+
+    // The turn-finished signal lands with the call off-screen. Scroll
+    // until its caption and placeholder reach the wire, then click it.
+    let from = run.output().len();
+    wheel(&mut run, true);
+    let from = open_call(&mut run, from, "Read 1 file");
+    // The opened call emits its placeholder grid before its caption.
+    let placeholder = run.wait_bytes(from, PLACEHOLDER, "the placeholder grid");
+    let mut from = run.wait_bytes(placeholder, FRAME_END, "the inline image frame");
     run.wait_screen("the inline grid", |grid| grid.contents.contains(&caption));
-    // Away to the bottom and back, then a resize: the scrolled and
-    // recounted grid fetches and transmits nothing again.
-    run.write(&b"\x1b[<65;51;16M".repeat(10));
+
+    // Scroll away and back, then resize. Each input follows the prior
+    // frame's end; each redraw still places the image without a second
+    // transmit.
+    wheel(&mut run, false);
     run.wait_screen("the scrolled-away grid", |grid| {
         !grid.contents.contains(&caption)
     });
-    from = run.output().len();
-    run.write(&b"\x1b[<64;51;16M".repeat(10));
-    run.wait_bytes(from, PLACEHOLDER, "the followed grid");
+    from = run.wait_bytes(from, FRAME_END, "the scrolled-away frame");
+    wheel(&mut run, true);
+    let placeholder = run.wait_bytes(from, PLACEHOLDER, "the followed grid");
+    run.wait_bytes(placeholder, FRAME_END, "the followed frame");
     run.wait_screen("the followed grid", |grid| grid.contents.contains(&caption));
-    from = run.output().len();
+    let resized_from = run.output().len();
     run.resize(80, 24);
-    run.wait_bytes(from, PLACEHOLDER, "the recounted grid");
-    run.wait_screen("the recounted grid", |grid| {
-        grid.contents.contains(&caption)
-    });
-    // The caption click queues the viewer with the image.
+    let placeholder = run.wait_bytes(resized_from, PLACEHOLDER, "the recounted grid");
+    run.wait_bytes(placeholder, FRAME_END, "the recounted frame");
     let grid = run.wait_screen("the clickable caption", |grid| {
         grid.rows.iter().any(|row| row.contains(&caption))
     });
-    let row = find_row(&grid.rows, &caption).expect("the caption row");
-    let col = u16::try_from(
-        grid.rows[usize::from(row)]
-            .find('▣')
-            .expect("the caption marker"),
-    )
-    .expect("the row fits in a u16");
-    click(&mut run, col, row);
-    until_file(&mut run, setup.deadline, &marker, "the viewer to open");
-    // The second turn runs in this session: the kitty `CSI 27u` Esc is
-    // one self-delimiting sequence returning the click-landed row focus
-    // to the input box (`keys.rs`: a lone Esc ending the read is Esc),
-    // and the box echo proves the prompt landed before Enter starts it.
-    // Its text-only turn draws nothing inline and transmits nothing.
+    let clicked_from = run.output().len();
+    click_text(&mut run, &grid, &caption);
+    run.wait_bytes(clicked_from, FRAME_END, "the caption click frame");
+
+    // Wait for the viewer's complete path, not just its redirected file:
+    // the shell creates that file before printf writes the path.
+    let marker_file = marker.clone();
+    let session = sessions[0]
+        .file_name()
+        .expect("the session directory name")
+        .to_string_lossy();
+    let name = Path::new(&path)
+        .file_name()
+        .expect("the image file name")
+        .to_string_lossy();
+    let expected = setup
+        .home()
+        .join("cache/images")
+        .join(format!("{session}-{name}"))
+        .to_string_lossy()
+        .into_owned();
+    let expected_line = expected.clone();
+    fakes::wait_until("the viewer to open", setup.deadline, move || {
+        fs::read_to_string(&marker_file)
+            .is_ok_and(|opened| opened.lines().any(|line| line == expected_line))
+    });
+    assert_eq!(
+        fs::read_to_string(&marker).unwrap().trim(),
+        expected,
+        "the viewer opened the private image copy"
+    );
+
+    // The kitty `CSI 27u` Esc returns the click-landed row focus to the
+    // input box. Wait for the typed prompt's frame before Enter starts the
+    // session's text-only turn.
     run.write(b"\x1b[27u");
+    let prompt_from = run.output().len();
     run.write(b"second");
+    let prompt = run.wait_bytes(prompt_from, b"second", "the input box echo");
+    run.wait_bytes(prompt, FRAME_END, "the input box frame");
     run.wait_screen("the box holds the prompt", |grid| {
         grid.contents.contains("second")
     });
-    let from = run.output().len();
+    let second_turn_from = run.output().len();
     run.write(b"\r");
-    // The view sits scrolled up from the image checks: follow the new
-    // turn to its end so its text draws on screen.
-    run.write(&b"\x1b[<65;51;16M".repeat(10));
+    let events = sessions[0].join("events.jsonl");
+    fakes::wait_until("the second turn to complete", setup.deadline, move || {
+        fs::read_to_string(&events).is_ok_and(|text| {
+            support::complete_lines(&text)
+                .iter()
+                .filter(|line| {
+                    matches!(
+                        line.get("kind").and_then(Value::as_str),
+                        Some("turn_started" | "turn_completed")
+                    )
+                })
+                .count()
+                >= 4
+        })
+    });
+    // The view sits scrolled up from the image checks. After the durable
+    // completion, click the emitted "New messages below" row to follow.
+    run.wait_bytes(second_turn_from, FRAME_END, "the second-turn frame");
+    let grid = run.wait_screen("the new-messages row", |grid| {
+        grid.contents.contains("New messages below · End")
+    });
+    let follow_from = run.output().len();
+    click_text(&mut run, &grid, "New messages below");
+    run.wait_bytes(follow_from, FRAME_END, "the followed second-turn frame");
     run.wait_screen("the second turn", |grid| grid.contents.contains("Second."));
-    run.turn_finished(from);
-    // Closing changes the session, deleting the shown image: exactly
-    // one transmit and place went out for it, then its delete, and
-    // nothing after the delete.
+
+    // Closing changes the session, deleting the shown image.
     let home_from = run.output().len();
     run.write(b"\x1b[27u/close\r");
     run.wait_screen("home", |grid| {
@@ -378,9 +379,10 @@ fn an_inline_image_transmits_once_then_deletes_on_session_change() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
-    // Exactly one transmit and place for the shown image, then its
-    // delete on the session change: nothing transmits or places after
-    // the delete.
+
+    // The terminal stream documents this journey's contract: one
+    // transmit and place before the session-change delete, then no more
+    // image writes.
     let terminal = output.terminal;
     assert_eq!(count(&terminal, b"a=t,"), 1, "one transmit");
     assert_eq!(count(&terminal, b"a=p,"), 1, "one place");
@@ -411,11 +413,10 @@ fn the_same_image_stays_one_line_with_the_flag_off() {
     let (path, width, height) = image_size(&setup, &sessions[0].join("events.jsonl"));
     let caption = caption_of(&path, width, height);
     // The opened call draws the image as one line, without placeholders.
-    // The turn ends following the tail, with the call off-screen: wheel
-    // back up so its row draws, then open it.
-    run.write(&b"\x1b[<64;51;16M".repeat(10));
+    // The turn-finished signal permits scrolling back to its off-screen row.
     let from = run.output().len();
-    open_call(&mut run, "Read 1 file");
+    wheel(&mut run, true);
+    open_call(&mut run, from, "Read 1 file");
     run.wait_screen("the one line", |grid| {
         grid.rows.iter().any(|row| row.contains(&caption))
     });

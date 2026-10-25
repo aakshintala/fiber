@@ -408,10 +408,11 @@ pub(crate) struct Shared {
 impl Shared {
     /// A blank `cols` by `rows` screen with no output.
     pub(crate) fn new(cols: u16, rows: u16) -> Self {
-        Self::new_with_graphics(cols, rows, false)
+        Self::new_with_graphics(cols, rows, None)
     }
 
-    fn new_with_graphics(cols: u16, rows: u16, graphics: bool) -> Self {
+    fn new_with_graphics(cols: u16, rows: u16, pixel_size: Option<(u16, u16)>) -> Self {
+        let graphics = pixel_size.is_some();
         let parser = vt100::Parser::new(rows, cols, 0);
         let grid = Grid::of(&parser);
         Self {
@@ -708,7 +709,7 @@ impl Run {
                 }
             }
         }
-        let (pixels, graphics) = pixel_size.map_or(((0, 0), false), |size| (size, true));
+        let pixels = pixel_size.unwrap_or((0, 0));
         let terminal = open_with_pixels(cols, rows, pixels.0, pixels.1);
         let sessions = Watchdog::matching(setup.workspace().to_str().unwrap());
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -732,7 +733,9 @@ impl Run {
         drop(terminal.terminal);
         let deadline = setup.deadline;
         let main = fs::File::from(terminal.main);
-        let shared = Arc::new(Mutex::new(Shared::new_with_graphics(cols, rows, graphics)));
+        let shared = Arc::new(Mutex::new(Shared::new_with_graphics(
+            cols, rows, pixel_size,
+        )));
         let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
         let (reader, wakes) =
             Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
