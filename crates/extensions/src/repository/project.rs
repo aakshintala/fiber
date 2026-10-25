@@ -52,6 +52,27 @@ pub struct RepositorySet {
 }
 
 impl RepositorySet {
+    /// Configuration with only this set's approved pinned hooks contributing
+    /// to the repository layer. Keep the set alive while reading this view
+    /// so the approved copies remain held. Gathering starts no extension VM.
+    pub fn hooks_config(&self, config: &config::Config) -> config::Config {
+        crate::hooks::filtered_hooks_config(
+            config,
+            self.has_hook_declarations(),
+            self.hooks.iter().filter_map(|(name, state)| {
+                if let super::hooks::HookState::Approved(snapshot) = state {
+                    Some((name.clone(), snapshot.entry.clone()))
+                } else {
+                    None
+                }
+            }),
+        )
+    }
+
+    pub(crate) fn has_hook_declarations(&self) -> bool {
+        !self.hooks.is_empty() || !self.hook_failures.is_empty() || self.hooks_failed
+    }
+
     /// The set for the session's home, project and repository workspace:
     /// each declared extension, in declaration order, whose current
     /// content the session did not skip and this project approved, held

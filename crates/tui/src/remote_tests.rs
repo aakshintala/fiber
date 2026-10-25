@@ -73,6 +73,173 @@ impl Drop for Hub {
     }
 }
 
+fn hooks_overrides() -> Vec<String> {
+    vec![
+        "first=value with spaces".into(),
+        "first=later".into(),
+        "second=\"quoted\"".into(),
+    ]
+}
+
+fn hooks_call(remote: &dyn Configure, operation: &str) -> Result<Vec<String>, ConfigureError> {
+    match operation {
+        "blocking_hooks" => remote.blocking_hooks(Path::new("/remote/ws"), &hooks_overrides()),
+        "install_hooks" => remote
+            .install_hooks(fakes::clock::FakeClock::new())
+            .map(|()| vec![]),
+        _ => panic!("unknown test operation"),
+    }
+}
+
+#[test]
+fn hooks_fake_records_exact_queries_and_canned_results() {
+    let fake = Fake::new(vec![]);
+    assert_eq!(hooks_call(&fake, "blocking_hooks"), Ok(vec![]));
+    *fake.blocking_hooks_answer.lock().unwrap() = Ok(vec!["guard".into()]);
+    assert_eq!(
+        hooks_call(&fake, "blocking_hooks"),
+        Ok(vec!["guard".into()])
+    );
+    let error = ConfigureError {
+        code: ErrorCode::IoFailed,
+        message: "original".into(),
+    };
+    *fake.blocking_hooks_answer.lock().unwrap() = Err(error.clone());
+    assert_eq!(hooks_call(&fake, "blocking_hooks"), Err(error.clone()));
+    assert_eq!(
+        *fake.blocking_hooks_queries.lock().unwrap(),
+        vec![(PathBuf::from("/remote/ws"), hooks_overrides()); 3]
+    );
+    assert_eq!(hooks_call(&fake, "install_hooks"), Ok(vec![]));
+    *fake.hooks_install_answer.lock().unwrap() = Err(error.clone());
+    assert_eq!(hooks_call(&fake, "install_hooks"), Err(error));
+    assert_eq!(*fake.hooks_installs.lock().unwrap(), 2);
+}
+
+#[test]
+fn hooks_remote_waits_for_a_worker_link_and_uses_only_the_hub() {
+    for operation in ["blocking_hooks", "install_hooks"] {
+        let local = Arc::new(Fake::new(vec![]));
+        let mut hub = Hub::new(local.clone());
+        hub.router.detach();
+        let deadline = Deadline::start();
+        let (tx, rx) = mpsc::channel();
+        let remote = hub.remote.clone();
+        thread::spawn(move || {
+            tx.send(hooks_call(remote.as_ref(), operation))
+                .unwrap_or(());
+        });
+        while hub.router.link_waiters() != 1 {
+            assert!(
+                !deadline.left().is_zero(),
+                "{operation} did not wait for a worker link"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "{operation} returned instead of waiting"
+            );
+            thread::yield_now();
+        }
+        let (client, stream) = UnixStream::pair().unwrap();
+        let (tx, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        hub.router.attach(client);
+        hub.lines = lines;
+        let line = deadline.recv_or_fail(&hub.lines, "hooks operation after attach");
+        assert_eq!(line["command"], "configure");
+        let (args, answer, expected) = match operation {
+            "blocking_hooks" => (
+                json!({"operation":operation,"workspace":"/remote/ws","overrides":hooks_overrides()}),
+                // Canned hub answer in sorted wire order (`docs/invocation.md:1160`).
+                json!({"names":["a","z"]}),
+                vec!["a".to_owned(), "z".to_owned()],
+            ),
+            "install_hooks" => (json!({"operation":operation}), json!({}), vec![]),
+            _ => unreachable!(),
+        };
+        assert_eq!(line["args"], args);
+        hub.reply(&line, answer);
+        assert_eq!(
+            deadline.recv_or_fail(&rx, "hooks worker answer"),
+            Ok(expected)
+        );
+        assert!(local.blocking_hooks_queries.lock().unwrap().is_empty());
+        assert_eq!(*local.hooks_installs.lock().unwrap(), 0);
+        assert!(local.reads.lock().unwrap().is_empty());
+        assert!(local.installs.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn hooks_remote_preserves_rejections_and_inflight_connection_loss() {
+    for operation in ["blocking_hooks", "install_hooks"] {
+        for reject in [true, false] {
+            let hub = Hub::new(Arc::new(Fake::new(vec![])));
+            let deadline = Deadline::start();
+            let (tx, rx) = mpsc::channel();
+            let remote = hub.remote.clone();
+            thread::spawn(move || {
+                tx.send(hooks_call(remote.as_ref(), operation))
+                    .unwrap_or(());
+            });
+            let line = deadline.recv_or_fail(&hub.lines, "inflight hooks request");
+            let expected = if reject {
+                hub.reject(&line, "fetch_failed", "unchanged failure");
+                ConfigureError {
+                    code: ErrorCode::FetchFailed,
+                    message: "unchanged failure".into(),
+                }
+            } else {
+                hub.router.detach();
+                ConfigureError {
+                    code: ErrorCode::IoFailed,
+                    message: "connection lost".into(),
+                }
+            };
+            assert_eq!(deadline.recv_or_fail(&rx, "hooks rejection"), Err(expected));
+        }
+    }
+}
+
+#[test]
+fn hooks_remote_rejects_malformed_answers() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    for answer in [
+        json!({}),
+        json!(null),
+        json!({"names":null}),
+        json!({"names":1}),
+        json!({"names":["a",null]}),
+    ] {
+        let error = hub
+            .call(
+                "blocking_hooks",
+                json!({"workspace":"/remote/ws","overrides":hooks_overrides()}),
+                answer,
+                |remote| hooks_call(remote.as_ref(), "blocking_hooks"),
+            )
+            .unwrap_err();
+        assert_eq!(error, decode::io_error("blocking_hooks"));
+    }
+    for answer in [json!(null), json!([]), json!({"names":[]})] {
+        let error = hub
+            .call("install_hooks", json!({}), answer, |remote| {
+                hooks_call(remote.as_ref(), "install_hooks")
+            })
+            .unwrap_err();
+        assert_eq!(error, decode::io_error("install_hooks"));
+    }
+}
+
 #[test]
 fn provider_install_uses_the_worker_wire_shape_and_decodes_the_outcome() {
     let hub = Hub::new(Arc::new(Fake::new(vec![])));

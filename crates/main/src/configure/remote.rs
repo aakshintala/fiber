@@ -479,6 +479,26 @@ impl hub::Machine for Seam {
                 }
                 Value::Object(value)
             }
+            "blocking_hooks" => {
+                a.shape(&["workspace"], &["overrides"])?;
+                let workspace = a.workspace()?;
+                let overrides = args
+                    .get("overrides")
+                    .map(|value| {
+                        serde_json::from_value::<Vec<String>>(value.clone()).map_err(|_| invalid())
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let names = self
+                    .blocking_hooks(workspace, &overrides)
+                    .map_err(from_view)?;
+                json!({"names":names})
+            }
+            "install_hooks" => {
+                a.shape(&[], &[])?;
+                self.install_hooks(clock).map_err(from_view)?;
+                json!({})
+            }
             "install_provider" => {
                 a.shape(&["workspace", "provider"], &[])?;
                 let installed = self
