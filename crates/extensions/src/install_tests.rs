@@ -48,6 +48,46 @@ impl Dirs {
 }
 
 #[test]
+fn malformed_session_ranges_are_refused_before_copying() {
+    use super::{Provenance, Record, stage};
+    use serde_json::json;
+    for range in [
+        json!(null),
+        json!({}),
+        json!({"min":"not-a-tag"}),
+        json!({"min":"v2.0.0","before":"v2.0.0"}),
+        json!({"min":"v2.0.0","before":"v1.0.0"}),
+        json!({"min":"v1.0.0","before":"not-a-tag"}),
+    ] {
+        let dirs = Dirs::new("tui-range");
+        let source = dirs.path("src");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("extension.json"),json!({"name":"acme","version":"v1.0.0","fiber":"0.1.0","api":1,"tui":{"session_versions":range}}).to_string()).unwrap();
+        let record = Record {
+            name: "acme".into(),
+            provenance: Provenance::Path(source.clone()),
+            version: "v1.0.0".into(),
+            requested: true,
+            floor: None,
+        };
+        let home = dirs.path("home");
+        let error = match stage(&home, &source, "0.1.0", &record) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid range staged: {range}"),
+        };
+        assert!(
+            matches!(&error, crate::Error::Config(config::ConfigError::WrongType{key,..}) if key=="tui.session_versions"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("acme"), "{error}");
+        assert!(
+            !home.join("extensions").exists(),
+            "copy started for {range}"
+        );
+    }
+}
+
+#[test]
 fn a_swap_puts_the_fresh_copy_in_place() {
     let dirs = Dirs::new("ok");
     dirs.swap(0).unwrap();

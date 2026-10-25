@@ -273,7 +273,7 @@ A prompt template is what a person runs by `/name`: a skill with
 as every other skill. An MCP server's prompts appear in the same `/` list,
 tagged with the server's name (`docs/mcp.md`).
 
-Fiber finds skills in these places, read once at session start:
+Fiber finds skills in these places, read once at session start and checked again at each turn start ("Added and removed skills"):
 
 | Source | Where |
 |---|---|
