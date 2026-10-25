@@ -365,9 +365,7 @@ pub(crate) fn render(
                         surface: crate::app::SurfaceId::Swapped,
                         rows: offer::selection_rows(&rows, top, conversation),
                     });
-                    for rect in app.selection_cells(crate::app::SurfaceId::Swapped, conversation) {
-                        buf.set_style(rect.intersection(conversation), marks::selection_style());
-                    }
+                    marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, conversation);
                 }
                 // The search results swap in for the conversation while
                 // open (`docs/tui.md`, "Search", "Swapped views").
@@ -405,14 +403,12 @@ pub(crate) fn render(
                             surface: crate::app::SurfaceId::Swapped,
                             rows: noted,
                         });
-                        for rect in
-                            app.selection_cells(crate::app::SurfaceId::Swapped, conversation)
-                        {
-                            buf.set_style(
-                                rect.intersection(conversation),
-                                marks::selection_style(),
-                            );
-                        }
+                        marks::paint_selection(
+                            app,
+                            buf,
+                            crate::app::SurfaceId::Swapped,
+                            conversation,
+                        );
                         marks::draw(app, conversation, buf, &mut targets, None);
                     }
                     None => {

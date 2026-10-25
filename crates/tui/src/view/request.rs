@@ -341,9 +341,7 @@ pub(super) fn draw_noted(
         surface: crate::app::SurfaceId::Request,
         rows: noted,
     });
-    for rect in app.selection_cells(crate::app::SurfaceId::Request, area) {
-        buf.set_style(rect.intersection(area), super::marks::selection_style());
-    }
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Request, area);
     top
 }
 

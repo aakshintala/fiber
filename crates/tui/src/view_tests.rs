@@ -4114,8 +4114,8 @@ fn a_drag_holds_a_fading_notice_until_after_the_release_copy() {
     let _ = report(&mut app, MouseKind::Press(Button::Left), at.0, at.1, t0);
     let _ = report(&mut app, MouseKind::Drag(Button::Left), at.0 + 4, at.1, t0);
     // Past the fade, mid-drag, the row still shows: the fade waits
-    // for the release (`docs/tui.md`, "Selection and copy": on
-    // release the copy happens first, then the waiting fade).
+    // for the release (`docs/tui.md:1553`: on release the copy
+    // happens first, then the waiting fade).
     app.sweep_notices(t0 + std::time::Duration::from_secs(30));
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
@@ -4237,14 +4237,27 @@ fn a_drag_over_the_model_picker_copies_its_row() {
 
 /// A drag over the `/keys` screen copies the frame's rows: the title
 /// and footer never copy (`docs/tui.md`, "Selection and copy").
-/// (The F1 key-map overlay draws through `key_map::draw`, not the
-/// swapped frame path, so it notes no selection rows; only the
-/// `/keys` screen exercises `select_frame`.)
 #[test]
 fn a_drag_over_the_keys_screen_copies_its_rows() {
     use crate::app::Effect;
     let mut app = empty();
     app.open_keys();
+    let at = cell_at(&mut app, 80, 24, "Send a prompt");
+    let effect = drag_at(&mut app, 80, 24, at, (at.0 + 3, at.1));
+    assert_eq!(effect, Effect::Copy("Send".to_owned()));
+}
+
+/// A drag over the F1 key-map overlay copies its row's text: the
+/// overlay notes its kept body rows through the shared overlay path,
+/// the title and footer never copying
+/// (`docs/tui.md`, "Selection and copy").
+#[test]
+fn a_drag_over_the_key_map_overlay_copies_its_row() {
+    use crate::app::Effect;
+    use crate::keys::Key;
+    let mut app = empty();
+    app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
+    assert!(app.keymap_top().is_some());
     let at = cell_at(&mut app, 80, 24, "Send a prompt");
     let effect = drag_at(&mut app, 80, 24, at, (at.0 + 3, at.1));
     assert_eq!(effect, Effect::Copy("Send".to_owned()));

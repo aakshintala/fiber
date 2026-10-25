@@ -94,9 +94,7 @@ pub(super) fn draw(
         surface: crate::app::SurfaceId::Notices,
         rows: noted,
     });
-    for rect in app.selection_cells(crate::app::SurfaceId::Notices, area) {
-        buf.set_style(rect.intersection(area), super::marks::selection_style());
-    }
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Notices, area);
 }
 
 /// Draws the notice overlay over `area` in the shared frame, hiding the

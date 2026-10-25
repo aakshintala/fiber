@@ -630,9 +630,7 @@ pub(crate) fn draw(
         surface: crate::app::SurfaceId::Rail,
         rows: noted,
     });
-    for rect in app.selection_cells(crate::app::SurfaceId::Rail, area) {
-        buf.set_style(rect.intersection(area), super::marks::selection_style());
-    }
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Rail, area);
     // The focused stop reads lifted (`docs/tui.md`, "The rail"): a
     // focused card reads as one lifted card, with colour its text rows
     // taking the hover tint, leaving its blank edges untinted; without

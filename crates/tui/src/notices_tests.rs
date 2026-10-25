@@ -840,8 +840,8 @@ fn a_row_showing_at_hold_keeps_its_row_past_fade() {
     // A drag holds every visible notice against expiry, not just the
     // ones pushed after the press: the row showing at hold time waits
     // out its fade, then expires on the first sweep past the release
-    // (`docs/tui.md`, "Notices": one row each until dismissed; a notice
-    // that arrives during a drag waits for the release).
+    // (`docs/tui.md:1204`, "Notices": one row each until dismissed; a
+    // notice that arrives during a drag waits for the release).
     let mut notices = Notices::default();
     notices.push("io_failed", "before".to_owned());
     notices.sweep(t0);

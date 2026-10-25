@@ -1,8 +1,8 @@
 //! Selecting panel card text (`docs/tui.md`, "Selection and copy").
 //!
 //! Reads the existing card rows; their content stays owned by the card
-//! builders and PR 3315. A cut row copies what it shows, without the
-//! "…" the fit adds.
+//! builders. A cut row copies what it shows, without the "…" the fit
+//! adds.
 
 use ratatui::text::Line;
 

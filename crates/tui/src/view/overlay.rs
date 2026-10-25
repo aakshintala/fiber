@@ -616,9 +616,19 @@ pub(crate) fn note_overlay(
             continue;
         }
         let text = body_text(row, usize::from(inner));
+        // The copy drops the choice gutter, so the noted text starts
+        // past it (`docs/tui.md`, "Selection and copy").
+        let mut x = text_x;
+        if row
+            .spans
+            .first()
+            .is_some_and(|span| span.content == "› " || span.content == "  ")
+        {
+            x = x.saturating_add(PAD);
+        }
         noted.push(SpanRow {
             y,
-            x: text_x,
+            x,
             end: slab.x.saturating_add(slab.width),
             text,
             join: *join,
@@ -628,9 +638,7 @@ pub(crate) fn note_overlay(
         surface: SurfaceId::Overlay,
         rows: noted,
     });
-    for rect in app.selection_cells(SurfaceId::Overlay, slab) {
-        buf.set_style(rect.intersection(slab), marks::selection_style());
-    }
+    marks::paint_selection(app, buf, SurfaceId::Overlay, slab);
 }
 
 /// The slab an overlay takes and its drawn body rows' screen rows with

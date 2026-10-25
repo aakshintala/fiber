@@ -769,6 +769,7 @@ fn find_cell(screen: &Grid, needle: &str) -> (u16, u16) {
 fn drag(run: &mut Run, from: (u16, u16), to: (u16, u16)) {
     run.write(format!("\x1b[<0;{};{}M", from.0 + 1, from.1 + 1).as_bytes());
     run.write(format!("\x1b[<32;{};{}M", to.0 + 1, to.1 + 1).as_bytes());
+    run.write(format!("\x1b[<0;{};{}m", to.0 + 1, to.1 + 1).as_bytes());
 }
 
 /// Standard-base64 decode for OSC 52 payloads, which the clipboard
@@ -833,7 +834,6 @@ fn journey_drag_input_box_copies_its_text() {
     let (x, y) = find_cell(&screen, "hello");
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 5, y));
-    run.write(format!("\x1b[<0;{};{}m", x + 5, y + 1).as_bytes());
     assert_eq!(osc52_copy(&mut run, from), "hello");
 }
 
@@ -870,6 +870,13 @@ fn journey_drag_notice_copies_its_text() {
     });
     let switched = run.output().len();
     run.write(b"\r");
+    // The closed picker proves the switch finished before the pointer
+    // goes out (`docs/testing/screens.md`, "Screens"): the switch
+    // sends no further output after it closes, so the notice stack is
+    // final.
+    run.wait_screen("the closed picker", |screen| {
+        !shows(screen, "Type to search") && shows(screen, "›")
+    });
     // The frame drawing the notice settles its row before the pointer
     // goes out (`docs/testing/screens.md`, "Screens"): the switch
     // sends no further output, so nothing moves it after this frame.
@@ -880,7 +887,6 @@ fn journey_drag_notice_copies_its_text() {
     let (x, y) = find_cell(&notice, "cache_rebuild");
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 13, y));
-    run.write(format!("\x1b[<0;{};{}m", x + 13, y + 1).as_bytes());
     assert_eq!(osc52_copy(&mut run, from), "cache_rebuild");
 }
 
@@ -941,7 +947,6 @@ fn journey_drag_panel_card_copies_its_text() {
     let (x, y) = found;
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 6, y));
-    run.write(format!("\x1b[<0;{};{}m", x + 6, y + 1).as_bytes());
     assert_eq!(osc52_copy(&mut run, from), "say hi");
 }
 
@@ -980,7 +985,6 @@ fn journey_drag_overlay_copies_its_text() {
     let (x, y) = find_cell(&open, "alpha-1");
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 7, y));
-    run.write(format!("\x1b[<0;{};{}m", x + 7, y + 1).as_bytes());
     assert_eq!(osc52_copy(&mut run, from), "alpha-1");
 }
 
@@ -1047,6 +1051,5 @@ fn journey_drag_approval_copies_its_text() {
     let (x, y) = find_cell(&panel, "run it");
     let from = run.output().len();
     drag(&mut run, (x, y), (x + 6, y));
-    run.write(format!("\x1b[<0;{};{}m", x + 6, y + 1).as_bytes());
     assert_eq!(osc52_copy(&mut run, from), "run it");
 }

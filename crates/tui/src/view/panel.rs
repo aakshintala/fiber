@@ -231,11 +231,8 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         area.bottom(),
         text,
     );
-    for rect in app.selection_cells(crate::app::SurfaceId::Panel, area) {
-        buf.set_style(rect.intersection(area), super::marks::selection_style());
-    }
-    // removed: the `to > first` guard; asking an empty range is a no-op
-    // because `ask` only fires on a contained state row.
+    super::marks::paint_selection(app, buf, crate::app::SurfaceId::Panel, area);
+    // An empty range asks nothing: `ask` fires only on a contained state row.
     if let Some(span) = span {
         let from = skip.max(span.start);
         let to = skip.saturating_add(drawn).min(span.end);

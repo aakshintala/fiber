@@ -323,12 +323,7 @@ pub(crate) fn draw(
                 surface: crate::app::SurfaceId::Swapped,
                 rows: super::view::model_picker::note_selection(&view, below, slab),
             });
-            for rect in app.selection_cells(crate::app::SurfaceId::Swapped, slab) {
-                buf.set_style(
-                    rect.intersection(slab),
-                    crate::view::marks::selection_style(),
-                );
-            }
+            crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, slab);
         }
         return Some(slab);
     }
@@ -432,12 +427,7 @@ pub(crate) fn select_frame(app: &App, frame: &Frame, area: Rect, buf: &mut Buffe
         surface: crate::app::SurfaceId::Swapped,
         rows: noted,
     });
-    for rect in app.selection_cells(crate::app::SurfaceId::Swapped, area) {
-        buf.set_style(
-            rect.intersection(area),
-            crate::view::marks::selection_style(),
-        );
-    }
+    crate::view::marks::paint_selection(app, buf, crate::app::SurfaceId::Swapped, area);
 }
 
 /// Draws `frame` into `area`: the top row, then what fits top down,

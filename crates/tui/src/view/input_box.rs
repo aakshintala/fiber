@@ -299,11 +299,8 @@ fn draw_selection(
     let shown = to_u16(rows.len());
     let first = below.saturating_sub(shown).max(area.y);
     let height = area.bottom().saturating_sub(first).min(shown);
-    // Always noted: an empty note claims nothing, since the press map
-    // reads the draft's pieces and a zero-height slab holds no cell
-    // (`removed`: the `&&`/`!`/`>` comparisons no test can tell apart —
-    // empty rows hold no pieces, and a zero-height slab only arises
-    // from an empty area, which never reaches the draw).
+    // Always noted: an empty note claims nothing — empty rows hold
+    // no pieces, and a zero-height slab holds no cell.
     app.note_input_area(Rect::new(text.x, first, text.width, height), top);
     // The selection's rects read draft rows from the column's first row:
     // the shown slab clips them, so scrolled rows paint nothing.
@@ -312,8 +309,7 @@ fn draw_selection(
     let slab = Rect::new(text.x, first, text.width, height);
     let tint = super::marks::selection_style();
     for rect in app.selection_cells(crate::app::SurfaceId::Input, full) {
-        // `removed`: styling an empty intersection paints no cell, so
-        // the guard told nothing apart.
+        // An empty intersection paints no cell.
         let clipped = rect.intersection(slab);
         buf.set_style(clipped, tint);
     }

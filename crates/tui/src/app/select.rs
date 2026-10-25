@@ -97,7 +97,7 @@ fn cells_range(text: &str, x: u16, from: u16, to: u16) -> Option<(u16, u16)> {
     let mut start = None;
     let mut end = None;
     for ch in text.chars() {
-        let wide = u16::try_from(crate::format::width(&ch.to_string())).unwrap_or(u16::MAX);
+        let wide = u16::try_from(crate::text::char_width(ch)).unwrap_or(u16::MAX);
         if col < to && col.saturating_add(wide) > from {
             if start.is_none() {
                 start = Some(x.saturating_add(col));
@@ -121,7 +121,7 @@ fn slice_cells(text: &str, from: u16, to: u16) -> String {
     let mut out = String::new();
     let mut col = 0u16;
     for ch in text.chars() {
-        let wide = u16::try_from(crate::format::width(&ch.to_string())).unwrap_or(u16::MAX);
+        let wide = u16::try_from(crate::text::char_width(ch)).unwrap_or(u16::MAX);
         if col >= to {
             break;
         }
