@@ -656,7 +656,11 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
     jobs.end("j_1", &inbox);
     jobs.end("j_2", &inbox);
     ran(&finished);
-    assert!(stops.try_recv().is_err(), "no ended job is stopped");
+    let extra_stops: Vec<JobId> = std::iter::from_fn(|| stops.try_recv().ok()).collect();
+    assert!(
+        extra_stops.is_empty(),
+        "no ended job is stopped: expected only the j_2 stop, extra stops in arrival order: {extra_stops:?}"
+    );
     // Both real ends are written cancelled; the queued `j_1` end never was.
     // The whole stream, in order: the queued `j_1` end was dropped, so
     // only the two real ends were written, both cancelled.
