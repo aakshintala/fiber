@@ -94,7 +94,11 @@ impl Setup {
 
     fn load(&self, config: &Config, set: RepositorySet) -> SessionExtensions {
         let home = self.home();
-        SessionExtensions::load_repository(
+        let gathered = set.hooks_config(config);
+        let gathered = gathered
+            .extensions()
+            .merged(&config::full_name("hooks"), &["hooks"]);
+        let session = SessionExtensions::load_repository(
             &home,
             config,
             FakeClock::new(),
@@ -102,7 +106,17 @@ impl Setup {
             None,
             StateSeed::new(),
             set,
-        )
+        );
+        let filtered = session.hooks_config(config);
+        assert_eq!(
+            gathered.unwrap(),
+            filtered
+                .extensions()
+                .merged(&config::full_name("hooks"), &["hooks"])
+                .unwrap(),
+            "gathered and session views must agree before any reload"
+        );
+        session
     }
 }
 
@@ -157,6 +171,38 @@ fn filtered_config_withholds_unapproved_and_merges_approved() {
             .join("scripts/repo.sh")
             .display()
             .to_string()
+    );
+}
+
+#[test]
+fn gathered_hooks_keep_personal_names_and_only_approved_repository_names() {
+    let setup = Setup::new();
+    setup.write("scripts/repo.sh", "repo\n");
+    setup.hooks(&json!({
+        "approved": {"point":"after_tool", "command":"scripts/repo.sh", "timeout":1000, "on_failure":"blocking"},
+        "withheld": {"point":"after_tool", "command":"scripts/repo.sh", "timeout":1000, "on_failure":"blocking"},
+        "personal": {"point":"after_tool", "command":"scripts/repo.sh", "timeout":1000, "on_failure":"non-blocking"}
+    }));
+    setup.approve("approved");
+    let person = setup.home().join("config/hooks.json");
+    fs::create_dir_all(person.parent().unwrap()).unwrap();
+    fs::write(person, json!({"hooks":{"personal":{"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}}}).to_string()).unwrap();
+    let config = setup.config(&[
+        r#"extensions."github.com/aakshintala/fiber/extensions/hooks".settings.hooks.run={"point":"after_tool","command":"true","timeout":1000,"on_failure":"blocking"}"#,
+    ]);
+    let set = setup.set(&empty_skipped());
+    let filtered = set.hooks_config(&config);
+    // Blocker names arrive sorted (`docs/invocation.md:1160`).
+    assert_eq!(
+        crate::hooks_state(&filtered, &[]).unwrap(),
+        crate::HooksState::MissingBlocking {
+            names: vec!["approved".into(), "personal".into(), "run".into()]
+        }
+    );
+    let session = setup.load(&config, set);
+    assert_eq!(
+        crate::hooks_state(&session.hooks_config(&config), &[]).unwrap(),
+        crate::hooks_state(&filtered, &[]).unwrap()
     );
 }
 
@@ -346,9 +392,12 @@ fn unapproved_hooks_gate_when_the_extension_is_absent() {
     let config = setup.config(&[]);
     let session = setup.load(&config, setup.set(&empty_skipped()));
     let filtered = session.hooks_config(&config);
+    // The lone blocker is named (`docs/invocation.md:1160`).
     assert_eq!(
         crate::hooks_state(&filtered, &[]).unwrap(),
-        crate::HooksState::MissingBlocking
+        crate::HooksState::MissingBlocking {
+            names: vec!["guard".to_owned()]
+        }
     );
 }
 
