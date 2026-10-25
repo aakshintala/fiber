@@ -951,26 +951,34 @@ fn hub_log_tail_shows_a_short_log_whole() {
     assert_eq!(hub_log_tail("a\nb"), "a\nb");
 }
 
+// No asserted count cites a `docs/<area>.md` line promising it
+// (`docs/code-quality.md`, "What a reviewer checks"): the tail's width is
+// the helper's own bound, so these tests pin presence and recency, not the
+// bound. A long log keeps its last line and drops an early one.
 #[test]
-fn hub_log_tail_shows_twenty_lines_whole() {
-    let log = (1..=20)
-        .map(|n| format!("line {n}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(hub_log_tail(&log), log);
-}
-
-#[test]
-fn hub_log_tail_shows_the_last_twenty_lines() {
+fn hub_log_tail_keeps_the_last_line() {
     let log = (1..=25)
         .map(|n| format!("line {n}"))
         .collect::<Vec<_>>()
         .join("\n");
     let tail = hub_log_tail(&log);
-    let lines: Vec<&str> = tail.lines().collect();
-    assert_eq!(lines.len(), 20);
-    assert_eq!(lines.first(), Some(&"line 6"));
-    assert_eq!(lines.last(), Some(&"line 25"));
+    assert!(
+        tail.lines().any(|line| line == "line 25"),
+        "the tail keeps the log's last line: {tail}"
+    );
+}
+
+#[test]
+fn hub_log_tail_drops_an_early_line() {
+    let log = (1..=25)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail = hub_log_tail(&log);
+    assert!(
+        !tail.lines().any(|line| line == "line 1"),
+        "the tail drops the log's early lines: {tail}"
+    );
 }
 
 /// What a hub that did not start left behind: the child status a
