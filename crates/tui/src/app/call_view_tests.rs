@@ -2034,3 +2034,345 @@ fn a_search_view_keeps_its_match_tint() {
         "the span tint draws marked: {inks:?}"
     );
 }
+
+#[test]
+fn refresh_without_paging_keeps_fill_empty() {
+    // Running to whole: neither side pages, so no fill queues.
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    assert!(!app.call_view().expect("open").paged());
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "one\ntwo"}],
+                "details": {"command": COMMAND, "exit_code": 0}}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(sends.is_empty(), "no artifact means no fetch: {sends:?}");
+    let view = app.call_view().expect("the view stays open");
+    assert!(!view.paged(), "still no artifact");
+    assert_eq!(
+        view.pager.fill_next, None,
+        "an unpaged refresh queues no fill"
+    );
+}
+
+#[test]
+fn refresh_on_an_already_paged_view_keeps_fill_empty() {
+    // Paged to paged with nothing queued: the fill stays empty.
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert!(app.call_view().expect("open").paged());
+    assert_eq!(app.call_view().expect("open").pager.fill_next, None);
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "cut"}],
+                "details": {"command": COMMAND, "exit_code": 0},
+                "artifact": ARTIFACT,
+                "kept": [[0, 5]]}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let _ = sends;
+    assert_eq!(
+        app.call_view().expect("open").pager.fill_next,
+        None,
+        "an already-paged refresh queues no new fill"
+    );
+}
+
+#[test]
+fn refresh_with_a_queued_fill_keeps_it() {
+    // Running to paged while a fill waits: the waiting offset stands.
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    app.call_view_mut().expect("open").pager.fill_next = Some(999);
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "head\ntail"}],
+                "details": {"command": COMMAND, "exit_code": 0},
+                "artifact": ARTIFACT,
+                "kept": [[0, 5], [10, 15]]}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert_eq!(
+        app.call_view().expect("open").pager.fill_next,
+        Some(999),
+        "a queued fill survives the refresh"
+    );
+    assert!(
+        sends
+            .iter()
+            .any(|line| line["args"]["offset"] == json!(999)),
+        "the pump asks for the queued fill: {sends:?}"
+    );
+}
+
+#[test]
+fn find_call_parts_pins_action_name_and_arguments() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let arguments = json!({"command": COMMAND});
+    requested(&mut app, "shell", arguments.clone(), ACTION);
+    completed(
+        &mut app,
+        ACTION,
+        "one\ntwo",
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    let (action, name, args) = app.find_call_parts(id).expect("the call is on the screen");
+    assert_eq!(action, ACTION, "the action pins");
+    assert_eq!(name, "shell", "the tool name pins");
+    assert_eq!(args, arguments, "the arguments pin");
+}
+
+#[test]
+fn refresh_ignores_a_completion_for_another_call() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let _ = page_request(app.open_call_view(id));
+    let other = "a_2";
+    requested(&mut app, "shell", json!({"command": COMMAND}), other);
+    completed(
+        &mut app,
+        other,
+        "other",
+        json!({"command": COMMAND, "exit_code": 0}),
+        None,
+        None,
+    );
+    let view = app.call_view().expect("the view stays open");
+    assert_eq!(
+        view.artifact.as_deref(),
+        Some(ARTIFACT),
+        "another call's completion keeps the artifact"
+    );
+    assert_eq!(
+        view.kept,
+        Some(vec![[0, 5], [10, 15]]),
+        "another call's completion keeps the kept edges"
+    );
+}
+
+#[test]
+fn refresh_ignores_a_completion_for_another_session() {
+    use crate::link::Line;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    let _ = page_request(app.open_call_view(id));
+    let payload = json!({"status": "completed",
+        "content": [{"type": "text", "text": "other"}],
+        "details": {"command": COMMAND, "exit_code": 0}});
+    let line = Line::Session(contract::Envelope {
+        kind: "tool_call_completed".to_owned(),
+        session_id: contract::SessionId("s_other".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: Some(contract::TurnId(TURN.to_owned())),
+        action_id: Some(contract::ActionId(ACTION.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    });
+    assert!(app.on_line(line).is_empty());
+    let view = app.call_view().expect("the view stays open");
+    assert_eq!(
+        view.artifact.as_deref(),
+        Some(ARTIFACT),
+        "another session's completion keeps the artifact"
+    );
+}
+
+#[test]
+fn scrolling_down_to_the_bottom_follows() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    assert!(app.call_view().expect("open").follow);
+    app.on_key(Key::Up, now());
+    app.on_key(Key::Up, now());
+    assert!(!app.call_view().expect("open").follow, "Up leaves follow");
+    app.on_key(Key::Down, now());
+    assert!(
+        !app.call_view().expect("open").follow,
+        "Down mid-file stays unfollowed"
+    );
+    app.on_key(Key::Down, now());
+    assert!(
+        app.call_view().expect("open").follow,
+        "Down to the bottom follows"
+    );
+}
+
+#[test]
+fn scrolling_down_mid_file_does_not_refetch_the_fill() {
+    let mut app = attached(80, 24);
+    let text = lined_file();
+    let (_id, first) = open_paged(&mut app, json!([[0, 5]]), ACTION);
+    let _ = page_to_end_from_zero(&mut app, first, &text);
+    {
+        let view = app.call_view_mut().expect("open");
+        view.pager.fill_next = Some(99999);
+        view.pager.missing.insert(99999);
+    }
+    app.on_key(Key::Up, now());
+    app.on_key(Key::Up, now());
+    app.on_key(Key::Up, now());
+    let sends = sent(app.on_key(Key::Down, now()));
+    assert!(
+        sends
+            .iter()
+            .all(|line| line["args"]["offset"] != json!(99999)),
+        "Down mid-file never refetches the fill: {sends:?}"
+    );
+}
+
+#[test]
+fn refresh_rebuilds_command_and_closing_from_details() {
+    // Opened on a running call, the completion's details choose the
+    // shell view: the command row draws before the output and the
+    // closing draws after it.
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(&mut app, "shell", json!({"command": COMMAND}), ACTION);
+    let id = crate::turn::target_id(ACTION);
+    app.open(Target::Group(id));
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let sends: Vec<Value> = app
+        .on_line(envelope(
+            "tool_call_completed",
+            json!({"status": "completed",
+                "content": [{"type": "text", "text": "head\ntail"}],
+                "details": {"command": COMMAND, "exit_code": 0},
+                "artifact": ARTIFACT,
+                "kept": [[0, 5], [10, 15]]}),
+            Some(ACTION),
+        ))
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    assert!(
+        sends.iter().any(|line| line["args"]["offset"] == json!(0)),
+        "the completion pumps the new artifact fetch: {sends:?}"
+    );
+    let view = app.call_view().expect("the view stays open");
+    assert_eq!(view.title, "Shell", "the kind pins from the tool name");
+    assert_eq!(view.command, COMMAND, "the target pins from the arguments");
+    let rows = frame_text(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("$ cargo test -p log")),
+        "the refreshed view draws the shell command: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("exit 0")),
+        "the refreshed view draws the shell closing: {rows:?}"
+    );
+}
+
+#[test]
+fn snapshot_completed_pins_the_call_identity() {
+    let arguments = json!({"command": COMMAND});
+    let done: contract::events::ToolCallCompleted = serde_json::from_value(json!({
+        "status": "completed",
+        "content": [{"type": "text", "text": "one\ntwo"}],
+        "details": {"command": COMMAND, "exit_code": 0},
+    }))
+    .expect("the completion decodes");
+    let snap = crate::turn::opened::snapshot_completed(42, "shell", &arguments, ACTION, &done);
+    assert_eq!(snap.id, 42, "the snapshot keeps the call id");
+    assert_eq!(snap.title, "Shell", "the kind pins from the tool name");
+    assert_eq!(snap.command, COMMAND, "the target pins from the arguments");
+    assert!(
+        snap.copy.contains("one") && snap.copy.contains("two"),
+        "the copy keeps the content: {:?}",
+        snap.copy
+    );
+}
+
+#[test]
+fn a_plain_view_marks_no_match_tint() {
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_whole(&mut app, ACTION);
+    open_inline(&mut app, id);
+    assert_eq!(app.open_call_view(id), Effect::None);
+    let frame = app.call_view().map(|view| view.frame()).expect("open");
+    let inks: Vec<Ink> = frame
+        .rows
+        .iter()
+        .flatten()
+        .map(|(_, _, ink)| *ink)
+        .collect();
+    assert!(
+        !inks.contains(&Ink::Marked(Role::Match)),
+        "plain output draws no match tint: {inks:?}"
+    );
+}
+
+#[test]
+fn highlight_empty_hit_keeps_cells_whole() {
+    use crate::app::call_view_rows::highlight_cells;
+    use crate::swapped::Ink;
+    let cells = vec![("ab".to_owned(), Ink::Plain)];
+    let hit = 1..1;
+    let out = highlight_cells(&cells, "ab", std::slice::from_ref(&hit), false);
+    assert_eq!(
+        out,
+        vec![("ab".to_owned(), Ink::Plain)],
+        "an empty hit marks nothing and splits nothing"
+    );
+}
+
+#[test]
+fn highlight_second_cell_gap_marks_only_its_hit() {
+    use crate::app::call_view_rows::highlight_cells;
+    use crate::swapped::Ink;
+    use crate::theme::Role;
+    let cells = vec![("ab".to_owned(), Ink::Plain), ("cd".to_owned(), Ink::Plain)];
+    let hit = 3..4;
+    let out = highlight_cells(&cells, "abcd", std::slice::from_ref(&hit), false);
+    assert_eq!(
+        out,
+        vec![
+            ("ab".to_owned(), Ink::Plain),
+            ("c".to_owned(), Ink::Plain),
+            ("d".to_owned(), Ink::Marked(Role::Match)),
+        ],
+        "a hit past the cell start keeps the leading plain part: {out:?}"
+    );
+}

@@ -105,7 +105,10 @@ pub(in crate::app) fn build_rows(input: &RowsInput<'_>) -> Vec<Row> {
     }
     for (index, body) in input.closing.iter().enumerate() {
         out.push(Row {
-            cells: body_cells(body, gutter(input)),
+            // Closing rows never carry numbers, so no gutter is fitted:
+            // `gutter` would always be zero here (numbering only comes
+            // with reads and writes, which draw no closing row).
+            cells: body_cells(body, 0),
             source: Source::Closing(index),
         });
     }
@@ -128,23 +131,6 @@ fn plain_rows(input: &RowsInput<'_>) -> Vec<Row> {
             source: Source::Prefix(index),
         })
         .collect()
-}
-
-/// The gutter width the output numbers need: digits of the largest
-/// drawn number, or of the start alone while nothing is held.
-fn gutter(input: &RowsInput<'_>) -> usize {
-    let Some(start) = input.numbering else {
-        return 0;
-    };
-    let mut width = digits(start);
-    for offset in input.pages.keys().copied().collect::<Vec<_>>() {
-        let lines = input.segs.get(&offset).map_or(0, |seg| seg.lines.len());
-        let last = start
-            .saturating_add(line_before(input, offset))
-            .saturating_add(lines.saturating_sub(1) as u64);
-        width = width.max(digits(last));
-    }
-    width
 }
 
 /// How many output lines the fetched pages before `offset` hold:
@@ -341,7 +327,9 @@ fn gutter_width(body: &opened::Body) -> usize {
 /// cells on the match tint, or the current tint for the current match,
 /// every other cell keeping its ink. A hit spanning cells marks each
 /// part; ranges that end at a cell's start belong to the next cell.
-fn highlight_cells(
+/// Empty slices push nothing visible: the trailing filter drops them,
+/// so the guards below stay unconditional.
+pub(in crate::app) fn highlight_cells(
     cells: &[(String, Ink)],
     text: &str,
     hits: &[std::ops::Range<usize>],
@@ -372,16 +360,14 @@ fn highlight_cells(
             let from = from.max(at);
             let to = to.min(end);
             if from < to {
-                if at < from {
-                    out.push((cell.0[at - offset..from - offset].to_owned(), cell.1));
-                }
+                // Unconditional: an empty `at..from` filters out below.
+                out.push((cell.0[at - offset..from - offset].to_owned(), cell.1));
                 out.push((cell.0[from - offset..to - offset].to_owned(), mark));
                 at = to;
             }
         }
-        if at < end {
-            out.push((cell.0[at - offset..].to_owned(), cell.1));
-        }
+        // Unconditional: an empty tail filters out below.
+        out.push((cell.0[at - offset..].to_owned(), cell.1));
         offset = end;
     }
     out.into_iter()

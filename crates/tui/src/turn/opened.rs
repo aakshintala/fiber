@@ -225,7 +225,7 @@ pub(crate) fn snapshot_completed(
     id: usize,
     name: &str,
     arguments: &Value,
-    action: &str,
+    _action: &str,
     done: &contract::events::ToolCallCompleted,
 ) -> CallSnapshot {
     let content = crate::format::content_text(done);
@@ -235,9 +235,11 @@ pub(crate) fn snapshot_completed(
         .clone()
         .filter(|details| !details.is_null())
         .map(|details| details.to_string());
+    // No `action` field: the temporary call's action is never read
+    // (the snapshot exposes no action; rendering uses name/arguments),
+    // so the default stands.
     let call = Call {
         id,
-        action: action.to_owned(),
         name: name.to_owned(),
         arguments: arguments.clone(),
         result: Some(Box::new(super::group::CallResult {
