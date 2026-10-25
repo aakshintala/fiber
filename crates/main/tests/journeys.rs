@@ -868,21 +868,27 @@ fn journey_drag_notice_copies_its_text() {
     run.wait_screen("the beta-filtered list", |screen| {
         shows(screen, "1 of 2 models") && shows(screen, "beta-2")
     });
-    let switched = run.output().len();
     run.write(b"\r");
-    // The closed picker proves the switch finished before the pointer
-    // goes out (`docs/testing/screens.md`, "Screens"): the switch
-    // sends no further output after it closes, so the notice stack is
-    // final.
-    run.wait_screen("the closed picker", |screen| {
-        !shows(screen, "Type to search") && shows(screen, "›")
-    });
-    // The frame drawing the notice settles its row before the pointer
-    // goes out (`docs/testing/screens.md`, "Screens"): the switch
-    // sends no further output, so nothing moves it after this frame.
-    run.wait_bytes(switched, b"cache_rebuild", "the cache-rebuild notice drew");
-    let notice = run.wait_screen("the cache-rebuild notice", |screen| {
+    // The notice can appear before the command answer. It is not a switch
+    // completion signal, so do not use its row until the fake sees beta's
+    // next request.
+    run.wait_screen("the cache-rebuild notice", |screen| {
         shows(screen, "cache_rebuild") && shows(screen, "✕")
+    });
+    let from = run.output().len();
+    run.write(b"again\r");
+    assert!(
+        server.await_requests(2, setup.deadline),
+        "the second request to reach the fake provider"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "the first and second model requests");
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(second["model"], "beta-2", "the switch reached beta");
+    run.wait_screen("the second reply", |screen| shows(screen, "Beta here."));
+    run.turn_finished(from);
+    let notice = run.wait_screen("the cache-rebuild notice after the switch", |screen| {
+        shows(screen, "cache_rebuild") && shows(screen, "✕") && shows(screen, "Beta here.")
     });
     let (x, y) = find_cell(&notice, "cache_rebuild");
     let from = run.output().len();
