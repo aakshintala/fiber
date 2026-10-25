@@ -424,6 +424,91 @@ fn home_with_more_rows_than_fit() {
     insta::assert_snapshot!("home_with_more_rows_than_fit", screen(&app, 80, 24));
 }
 
+/// Answers the feed, the first unscoped `recent` page with `rows`, and
+/// every scoped ask with `total` and no rows: the held total with one
+/// loaded row beneath it.
+fn hold_total(app: &mut App, rows: serde_json::Value, total: usize) {
+    fn parse(line: &String) -> serde_json::Value {
+        serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+    }
+    let outgoing: Vec<serde_json::Value> = app.on_line(hello()).iter().map(parse).collect();
+    let feed = outgoing[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a feed"));
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a recent"));
+    assert!(
+        app.on_line(accepted(feed, serde_json::json!({})))
+            .is_empty()
+    );
+    let fanout: Vec<serde_json::Value> = app
+        .on_line(accepted(recent, rows))
+        .iter()
+        .map(parse)
+        .collect();
+    assert!(!fanout.is_empty(), "the unscoped answer fans out");
+    for line in &fanout {
+        let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
+        assert!(
+            app.on_line(accepted(
+                id,
+                serde_json::json!({"sessions": [], "total": total})
+            ))
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn home_header_draws_the_held_total_with_more_beneath() {
+    let mut app = home(80, 24);
+    hold_total(
+        &mut app,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+        3,
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("exited · 3"), "{frame}");
+    assert!(frame.contains("… 2 more"), "{frame}");
+    insta::assert_snapshot!("home_header_with_a_held_total_80x24", frame);
+}
+
+#[test]
+fn home_header_draws_no_exited_head_at_a_zero_total() {
+    let mut app = home(80, 24);
+    hold_total(
+        &mut app,
+        serde_json::json!({"sessions": [recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited")]}),
+        0,
+    );
+    let frame = screen(&app, 80, 24);
+    assert!(!frame.contains("exited ·"), "{frame}");
+    assert!(frame.contains("old work"), "{frame}");
+}
+
+#[test]
+fn home_header_counts_loaded_rows_without_a_total() {
+    let mut app = home(80, 24);
+    let outgoing: Vec<serde_json::Value> = app
+        .on_line(hello())
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}")))
+        .collect();
+    let recent = outgoing[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a recent"));
+    app.on_line(accepted(
+        recent,
+        serde_json::json!({"sessions": [
+            recent_row("s_aaaaaaaaaaaaaaaa", "old work", "exited"),
+            recent_row("s_bbbbbbbbbbbbbbbb", "dead work", "crashed"),
+        ]}),
+    ));
+    let frame = screen(&app, 80, 24);
+    assert!(frame.contains("exited · 2"), "{frame}");
+}
+
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {

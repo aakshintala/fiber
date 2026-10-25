@@ -12,7 +12,7 @@ use ratatui::text::Span;
 
 use super::{App, Effect, Kind, mint};
 use crate::home::{
-    Chip, Header, HomeScreen, Launch, Left, ListLine, Sessions, Spot, State, cascade_line,
+    Chip, Header, HomeScreen, Launch, Left, ListLine, Section, Sessions, Spot, State, cascade_line,
     delete_line, from_status, import_head, line, recent_rows,
 };
 use crate::keys::{Edit, Key};
@@ -391,6 +391,10 @@ impl App {
                 .iter()
                 .filter(|row| row.left.is_none() && row.state == State::Waiting)
                 .count();
+            // The `More` key resolves before the rows below move out of
+            // the section: it names the first hidden loaded row, else the
+            // section's last loaded row, else a live row.
+            let more = more_key(&section);
             list.push(ListLine::Head {
                 start: section.start,
                 name: section.name,
@@ -451,10 +455,20 @@ impl App {
                     },
                 });
             }
-            if !section.exited.is_empty() {
-                list.push(ListLine::ExitedHead {
-                    count: section.exited.len(),
-                });
+            // The header draws the hub's total when one is held,
+            // counting loaded rows only before the first scoped answer.
+            match section.total {
+                Some(total) if total > 0 => {
+                    list.push(ListLine::ExitedHead { count: total });
+                }
+                Some(_) => {}
+                None => {
+                    if !section.exited.is_empty() {
+                        list.push(ListLine::ExitedHead {
+                            count: section.exited.len(),
+                        });
+                    }
+                }
             }
             for row in section.exited.iter().take(section.shown_exited) {
                 list.push(ListLine::Exited {
@@ -469,11 +483,24 @@ impl App {
                     }),
                 });
             }
-            if let Some(row) = section.exited.get(section.shown_exited) {
-                list.push(ListLine::More {
-                    key: row.key,
-                    count: hidden_exited,
-                });
+            // `More` draws total-minus-shown when a total is held,
+            // saturating so a total below loaded rows never underflows.
+            match section.total {
+                Some(total) if total > section.shown_exited => {
+                    list.push(ListLine::More {
+                        key: more,
+                        count: total.saturating_sub(section.shown_exited),
+                    });
+                }
+                Some(_) => {}
+                None => {
+                    if let Some(row) = section.exited.get(section.shown_exited) {
+                        list.push(ListLine::More {
+                            key: row.key,
+                            count: hidden_exited,
+                        });
+                    }
+                }
             }
         }
         let header = Header {
@@ -1092,6 +1119,26 @@ impl App {
                     home.sessions.expand(&project);
                     self.focus = Some(TargetId::Home(Spot::Entry(key)));
                 }
+                // Opening also asks the project's next scoped page while
+                // its held total says more: the page rides past the
+                // project's last loaded row.
+                let next = self.home.as_ref().and_then(|home| {
+                    let project = home.sessions.by_key(key)?.project.clone();
+                    let total = home.sessions.total_for(&project)?;
+                    let section = home
+                        .sessions
+                        .sections(home.launch_project())
+                        .into_iter()
+                        .find(|section| section.project == project)?;
+                    (total > section.exited.len())
+                        .then(|| (project, section.exited.last().map(|row| row.id.0.clone())))
+                });
+                if let Some((project, before)) = next {
+                    let lines = self.scoped_page(&project, before.as_deref());
+                    if !lines.is_empty() {
+                        return Effect::Send(lines);
+                    }
+                }
                 Effect::None
             }
             Spot::Keep => {
@@ -1296,11 +1343,54 @@ impl App {
         Vec::new()
     }
 
-    /// Asks the next unscoped `recent` page past the focused last row,
-    /// using its id as `before`. `None` unless the focused row ends the
-    /// list and is its last recent row, the last
-    /// answer was not empty, and no `recent` is in flight.
+    /// Asks the next scoped `recent` page for `project` past `before`,
+    /// recording its id. While one is in flight for the project, sends
+    /// nothing: paging is not a re-trigger, so it marks nothing dirty.
+    /// Nothing goes out with no home, with the link down, or for an
+    /// empty project.
+    fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
+        if project.is_empty() || !self.outbox.is_up() {
+            return Vec::new();
+        }
+        let Some(home) = self.home.as_mut() else {
+            return Vec::new();
+        };
+        if home.scoped_asks.values().any(|pending| pending == project) {
+            return Vec::new();
+        }
+        let id = mint();
+        home.scoped_asks.insert(id.clone(), project.to_owned());
+        vec![recent_line(&id, Some(project), before)]
+    }
+
+    /// Asks the next `recent` page past the focused last row. When the
+    /// focused row is its project's last loaded row and the held total
+    /// says more, the page is scoped to that project; else the unscoped
+    /// path asks past the unscoped cursor. `None` unless the focused row
+    /// ends the list and a page may exist, with nothing in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
+        // The scoped page wins while the project holds more: the held
+        // total is that count's source of truth.
+        let scoped = self.home.as_ref().and_then(|home| {
+            let row = home.sessions.by_key(focused)?;
+            let project = row.project.clone();
+            let total = home.sessions.total_for(&project)?;
+            let section = home
+                .sessions
+                .sections(home.launch_project())
+                .into_iter()
+                .find(|section| section.project == project)?;
+            let last = section.exited.last()?;
+            (last.key == focused && total > section.exited.len())
+                .then(|| (project, Some(last.id.0.clone())))
+        });
+        if let Some((project, before)) = scoped {
+            let lines = self.scoped_page(&project, before.as_deref());
+            if lines.is_empty() {
+                return None;
+            }
+            return Some(Effect::Send(lines));
+        }
         let home = self.home.as_mut()?;
         if !home.sessions.more() || home.recent_ask.is_some() {
             return None;
@@ -1338,8 +1428,14 @@ impl App {
                     .sections(home.launch_project())
                     .into_iter()
                     .find(|section| section.project == row.project)?;
-                let hidden = section.hidden();
-                (hidden > 0).then(|| format!("… {hidden} more"))
+                match section.total {
+                    Some(total) => (total > section.shown_exited)
+                        .then(|| format!("… {} more", total.saturating_sub(section.shown_exited))),
+                    None => {
+                        let hidden = section.hidden();
+                        (hidden > 0).then(|| format!("… {hidden} more"))
+                    }
+                }
             }
             Spot::Stop(_)
             | Spot::Start(_)
@@ -1436,6 +1532,20 @@ fn scoped_result(
         return None;
     }
     Some(recent_rows(result))
+}
+
+/// The key `More` carries for its section: the first hidden loaded
+/// row when one hides, else the section's last loaded row, else a live
+/// row, so opening and paging still find the section's project.
+fn more_key(section: &Section<'_>) -> u64 {
+    section
+        .exited
+        .get(section.shown_exited)
+        .or(section.exited.last())
+        .map(|row| row.key)
+        .or(section.live.last().map(|row| row.key))
+        .or(section.start)
+        .unwrap_or(0)
 }
 
 /// A `recent` line: the first page, or past `before`. `project` scopes

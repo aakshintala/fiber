@@ -757,14 +757,19 @@ fn keys(app: &App) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-/// The first hidden exited row's key for `project`.
+/// The drawn `More` row's key for `project`: the first hidden loaded
+/// row when one hides, else the key the total path assigned.
 fn more_key(app: &App, project: &str) -> Option<u64> {
     let home = app.home.as_ref()?;
-    home.sessions
-        .sections(home.launch_project())
+    app.home_screen()?
+        .list
         .into_iter()
-        .find(|section| section.project == project)
-        .and_then(|section| section.exited.get(section.shown_exited).map(|row| row.key))
+        .find_map(|line| match line {
+            ListLine::More { key, .. } => {
+                (home.sessions.by_key(key)?.project == project).then_some(key)
+            }
+            _ => None,
+        })
 }
 
 /// Opens the row with `key`, with the parsed lines going out.
@@ -5269,6 +5274,225 @@ fn triggers_send_nothing_while_the_link_is_down() {
         app.home_line(&left("s_aaaaaaaaaaaaaaaa", "exited")),
         Some(Vec::new())
     );
+}
+
+/// The `(section head, exited head, more)` counts in draw order: the
+/// section's workspace tail, its exited header count, and its More
+/// count, skipping rows.
+fn list_shapes(app: &App) -> Vec<String> {
+    app.home_screen()
+        .map(|screen| {
+            screen
+                .list
+                .into_iter()
+                .map(|line| match line {
+                    ListLine::Head { name, .. } => format!("section {name}"),
+                    ListLine::ExitedHead { count } => format!("head {count}"),
+                    ListLine::More { count, .. } => format!("more {count}"),
+                    ListLine::Exited { .. } | ListLine::Live { .. } => "row".to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Answers each scoped ask in `lines` with `total` and no rows.
+fn answer_scoped_empty(app: &mut App, lines: &[Value], total: usize) {
+    for line in lines {
+        assert!(
+            app.on_line(accepted(
+                line_id(line),
+                json!({"sessions": [], "total": total})
+            ))
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn home_counts_come_from_the_held_total() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other"),
+        ]}),
+    );
+    assert!(
+        app.on_line(accepted(line_id(&fanout[0]), json!({"total": 7})))
+            .is_empty()
+    );
+    assert!(
+        app.on_line(accepted(line_id(&fanout[1]), json!({"total": 1})))
+            .is_empty()
+    );
+    assert_eq!(
+        list_shapes(&app),
+        [
+            "section w",
+            "head 7",
+            "row",
+            "more 6",
+            "section other",
+            "head 1",
+            "row",
+        ]
+    );
+    // `More` carries its section's project through its key.
+    let key = more_key(&app, "-w").expect("a more row");
+    assert_eq!(row_key(&app, "s_aaaaaaaaaaaaaaaa"), key);
+    assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 6 more"));
+}
+
+#[test]
+fn home_draws_no_exited_head_at_total_zero() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 0);
+    assert_eq!(list_shapes(&app), ["section w", "row"]);
+    assert_eq!(listed(&app), ["○  a"]);
+}
+
+#[test]
+fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w"),
+        ]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 2);
+    assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
+    assert_eq!(listed(&app), ["○  a", "○  b"]);
+}
+
+#[test]
+fn home_more_draws_one_more_at_total_one_above_shown() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w"),
+        ]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 3);
+    assert_eq!(
+        list_shapes(&app),
+        ["section w", "head 3", "row", "row", "more 1"]
+    );
+    let key = more_key(&app, "-w").expect("a more row");
+    assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 1 more"));
+}
+
+#[test]
+fn home_draws_no_more_when_the_total_falls_below_loaded() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w"),
+        ]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 1);
+    // Below loaded rows the count never goes negative and no `More`
+    // draws.
+    assert_eq!(list_shapes(&app), ["section w", "head 1", "row", "row"]);
+}
+
+#[test]
+fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 3);
+    let key = more_key(&app, "-w").expect("a more row");
+    let Effect::Send(lines) = app.home_click(Spot::More(key)) else {
+        panic!("More opens the next scoped page");
+    };
+    assert_eq!(lines.len(), 1);
+    let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert_eq!(page["args"]["project"], "-w");
+    assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
+    // The answer appends the next page under the same total.
+    assert!(
+        app.on_line(accepted(
+            page["id"].as_str().unwrap_or_else(|| panic!("page id")),
+            json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")], "total": 3}),
+        ))
+        .is_empty()
+    );
+    assert_eq!(
+        list_shapes(&app),
+        ["section w", "head 3", "row", "row", "more 1"]
+    );
+}
+
+#[test]
+fn enter_on_more_at_or_below_the_total_sends_nothing() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [
+            exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w"),
+            exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w"),
+        ]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 2);
+    // The second row's key still resolves the project, but the held
+    // total says nothing more: no page goes out.
+    let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(app.home_click(Spot::More(key)), Effect::None);
+}
+
+#[test]
+fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
+    let mut app = home();
+    let (_, recent) = linked(&mut app);
+    let fanout = answer_value(
+        &mut app,
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    );
+    answer_scoped_empty(&mut app, &fanout, 3);
+    // The `More` row is the last drawn stop: Enter opens the project's
+    // next scoped page past its last loaded row.
+    let key = more_key(&app, "-w").expect("a more row");
+    drawn(&mut app);
+    app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
+    let now = fakes::clock::FakeClock::new().now();
+    let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
+        panic!("Enter on More pages the project");
+    };
+    assert_eq!(lines.len(), 1);
+    let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(page["command"], "recent");
+    assert_eq!(page["args"]["project"], "-w");
+    assert_eq!(page["args"]["before"], "s_aaaaaaaaaaaaaaaa");
 }
 
 /// The row key of `session` on home.

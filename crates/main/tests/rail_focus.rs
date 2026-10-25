@@ -30,6 +30,47 @@ use support::{
 /// starts a row with it.
 const RAIL_HEADER: &str = "  w +";
 
+/// A `recent.jsonl` exited row for the launch workspace.
+fn exited_row(
+    id: &str,
+    name: &str,
+    workspace: &std::path::Path,
+    project: &str,
+    ts: u64,
+) -> serde_json::Value {
+    let workspace = std::fs::canonicalize(workspace)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    serde_json::json!({
+        "session_id": id,
+        "ts": ts,
+        "project": project,
+        "workspace": workspace,
+        "name": name,
+        "how": "exited",
+    })
+}
+
+/// Seeds two exited rows for the launch workspace and keeps their
+/// session directories, as the hub's recent reader requires.
+fn seed_exited_rows(setup: &Setup, workspace: &std::path::Path) {
+    let project = log::project_key(&doors::project(workspace));
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(workspace));
+    std::fs::create_dir_all(&sessions).unwrap();
+    let mut lines = Vec::new();
+    for (index, name) in [(1u64, "seeded exit one"), (2, "seeded exit two")] {
+        let id = format!("s_{index:016x}");
+        std::fs::create_dir_all(sessions.join(&id)).unwrap();
+        lines.push(exited_row(&id, name, workspace, &project, index * 1_000).to_string());
+    }
+    std::fs::write(
+        setup.home().join("recent.jsonl"),
+        format!("{}\n", lines.join("\n")),
+    )
+    .unwrap();
+}
+
 /// The foot hint's middle: the row reads the full hint while focused.
 const HINT_MIDDLE: &str = "↑↓ move · Enter switch";
 
@@ -375,6 +416,55 @@ fn rail_focus_lifts_moves_switches_and_widens_home() {
     run.write(b"\x03");
     run.write(b"\x1b[D");
     run.wait_screen("home again", |grid| grid.contents.contains(HOME_COUNTS));
+
+    close_two(&setup, &server, &first, &second, launch_guard, other_guard);
+    drop(control);
+    finish_run(run);
+    reap(&hub);
+}
+
+/// The rail header draws the hub's total for the seeded exits: the
+/// launch project reads "2 ✓" while the other project reads "0 ✓".
+/// Opening the launch project's `Done` stop lands home on the first
+/// exited row.
+#[test]
+fn rail_header_draws_the_hub_total_for_seeded_exits() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 1000}}),
+    );
+    server.hold();
+    let launch = setup.workspace();
+    seed_exited_rows(&setup, &launch);
+    let hub = Arc::new(Mutex::new(None));
+    let (control, _) = connect_hub(&setup, &hub);
+    let (first, second, launch_guard, other_guard) = start_two(&setup, &control);
+    let mut run = Run::spawn(&setup, 160, 48, &["resume", first.as_str()], &TRUECOLOUR);
+    run.ready();
+    run.wait_screen("the rail with a two-exit total", |grid| {
+        rail_drawn(grid) && grid.contents.contains("2 ✓") && grid.contents.contains("0 ✓")
+    });
+    // ← focuses the on-screen card, ↓ moves to the launch project's
+    // "+" stop, ↓ again to its "2 ✓" stop.
+    run.write(b"\x1b[D");
+    run.wait_screen("the hint on the first card", |grid| {
+        grid.contents.contains(HINT_MIDDLE)
+    });
+    run.write(b"\x1b[B");
+    run.write(b"\x1b[B");
+    // Enter opens home on the first exited row, newest first.
+    run.write(b"\r");
+    let home = run.wait_screen("home on the first seeded exit", |grid| {
+        grid.contents.contains("exited · 2") && grid.contents.contains("seeded exit two")
+    });
+    assert!(
+        home.rows.iter().any(|row| row.contains("seeded exit one")),
+        "both seeded exits drawn:\n{}",
+        home.contents
+    );
 
     close_two(&setup, &server, &first, &second, launch_guard, other_guard);
     drop(control);
