@@ -139,11 +139,20 @@ fn finish(
     }
     // Wait for every session to exit before killing the hub: a close the
     // hub never forwards leaves the session up and `wait_gone` times out.
-    for session in sessions {
-        until(&client, "the session exited", |line| {
-            line["kind"] == "fiber_exited" && line["session_id"] == *session
-        });
-    }
+    // One wait collects every requested exit: `until` consumes the lines
+    // it reads, so a wait per session drops another session's exit when
+    // it arrives first and the next wait times out.
+    let mut remaining: Vec<&str> = sessions.to_vec();
+    until(&client, "the sessions exited", |line| {
+        if line["kind"] == "fiber_exited" {
+            if let Some(exited) = line["session_id"].as_str() {
+                if let Some(pos) = remaining.iter().position(|wanted| *wanted == exited) {
+                    remaining.remove(pos);
+                }
+            }
+        }
+        remaining.is_empty()
+    });
     drop(client);
     hub.lock().unwrap().take().unwrap().kill_and_wait();
     guard.wait_gone();
@@ -483,11 +492,6 @@ fn question_reply_to_a_hub_started_session_is_allowed() {
     let setup = Setup::new();
     let server = fakes::ProviderServer::start_responding(|request: &fakes::Request| {
         let text = String::from_utf8_lossy(&request.body);
-        // The steered turn carries the steer text but no tool result: end
-        // it, leaving the asked question pending for the probe's reply.
-        if text.contains("from a sibling") {
-            return hello();
-        }
         let body: Value = serde_json::from_slice(&request.body).unwrap();
         let answered = body["input"].as_array().is_some_and(|input| {
             input
