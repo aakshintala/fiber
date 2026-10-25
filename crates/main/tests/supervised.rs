@@ -108,11 +108,35 @@ fn started_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> Socket {
 /// other lines (`docs/testing.md`, "Event streams"): `clients`, written when
 /// a connection attaches; `session_status` and the hub's `attention`,
 /// written when the session's summary changes; and `date_changed`, written
-/// when the local date changes. Every other kind is pinned in order,
-/// including the ones without `seq`: the ephemeral deltas, `command_accepted`
-/// and `steering_queue` (`docs/invocation.md`, "Driver commands";
-/// `docs/events.md`, "`steering_queue`", "`assistant_message_delta`").
-/// The projection itself is `support::kinds`, imported through `support::*`.
+/// when the local date changes. Other kinds are pinned in order, including
+/// ephemeral deltas and `steering_queue` (`docs/events.md`,
+/// "`steering_queue`", "`assistant_message_delta`"). `command_accepted` is
+/// filtered from ordered comparisons and asserted separately: it is an
+/// ephemeral acknowledgement sent only to its client, with no `seq`
+/// (`docs/invocation.md`, "Driver commands").
+/// `support::kinds` supplies the base projection (`support::*`).
+fn ordered_kinds_without_command_accepted(lines: &[Value]) -> Vec<&str> {
+    kinds(lines)
+        .into_iter()
+        .filter(|kind| *kind != "command_accepted")
+        .collect()
+}
+
+/// A driver command is acknowledged once on its own client stream
+/// (`docs/invocation.md`, "Driver commands").
+fn assert_command_accepted_once(lines: &[Value], command_id: &str) {
+    let accepted = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == command_id
+        })
+        .count();
+    assert_eq!(
+        accepted, 1,
+        "one acknowledgement for {command_id}: {lines:?}"
+    );
+}
+
 fn assert_one_clients_line(lines: &[Value]) {
     // `clients` is "written whenever a `full` connection attaches or
     // leaves" (`docs/events.md`, "`clients`"), so the one attach writes
@@ -338,18 +362,18 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
     lines.extend(until(&control, "the second turn end", |line| {
         line["kind"] == "turn_completed"
     }));
-    // Complete ordered kinds (the same four set aside as above, every other
-    // kind pinned in order). The first `until` ends before the steer,
+    // Complete ordered kinds (the independently triggered lines set aside as
+    // above, and `command_accepted` filtered because its position relative to
+    // logged lines is not promised). The first `until` ends before the steer,
     // splitting deny from allow; the allow's `permission_resolved` precedes
     // `tool_call_started` (`docs/permissions.md`, "What the log records").
-    // `steering_queue` marks each queue change (`docs/events.md`,
-    // "`steering_queue`"), `command_accepted` answers the steer once
-    // (`docs/invocation.md`, "Driver commands"), and the drained queue feeds
-    // the next turn (`docs/loop.md`, "One step"). Deltas stream each turn's
-    // `Hello.` in fragments (same pages as above).
+    // The two `steering_queue` updates stay ordered (`docs/events.md`,
+    // "`steering_queue`", and `docs/loop.md`, "One step"). The steer's
+    // acknowledgement is asserted separately below (`docs/invocation.md`,
+    // "Driver commands"). Deltas stream each turn's `Hello.` in fragments.
     assert_one_clients_line(&lines);
     assert_eq!(
-        kinds(&lines),
+        ordered_kinds_without_command_accepted(&lines),
         [
             "session_started",
             "fiber_started",
@@ -375,7 +399,6 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
             "assistant_message_completed",
             "turn_completed",
             "steering_queue",
-            "command_accepted",
             "steering_queue",
             "turn_started",
             "step_started",
@@ -399,6 +422,7 @@ fn a_supervised_steer_grants_a_fresh_review_and_allows() {
         ],
         "complete ordered kinds: {lines:?}"
     );
+    assert_command_accepted_once(&lines, "c_steer");
     // The steer never answers an approval (`docs/permissions.md`,
     // "Supervised sessions": "The supervisor never answers an approval").
     assert!(
@@ -574,13 +598,7 @@ fn a_supervised_resume_stays_unanswerable() {
     let replay = until(&resumed, "the resumed run", |line| {
         line["kind"] == "fiber_started" && line["payload"]["resumed"] == true
     });
-    assert!(
-        replay
-            .iter()
-            .any(|line| line["kind"] == "command_accepted"
-                && line["payload"]["command_id"] == "c_resub"),
-        "the subscribe was acknowledged: {replay:?}"
-    );
+    assert_command_accepted_once(&replay, "c_resub");
     let log = read_log(&setup, &id);
     let started = log
         .iter()
@@ -594,23 +612,21 @@ fn a_supervised_resume_stays_unanswerable() {
     let lines = until(&resumed, "the resumed turn end", |line| {
         line["kind"] == "turn_completed"
     });
-    // Complete ordered kinds of the resumed turn (the same four set aside as
-    // above, but no `clients` count is pinned: the resumed stream can carry
-    // both attaches' lines, so only the order is pinned,
-    // `docs/testing.md`, "Event streams"). `extensions_loaded` replays on
-    // the fresh subscribe; the prompt's `command_accepted` answers it once
-    // after `turn_started` and before the first step (`docs/invocation.md`,
-    // "Driver commands"; `docs/loop.md`, "One step"). The resumed turn
-    // denies as a fresh supervised block (`docs/permissions.md`, "Supervised
-    // sessions": "A person driving the session does not change it: its
-    // escalations stay blocks"); deltas as above.
+    // Complete ordered kinds of the resumed turn (the same independently
+    // triggered lines set aside as above, plus `command_accepted` filtered
+    // because its position relative to logged lines is not promised). The
+    // prompt's acknowledgement is asserted separately below
+    // (`docs/invocation.md`, "Driver commands"). `extensions_loaded` replays
+    // on the fresh subscribe. The resumed turn denies as a fresh supervised
+    // block (`docs/permissions.md`, "Supervised sessions": "A person driving
+    // the session does not change it: its escalations stay blocks"); deltas
+    // as above.
     assert_eq!(
-        kinds(&lines),
+        ordered_kinds_without_command_accepted(&lines),
         [
             "extensions_loaded",
             "preamble_built",
             "turn_started",
-            "command_accepted",
             "step_started",
             "assistant_message_started",
             "tool_call_requested",
@@ -631,6 +647,7 @@ fn a_supervised_resume_stays_unanswerable() {
         ],
         "complete ordered kinds: {lines:?}"
     );
+    assert_command_accepted_once(&lines, "c_again");
     let resolved: Vec<&Value> = lines
         .iter()
         .filter(|line| line["kind"] == "permission_resolved")
