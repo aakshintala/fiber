@@ -635,6 +635,20 @@ impl Diag {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
         timeout_message(what, got, &stderr, &session_log_tail(&self.log_dir))
     }
+
+    /// The closed-socket message for `what` with the lines `got` so far:
+    /// the old first line, then the stderr snapshot, then the session-log
+    /// tail. The stderr lock is released before the log file is read, and
+    /// a poisoned lock yields what was captured, so the dump never
+    /// replaces the closed panic with its own.
+    pub(crate) fn report_closed(&self, what: &str, got: &[Value]) -> String {
+        let stderr = self
+            .stderr
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        closed_message(what, got, &stderr, &session_log_tail(&self.log_dir))
+    }
 }
 
 /// The session-log lines a timeout dump shows: the last 20 complete lines
@@ -675,6 +689,25 @@ pub(crate) fn timeout_message(what: &str, got: &[Value], stderr: &str, log_tail:
     };
     format!(
         "waited until the deadline for {what}; got {got:?}\n\
+         fiber stderr:\n\
+         {stderr}\n\
+         session log tail (events.jsonl, last 20 lines):\n\
+         {log_tail}"
+    )
+}
+
+/// The closed-socket message: the old first line naming `what` and `got`,
+/// then the stderr snapshot (or the captured-nothing marker when it is
+/// empty), then the session-log tail. The empty marker never says the
+/// session is still running: the socket already closed.
+pub(crate) fn closed_message(what: &str, got: &[Value], stderr: &str, log_tail: &str) -> String {
+    let stderr = if stderr.is_empty() {
+        "(no stderr captured)"
+    } else {
+        stderr
+    };
+    format!(
+        "the socket closed while waiting for {what}; got {got:?}\n\
          fiber stderr:\n\
          {stderr}\n\
          session log tail (events.jsonl, last 20 lines):\n\
@@ -874,9 +907,10 @@ pub(crate) fn until(
     loop {
         let line = match client.next(what, &lines) {
             Some(line) => line,
-            None => {
-                panic!("the socket closed while waiting for {what}; got {lines:?}")
-            }
+            None => match &client.diag {
+                Some(diag) => panic!("{}", diag.report_closed(what, &lines)),
+                None => panic!("the socket closed while waiting for {what}; got {lines:?}"),
+            },
         };
         let stop = done(&line);
         lines.push(line);
@@ -1602,6 +1636,70 @@ fn timeout_message_marks_empty_stderr_as_still_running() {
     let message = timeout_message("the refused prompt", &[], "late line\n", "");
     assert!(!message.contains("still running"), "{message}");
     assert!(message.contains("late line"), "{message}");
+}
+
+#[test]
+fn closed_socket_dump_with_diag_shows_lines_stderr_and_log_tail() {
+    let dir = fakes::TempDir::new("diag-closed");
+    let dir_path = dir.path().join("s_9");
+    fs::create_dir_all(&dir_path).unwrap();
+    fs::write(
+        dir_path.join("events.jsonl"),
+        "{\"kind\":\"session_started\"}\n{\"kind\":\"fiber_exited\"}\n",
+    )
+    .unwrap();
+    let stderr = Arc::new(Mutex::new("boom on fd 2\n".to_owned()));
+    let diag = Diag::new(Arc::clone(&stderr), dir_path);
+    // One line arrives before the peer goes away, so the panic names a
+    // received line; the close itself needs no timing.
+    let (mine, mut peer) = UnixStream::pair().unwrap();
+    peer.write_all(b"{\"kind\":\"command_accepted\"}\n")
+        .unwrap();
+    drop(peer);
+    let mut client = Socket::from(Deadline::after(fakes::MUST_SUCCEED_WITHIN), mine);
+    client.set_diag(diag);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until(&client, "the stopped child exits", |_| false);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    let first = message.lines().next().unwrap_or_default();
+    assert!(
+        first.starts_with("the socket closed while waiting for the stopped child exits; got "),
+        "{message}"
+    );
+    assert!(message.contains("command_accepted"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    assert!(message.contains("boom on fd 2"), "{message}");
+    assert!(
+        message.contains("session log tail (events.jsonl, last 20 lines):"),
+        "{message}"
+    );
+    assert!(
+        message.contains("\"kind\":\"session_started\""),
+        "{message}"
+    );
+    // A closed socket already ended, so an empty snapshot says nothing was
+    // captured, never that the session is still running.
+    let empty = closed_message("the stopped child exits", &[], "", "{\"kind\":\"x\"}\n");
+    assert!(empty.contains("(no stderr captured)"), "{empty}");
+    assert!(!empty.contains("still running"), "{empty}");
+}
+
+#[test]
+fn until_without_diag_keeps_the_old_closed_message() {
+    let (mine, peer) = UnixStream::pair().unwrap();
+    drop(peer);
+    let client = Socket::from(Deadline::after(fakes::MUST_SUCCEED_WITHIN), mine);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        until(&client, "the stopped child exits", |_| false);
+    }))
+    .unwrap_err();
+    let message = failed.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert_eq!(
+        message,
+        "the socket closed while waiting for the stopped child exits; got []"
+    );
 }
 
 #[test]

@@ -368,11 +368,16 @@ fn is_stopped(deadline: Deadline, pid: u32) -> bool {
     String::from_utf8_lossy(&output.stdout).contains('T')
 }
 
-/// Waits until `ps` shows process `pid` stopped, polling with no sleep to
-/// the test's [`Deadline`]: proof the shell parked inside the blocking
-/// command's expansion, so the SIGTERM below lands inside the read.
+/// Waits until `ps` shows process `pid` stopped: each probe is the bounded
+/// `ps` in [`is_stopped`], and failed probes pause one shared
+/// [`fakes::POLL`] on a bounded channel wait, never spinning. Proof the
+/// shell parked inside the blocking command's expansion, so the SIGTERM
+/// below lands inside the read.
 #[track_caller]
 fn wait_stopped(deadline: Deadline, pid: u32) {
+    // The sender stays alive so every receive times out after one `POLL`:
+    // the same bounded wait the shared paced loops use between probes.
+    let (_stop, stopped) = mpsc::channel::<()>();
     loop {
         assert!(
             !deadline.left().is_zero(),
@@ -381,7 +386,9 @@ fn wait_stopped(deadline: Deadline, pid: u32) {
         if is_stopped(deadline, pid) {
             return;
         }
-        std::thread::yield_now();
+        match fakes::Deadline::after(fakes::POLL).recv(&stopped) {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
