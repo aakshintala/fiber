@@ -144,6 +144,10 @@ pub struct SessionsArgs {
     /// Keeps only that project's sessions; absent means every project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// With true, each entry carries `active`; absent or false lists
+    /// without opening any session log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
 }
 
 /// The `args` of `start`.

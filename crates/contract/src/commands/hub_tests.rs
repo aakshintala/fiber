@@ -29,6 +29,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "recent", "args": {"before": "s_1"}}),
         json!({"id": "c", "command": "recent", "args": {"project": "p"}}),
         json!({"id": "c", "command": "sessions", "args": {"project": "p"}}),
+        json!({"id": "c", "command": "sessions", "args": {"project": "p", "active": true}}),
         json!({"id": "c", "command": "start", "args": {"workspace": "/w", "model": "m",
             "overrides": ["a=b"], "worktree": true,
             "content": [{"type": "text", "text": "t"}]}}),
