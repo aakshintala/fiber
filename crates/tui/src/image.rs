@@ -355,9 +355,7 @@ fn inline_rows(
     let target = Some(Target::Image(id));
     for row in 0..rows {
         let mut spans = Vec::with_capacity(usize::from(cols).saturating_add(1));
-        if indent > 0 {
-            spans.push(Span::raw(" ".repeat(usize::from(indent))));
-        }
+        spans.push(Span::raw(" ".repeat(usize::from(indent))));
         for col in 0..cols {
             spans.push(crate::graphics::cell(
                 usize::from(row),

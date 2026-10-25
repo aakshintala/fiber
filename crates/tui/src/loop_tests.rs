@@ -7,6 +7,7 @@ use super::{
     hub::{Connection, LOST},
 };
 use crate::app::App;
+use crate::keys::{Event, Reply};
 use crate::link::Line;
 use contract::clock::Clock;
 use contract::{Envelope, Seq};
@@ -333,6 +334,22 @@ fn stepped(
 
 /// The second session the ordering test switches to.
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
+
+#[test]
+fn a_graphics_error_event_fails_the_transmitted_image() {
+    let (lp, theirs, tx, rx) = inline_opened(image_session());
+    let (lp, rx) = stepped(lp, rx, Input::Tick);
+    let command = read_display_id(&theirs);
+    let (mut lp, _rx) = stepped(lp, rx, display_answer(&command));
+    drop(tx);
+
+    lp.handle_events(vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]);
+
+    assert_eq!(
+        lp.app.notice(),
+        Some("Could not show a.png: the terminal reported an error.")
+    );
+}
 
 /// A session change deletes the shown image, and the next session's
 /// image reaches the terminal without reusing the old id.

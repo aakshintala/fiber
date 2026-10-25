@@ -1402,6 +1402,19 @@ fn typed_alt_underscore_reads_as_keys() {
     );
 }
 
+/// A terminated graphics reply at the candidate cap still parses.
+#[test]
+fn graphics_error_at_apc_cap_parses() {
+    let mut reply = b"\x1b_Gi=1;".to_vec();
+    reply.extend(std::iter::repeat_n(b'E', 248));
+    reply.push(0x07);
+    assert_eq!(reply.len(), 256);
+    assert_eq!(
+        feed_all(&[reply.as_slice()]),
+        vec![Event::Reply(Reply::Graphics { id: 1, ok: false })]
+    );
+}
+
 /// A never-terminated graphics candidate resolves instead of holding
 /// forever: past the cap it reads as keys.
 #[test]

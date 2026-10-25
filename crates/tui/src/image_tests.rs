@@ -531,6 +531,7 @@ fn grid_keeps_a_small_image_at_its_natural_cells() {
     // A small image draws as it is: no upscale past its natural cells.
     assert_eq!(super::grid(&sized(20, 40), 60, (10, 20)), (2, 2));
     assert_eq!(super::grid(&sized(25, 45), 60, (10, 20)), (2, 2));
+    assert_eq!(super::grid(&sized(100, 100), 80, (10, 20)), (10, 5));
     assert_eq!(super::grid(&sized(1, 1), 60, (10, 20)), (1, 1));
 }
 

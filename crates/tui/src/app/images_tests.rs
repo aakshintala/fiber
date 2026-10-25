@@ -739,6 +739,16 @@ fn command_for(lines: &[String], path: &str) -> String {
 }
 
 #[test]
+fn set_cell_resizes_inline_images() {
+    let mut app = inline_app();
+    app.set_cell((40, 80));
+    assert_eq!(
+        app.screen.pages().image_sizing(),
+        crate::image::Sizing::Inline { cell: (40, 80) }
+    );
+}
+
+#[test]
 fn a_kitty_error_fails_only_its_image() {
     let mut app = inline_app();
     ancestor_image(&mut app, "artifacts/old.png");
@@ -781,6 +791,11 @@ fn a_kitty_error_fails_only_its_image() {
         app.screen
             .pages()
             .image_failed(&contract::SessionId(OTHER.to_owned()), "artifacts/old.png")
+    );
+    assert!(
+        app.images.display.values().any(|display| {
+            display.id == failed && display.state == super::DisplayState::Failed
+        })
     );
     assert!(!app.screen.pages().image_failed(
         &contract::SessionId(SESSION.to_owned()),

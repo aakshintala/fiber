@@ -1,6 +1,6 @@
 //! Tests for raw mode, the alternate screen and restore, on a pty pair.
 
-use super::{restore, setup, size};
+use super::{pixels, restore, setup, size};
 use crate::pty_watch::{DEADLINE, watch, watched};
 use fakes::Deadline;
 use std::fs::File;
@@ -126,6 +126,20 @@ fn size_reads_the_winsize() {
         size(&pair.slave).unwrap_or_else(|err| panic!("size: {err}")),
         (60, 12)
     );
+}
+
+#[test]
+fn pixels_reads_the_terminal_pixel_size() {
+    let pair = open();
+    let winsize = rustix::termios::Winsize {
+        ws_col: 60,
+        ws_row: 12,
+        ws_xpixel: 1200,
+        ws_ypixel: 800,
+    };
+    rustix::termios::tcsetwinsize(&pair.slave, winsize)
+        .unwrap_or_else(|err| panic!("winsize: {err}"));
+    assert_eq!(pixels(&pair.slave), (1200, 800));
 }
 
 /// What `resume` writes before kitty's push: as `setup` without the
