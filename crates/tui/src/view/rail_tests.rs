@@ -202,7 +202,7 @@ fn hold_total(app: &mut App, total: usize) {
         "the session-left trigger asks for a scoped total"
     );
     for line in &fanout {
-        // `docs/invocation.md:1091` (scoped `recent` for the project).
+        // `docs/invocation.md:1102` (scoped `recent` for the project).
         assert_eq!(line["command"], "recent");
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
         assert!(
