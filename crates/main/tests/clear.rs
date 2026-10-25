@@ -146,7 +146,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     scripted(
         &setup,
         json!([
-            {"tool_calls": [{"name": "shell", "arguments": {"command": command, "timeout_ms": 600_000}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
             {"text": ["done."]},
         ]),
     );
@@ -163,10 +163,13 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     let mut run = Run::spawn(&setup, COLS, ROWS, &[], &[]);
     run.ready();
     run.write(b"run it\r");
-    run.wait_screen("A's running turn", |grid| {
-        grid.contents.contains("wait.sh") && grid.contents.contains("running")
+    run.wait_screen("A's running shell job", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("Jobs") && row.contains("1 running"))
     });
-    // The shell holds the turn on the FIFO: its process is alive.
+    // A slow runner may move the foreground call to a job after 30 seconds;
+    // either way, the live job keeps the old session open until release.
     assert!(
         !fakes::matching("wait.sh").unwrap().is_empty(),
         "the shell waits on the FIFO"
@@ -230,6 +233,9 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
     // The hub's start checks that workspace still exists. Renaming it
     // makes the terminal's verbatim path refuse without disturbing old.
     let workspace = setup.workspace();
+    // Preserve the canonical project identity: after the rename, macOS
+    // cannot resolve the old path's `/var` symlink to `/private/var`.
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&workspace));
     let moved = workspace.with_file_name("w-moved");
     fs::rename(&workspace, &moved).unwrap();
     run.write(b"/clear\r");
@@ -237,7 +243,7 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
         grid.contents.contains("not an existing directory")
     });
     assert!(refused.contents.contains("ready."));
-    assert_eq!(stored(&setup), vec![old]);
+    assert_eq!(stored_at(&sessions).unwrap(), vec![old]);
     fs::rename(&moved, &workspace).unwrap();
 
     drop(control);
