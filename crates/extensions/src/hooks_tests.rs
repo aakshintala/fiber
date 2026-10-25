@@ -4019,11 +4019,14 @@ fn process_package_failure_fails_the_session_fold() {
 }
 
 /// Installs `fiber.test/<short>` as a process package: a manifest with a
-/// process program and no entry script.
-fn install_process(home: &Home, short: &str) {
+/// process program and no entry script, merged over `extra`.
+fn install_process_with(home: &Home, short: &str, extra: serde_json::Value) {
     let src = home.root.path().join("src").join(short);
     fs::create_dir_all(&src).unwrap();
-    let manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1, "process": {"program": "proc", "exit_timeout_ms": 1000}});
+    let mut manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1, "process": {"program": "proc", "exit_timeout_ms": 1000}});
+    for (key, value) in extra.as_object().unwrap() {
+        manifest[key] = value.clone();
+    }
     fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
     plan(
         &home.home(),
@@ -4040,7 +4043,7 @@ fn install_process(home: &Home, short: &str) {
 #[test]
 fn process_package_loads_without_starting_a_vm() {
     let home = Home::new();
-    install_process(&home, "proc");
+    install_process_with(&home, "proc", json!({}));
     let session = home.load(&[]);
     assert!(
         session
@@ -4066,7 +4069,7 @@ fn process_package_loads_without_starting_a_vm() {
 #[test]
 fn process_package_with_undeclared_provider_file_fails_the_load() {
     let home = Home::new();
-    install_process(&home, "proc");
+    install_process_with(&home, "proc", json!({}));
     let installed = home.home().join("extensions").join("fiber.test-proc");
     fs::create_dir_all(installed.join("providers")).unwrap();
     fs::write(installed.join("providers").join("q.json"), "{}").unwrap();
@@ -4156,4 +4159,61 @@ fn process_commands_and_search_join_session_sources() {
     let backends = started.process_search_sources(&runtime);
     assert_eq!(backends.len(), 1);
     assert_eq!(backends[0].name, "web");
+}
+
+/// A process package whose manifest declares a provider, with no provider
+/// file and no entry script, loads without starting a VM: its provider
+/// declarations wait for native registrations, as data providers do.
+#[test]
+fn process_package_with_declared_providers_loads_without_a_vm() {
+    let home = Home::new();
+    install_process_with(&home, "proc", json!({"providers": {"p": []}}));
+    let session = home.load(&[]);
+    assert!(
+        session
+            .loaded_names()
+            .contains(&"fiber.test/proc".to_owned()),
+        "{:?}",
+        session.loaded_names()
+    );
+    assert!(session.lua.is_empty(), "a process package starts no VM");
+    assert!(session.lua_providers().is_empty());
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| notice.extension.as_deref() != Some("fiber.test/proc")),
+        "{:?}",
+        session.notices()
+    );
+}
+
+/// Starting a process extension's provider fails without starting a VM:
+/// nothing registered the provider, and no Lua runs it.
+#[test]
+fn start_provider_on_a_process_extension_starts_no_vm() {
+    use support::lock as process_lock;
+    let home = Home::new();
+    install_process_with(&home, "proc", json!({"providers": {"p": []}}));
+    let session = home.load(&[]);
+    let config = home.config(&[]);
+    let caller = Arc::clone(&session);
+    let result = bounded(move || {
+        caller.start_provider(
+            &config,
+            FakeClock::new(),
+            Arc::new(FakeLock::new()),
+            "fiber.test/proc",
+            "p",
+        )
+    });
+    let Err(crate::Error::Lua { extension, message }) = result else {
+        panic!("an unregistered process provider fails");
+    };
+    assert_eq!(extension, "fiber.test/proc");
+    assert!(message.contains("registers no provider `p`"), "{message}");
+    assert!(
+        !process_lock(&session.provider_vms).contains_key("fiber.test/proc"),
+        "a failed process provider start keeps no VM"
+    );
 }

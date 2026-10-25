@@ -1197,3 +1197,106 @@ fn command_registers_and_re_registers() {
     assert_eq!(entry.run.command, CommandId("c2".to_owned()));
     assert!(registry.problems().is_empty());
 }
+
+/// A registry for `fiber.test/proc` on a shared runtime: a restart is a
+/// second registry for the same owner, so its registrations mint under
+/// the next generation.
+fn shared_registry(runtime: &Runtime, extra: Value) -> (fakes::TempDir, Registry) {
+    let dir = package_dir(extra);
+    let manifest = config::read_manifest(dir.path()).unwrap();
+    let registry = Registry::new("fiber.test/proc".to_owned(), runtime.clone(), &manifest);
+    (dir, registry)
+}
+
+/// A restart re-registers the owner under a new generation: the old
+/// provider reference no longer resolves, and it never selects the
+/// replacement callback.
+#[test]
+fn provider_references_resolve_only_within_their_generation() {
+    use std::sync::Arc as Shared;
+    let runtime = Runtime::new(fakes::clock::FakeClock::new());
+    let (_dir1, mut first) = shared_registry(&runtime, json!({"providers": {"p": []}}));
+    let outcome = register(
+        &mut first,
+        "c1",
+        "fiber.provider",
+        json!(["p", provider_spec()]),
+    );
+    assert!(
+        matches!(outcome, RegisterOutcome::Accepted { .. }),
+        "{outcome:?}"
+    );
+    let old = first
+        .providers()
+        .get("p")
+        .unwrap()
+        .runs
+        .get("models")
+        .unwrap()
+        .clone();
+    assert_eq!(old.generation, 1);
+    first.set_handler(
+        &CommandId("c1".to_owned()),
+        "models",
+        Shared::new(|_, _| Ok(Some(json!({"generation": 1})))),
+    );
+    let (_dir2, mut second) = shared_registry(&runtime, json!({"providers": {"p": []}}));
+    let outcome = register(
+        &mut second,
+        "c1",
+        "fiber.provider",
+        json!(["p", provider_spec()]),
+    );
+    assert!(
+        matches!(outcome, RegisterOutcome::Accepted { .. }),
+        "{outcome:?}"
+    );
+    let new = second
+        .providers()
+        .get("p")
+        .unwrap()
+        .runs
+        .get("models")
+        .unwrap()
+        .clone();
+    assert_eq!(new.generation, 2);
+    second.set_handler(
+        &CommandId("c1".to_owned()),
+        "models",
+        Shared::new(|_, _| Ok(Some(json!({"generation": 2})))),
+    );
+    let stale = runtime
+        .provider_call(&old, json!({}))
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("generation 1"), "{stale}");
+    assert_eq!(
+        runtime.provider_call(&new, json!({})).unwrap(),
+        json!({"generation": 2})
+    );
+}
+
+/// A positional reference shares the triple: its key may be `"1"`, and it
+/// resolves only within the generation that minted it.
+#[test]
+fn positional_references_share_the_generation_triple() {
+    use std::sync::Arc as Shared;
+    let runtime = Runtime::new(fakes::clock::FakeClock::new());
+    let (_dir, mut registry) = shared_registry(&runtime, json!({}));
+    let outcome = register(&mut registry, "c1", "fiber.tool", json!(["t", tool_spec()]));
+    assert!(
+        matches!(outcome, RegisterOutcome::Accepted { .. }),
+        "{outcome:?}"
+    );
+    let positional = registry.set_handler(
+        &CommandId("c1".to_owned()),
+        "1",
+        Shared::new(|_, _| Ok(Some(json!({"positional": true})))),
+    );
+    assert_eq!(positional.command, CommandId("c1".to_owned()));
+    assert_eq!(positional.key, "1");
+    assert_eq!(positional.generation, 1);
+    assert!(runtime.resolve(&positional).is_ok());
+    runtime.register_process("fiber.test/proc");
+    assert!(runtime.resolve(&positional).is_err());
+}
