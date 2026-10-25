@@ -1957,8 +1957,10 @@ impl App {
             }
             // An offer's approval loads extensions with no `reloaded`,
             // so `extensions_loaded` asks too: their commands join the
-            // list (`docs/events.md`, "`extensions_loaded`").
-            "reloaded" | "extensions_loaded" => {
+            // list (`docs/events.md`, "`extensions_loaded`"). A turn
+            // start may change the runnable set, so `turn_started` asks
+            // too (`docs/invocation.md`, "What each command does").
+            "reloaded" | "extensions_loaded" | "turn_started" => {
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }

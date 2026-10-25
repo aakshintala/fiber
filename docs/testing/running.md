@@ -81,7 +81,8 @@ developer machine.
 A failed binary-level test retries once. The binary-level tests are the test
 binaries in `crates/main/tests/`; no other test retries, including the unit
 tests in `crates/main/src/`. A pass on retry does not block the
-merge. CI opens a flake issue naming the test and its first failure, or
+merge, unless the pull request added or changed that test, in which case
+the test job fails (`docs/ci.md`). CI opens a flake issue naming the test and its first failure, or
 comments on the open one. The issue's title is `Flaky test: ` followed by
 the test as nextest prints it. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own

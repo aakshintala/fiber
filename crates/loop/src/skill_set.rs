@@ -29,8 +29,9 @@ use crate::skills;
 pub struct SkillSet(std::sync::Arc<Mutex<Inner>>);
 
 /// What one turn-start check found (`docs/system-prompt.md`, "Added and
-/// removed skills"): the notices the turn appends, and the
-/// `skills_changed` line, when a skill was added or removed.
+/// removed skills"): the notices the turn appends, the
+/// `skills_changed` line, when a skill was added or removed, and whether
+/// the runnable `/name` set changed.
 pub(crate) struct SkillCheck {
     /// The skill notices the turn appends: the discovery's notices in
     /// discovery order, then the `skills.disabled` failure. Each is
@@ -39,6 +40,17 @@ pub(crate) struct SkillCheck {
     /// The skills added or removed since the listing was last given, when
     /// any: each added entry, then each removed name, in name order.
     pub(crate) changed: Option<SkillsChanged>,
+    /// Whether the runnable slash-command set changed since the session's
+    /// `commands` answer was built: a skill or prompt template added,
+    /// removed or switched, with its tag. Templates count although the
+    /// listing, and so `changed`, leaves them out.
+    pub(crate) commands_changed: bool,
+    /// The inputs the check discovered with: what a `commands` refresh
+    /// combines with current prompt and extension rows.
+    pub(crate) inputs: PromptInputs,
+    /// The exact winners this check discovered (including its unreadable
+    /// fallbacks), for a `commands` refresh that must not rediscover them.
+    pub(crate) found: Vec<skills::Found>,
 }
 
 /// What the set holds: the inputs the opening message reads, the
@@ -52,11 +64,19 @@ struct Inner {
     top: PathBuf,
     /// The one discovery, once read.
     known: Option<Known>,
+    /// Whether any opening message has been folded into this set: the
+    /// first opening forces a command-row refresh from its exact snapshot.
+    opening_seen: bool,
     /// What the model was last given, per name: the opening listing, then
     /// each `added` (`docs/system-prompt.md`, "Recording"). A lazy read
     /// never touches it, so the turn after a resume still announces what
     /// changed while the session was away.
     listed: BTreeMap<String, SkillListed>,
+    /// The runnable slash-command set the session's `commands` answer was
+    /// built from, per name: whether the model may load it, so a skill
+    /// turning into a template counts too. `None` until the construction
+    /// site seeds it, or the opening message or the resume fold does.
+    commands: Option<BTreeMap<String, bool>>,
     /// The previous check's notice messages: a notice is raised again
     /// only when its message is new
     /// (`docs/system-prompt.md`, "Added and removed skills").
@@ -89,7 +109,9 @@ impl SkillSet {
             inputs,
             top,
             known: None,
+            opening_seen: false,
             listed: BTreeMap::new(),
+            commands: None,
             noticed: BTreeSet::new(),
             reading: false,
             pending_notice: None,
@@ -122,19 +144,29 @@ impl SkillSet {
     /// Refreshes the set with what the opening message sent: the
     /// discovery's winners, the disabled list in force with them, the
     /// listing as the new baseline, and the opening's notices, which seed
-    /// the check's notice dedupe. The opening's own discovery neither
-    /// uses nor seeds the cache, so the first turn-start check reads each
-    /// `SKILL.md` once (`docs/system-prompt.md`, "Added and removed
-    /// skills").
+    /// the check's notice dedupe. Returns whether the caller must rebuild
+    /// the session's `commands` answer from this discovery, and whether
+    /// the runnable set changed since that answer was built.
+    /// The opening's own discovery neither uses nor seeds the cache, so
+    /// the first turn-start check reads each `SKILL.md` once
+    /// (`docs/system-prompt.md`, "Added
+    /// and removed skills").
     pub(crate) fn opened(
         &self,
         found: Vec<skills::Found>,
         disabled: Vec<String>,
         listed: &[SkillListed],
         notices: &[Notice],
-    ) {
+    ) -> (bool, bool) {
         let mut inner = lock(&self.0);
         inner.inputs.skills_disabled = disabled;
+        let runnable = runnable_commands(&found, &inner.inputs.skills_disabled);
+        let commands_changed = inner
+            .commands
+            .as_ref()
+            .is_some_and(|baseline| *baseline != runnable);
+        let refresh_commands = !inner.opening_seen || commands_changed;
+        inner.opening_seen = true;
         inner.known = Some(Known {
             found,
             cache: skills::Cache::default(),
@@ -143,10 +175,14 @@ impl SkillSet {
             .iter()
             .map(|entry| (entry.name.clone(), entry.clone()))
             .collect();
+        // The caller refreshes the answer from these same winners when
+        // they differ from the construction site's seed.
+        inner.commands = Some(runnable);
         inner.noticed = notices
             .iter()
             .map(|notice| notice.message.clone())
             .collect();
+        (refresh_commands, commands_changed)
     }
 
     /// Refreshes the discovery inputs without changing the last-sent listing.
@@ -154,9 +190,22 @@ impl SkillSet {
         lock(&self.0).inputs = inputs;
     }
 
+    /// Syncs the runnable-set baseline to the rows the session's
+    /// `commands` answer holds: each skill and prompt template row, by
+    /// the tag the answer gives it. The construction site calls this with
+    /// the built rows, and a reload's install with the installed ones, so
+    /// the next check measures against what the session answers, not
+    /// what the opening later lists or a check past the install saw.
+    pub fn sync_commands(&self, runnable: &crate::commands::RunnableCommands) {
+        lock(&self.0).commands = Some(runnable.clone());
+    }
+
     /// A reload also sends descriptions that differ from the last-sent text.
+    /// It never moves the runnable-set baseline: the reload's installed
+    /// rows sync that, so a skill moving on disk past the install still
+    /// refreshes at the next turn start.
     pub(crate) fn reload_check(&self) -> SkillCheck {
-        self.check_listing(true)
+        self.check_listing(true, false)
     }
 
     /// The turn-start check (`docs/system-prompt.md`, "Added and removed
@@ -164,14 +213,15 @@ impl SkillSet {
     /// given. One `skills_changed`, written only when a skill was added
     /// or removed.
     pub(crate) fn check(&self) -> SkillCheck {
-        self.check_listing(false)
+        self.check_listing(false, true)
     }
 
-    fn check_listing(&self, descriptions: bool) -> SkillCheck {
-        let inputs = self.inputs_now();
+    fn check_listing(&self, descriptions: bool, track_commands: bool) -> SkillCheck {
+        let mut inputs = self.inputs_now();
         let mut inner = lock(&self.0);
         let pending = inner.pending_notice.take();
         let disabled = inner.inputs.skills_disabled.clone();
+        inputs.skills_disabled.clone_from(&disabled);
         let top = inner.top.clone();
         let mut cache = inner
             .known
@@ -189,10 +239,12 @@ impl SkillSet {
         // The listing by the listing's rules.
         let mut current: BTreeMap<String, SkillListed> = BTreeMap::new();
         let mut winners: BTreeMap<String, skills::Found> = BTreeMap::new();
+        let mut winner_order = Vec::new();
         for found in discovered.skills {
             if found.model_invocable && !disabled.iter().any(|off| off == &found.listed.name) {
                 current.insert(found.listed.name.clone(), found.listed.clone());
             }
+            winner_order.push(found.listed.name.clone());
             winners.insert(found.listed.name.clone(), found);
         }
         // A listed skill the check could not read keeps its last-known
@@ -213,6 +265,7 @@ impl SkillSet {
             }
             if let Some(found) = old.iter().find(|found| found.listed.name == *name) {
                 current.insert(name.clone(), found.listed.clone());
+                winner_order.push(name.clone());
                 winners.insert(name.clone(), found.clone());
             }
         }
@@ -242,9 +295,25 @@ impl SkillSet {
         } else {
             Some(SkillsChanged { added, removed })
         };
+        // The runnable set, templates included: what the session's
+        // `commands` answer must hold. A change here refreshes that
+        // answer although the listing above, and so `changed`, may not
+        // move at all.
+        let found: Vec<skills::Found> = winner_order
+            .into_iter()
+            .filter_map(|name| winners.remove(&name))
+            .collect();
+        let runnable = runnable_commands(&found, &disabled);
+        let commands_changed = match &inner.commands {
+            None => false,
+            Some(baseline) => *baseline != runnable,
+        };
+        if track_commands {
+            inner.commands = Some(runnable);
+        }
         inner.listed = current;
         inner.known = Some(Known {
-            found: winners.into_values().collect(),
+            found: found.clone(),
             cache,
         });
         // Each candidate notice is raised when its message was not among
@@ -263,7 +332,13 @@ impl SkillSet {
             .iter()
             .map(|notice| notice.message.clone())
             .collect();
-        SkillCheck { notices, changed }
+        SkillCheck {
+            notices,
+            changed,
+            commands_changed,
+            inputs,
+            found,
+        }
     }
 
     /// Folds the durable `opening_message` and `skills_changed` lines into
@@ -297,7 +372,21 @@ impl SkillSet {
                 }
             }
         }
-        lock(&self.0).listed = listed;
+        // The fold holds listed skills only, each loadable as listed, so
+        // the baseline seeds exact for them; templates never appear in
+        // the fold, so one added while the session was away still counts
+        // as added at the first check.
+        let mut inner = lock(&self.0);
+        inner.listed = listed;
+        if inner.commands.is_none() {
+            inner.commands = Some(
+                inner
+                    .listed
+                    .keys()
+                    .map(|name| (name.clone(), true))
+                    .collect(),
+            );
+        }
         Ok(())
     }
 
@@ -443,12 +532,33 @@ impl SkillSet {
 
 impl crate::Loop {
     /// Answers `/name` and the `skill` tool from `shared`: `shared`
-    /// takes over this loop's one discovery, then this loop holds it.
+    /// takes over this loop's one discovery, then this loop holds it. A
+    /// runnable-set seed the construction site set stands: it saw the
+    /// rows the session answers, which the adopted discovery never
+    /// rebuilds.
     pub fn skill_set(mut self, shared: SkillSet) -> Self {
+        let seed = lock(&shared.0).commands.clone();
         shared.adopt(&self.skills);
+        if let Some(seed) = seed {
+            lock(&shared.0).commands = Some(seed);
+        }
         self.skills = shared;
         self
     }
+}
+
+/// The runnable slash-command set one discovery holds: every found skill
+/// and prompt template `disabled` does not switch off, per name, whether
+/// the model may load it. What the session's `commands` answer must list.
+pub(crate) fn runnable_commands<'a>(
+    found: impl IntoIterator<Item = &'a skills::Found>,
+    disabled: &[String],
+) -> BTreeMap<String, bool> {
+    found
+        .into_iter()
+        .filter(|found| !disabled.iter().any(|off| off == &found.listed.name))
+        .map(|found| (found.listed.name.clone(), found.model_invocable))
+        .collect()
 }
 
 /// Discovers once when nothing is read yet, and stores the result. The

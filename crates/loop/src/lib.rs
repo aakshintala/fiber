@@ -16,8 +16,8 @@ use crate::shutdown::ReleaseDelegates;
 pub(crate) use completion::Step;
 use contract::ErrorCode;
 use contract::events::{
-    CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolInfo, ToolReplaced,
-    ToolState,
+    CacheLifetime, CommandInfo, Event, Grant, Parent, PreambleReason, SessionStarted, ToolInfo,
+    ToolReplaced, ToolState,
 };
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Input, Provider, ToolDefinition};
@@ -98,7 +98,7 @@ pub use before_tool::Prepared as ReviewPrepared;
 pub use calls::Decided as ReviewDecision;
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
-pub use commands::{Commands, commands, skills};
+pub use commands::{Commands, RunnableCommands, commands, skills};
 pub use error::Error;
 pub use handoff::HandoffSettings;
 pub use history::forked;
@@ -161,6 +161,20 @@ pub struct ToolRows {
     pub declare: Arc<dyn Fn(&str, Option<ToolInfo>) + Send + Sync>,
     /// Moves the row named `name` to `state`.
     pub state: Arc<dyn Fn(&str, ToolState) + Send + Sync>,
+}
+
+/// Refreshes the session's `commands` answer after the turn-start check
+/// changed the runnable set (`docs/invocation.md`, "What each command
+/// does"): `extensions` reads the session's current extension commands,
+/// and `replace` stores the recomputed rows. `main` wires both at the
+/// command construction sites; without them the loop still writes its
+/// `skills_changed` line, but no session row moves.
+#[derive(Clone)]
+pub struct CommandsRefresh {
+    /// The session's current extension commands, in answer order.
+    pub extensions: Arc<dyn Fn() -> Vec<CommandInfo> + Send + Sync>,
+    /// Replaces the session's stored `commands` rows.
+    pub replace: Arc<dyn Fn(Vec<CommandInfo>) + Send + Sync>,
 }
 
 /// One session's loop.
@@ -397,6 +411,9 @@ pub struct Loop {
     inserted_search: Option<String>,
     /// Publishes `/tools` rows; `None` publishes nothing.
     tool_rows: Option<ToolRows>,
+    /// Refreshes the session's `commands` rows after the turn-start
+    /// check; `None` refreshes nothing.
+    commands_refresh: Option<CommandsRefresh>,
     /// The admission the door and the loop share: once it closes, no session
     /// message enters the inbox (`docs/tools.md`, "Messaging other sessions").
     admission: Option<Arc<support::admission::Admission>>,
@@ -716,6 +733,7 @@ impl Loop {
             tool_search: None,
             inserted_search: None,
             tool_rows: None,
+            commands_refresh: None,
             admission: None,
             message_waiting: false,
             #[cfg(test)]
@@ -813,6 +831,13 @@ impl Loop {
     /// "Seeing the tools"). Default `None`, which publishes nothing.
     pub fn tool_rows(mut self, rows: ToolRows) -> Self {
         self.tool_rows = Some(rows);
+        self
+    }
+
+    /// Refreshes the session's `commands` rows after the turn-start check
+    /// changed the runnable set. Default `None`, which refreshes nothing.
+    pub fn commands_refresh(mut self, refresh: CommandsRefresh) -> Self {
+        self.commands_refresh = Some(refresh);
         self
     }
 

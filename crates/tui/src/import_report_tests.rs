@@ -358,7 +358,18 @@ fn the_open_report_over_a_session_hides_the_conversation_targets() {
         json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": "go"}]}]}),
     );
-    assert!(app.on_line(started).is_empty());
+    // The start asks `commands` again; answering with no rows keeps the
+    // conversation line the failing turn draws below.
+    let asked = app.on_line(started);
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(asked.len(), 1);
+    let asked: Value = serde_json::from_str(&asked[0]).unwrap_or_default();
+    assert_eq!(asked["command"], "commands");
+    let answer = session_line(
+        "command_accepted",
+        json!({"command_id": asked["id"], "result": {"commands": []}}),
+    );
+    assert!(app.on_line(answer).is_empty());
     let failed = session_line(
         "turn_completed",
         json!({"outcome": "failed", "error": {"code": "authentication_failed",

@@ -1484,6 +1484,28 @@ fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
     );
 }
 
+/// Installs `fiber.test/<short>` with `init` as its entry script, as a
+/// session start would: a later `reload` picks its commands up.
+fn install_lua(setup: &Setup, short: &str, init: &str) {
+    let source = setup.root.path().join("src").join(short);
+    fs::create_dir_all(&source).unwrap();
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": format!("fiber.test/{short}"), "version": "v2.0.0", "fiber": "0.1.0", "api": 1}),
+    );
+    fs::write(source.join("init.lua"), init).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
 /// Writes a skill under the workspace's `.agents/skills/<name>/`.
 fn workspace_skill(setup: &Setup, name: &str, header: &str) {
     let dir = setup.workspace().join(".agents/skills").join(name);
@@ -3862,5 +3884,187 @@ fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
             "turn_completed",
             "fiber_exited",
         ]
+    );
+}
+
+#[test]
+fn commands_answers_with_a_template_added_between_turns() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // A prompt template added between turns: no skill the model loads,
+    // only a `/name` the session runs.
+    workspace_skill(
+        &setup,
+        "ship",
+        "description: Ships it.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
+    );
+    until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The post-turn `commands` answer lists the new template.
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let answered = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["commands"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["name"] == "ship" && row["tag"] == "template"),
+        "the template added between turns is listed: {result:?}"
+    );
+    // The template's slash command resolves as before.
+    send(
+        &client,
+        r#"{"id":"c_third","command":"prompt","args":{"content":[{"type":"text","text":"/ship 1.0"}]}}"#,
+    );
+    let third = until_session(&client, "the third turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = third
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the template prompt started a turn");
+    assert!(
+        turn_started["payload"]["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Body."),
+        "the template expanded: {turn_started:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    workspace_skill(&setup, "keep", "description: Keeps it.\n");
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // A reload picks up the new extension's commands: the rows change
+    // without any skill moving on disk.
+    install_lua(
+        &setup,
+        "clashbox",
+        "fiber.command('clash', { timeout = 5000, description = 'Clash ext.', run = function(text) host.status('clash ' .. text) end })\nfiber.command('other', { timeout = 5000, description = 'Other ext.', run = function(text) host.status('other ' .. text) end })\n",
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    until_session(&client, "the reloaded line", |line| {
+        line["kind"] == "reloaded"
+    });
+    send(&client, r#"{"id":"c_before","command":"commands"}"#);
+    let before = until_session(&client, "the pre-template commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_before"
+    });
+    let rows = before.last().unwrap()["payload"]["result"]["commands"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        rows.len(),
+        3,
+        "the reload added both extension rows: {rows:?}"
+    );
+    assert!(rows.iter().any(|row| row["name"] == "clash"
+        && row["tag"] == "fiber.test/clashbox"
+        && row["extension"] == true));
+    // A template named like the extension's row wins it: the refresh
+    // recomputes every row from the current sources, keeping the reload's
+    // unrelated rows and dropping the shadowed one.
+    workspace_skill(
+        &setup,
+        "clash",
+        "description: Clash template.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
+    );
+    let second_turn = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        second_turn.iter().any(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["code"] == "skill_shadowed"
+                && line["payload"]["extension"] == "fiber.test/clashbox"
+        }),
+        "the turn-start refresh forwards the template's shadow notice: {second_turn:?}"
+    );
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let answered = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "no row lost and none restored: {result:?}");
+    assert!(
+        rows.contains(&json!({"name": "keep", "description": "Keeps it.", "tag": "skill"})),
+        "the unrelated skill row stands: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"name": "other", "description": "Other ext.", "tag": "fiber.test/clashbox", "extension": true})
+        ),
+        "the reload's unrelated extension row stands: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"name": "clash", "description": "Clash template.", "argument_hint": "<tag>", "tag": "template"})
+        ),
+        "the template wins its name: {result:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        rows.iter()
+            .all(|row| row["tag"] != "fiber.test/clashbox" || row["name"] != "clash"),
+        "the shadowed extension row stays out: {result:?}"
     );
 }

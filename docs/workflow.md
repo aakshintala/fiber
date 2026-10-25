@@ -175,9 +175,10 @@ touches, before any other.
 
 ## The pull request
 
-The body says `Resolves #<ticket>`, and either `Doc friction: none` or a
-link to each `needs-owner` issue the work raised ("When a doc should
-change").
+The body says `Resolves #<ticket>` for an unsplit ticket or the last part
+of a split ticket. Earlier parts say `Part of #<ticket>`. Every pull request
+also says `Doc friction: none` or links each `needs-owner` issue it raised
+("When a doc should change").
 
 A pull request that resolves an issue labelled `bug` proves its fix with a
 red commit, then green. Its first commit, the red commit, holds the test that

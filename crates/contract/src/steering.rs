@@ -18,7 +18,7 @@
 //! still present.
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use crate::CommandId;
 use crate::emit::Emit;
@@ -400,7 +400,7 @@ fn is_session(entry: &Entry) -> bool {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    support::lock(mutex)
 }
 
 impl Default for Queue {

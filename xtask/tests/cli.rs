@@ -263,7 +263,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":true,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -280,6 +280,307 @@ fn plan_prints_the_jobs_and_shards() {
     let mut not_a_count = args.to_vec();
     *not_a_count.last_mut().unwrap() = "many";
     assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
+}
+
+/// `HOME` and `TMPDIR` point at the temp dir, so a test that runs `git`
+/// or the built `xtask` reaches no real home.
+fn home(dir: &TempDir) -> String {
+    dir.path().to_str().unwrap_or_default().to_owned()
+}
+
+fn home_env(home: &str) -> Vec<(&str, &str)> {
+    vec![("HOME", home), ("TMPDIR", home)]
+}
+
+/// A branch whose head adds a test to `crates/a/tests/t.rs` and edits one
+/// of the two tests in `crates/b/src/fold_tests.rs`, on top of a base that
+/// holds both tests.
+fn stress_branch() -> TempDir {
+    let dir = workspace();
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "two tests"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write("crates/a/tests/t.rs", "#[test]\nfn new_test() {}\n");
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "#[test]\nfn first() {}\n\n#[test]\nfn second() {\n    let _ = 1;\n}\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "touch two tests"]);
+    dir
+}
+
+#[test]
+fn stress_plan_prints_the_touched_tests() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main"],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0);
+    // `docs/ci.md` promises which tests run but not the order of the
+    // selection lines, so every line but the run/count head compares as a
+    // set, and the filter terms compare as a set too.
+    let mut head = Vec::new();
+    let mut terms = Vec::new();
+    let mut rest = Vec::new();
+    for line in out.lines() {
+        if let Some(filter) = line.strip_prefix("filter\t") {
+            terms.extend(filter.split(" | ").map(str::to_owned));
+        } else if line.starts_with("run\t") || line.starts_with("count\t") {
+            head.push(line.to_owned());
+        } else {
+            rest.push(line.to_owned());
+        }
+    }
+    head.sort();
+    terms.sort();
+    rest.sort();
+    assert_eq!(head, ["count\t30".to_owned(), "run\ttrue".to_owned()]);
+    assert_eq!(
+        terms,
+        [
+            "(binary_id(a::t) & test(=new_test))".to_owned(),
+            "(package(b) & test(=fold::tests::second))".to_owned(),
+        ]
+    );
+    assert_eq!(
+        rest,
+        [
+            "package\ta@0.0.0".to_owned(),
+            "package\tb@0.0.0".to_owned(),
+            "test\ta::t new_test".to_owned(),
+            "test\tb fold::tests::second".to_owned(),
+        ]
+    );
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main", "--labels", "test-only"],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0);
+    assert!(out.starts_with("run\ttrue\ncount\t100\n"), "{out}");
+}
+
+#[test]
+fn stress_plan_reports_no_run_when_no_test_function_changes() {
+    let dir = workspace();
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "two tests"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write(
+        "crates/b/src/fold_tests.rs",
+        "#[test]\nfn first() {}\n\n#[test]\nfn second() {}\n\nfn helper() {}\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "helper only"]);
+    let home = home(&dir);
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main"],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "run\tfalse\ncount\t30\nfilter\t\n");
+}
+
+#[test]
+fn stress_plan_appends_its_summary() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write("summary.md", "before\n");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main", "--summary", summary],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "before\n\
+         ### Stress job: 2 tests, 30 runs each\n\
+         ```\n\
+         test\ta::t new_test\n\
+         test\tb fold::tests::second\n\
+         ```\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_no_touched_tests_summarises_the_empty_selection() {
+    let dir = workspace();
+    git(&dir, &["switch", "-qc", "pr"]);
+    dir.write("crates/b/src/lib.rs", "//! b\n\nfn helper() {}\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "helper only"]);
+    let home = home(&dir);
+    dir.write("summary.md", "");
+    let summary = dir.path().join("summary.md");
+    let summary = summary.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main", "--summary", summary],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        std::fs::read_to_string(summary).unwrap(),
+        "### Stress job: no test added or changed\n"
+    );
+}
+
+#[test]
+fn stress_plan_with_a_bad_base_is_an_error() {
+    let dir = stress_branch();
+    git(&dir, &["switch", "main"]);
+    git(&dir, &["branch", "-D", "pr"]);
+    git(&dir, &["switch", "-qc", "pr"]);
+    git(&dir, &["branch", "-D", "main"]);
+    let home = home(&dir);
+    let (code, out) = xtask(
+        &dir,
+        &["stress-plan", "--base", "main"],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 2);
+    assert!(out.starts_with("xtask: git merge-base"), "{out}");
+    assert!(!out.contains("run\t"), "{out}");
+}
+
+#[test]
+fn touched_retries_fails_on_a_touched_test() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write(
+        "flaky.txt",
+        "a::t new_test\tfirst failure\nb fold::tests::second\tfirst failure\n",
+    );
+    let list = dir.path().join("flaky.txt");
+    let list = list.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", list],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 1);
+    assert_eq!(
+        out,
+        "touched-retries: a::t new_test was added or changed by this pull request and passed only on retry\n\
+         touched-retries: b fold::tests::second was added or changed by this pull request and passed only on retry\n"
+    );
+}
+
+#[test]
+fn touched_retries_passes_on_an_untouched_test() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    dir.write(
+        "flaky.txt",
+        "a::t other\tfirst failure\nc whatever\tfirst failure\n",
+    );
+    let list = dir.path().join("flaky.txt");
+    let list = list.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", list],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(out, "touched-retries: ok\n");
+}
+
+#[test]
+fn touched_retries_with_a_missing_list_is_an_error() {
+    let dir = stress_branch();
+    let home = home(&dir);
+    let missing = dir.path().join("missing.txt");
+    let missing = missing.to_str().unwrap();
+    let (code, out) = xtask(
+        &dir,
+        &["touched-retries", "--base", "main", "--list", missing],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 2);
+    assert!(out.starts_with("xtask: "), "{out}");
+}
+
+#[test]
+fn stress_cost_prints_the_cost_block() {
+    let dir = workspace();
+    let home = home(&dir);
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "stress-cost",
+            "--start",
+            "100",
+            "--end",
+            "532",
+            "--count",
+            "30",
+            "--tests",
+            "5",
+            "--outcome",
+            "success",
+        ],
+        &home_env(&home),
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "### Stress job cost\n\
+         wall time: 7m 12s (432 s)\n\
+         runner minutes: 8\n\
+         stress-cost: wall_seconds=432 runner_minutes=8 count=30 tests=5 outcome=success\n"
+    );
+    let bad = [
+        "stress-cost",
+        "--start",
+        "many",
+        "--end",
+        "532",
+        "--count",
+        "30",
+        "--tests",
+        "5",
+        "--outcome",
+        "success",
+    ];
+    assert_eq!(xtask(&dir, &bad, &home_env(&home), "").0, 2);
+    let missing = [
+        "stress-cost",
+        "--end",
+        "532",
+        "--count",
+        "30",
+        "--tests",
+        "5",
+        "--outcome",
+        "success",
+    ];
+    assert_eq!(xtask(&dir, &missing, &home_env(&home), "").0, 2);
 }
 
 /// The `plan` arguments the release-code CLI tests run: a code pull request
@@ -836,8 +1137,8 @@ fn docs_only_reports_whether_the_files_are_docs() {
 
 #[test]
 fn ci_needs_passes_fails_and_errors() {
-    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
-    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`. Done.\n";
+    const WORKFLOW: &str = "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  lint:\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  flake_decide:\n    runs-on: ubuntu-24.04\n  flake_report:\n    runs-on: ubuntu-24.04\n  stress:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: [select, lint]\n    runs-on: ubuntu-24.04\n";
+    const DOC: &str = "# CI\n\n## The merge gate\n\nEvery job but the verdict job is in its needs, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`, `flake_decide`, `flake_report`, `stress`. Done.\n";
     const FAILURE: &str = "ci-needs: .github/workflows/ci.yml: job lint is not in the ci job's needs, so CI passes without it; add it to needs, or, if it reports and gates nothing, add it to REPORT_JOBS in xtask/src/ci_needs.rs and to docs/ci.md, \"The merge gate\"\n";
     let dir = workspace();
     dir.write(".github/workflows/ci.yml", WORKFLOW);

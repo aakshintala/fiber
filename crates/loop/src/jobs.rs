@@ -19,6 +19,7 @@ use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode, JobId, Seq, TurnId};
+use support::lock;
 
 use crate::before_message::Hooked;
 use crate::prompt::{fill, message};
@@ -162,9 +163,7 @@ impl Loop {
         // so a tap firing between the publish and the install still
         // serialises on the same lock and loses nothing.
         {
-            let mut guard = trip
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut guard = lock(&trip);
             for line in self.ledger.lines() {
                 // Preserves watcher records not yet folded: only ledger
                 // lines the map lacks join the sum here; the per-line
@@ -180,9 +179,7 @@ impl Loop {
             // this newer value instead of replaying the delivery's older
             // line. The guard is released before stopping delegates.
             let tripped = {
-                let mut guard = trip
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut guard = lock(&trip);
                 guard.tap(&line)
             };
             if tripped && let Some(jobs) = weak.upgrade() {
