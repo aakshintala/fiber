@@ -184,11 +184,11 @@ fn run() -> i32 {
                 fiber,
             ),
             Some(cli::SessionsCommands::Delete {
-                hub: _,
+                hub,
                 cascade,
                 yes,
                 id,
-            }) => sessions_delete(&id, cascade, yes, clock.as_ref(), fiber),
+            }) => sessions_delete(&id, cascade, yes, hub.as_deref(), clock.as_ref(), fiber),
             Some(cli::SessionsCommands::Export { id, path }) => ::cli::export(&id, path.as_deref()),
             Some(cli::SessionsCommands::Search { all, json, text }) => {
                 ::cli::sessions_search(&text, all, json)
@@ -1234,18 +1234,20 @@ fn sessions_delete(
     id: &str,
     cascade: bool,
     yes: bool,
+    named: Option<&str>,
     clock: &dyn contract::clock::Clock,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
-    let mut connect = || {
-        connect_hub(
-            &config::fiber_home_from_env().map_err(doors::Error::Config)?,
-            &doors::hub::Target::Local,
-            &fiber,
-            clock,
-        )
+    let (home, target) = match hub_target(named) {
+        Ok(target) => target,
+        Err(error) => return fail(error),
     };
-    ::cli::delete(id, cascade, yes, &mut connect)
+    let hub = match &target {
+        doors::hub::Target::Local => None,
+        doors::hub::Target::Listed { name, .. } => Some(name.as_str()),
+    };
+    let mut connect = || connect_hub(&home, &target, &fiber, clock);
+    ::cli::delete(id, cascade, yes, hub, &mut connect)
 }
 
 /// `fiber sessions prune`: the hub it reaches is started when none runs.

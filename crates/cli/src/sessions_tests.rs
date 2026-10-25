@@ -2,9 +2,10 @@
 //! delete`'s confirmation and its one `delete` to an in-process fake hub,
 //! with the session directories built by hand.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use std::os::unix::net::UnixStream;
 use contract::HubLine;
 use serde_json::{Map, Value, json};
 
-use super::{Ask, delete, delete_run, export, matched, run};
+use super::{Ask, delete, delete_listed, delete_run, export, matched, run};
 use crate::CliError;
 use fakes::Deadline;
 
@@ -445,7 +446,7 @@ fn delete_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
             vec![accepted()]
         };
         let mut hub = FakeHub::new(&answers);
-        let code = delete(ROOT, false, case != "usage", &mut || hub.connect());
+        let code = delete(ROOT, false, case != "usage", None, &mut || hub.connect());
         if case == "usage" {
             assert_eq!(hub.connects, 0, "usage must not reach the hub");
         } else {
@@ -880,4 +881,310 @@ fn an_accepted_delete_with_a_failing_writer_is_io_failed_and_stays_deleted() {
         json!({"id": "c_delete", "command": "delete", "args": {"session": ROOT}})
     );
     assert_eq!(connects, 1);
+}
+
+/// Sessions only the hub answers with: they live on the hub, never in the
+/// local sessions directory, so a passing hub test proves the hub path
+/// reads no local log.
+const HUB_ROOT: &str = "s_11111111111111a1";
+const HUB_FORK: &str = "s_11111111111111b2";
+const HUB_OTHER: &str = "s_11111111111111c3";
+
+/// A scripted hub: every `connect` hands out one end of a pair, and a
+/// thread on the other answers each command line it reads with the next
+/// scripted answer, recording every line it read.
+struct ScriptHub {
+    answers: Arc<Mutex<VecDeque<String>>>,
+    sent: Arc<Mutex<Vec<String>>>,
+    connects: Arc<Mutex<usize>>,
+}
+
+impl ScriptHub {
+    fn new(answers: &[Value]) -> Self {
+        Self {
+            answers: Arc::new(Mutex::new(
+                answers.iter().map(|line| format!("{line}\n")).collect(),
+            )),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            connects: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn connect(&mut self) -> Result<doors::hub::Hub, doors::Error> {
+        *self.connects.lock().unwrap() += 1;
+        let (client, hub) = UnixStream::pair().map_err(doors::Error::Local)?;
+        hub.set_read_timeout(Some(HUB_DEADLINE))
+            .map_err(doors::Error::Local)?;
+        let answers = Arc::clone(&self.answers);
+        let sent = Arc::clone(&self.sent);
+        thread::spawn(move || {
+            let mut lines = BufReader::new(&hub);
+            loop {
+                let mut line = String::new();
+                match lines.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                sent.lock().unwrap().push(line);
+                let Some(answer) = answers.lock().unwrap().pop_front() else {
+                    break;
+                };
+                if (&hub).write_all(answer.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        });
+        let hello = HubLine {
+            kind: "hub_hello".to_owned(),
+            ts: 1,
+            schema_version: 1,
+            payload: Map::new(),
+        };
+        Ok((client, hello))
+    }
+
+    /// Every command line the hub read, as JSON, in read order.
+    fn sent(&self) -> Vec<Value> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    fn connects(&self) -> usize {
+        *self.connects.lock().unwrap()
+    }
+}
+
+/// A `sessions` answer naming `ids` as exited sessions.
+fn sessions_answer(ids: &[&str]) -> Value {
+    let exited: Vec<Value> = ids
+        .iter()
+        .map(|id| json!({"session_id": id, "name": "n", "how": "exited"}))
+        .collect();
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_sessions", "result": {"live": [], "exited": exited}}})
+}
+
+/// A dry-run answer naming `ids` as the set the delete would remove.
+fn dry_answer(ids: &[&str]) -> Value {
+    json!({"kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_delete", "result": {"sessions": ids}}})
+}
+
+/// A rejection of `command_id` with `code` and `message`.
+fn refused(command_id: &str, code: &str, message: &str) -> Value {
+    json!({"kind": "command_rejected", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": command_id, "code": code, "message": message}})
+}
+
+/// Runs `delete_listed` on hub `box` against scripted `answers`, on a
+/// worker thread: its stdout, its stderr, its outcome, how often it
+/// connected, and every command the hub read. The test thread receives
+/// the outcome under `HUB_DEADLINE`.
+fn run_delete_listed(
+    answers: &[Value],
+    selector: &str,
+    cascade: bool,
+    yes: bool,
+    terminal: bool,
+    input: impl BufRead + Send + 'static,
+) -> (String, String, Result<(), CliError>, usize, Vec<Value>) {
+    let answers = answers.to_owned();
+    let selector = selector.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut hub = ScriptHub::new(&answers);
+        let mut input = input;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let ask = Ask {
+            yes,
+            terminal,
+            input: &mut input,
+            err: &mut err,
+        };
+        let got = delete_listed("box", &selector, cascade, ask, &mut out, &mut || {
+            hub.connect()
+        });
+        tx.send((
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+            got,
+            hub.connects(),
+            hub.sent(),
+        ))
+        .unwrap_or(());
+    });
+    Deadline::after(HUB_DEADLINE).recv(&rx).unwrap()
+}
+
+#[test]
+fn hub_delete_without_yes_confirms_the_dry_run_set_exactly() {
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[
+            sessions_answer(&[HUB_ROOT, HUB_FORK]),
+            dry_answer(&[HUB_ROOT, HUB_FORK]),
+            accepted(),
+        ],
+        "s_11111111111111a",
+        true,
+        false,
+        true,
+        io::Cursor::new(b"y\n".to_vec()),
+    );
+    got.unwrap();
+    // The answered set prints before the question and once accepted.
+    assert_eq!(
+        out,
+        format!("{HUB_ROOT}\n{HUB_FORK}\n{HUB_ROOT}\n{HUB_FORK}\n")
+    );
+    assert_eq!(err, "delete? [y/N] ");
+    assert_eq!(
+        sent,
+        vec![
+            json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+            json!({"id": "c_delete", "command": "delete",
+                "args": {"session": HUB_ROOT, "cascade": true, "dry_run": true}}),
+            json!({"id": "c_delete", "command": "delete",
+                "args": {"session": HUB_ROOT, "cascade": true,
+                    "expect": [HUB_ROOT, HUB_FORK]}}),
+        ]
+    );
+}
+
+#[test]
+fn hub_delete_yes_sends_one_delete_without_expect() {
+    let (out, err, got, _, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_ROOT]), accepted()],
+        HUB_ROOT,
+        false,
+        true,
+        false,
+        Unread,
+    );
+    got.unwrap();
+    // One `delete` with no `expect` and no dry run: the exact line
+    // proves both keys are absent.
+    assert_eq!(
+        sent,
+        vec![
+            json!({"id": "c_sessions", "command": "sessions", "args": {}}),
+            json!({"id": "c_delete", "command": "delete", "args": {"session": HUB_ROOT}}),
+        ]
+    );
+    assert_eq!(out, format!("{HUB_ROOT}\n"));
+    assert_eq!(err, "");
+}
+
+#[test]
+fn hub_delete_unknown_and_ambiguous_ids_fail_after_resolving() {
+    let (_, _, got, _, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_OTHER])],
+        "s_zz",
+        false,
+        true,
+        false,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(&error, CliError::SessionNotFoundOnHub { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::SessionNotFound);
+    // The resolve connected; no dry run follows a failed resolve.
+    assert_eq!(sent.len(), 1);
+
+    let (_, _, got, _, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_ROOT, HUB_FORK])],
+        "s_11111111111111",
+        false,
+        true,
+        false,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(&error, CliError::Log(log::Error::Ambiguous { .. })),
+        "{error:?}"
+    );
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert_eq!(sent.len(), 1);
+}
+
+#[test]
+fn hub_delete_without_a_terminal_never_connects() {
+    let (out, _, got, connects, sent) = run_delete_listed(
+        &[sessions_answer(&[HUB_ROOT])],
+        HUB_ROOT,
+        false,
+        false,
+        false,
+        Unread,
+    );
+    let error = got.unwrap_err();
+    assert!(matches!(&error, CliError::DeleteNobody), "{error:?}");
+    assert_eq!(error.code(), ErrorCode::Usage);
+    assert_eq!(out, "");
+    assert_eq!(connects, 0);
+    assert!(sent.is_empty());
+}
+
+#[test]
+fn hub_delete_keeps_refusal_codes() {
+    // A held session fails the dry run with its own code.
+    let (out, _, got, _, _) = run_delete_listed(
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            refused("c_delete", "session_held", "Session is held."),
+        ],
+        HUB_ROOT,
+        false,
+        false,
+        true,
+        io::Cursor::new(b"y\n".to_vec()),
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::SessionHeld,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "Session is held.");
+    assert_eq!(out, "", "a refused dry run prints nothing");
+
+    // A set changed mid-prompt fails the confirm with its own code and
+    // prints only the previewed set.
+    let (out, _, got, _, _) = run_delete_listed(
+        &[
+            sessions_answer(&[HUB_ROOT]),
+            dry_answer(&[HUB_ROOT]),
+            refused("c_delete", "stale_request", "The set changed."),
+        ],
+        HUB_ROOT,
+        false,
+        false,
+        true,
+        io::Cursor::new(b"y\n".to_vec()),
+    );
+    let error = got.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CliError::Rejected {
+                code: ErrorCode::StaleRequest,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(out, format!("{HUB_ROOT}\n"));
 }
