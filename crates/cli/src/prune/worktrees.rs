@@ -160,7 +160,10 @@ pub(crate) fn select_scoped(
     // Every listed worktree, sorted by name.
     let mut listed: Vec<Listed> = Vec::new();
     for key in &keys {
-        let worktrees = home.join("projects").join(key).join("worktrees");
+        let Ok(project) = config::ProjectKey::new(key.as_str()) else {
+            continue;
+        };
+        let worktrees = config::project_worktrees_dir(home, &project);
         let Ok(entries) = std::fs::read_dir(&worktrees) else {
             continue;
         };
@@ -420,7 +423,7 @@ pub(super) fn scope_keys_scoped(home: &Path, scope: super::Scope<'_>) -> Vec<Str
         }
     }
     let mut keys = Vec::new();
-    let Ok(projects) = std::fs::read_dir(home.join("projects")) else {
+    let Ok(projects) = std::fs::read_dir(config::projects_dir(home)) else {
         return keys;
     };
     for project in projects.flatten() {

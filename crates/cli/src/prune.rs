@@ -390,8 +390,8 @@ pub fn select_for_hub(
     // The scan holds no locks: the dry run drops each taken lock at once.
     let planned = worktrees::select_scoped(home, &started, Scope::HubWide, force, true, now);
     let pinned_plan = pinned::select_scoped(home, &started, Scope::HubWide, clock);
-    let logs = old_diagnostics(&home.join("logs"), now);
-    let crashes = old_diagnostics(&home.join("crashes"), now);
+    let logs = old_diagnostics(&config::logs_dir(home), now);
+    let crashes = old_diagnostics(&config::crashes_dir(home), now);
     let lines = listing_lines(
         &selected.rows,
         &planned.rows,
@@ -495,8 +495,8 @@ pub fn remove_for_hub(
     let mut failures = Vec::new();
     // Diagnostics first, as the local path removes them first.
     let (logs, crashes) = (
-        old_diagnostics(&home.join("logs"), now),
-        old_diagnostics(&home.join("crashes"), now),
+        old_diagnostics(&config::logs_dir(home), now),
+        old_diagnostics(&config::crashes_dir(home), now),
     );
     let present: BTreeSet<String> = logs
         .iter()
