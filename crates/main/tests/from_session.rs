@@ -16,7 +16,9 @@
 mod support;
 
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 use serde_json::{Value, json};
 use support::{
@@ -72,6 +74,162 @@ fn write_probe(setup: &Setup) -> String {
     let path = setup.workspace().join("probe.py");
     fs::write(&path, PROBE).unwrap();
     path.to_string_lossy().into_owned()
+}
+
+/// A probe the session's shell runs to steer an ask session the same shell
+/// started in the background: the ask's stdout is a fifo, so the probe
+/// blocks reading its first lines until the ask session's id appears, then
+/// subscribes to the ask and steers it. Both the ask and the probe are
+/// children of the shell, so neither is the other's parent.
+const PROBE_FIFO: &str = r#"import json, socket, sys, threading
+fifo_path = sys.argv[1]
+hub_path = sys.argv[2]
+fifo = open(fifo_path)
+ask_id = None
+for line in fifo:
+    try:
+        v = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(v, dict) and v.get("session_id"):
+        ask_id = v["session_id"]
+        break
+print(json.dumps({"ask_session": ask_id}), flush=True)
+
+def drain():
+    for _ in fifo:
+        pass
+threading.Thread(target=drain, daemon=True).start()
+
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(hub_path)
+f = s.makefile("r")
+f.readline()
+sub = {"id": "c_fifo_sub", "session_id": ask_id, "command": "subscribe", "args": {"level": "full"}}
+s.sendall((json.dumps(sub) + "\n").encode())
+while True:
+    v = json.loads(f.readline())
+    if isinstance(v, dict) and v.get("payload", {}).get("command_id") == "c_fifo_sub":
+        break
+steer = {"id": "c_fifo_steer", "session_id": ask_id, "command": "steer", "args": {"content": [{"type": "text", "text": "from the shell"}]}}
+s.sendall((json.dumps(steer) + "\n").encode())
+while True:
+    v = json.loads(f.readline())
+    if isinstance(v, dict) and v.get("payload", {}).get("command_id") == "c_fifo_steer":
+        print(json.dumps(v), flush=True)
+        break
+"#;
+
+/// Writes the fifo probe beside the workspace and returns its path.
+fn write_fifo_probe(setup: &Setup) -> String {
+    let path = setup.workspace().join("probe_fifo.py");
+    fs::write(&path, PROBE_FIFO).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// A `fiber ask` child of the test with its stdout lines sent over a
+/// channel: the test reads the ask session's id off the stream while the
+/// drain keeps the ask from blocking on a full pipe. Stderr is drained the
+/// same way and dropped.
+struct Ask {
+    child: Child,
+    group: u32,
+    lines: mpsc::Receiver<String>,
+}
+
+/// Starts `fiber ask` with `args` as a child of the test, in its own
+/// process group. The prompt names the workspace so the workspace guard
+/// reaps the child when the test fails before its explicit wait.
+fn spawn_ask(setup: &Setup, args: &[&str]) -> Ask {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    command
+        .args(args)
+        .current_dir(setup.workspace())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.home().parent().unwrap())
+        .env("FIBER_HOME", setup.home())
+        .env("FIBER_TEST_FAKE_KEY", "sk-test")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    let group = child.id();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (tx, lines) = mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead as _;
+        for line in std::io::BufReader::new(stdout).lines() {
+            match tx.send(line.unwrap_or_default()) {
+                Ok(()) => {}
+                Err(mpsc::SendError(_)) => break,
+            }
+        }
+    });
+    thread::spawn(move || {
+        use std::io::Read as _;
+        let mut sink = Vec::new();
+        let _drained = std::io::BufReader::new(stderr).read_to_end(&mut sink);
+    });
+    Ask {
+        child,
+        group,
+        lines,
+    }
+}
+
+/// The ask session's id, read off the ask child's stdout stream within the
+/// one deadline: every receive takes what remains of it, and expiry names
+/// the wait.
+fn ask_session_id(ask: &Ask, deadline: fakes::Deadline) -> String {
+    loop {
+        match deadline.recv(&ask.lines) {
+            Ok(line) => {
+                if let Ok(value) = serde_json::from_str::<Value>(&line)
+                    && let Some(id) = value.get("session_id").and_then(Value::as_str)
+                {
+                    return id.to_owned();
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited until the deadline for the ask session's id")
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the ask child exited before printing its session id")
+            }
+        }
+    }
+}
+
+/// Waits under the deadline for the ask child to exit, killing its group
+/// when it does not.
+fn wait_ask(ask: Ask, deadline: fakes::Deadline, what: &str) {
+    let Ask {
+        mut child,
+        group,
+        lines: _,
+    } = ask;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    match deadline.recv(&finished) {
+        Ok(status) => {
+            status.expect("the ask child's wait keeps its status");
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            support::expired(deadline, group, &finished, &format!("{what} to exit"));
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the wait thread of {what} ended before it exited")
+        }
+    }
+    assert!(
+        !fakes::group_alive(group),
+        "{what} left a process in its group behind"
+    );
 }
 
 /// Sends `shell` running the probe with `line` to `session` through the
@@ -951,5 +1109,305 @@ fn run_directory_edits_change_nothing() {
     );
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+    finish(hub, client, guard, &[&session]);
+}
+
+/// A shell under `fiber ask` answers an approval on the hub: the kernel
+/// walk from its socket passes the ask session process, so the reply is
+/// refused `from_session`. Nobody can be asked inside an ask session — the
+/// ask answers its own approvals — so the probe replies to a fabricated
+/// request: the hub refuses before the session ever validates it. The ask
+/// stays alive on a sleeping shell call the test closes at the end.
+#[test]
+fn ask_descendant_reply_to_approval_is_refused_from_session() {
+    let setup = Setup::new();
+    fs::write(
+        setup.home().join("rules"),
+        json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}).to_string(),
+    )
+    .unwrap();
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_sleep",
+            "shell",
+            &json!({"command": "sleep 20"}),
+        )]),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let probe = write_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let ask = spawn_ask(&setup, &["ask", &format!("sleeper run it in {workspace}")]);
+    let session = ask_session_id(&ask, setup.deadline);
+    subscribe(&client, &session);
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the ask starts its sleeping shell call"
+    );
+
+    let answer = probe_answer_to(
+        &client,
+        &session,
+        &session,
+        &probe,
+        &hub_socket,
+        &json!({
+            "id": "c_probe_reply",
+            "session_id": session,
+            "command": "reply",
+            "args": {"request_id": "r_1", "decision": "allow"},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+
+    client.send(
+        &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
+            .to_string(),
+    );
+    let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
+    assert_eq!(closed["kind"], "command_accepted", "{closed}");
+    wait_ask(ask, setup.deadline, "the ask child");
+    drop(client);
+    hub.lock().unwrap().take().unwrap().kill_and_wait();
+    guard.wait_gone();
+}
+
+/// A shell under `fiber ask` prompts the ask session's own socket: the
+/// target is on the connection's ancestor walk, so the prompt is refused
+/// `from_session`. The ask stays alive on a sleeping shell call the test
+/// closes at the end.
+#[test]
+fn ask_descendant_prompt_to_own_ask_socket_is_refused_from_session() {
+    let setup = Setup::new();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}),
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo"}),
+        ),
+    )
+    .unwrap();
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_sleep",
+            "shell",
+            &json!({"command": "sleep 20"}),
+        )]),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let probe = write_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let ask = spawn_ask(&setup, &["ask", &format!("sleeper run it in {workspace}")]);
+    let session = ask_session_id(&ask, setup.deadline);
+    subscribe(&client, &session);
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the ask starts its sleeping shell call"
+    );
+
+    let answer = probe_answer_to(
+        &client,
+        &session,
+        &session,
+        &probe,
+        &hub_socket,
+        &json!({
+            "id": "c_probe_prompt",
+            "session_id": session,
+            "command": "prompt",
+            "args": {"content": [{"type": "text", "text": "from the shell"}]},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+
+    client.send(
+        &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
+            .to_string(),
+    );
+    let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
+    assert_eq!(closed["kind"], "command_accepted", "{closed}");
+    wait_ask(ask, setup.deadline, "the ask child");
+    drop(client);
+    hub.lock().unwrap().take().unwrap().kill_and_wait();
+    guard.wait_gone();
+}
+
+/// A shell under `fiber ask` steers a session the hub started: the target
+/// shares no session process with the connection's walk, so the steer is
+/// accepted.
+#[test]
+fn ask_descendant_steering_an_unrelated_hub_started_session_is_allowed() {
+    let setup = Setup::new();
+    fs::write(
+        setup.home().join("rules"),
+        json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}).to_string(),
+    )
+    .unwrap();
+    let server = fakes::ProviderServer::start_responding(|request: &fakes::Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("sleeper") {
+            return stream(&[function_call(
+                "call_sleep",
+                "shell",
+                &json!({"command": "sleep 20"}),
+            )]);
+        }
+        hello()
+    })
+    .unwrap();
+    setup.provider(&server);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let probe = write_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let first = start_session(&client, &workspace, "first");
+    subscribe(&client, &first);
+    let ask = spawn_ask(&setup, &["ask", &format!("sleeper run it in {workspace}")]);
+    let session = ask_session_id(&ask, setup.deadline);
+    subscribe(&client, &session);
+
+    let answer = probe_answer_to(
+        &client,
+        &session,
+        &first,
+        &probe,
+        &hub_socket,
+        &json!({
+            "id": "c_probe_steer",
+            "session_id": first,
+            "command": "steer",
+            "args": {"content": [{"type": "text", "text": "from a sibling"}]},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+
+    client.send(
+        &json!({"id": "c_close_ask", "session_id": session, "command": "close", "args": {"now": true}})
+            .to_string(),
+    );
+    let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
+    assert_eq!(closed["kind"], "command_accepted", "{closed}");
+    wait_ask(ask, setup.deadline, "the ask child");
+    finish(hub, client, guard, &[&first]);
+}
+
+/// A session's shell starts `fiber ask` in the background and steers it
+/// from a second client the same shell runs: the ask's parent walk passes
+/// the parent session, and the steering client is not the ask's direct
+/// parent, so the steer is refused `from_session`.
+#[test]
+fn shell_started_ask_steered_by_the_shell_is_refused_from_session() {
+    let setup = Setup::new();
+    fs::write(
+        setup.home().join("rules"),
+        json!({"decision": "allow", "tool": "shell", "prefix": "sleep"}).to_string(),
+    )
+    .unwrap();
+    // The ask sleeps once and then answers plainly: every later model call
+    // still carries the marker in its history, so answering every one with
+    // a sleep would loop forever and the shell would never complete.
+    let slept = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = fakes::ProviderServer::start_responding({
+        let slept = Arc::clone(&slept);
+        move |request: &fakes::Request| {
+            let text = String::from_utf8_lossy(&request.body);
+            if text.contains("ask-target-marker")
+                && !slept.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                return stream(&[function_call(
+                    "call_sleep",
+                    "shell",
+                    &json!({"command": "sleep 10"}),
+                )]);
+            }
+            hello()
+        }
+    })
+    .unwrap();
+    setup.provider(&server);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    let probe = write_fifo_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let session = start_session(&client, &workspace, "hello");
+    subscribe(&client, &session);
+    let fiber = env!("CARGO_BIN_EXE_fiber");
+    let fifo = setup
+        .workspace()
+        .join("ask.fifo")
+        .to_string_lossy()
+        .into_owned();
+    let shell_id = "c_shell_ask";
+    client.send(
+        &json!({
+            "id": shell_id,
+            "session_id": session,
+            "command": "shell",
+            "args": {"command": format!("rm -f {fifo}; mkfifo {fifo}; {fiber} ask --model fake/m 'ask-target-marker run it in {workspace}' > {fifo} 2>&1 & python3 {probe} {fifo} {hub_socket}"), "send": false},
+        })
+        .to_string(),
+    );
+    let ack = recv_answer(&client, shell_id, "the shell acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let output = &ack["payload"]["result"];
+    let text = output
+        .get("output")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| output.to_string());
+    let mut ask_id = None;
+    let mut answer = None;
+    for line in text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('{'))
+    {
+        let value: Value = serde_json::from_str(line).unwrap_or(Value::Null);
+        if value.get("ask_session").is_some() {
+            ask_id = value["ask_session"].as_str().map(str::to_owned);
+        }
+        if value.get("kind").is_some() {
+            answer = Some(value);
+        }
+    }
+    let ask_id = ask_id.expect("the probe reports the ask session");
+    let answer = answer.expect("the probe prints the steer answer");
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+    assert!(
+        answer["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&ask_id),
+        "{answer}"
+    );
+
+    subscribe(&client, &ask_id);
+    client.send(
+        &json!({"id": "c_close_ask", "session_id": ask_id, "command": "close", "args": {"now": true}})
+            .to_string(),
+    );
+    let closed = recv_answer(&client, "c_close_ask", "the close acknowledgement");
+    assert_eq!(closed["kind"], "command_accepted", "{closed}");
     finish(hub, client, guard, &[&session]);
 }
