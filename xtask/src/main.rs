@@ -56,6 +56,13 @@
 //!   it probes ancestry itself with `git merge-base --is-ancestor`, but
 //!   only for each title's latest closed event's non-null commit; without
 //!   it every fix probes unknown
+//! - `flake-classify --flaky-dir DIR --event NAME --tested-commit SHA
+//!   [--base SHA] [--head SHA] [--compare-files FILE] [--pr-files FILE]`:
+//!   reads the `flaky-tests-<runner>.txt` files under DIR and prints one
+//!   JSON object per unique title, in first-seen order: `lookup` when the
+//!   failure goes on to the issue lookup, `stale-base` when main changed
+//!   the failing file since base, `pr-owned` when the pull request changed
+//!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
@@ -397,6 +404,38 @@ fn run(args: &[String]) -> Result<bool, String> {
                     .and_then(|commit| ancestor_of(fix, commit))
             })? {
                 println!("{}", decision.line());
+            }
+            Ok(true)
+        }
+        "flake-classify" => {
+            let dir = flag(rest, "--flaky-dir")?;
+            let event = flag(rest, "--event")?;
+            let tested = flag(rest, "--tested-commit")?;
+            let base = optional(rest, "--base").unwrap_or_default();
+            let head = optional(rest, "--head").unwrap_or_default();
+            let compare_files = match optional(rest, "--compare-files") {
+                Some(path) => read(&path)?,
+                None => String::new(),
+            };
+            let pr_files = match optional(rest, "--pr-files") {
+                Some(path) => read(&path)?,
+                None => String::new(),
+            };
+            let lists = flake_report::read_lists(Path::new(&dir))?;
+            let listed: Vec<flake_report::Listed> = lists
+                .iter()
+                .map(|(runner, text)| flake_report::Listed { runner, text })
+                .collect();
+            let run = flake_report::Run {
+                pull_request: event == "pull_request",
+                tested_commit: &tested,
+                base: &base,
+                head: &head,
+                compare_files: &compare_files,
+                pr_files: &pr_files,
+            };
+            for classified in flake_report::classify(&listed, &run) {
+                println!("{}", classified.line());
             }
             Ok(true)
         }
