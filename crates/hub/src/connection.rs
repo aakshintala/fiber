@@ -657,8 +657,8 @@ fn serve_from(
     };
     hub.pairing.attach(&who, &writer);
     // Caller attribution before `hub_hello`: every command on this
-    // connection is judged by the same owners. A websocket or port
-    // connection stays remote.
+    // connection is judged by the same session-process pids. A websocket
+    // or port connection stays remote.
     let attribution = match &who {
         crate::pairing::Who::Local => {
             attribute_peer(support::peer::peer_pid(&stream), read_for(&hub).as_ref())
@@ -749,19 +749,21 @@ fn serve_from(
 
 /// What a connection is, for the session-socket refusals
 /// (`docs/permissions.md`, "Sessions on the sockets"): a local connection
-/// carries the kernel peer pid and every session id on its walk, a remote
-/// websocket or port connection carries nothing, and a local connection
-/// whose peer credential or walk could not be read carries what is known.
-/// An incomplete walk keeps a known peer pid so the direct-parent
+/// carries the kernel peer pid and every session-process pid on its walk,
+/// a remote websocket or port connection carries nothing, and a local
+/// connection whose peer credential or walk could not be read carries what
+/// is known. An incomplete walk keeps a known peer pid so the direct-parent
 /// exception can still be checked; `None` never stands for a remote
 /// connection.
 pub(crate) enum Attribution {
-    /// A local connection with its kernel peer pid and session owners.
+    /// A local connection with its kernel peer pid and matching
+    /// session-process pids.
     Local {
         /// The kernel-reported peer pid.
         peer_pid: u32,
-        /// Every session id on the peer's strict-ancestor walk.
-        owners: Vec<SessionId>,
+        /// Every session-process pid on the peer's strict-ancestor walk,
+        /// nearest first.
+        session_process_pids: Vec<u32>,
     },
     /// A local connection whose peer credential or walk could not be
     /// read, failing closed.
@@ -784,7 +786,10 @@ impl Attribution {
     /// connection, or an incomplete local one, failing closed.
     fn session_owned(&self) -> bool {
         match self {
-            Attribution::Local { owners, .. } => !owners.is_empty(),
+            Attribution::Local {
+                session_process_pids,
+                ..
+            } => !session_process_pids.is_empty(),
             Attribution::Incomplete { .. } => true,
             Attribution::Remote => false,
         }
@@ -801,8 +806,10 @@ impl Attribution {
 }
 
 /// The attribution of one accepted local connection: the kernel peer pid
-/// first, then every session id on its walk. A failed peer credential or
-/// walk reads as [`Attribution::Incomplete`], never as remote.
+/// first, then every session-process pid on its walk. A failed peer
+/// credential or walk reads as [`Attribution::Incomplete`], never as
+/// remote. The accepted socket peer's own arguments are never read: only
+/// strict ancestors are walked.
 pub(crate) fn attribute_peer(
     peer: Result<u32, support::peer::PeerCredentialError>,
     read: &dyn support::peer::ProcessRead,
@@ -813,14 +820,25 @@ pub(crate) fn attribute_peer(
             pid: None,
             peer_error: Some(error.to_string()),
         },
-        Ok(peer_pid) => match session_owners(peer_pid, read) {
-            Ok(owners) => Attribution::Local { peer_pid, owners },
-            Err(incomplete) => Attribution::Incomplete {
-                peer_pid: Some(peer_pid),
-                pid: Some(incomplete.pid),
-                peer_error: None,
-            },
-        },
+        Ok(peer_pid) => {
+            match support::peer::walk_ancestors(peer_pid, read, |argv| {
+                if contract::session_process::is_session_process(argv) {
+                    support::peer::Visit::Match
+                } else {
+                    support::peer::Visit::Skip
+                }
+            }) {
+                Ok(session_process_pids) => Attribution::Local {
+                    peer_pid,
+                    session_process_pids,
+                },
+                Err(incomplete) => Attribution::Incomplete {
+                    peer_pid: Some(peer_pid),
+                    pid: Some(incomplete.pid),
+                    peer_error: None,
+                },
+            }
+        }
     }
 }
 
@@ -1588,51 +1606,6 @@ pub(crate) fn reject(
         "command_rejected",
         rejection(id, code, message),
     );
-}
-
-/// The session id a kernel argument vector belongs to: the executable is
-/// dropped, the next word is exactly `session`, and one later word is
-/// exactly `--id=s_...` with a valid session id. Anything else names no
-/// session, so a shell's words only add refusals by matching this shape.
-pub(crate) fn session_argv_id(argv: &[Vec<u8>]) -> Option<SessionId> {
-    let words = argv.get(1..)?;
-    let (command, flags) = words.split_first()?;
-    if command.as_slice() != b"session" {
-        return None;
-    }
-    flags.iter().find_map(|flag| {
-        let id = flag.strip_prefix(b"--id=")?;
-        let id = std::str::from_utf8(id).ok()?;
-        crate::relay::valid_session_id(id).then(|| SessionId(id.to_owned()))
-    })
-}
-
-/// Every session id on the strict ancestors of `peer_pid`: the caller's
-/// own effective uid is read first, and argument vectors only for
-/// ancestors sharing it. A foreign-owned ancestor contributes nothing and
-/// its arguments are never read; an unreadable owner, parent, or
-/// same-owner argument vector names its pid.
-pub(crate) fn session_owners(
-    peer_pid: u32,
-    read: &dyn support::peer::ProcessRead,
-) -> Result<Vec<SessionId>, support::peer::IncompleteWalk> {
-    use support::peer::IncompleteWalk;
-    let current = read
-        .current_euid()
-        .map_err(|_| IncompleteWalk { pid: peer_pid })?;
-    let mut owners = Vec::new();
-    for ancestor in support::peer::ancestors(peer_pid, read)? {
-        if ancestor.euid != current {
-            continue;
-        }
-        let argv = read
-            .argv(ancestor.pid)
-            .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
-        if let Some(id) = session_argv_id(&argv) {
-            owners.push(id);
-        }
-    }
-    Ok(owners)
 }
 
 /// A `command_rejected` payload for `code` and `message`, with `id` when

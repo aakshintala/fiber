@@ -25,7 +25,7 @@ use super::*;
 use crate::Starter as _;
 use crate::connection::{Hub, lock};
 use crate::fake::{FakeSession, FakeStarter};
-use crate::relay::{Kept, Relay, Replayed};
+use crate::relay::{Kept, Relay, RelayTarget, Replayed};
 use crate::testkit::write_log;
 use fakes::Deadline;
 
@@ -147,7 +147,7 @@ fn rig(
         replayed: Replayed::default(),
         thread,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let rig = Rig {
         hub,

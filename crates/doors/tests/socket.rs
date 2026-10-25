@@ -6518,20 +6518,24 @@ struct OwnedPeer {
 }
 
 impl OwnedPeer {
-    /// Starts `sh session --id=<owned>` in `dir`, running the probe against
-    /// `socket` with `specs` as its command lines.
+    /// Starts a fake `fiber session --id=<owned>` in `dir`, running the
+    /// probe against `socket` with `specs` as its command lines. The fake
+    /// is a symlink to the shell, so the kernel runs the shell with argv[0]
+    /// naming `fiber`: a shebang script would name its interpreter instead.
+    /// The id names nothing; any session-shaped ancestor marks the probe.
     fn start(dir: &Path, owned: &SessionId, socket: &Path, specs: &[Value]) -> OwnedPeer {
         let probe = dir.join("probe.py");
         fs::write(&probe, OWNED_PROBE).unwrap();
         // The first operand names the fake session; the rest are the probe's
         // command lines. The probe runs as a child, so this shell keeps its
         // fake argument vector alive as the probe's parent.
+        std::os::unix::fs::symlink("/bin/sh", dir.join("fiber")).unwrap();
         fs::write(
             dir.join("session"),
             "shift\npython3 -u \"$OWNED_PROBE\" \"$OWNED_SOCK\" \"$@\" & wait\n",
         )
         .unwrap();
-        let mut child = Command::new("sh")
+        let mut child = Command::new(dir.join("fiber"))
             .arg("session")
             .arg(format!("--id={}", owned.0))
             .args(specs.iter().map(ToString::to_string))
@@ -6623,68 +6627,23 @@ fn other_id(id: &SessionId) -> SessionId {
     SessionId(other)
 }
 
-/// The `from_session` sentence for `command` sent from inside `owner` to
-/// `target`: the refusal names both sessions.
-fn owned_command_sentence(owner: &SessionId, command: &str, target: &SessionId) -> String {
-    format!(
-        "A connection from inside session `{}` cannot send `{command}` to session `{}`, which is that session or one of its delegates. A session messages its delegates with `delegate_message`.",
-        owner.0, target.0
-    )
+/// The `from_session` sentence for an approval answered from inside a
+/// session: only a person answers.
+fn refusal_approval_sentence() -> String {
+    "Only a person answers an approval. This connection comes from inside a session.".to_owned()
 }
 
-/// The `from_session` sentence for an approval answered from inside `owner`:
-/// only a person answers.
-fn owned_approval_sentence(owner: &SessionId) -> String {
-    format!(
-        "Only a person answers an approval. This connection comes from inside session `{}`.",
-        owner.0
-    )
-}
-
+/// An approval answer from a session-shaped ancestor is refused without
+/// any target relation: the fake `fiber session` on the probe's walk marks
+/// it, whatever id the fake names. Refusal 2 needs a pid intersection the
+/// in-process session cannot express end to end, so the scripted dispatch
+/// tests pin it; the binary suite pins it with real session processes.
 #[test]
-fn session_owned_steer_and_prompt_are_refused() {
+fn approval_from_a_session_shaped_ancestor_is_refused() {
     let opened = Opened::open(vec![]);
     let socket = opened.socket.clone();
     let owned = opened.id.clone();
-    let specs = [text_command("c_1", "steer"), text_command("c_2", "prompt")];
-    opened
-        .session
-        .run(Vec::new(), Arc::new(|| false), move |inbox| {
-            let holder = fakes::TempDir::new("fiber-owned");
-            let dir = holder.path().to_path_buf();
-            let mut peer = OwnedPeer::start(&dir, &owned, &socket, &specs);
-            for (id, command) in [("c_1", "steer"), ("c_2", "prompt")] {
-                let answer = peer.answer();
-                assert_eq!(command_id(&answer), Some(id));
-                assert_eq!(
-                    rejection(&answer),
-                    (
-                        "from_session",
-                        owned_command_sentence(&owned, command, &owned).as_str()
-                    ),
-                    "{answer}"
-                );
-            }
-            assert!(
-                inbox.try_recv().is_err(),
-                "a refused steer or prompt is never delivered"
-            );
-            peer.finish();
-            Ok(())
-        })
-        .unwrap();
-    opened.close();
-}
-
-#[test]
-fn session_owned_replies_are_refused() {
-    let opened = Opened::open(vec![]);
-    let socket = opened.socket.clone();
-    let owned = opened.id.clone();
-    let specs = [
-        question_reply_command("c_1", "r_1"),
-        approval_command("c_2", "r_2"),
-    ];
+    let specs = [approval_command("c_1", "r_1")];
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |inbox| {
@@ -6695,22 +6654,12 @@ fn session_owned_replies_are_refused() {
             assert_eq!(command_id(&answer), Some("c_1"));
             assert_eq!(
                 rejection(&answer),
-                (
-                    "from_session",
-                    owned_command_sentence(&owned, "reply", &owned).as_str()
-                ),
-                "{answer}"
-            );
-            let answer = peer.answer();
-            assert_eq!(command_id(&answer), Some("c_2"));
-            assert_eq!(
-                rejection(&answer),
-                ("from_session", owned_approval_sentence(&owned).as_str()),
+                ("from_session", refusal_approval_sentence().as_str()),
                 "{answer}"
             );
             assert!(
                 inbox.try_recv().is_err(),
-                "a refused reply is never delivered"
+                "a refused approval is never delivered"
             );
             peer.finish();
             Ok(())
@@ -6786,7 +6735,7 @@ fn unrelated_session_steer_reply_and_message_are_allowed() {
             assert_eq!(command_id(&answer), Some("c_4"));
             assert_eq!(
                 rejection(&answer),
-                ("from_session", owned_approval_sentence(&other).as_str()),
+                ("from_session", refusal_approval_sentence().as_str()),
                 "{answer}"
             );
             assert!(

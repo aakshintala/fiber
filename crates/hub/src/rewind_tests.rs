@@ -1044,7 +1044,7 @@ fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
         replayed: Default::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: crate::relay::RelayTarget::LiveUnreadable,
     });
     let (client_write, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -1163,7 +1163,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         replayed: Default::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: crate::relay::RelayTarget::LiveUnreadable,
     });
     // A live relay for the same session answers the re-routed command.
     // It starts after the retiring relay below has read, so the
@@ -1187,7 +1187,7 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         replayed: Default::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: crate::relay::RelayTarget::LiveUnreadable,
     });
     let (client_write, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -1342,7 +1342,7 @@ fn follow_leaves_a_relay_already_holding_the_level_alone() {
             replayed: crate::relay::Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: crate::relay::RelayTarget::LiveUnreadable,
         });
     }
     let (write, _) = UnixStream::pair().unwrap();
@@ -1456,7 +1456,7 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
             replayed: crate::relay::Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: crate::relay::RelayTarget::LiveUnreadable,
         });
     }
     let (write, _) = UnixStream::pair().unwrap();

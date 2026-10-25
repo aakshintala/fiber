@@ -31,7 +31,7 @@ fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         }
     }
     let line = |id: &str, level: &str| {
@@ -76,7 +76,7 @@ fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         }
     }
     let sid = "s_0123456789abcdef";
@@ -109,7 +109,7 @@ fn relay_slots_drop_only_their_own_entry() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         }
     }
     let entries = [
@@ -136,7 +136,7 @@ fn an_accepted_subscribe_replaces_the_kept_one() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         }
     }
     let line = |id: &str, command: &str| {
@@ -186,7 +186,7 @@ fn entry_with_epoch(session: &str, epoch: u64) -> Relay {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     }
 }
 
@@ -308,7 +308,7 @@ fn an_accepted_command_that_is_not_subscribe_changes_nothing() {
             replayed: Replayed::default(),
             thread: None,
             retiring: None,
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         }
     });
     relays.accepted("s_aaaaaaaaaaaaaaaa", epoch, line("c_1", "prompt"));
@@ -342,7 +342,7 @@ fn only_an_accepted_full_subscribe_returns_the_waiting_first_prompt() {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let first = crate::first::First::new(std::sync::Arc::default());
     relays
@@ -731,7 +731,7 @@ fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
             replayed: Replayed::default(),
             thread,
             retiring: Some(crate::retire::Retire::Dead),
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         });
         let (client_write, client_read) = UnixStream::pair().unwrap();
         client_read.set_read_timeout(Some(DEADLINE)).unwrap();
@@ -997,7 +997,7 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(crate::connection::lock(&relays).transfer(SID, &line));
     {
@@ -1120,7 +1120,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         replayed: Replayed::default(),
         thread: Some(parked),
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     // A newer dead relay holding an unsent command, with no thread.
     let dead = crate::connection::lock(&relays).mint();
@@ -1140,7 +1140,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Dead),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     // A pass-on from the retiring relay routes with its bound: the dead
     // relay recovers its queue with that bound, never from the top, so
@@ -1239,7 +1239,7 @@ fn a_failed_transfer_unmutes_only_its_own_minted_id() {
         replayed: std::sync::Arc::clone(&replayed),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(relays.transfer(sid, &line));
     assert_eq!(
@@ -1270,7 +1270,7 @@ fn an_exited_relay_never_keeps_an_accepted_level() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(relays.accepted(sid, epoch, line("c_1")).is_none());
     assert_eq!(
@@ -1289,7 +1289,7 @@ fn an_exited_relay_never_keeps_an_accepted_level() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Dead),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(relays.accepted(sid, epoch, line("c_2")).is_none());
     assert_eq!(
@@ -1318,7 +1318,7 @@ fn a_transfer_with_only_retiring_relays_keeps_the_level_and_opens_nothing() {
         replayed: std::sync::Arc::clone(&replayed),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(
         relays.transfer(sid, &line),
@@ -1352,7 +1352,7 @@ fn a_transfer_lands_on_the_live_relay() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let live = relays.mint();
     let (writer, peer) = UnixStream::pair().unwrap();
@@ -1365,7 +1365,7 @@ fn a_transfer_lands_on_the_live_relay() {
         replayed: std::sync::Arc::clone(&replayed),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     assert!(relays.transfer(sid, &line));
     assert_eq!(relays.subscription(sid), Some(line));
@@ -1467,7 +1467,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
         replayed,
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let (reply_tx, reply_rx) = mpsc::channel();
     let fake = std::thread::Builder::new()
@@ -1748,7 +1748,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let (client, peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(MUST_SUCCEED_WITHIN)).unwrap();
@@ -1857,7 +1857,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             replayed: Replayed::default(),
             thread: None,
             retiring: Some(crate::retire::Retire::Exited),
-            session_pid: None,
+            target: RelayTarget::LiveUnreadable,
         });
         let order = crate::connection::lock(&relays).order.clone();
         order.enqueue(SID, "c_ack");
@@ -1958,7 +1958,7 @@ fn passing_an_empty_queue_does_not_finish_its_retiring_relay() {
         replayed: Replayed::default(),
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let order = crate::connection::lock(&relays).order.clone();
     order.enqueue(SID, "c_ack");
@@ -2074,7 +2074,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
         replayed: Replayed::default(),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
     let order = crate::connection::lock(&relays).order.clone();
     order.enqueue(SID, "c_known");
@@ -2143,7 +2143,7 @@ fn a_transfer_does_not_use_another_sessions_live_relay() {
         replayed: std::sync::Arc::clone(&replayed),
         thread: None,
         retiring: None,
-        session_pid: None,
+        target: RelayTarget::LiveUnreadable,
     });
 
     assert!(!relays.transfer(sid, &line));
@@ -2475,7 +2475,7 @@ impl Ended {
                 replayed: Replayed::default(),
                 thread: None,
                 retiring: None,
-                session_pid: None,
+                target: RelayTarget::LiveUnreadable,
             });
         }
         let (client_write, client_read) = UnixStream::pair().unwrap();

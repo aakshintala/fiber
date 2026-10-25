@@ -88,9 +88,26 @@ pub(crate) struct Relay {
     pub(crate) thread: Option<thread::JoinHandle<()>>,
     /// Why the relay no longer takes writes, if it does not.
     pub(crate) retiring: Option<Retire>,
-    /// The kernel peer pid of the session socket, read when the relay was
-    /// published: the target the direct-parent exception compares against.
-    pub(crate) session_pid: Option<u32>,
+    /// The session server the entry writes to, as a live pid, an
+    /// unreadable live target, or a synthetic replay: the target the
+    /// direct-parent exception compares against.
+    pub(crate) target: RelayTarget,
+}
+
+/// What the relay entry's target process is: a live session server pid, a
+/// live target whose pid, parent or walk could not be read (fail closed),
+/// or a synthetic replay of an exited delegate, which has no target
+/// process. Never an ambiguous `Option<u32>`: a live target
+/// peer-credential failure cannot be mistaken for replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelayTarget {
+    /// A live session server process.
+    Live { pid: u32 },
+    /// A live target the check could not read: refusals fail closed.
+    LiveUnreadable,
+    /// A synthetic replay of an exited delegate: no target process, so no
+    /// refusal applies to it.
+    SyntheticReplay,
 }
 
 /// The refused command class a `from_session` message names
@@ -98,7 +115,8 @@ pub(crate) struct Relay {
 pub(crate) enum FromSessionRefusal<'a> {
     /// An approval answer.
     Approval,
-    /// `prompt`, `steer` or `reply` to the caller's own session or delegate.
+    /// `prompt`, `steer` or `reply` to a session on the caller's walk or
+    /// sharing a session process with it.
     SessionCommand {
         /// The refused wire command.
         command: &'a str,
@@ -107,6 +125,16 @@ pub(crate) enum FromSessionRefusal<'a> {
     },
     /// `pairing_code`.
     PairingCode,
+}
+
+/// The shared session-host predicate as a walk visit: every match is
+/// collected, nearest first.
+fn is_session_host(argv: &[Vec<u8>]) -> support::peer::Visit {
+    if contract::session_process::is_session_process(argv) {
+        support::peer::Visit::Match
+    } else {
+        support::peer::Visit::Skip
+    }
 }
 
 impl FromSessionRefusal<'_> {
@@ -121,44 +149,44 @@ impl FromSessionRefusal<'_> {
 }
 
 /// The `from_session` message for a refused command: the exact sentence for
-/// the refusal class when the caller's walk names a session, otherwise the
-/// unreadable pid, otherwise the preserved peer-credential error. The owner
-/// is the nearest session process on the walk.
+/// the refusal class when the caller's walk passes a session process, the
+/// unreadable pid on an incomplete caller walk, otherwise the preserved
+/// peer-credential error. No session id of the caller's is ever named:
+/// which session it is, Fiber reads from the process tree, never from the
+/// arguments.
 pub(crate) fn from_session_message(
     attribution: &crate::connection::Attribution,
     refusal: FromSessionRefusal<'_>,
 ) -> String {
-    let owner = match attribution {
-        crate::connection::Attribution::Local { owners, .. } => {
-            owners.first().map(|owner| owner.0.as_str())
-        }
-        crate::connection::Attribution::Incomplete { .. }
-        | crate::connection::Attribution::Remote => None,
-    };
-    if let Some(owner) = owner {
-        return match refusal {
-            FromSessionRefusal::Approval => format!(
-                "Only a person answers an approval. This connection comes from inside session `{owner}`."
-            ),
+    match attribution {
+        crate::connection::Attribution::Local { .. } => match refusal {
+            FromSessionRefusal::Approval => {
+                "Only a person answers an approval. This connection comes from inside a session."
+                    .to_owned()
+            }
             FromSessionRefusal::SessionCommand { command, target } => format!(
-                "A connection from inside session `{owner}` cannot send `{command}` to session `{}`, which is that session or one of its delegates. A session messages its delegates with `delegate_message`.",
+                "A connection from inside a session cannot send `{command}` to session `{}`. A session messages its delegates with delegate_message.",
                 target.0
             ),
             FromSessionRefusal::PairingCode => {
-                format!("A connection from inside session `{owner}` cannot ask for a pairing code.")
+                "A connection from inside a session cannot ask for a pairing code.".to_owned()
             }
-        };
-    }
-    let command = refusal.command();
-    match attribution {
-        crate::connection::Attribution::Incomplete { pid: Some(pid), .. } => format!(
-            "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
-        ),
-        crate::connection::Attribution::Incomplete { peer_error, .. } => format!(
-            "This connection's process could not be identified ({}), so `{command}` is refused.",
-            peer_error.as_deref().unwrap_or("unknown error")
-        ),
-        crate::connection::Attribution::Local { .. } | crate::connection::Attribution::Remote => {
+        },
+        crate::connection::Attribution::Incomplete { pid: Some(pid), .. } => {
+            let command = refusal.command();
+            format!(
+                "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
+            )
+        }
+        crate::connection::Attribution::Incomplete { peer_error, .. } => {
+            let command = refusal.command();
+            format!(
+                "This connection's process could not be identified ({}), so `{command}` is refused.",
+                peer_error.as_deref().unwrap_or("unknown error")
+            )
+        }
+        crate::connection::Attribution::Remote => {
+            let command = refusal.command();
             format!(
                 "This connection's process could not be identified (unknown error), so `{command}` is refused."
             )
@@ -189,25 +217,34 @@ fn is_approval_reply(stripped: &Map<String, Value>) -> bool {
 /// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
 /// an approval answer from an owned or incomplete local connection, with
 /// no exception. Refusal 2 rejects `prompt`, `steer` and `reply` when the
-/// caller's owners meet the target session or its ancestors, unless the
-/// caller is the target's current kernel parent. Incomplete walks fail
-/// closed, naming the unreadable pid.
+/// target pid is on the caller's walk, or when a session-host pid from the
+/// target's parent walk is also on the caller's walk, unless the caller is
+/// the target's current kernel parent with a readable target ancestry. A
+/// synthetic replay has no target process, so no refusal applies to it. An
+/// unreadable target pid, parent, or walk fails closed.
 pub(crate) fn session_command_refusal(
     attribution: &crate::connection::Attribution,
     stripped: &Map<String, Value>,
     target: &SessionId,
-    target_pid: Option<u32>,
+    target_state: RelayTarget,
     read: &dyn support::peer::ProcessRead,
 ) -> Option<crate::connection::Refused> {
     use crate::connection::{Attribution, Refused};
-    let owned = match attribution {
-        Attribution::Local { owners, .. } => !owners.is_empty(),
-        Attribution::Incomplete { .. } => true,
-        Attribution::Remote => false,
+    let caller_matches: &[u32] = match attribution {
+        Attribution::Local {
+            session_process_pids,
+            ..
+        } => {
+            if session_process_pids.is_empty() {
+                return None;
+            }
+            session_process_pids
+        }
+        Attribution::Incomplete { .. } => &[],
+        Attribution::Remote => return None,
     };
-    if !owned {
-        return None;
-    }
+    // An incomplete caller walk fails closed: only the direct-parent
+    // exception below still lets it through.
     if is_approval_reply(stripped) {
         return Some(Refused {
             code: ErrorCode::FromSession,
@@ -219,11 +256,41 @@ pub(crate) fn session_command_refusal(
         .and_then(Value::as_str)
         .filter(|command| *command == "prompt" || *command == "steer" || *command == "reply")?;
     let refusal = || FromSessionRefusal::SessionCommand { command, target };
-    // The direct-parent exception first: the delegate's own client still
-    // reaches it, even on an incomplete caller walk.
-    if let (Some(peer), Some(target_pid)) = (attribution.peer_pid(), target_pid)
-        && read.parent(target_pid).is_ok_and(|parent| parent == peer)
-    {
+    let target_pid = match target_state {
+        RelayTarget::SyntheticReplay => return None,
+        RelayTarget::LiveUnreadable => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command),
+            });
+        }
+        RelayTarget::Live { pid } => pid,
+    };
+    // The target's parent decides the direct-parent exception, and the
+    // parent walk decides the intersection: either unreadable fails the
+    // live target closed.
+    let parent = match read.parent(target_pid) {
+        Ok(parent) => parent,
+        Err(_) => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command),
+            });
+        }
+    };
+    let target_matches = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
+        Ok(matches) => matches,
+        Err(_) => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command),
+            });
+        }
+    };
+    // The direct-parent exception: the target's own parent still reaches
+    // it on any live target host, whatever the peer's arguments say, but
+    // never on an unreadable target ancestry.
+    if Some(parent) == attribution.peer_pid() {
         return None;
     }
     match attribution {
@@ -232,27 +299,12 @@ pub(crate) fn session_command_refusal(
             message: from_session_message(attribution, refusal()),
         }),
         Attribution::Remote => None,
-        Attribution::Local { owners, .. } => {
-            // The routed session itself needs no walk.
-            if owners.iter().any(|owner| owner == target) {
-                return Some(Refused {
-                    code: ErrorCode::FromSession,
-                    message: from_session_message(attribution, refusal()),
-                });
-            }
-            let mut target_set = vec![target.clone()];
-            if let Some(pid) = target_pid {
-                match crate::connection::session_owners(pid, read) {
-                    Ok(ancestors) => target_set.extend(ancestors),
-                    Err(_) => {
-                        return Some(Refused {
-                            code: ErrorCode::FromSession,
-                            message: unreadable_target_message(target, command),
-                        });
-                    }
-                }
-            }
-            if owners.iter().any(|owner| target_set.contains(owner)) {
+        Attribution::Local { .. } => {
+            if caller_matches.contains(&target_pid)
+                || target_matches
+                    .iter()
+                    .any(|pid| caller_matches.contains(pid))
+            {
                 Some(Refused {
                     code: ErrorCode::FromSession,
                     message: from_session_message(attribution, refusal()),
@@ -387,15 +439,12 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
-    // A caller that names itself needs no relay, socket or log: the
-    // owner==target match refuses without a target pid, while every other
-    // command falls through to the paths below (the pid version re-checks
-    // ancestors and the parent exception there). Subscribe is not in the
-    // refused set, so it always falls through. An incomplete caller walk
-    // whose peer pid was read keeps the direct-parent exception, which
-    // needs the target's pid to evaluate, so only an approval reply
-    // (which no exception covers) refuses early; every other incomplete
-    // command falls through to the pid version.
+    // An approval reply refuses before any relay, socket or log: no
+    // exception covers it, so it needs no target pid. Every other command
+    // falls through to the pid version below, which re-checks ancestors
+    // and the parent exception there. An incomplete caller walk whose peer
+    // pid was read keeps the direct-parent exception, which needs the
+    // target's pid to evaluate.
     if let Some(attribution) = admit {
         let defer_to_target_pid = matches!(
             attribution,
@@ -404,23 +453,26 @@ pub(crate) fn route(
                 ..
             }
         ) && !is_approval_reply(&stripped);
-        if !defer_to_target_pid {
-            let read = crate::connection::read_for(hub);
-            if let Some(refused) = session_command_refusal(
-                attribution,
-                &stripped,
-                &SessionId(session.to_owned()),
-                None,
-                read.as_ref(),
-            ) {
+        if !defer_to_target_pid && is_approval_reply(&stripped) {
+            // The same owned definition as
+            // `crate::connection::Attribution::session_owned`.
+            let owned = match attribution {
+                crate::connection::Attribution::Local {
+                    session_process_pids,
+                    ..
+                } => !session_process_pids.is_empty(),
+                crate::connection::Attribution::Incomplete { .. } => true,
+                crate::connection::Attribution::Remote => false,
+            };
+            if owned {
                 crate::retire::refuse(
                     writer,
                     hub,
                     relays,
                     session,
                     id,
-                    &refused.code,
-                    &refused.message,
+                    &ErrorCode::FromSession,
+                    &from_session_message(attribution, FromSessionRefusal::Approval),
                 );
                 return;
             }
@@ -468,10 +520,10 @@ pub(crate) fn route(
             let held = lock(relays);
             held.entries.iter().find_map(|entry| {
                 (entry.session == session && from.is_none_or(|from| entry.epoch > from))
-                    .then_some((entry.epoch, entry.session_pid))
+                    .then_some((entry.epoch, entry.target))
             })
         };
-        let Some((epoch, target_pid)) = snapshot else {
+        let Some((epoch, target_state)) = snapshot else {
             return false;
         };
         if let Some(attribution) = admit {
@@ -480,7 +532,7 @@ pub(crate) fn route(
                 attribution,
                 &stripped,
                 &SessionId(session.to_owned()),
-                target_pid,
+                target_state,
                 read.as_ref(),
             ) {
                 crate::retire::refuse(
@@ -680,17 +732,21 @@ pub(crate) fn route(
             return;
         }
     };
-    // With no relay published, the target pid comes from the newly
-    // connected socket: the refusal runs before the relay publishes or
-    // the pending command is written.
-    let session_pid = support::peer::peer_pid(&stream).ok();
+    // With no relay published, the target identity comes from the newly
+    // connected socket: a peer-credential failure is a live unreadable
+    // target, never a replay. The refusal runs before the relay publishes
+    // or the pending command is written.
+    let target_state = match support::peer::peer_pid(&stream) {
+        Ok(pid) => RelayTarget::Live { pid },
+        Err(_) => RelayTarget::LiveUnreadable,
+    };
     if let Some(attribution) = admit {
         let read = crate::connection::read_for(hub);
         if let Some(refused) = session_command_refusal(
             attribution,
             &stripped,
             &SessionId(session.to_owned()),
-            session_pid,
+            target_state,
             read.as_ref(),
         ) {
             crate::retire::refuse(
@@ -848,6 +904,9 @@ fn replay_exited_delegate(
             replayed: Replayed::default(),
             retiring: Some(Retire::Dead),
             pending: None,
+            // A synthetic replay has no target process: the socket pair
+            // is the hub's own, so its peer pid says nothing.
+            target: RelayTarget::SyntheticReplay,
         },
     ) {
         Established::Running => {}
@@ -912,6 +971,7 @@ struct Establishment {
     replayed: Replayed,
     retiring: Option<Retire>,
     pending: Option<(String, log::diag::Timer)>,
+    target: RelayTarget,
 }
 
 /// What `establish` leaves behind: a thread running behind a pushed entry,
@@ -949,6 +1009,7 @@ fn establish(
         replayed,
         retiring,
         pending,
+        target,
     } = establishment;
     let epoch = held.mint();
     // The guard moves into the pending slot before the worker can run:
@@ -991,9 +1052,6 @@ fn establish(
             .and_then(|key| held.pending_replay.remove(key));
         return Established::SpawnFailed(guard);
     };
-    // The target the direct-parent exception compares against: the kernel
-    // peer of the session socket, read before the entry publishes.
-    let session_pid = support::peer::peer_pid(&stream).ok();
     held.entries.push(Relay {
         session: session.to_owned(),
         epoch,
@@ -1002,7 +1060,7 @@ fn establish(
         replayed,
         thread: Some(thread),
         retiring,
-        session_pid,
+        target,
     });
     Established::Running
 }
@@ -1158,6 +1216,13 @@ fn attach_inner(
         Some(held) => held,
         None => lock(relays),
     };
+    // The target the direct-parent exception compares against: the kernel
+    // peer of the session socket, read before the entry publishes. A
+    // peer-credential failure is a live unreadable target, never a replay.
+    let target = match support::peer::peer_pid(&stream) {
+        Ok(pid) => RelayTarget::Live { pid },
+        Err(_) => RelayTarget::LiveUnreadable,
+    };
     // A thread that never started leaves no entry: the next command for
     // the session reconnects. Its pending replay guard goes back with
     // it, emitted outside the lock.
@@ -1177,6 +1242,7 @@ fn attach_inner(
             replayed,
             retiring: None,
             pending: replayed_id.zip(replay_timer.take()),
+            target,
         },
     ) {
         Established::Running => {}

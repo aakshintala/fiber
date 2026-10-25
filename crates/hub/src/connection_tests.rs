@@ -3542,9 +3542,10 @@ fn refresh_with_an_argument_is_invalid_arguments() {
     assert_eq!(message, "The arguments do not fit this command.");
 }
 
-/// A scripted process tree for [`session_owners`]: parents and owners by
-/// pid, with unreadable pids and argument vectors that panic when read.
-struct OwnerScript {
+/// A scripted process tree for peer attribution: parents, owners and
+/// argument vectors by pid, with unreadable pids and argument vectors
+/// that panic when read.
+struct PeerScript {
     current: u32,
     parents: std::collections::HashMap<u32, u32>,
     euids: std::collections::HashMap<u32, u32>,
@@ -3555,7 +3556,7 @@ struct OwnerScript {
     argv_read: std::cell::Cell<usize>,
 }
 
-impl support::peer::ProcessRead for OwnerScript {
+impl support::peer::ProcessRead for PeerScript {
     fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
         Ok(self.current)
     }
@@ -3598,142 +3599,6 @@ impl support::peer::ProcessRead for OwnerScript {
     }
 }
 
-fn session_argv(id: &str) -> Vec<Vec<u8>> {
-    [
-        "/path/to/fiber",
-        "session",
-        &format!("--id={id}"),
-        "--workspace=/w",
-    ]
-    .iter()
-    .map(|word| word.as_bytes().to_vec())
-    .collect()
-}
-
-#[test]
-fn session_argv_id_matches_only_the_session_shape() {
-    let id = "s_0123456789abcdef";
-    assert_eq!(
-        session_argv_id(&session_argv(id)),
-        Some(SessionId(id.to_owned()))
-    );
-    // Reordered flags still match: the id is found past any position.
-    let mut reordered = session_argv(id);
-    reordered.swap(2, 3);
-    assert_eq!(session_argv_id(&reordered), Some(SessionId(id.to_owned())));
-    // Nothing else does: another command, a missing or malformed id, or a
-    // flag that merely contains the shape.
-    for argv in [
-        vec![],
-        vec![b"fiber".to_vec()],
-        vec![b"fiber".to_vec(), b"ask".to_vec()],
-        vec![b"fiber".to_vec(), b"session".to_vec()],
-        vec![
-            b"fiber".to_vec(),
-            b"sessionx".to_vec(),
-            b"--id=s_0123456789abcdef".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"session".to_vec(),
-            b"--idx=s_0123456789abcdef".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"session".to_vec(),
-            b"--id=s_SHORT".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"session".to_vec(),
-            b"--id=s_0123456789abcde".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"session".to_vec(),
-            b"--id=s_0123456789abcdef0".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"session".to_vec(),
-            b"--id=s_0123456789ABCDEF".to_vec(),
-        ],
-        vec![
-            b"fiber".to_vec(),
-            b"sh".to_vec(),
-            b"-c".to_vec(),
-            b"session --id=s_0123456789abcdef".to_vec(),
-        ],
-    ] {
-        assert_eq!(session_argv_id(&argv), None, "{argv:?}");
-    }
-}
-
-#[test]
-fn session_owners_skips_foreign_argv_and_names_unreadable_pids() {
-    let id = "s_0123456789abcdef";
-    let read = OwnerScript {
-        current: 1000,
-        parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
-        euids: [(20, 1000), (30, 2000), (1, 1000)].into_iter().collect(),
-        argvs: [(20, session_argv(id)), (1, session_argv(id))]
-            .into_iter()
-            .collect(),
-        unreadable_parent: vec![],
-        unreadable_euid: vec![],
-        unreadable_argv: vec![],
-        argv_read: std::cell::Cell::new(0),
-    };
-    // The foreign-owned ancestor contributes nothing and its arguments are
-    // never read: two same-owner reads, not three.
-    assert_eq!(
-        session_owners(10, &read).unwrap(),
-        [SessionId(id.to_owned()), SessionId(id.to_owned())]
-    );
-    assert_eq!(read.argv_read.get(), 2);
-}
-
-#[test]
-fn session_owners_names_an_unreadable_owner_or_argv() {
-    let base = OwnerScript {
-        current: 1000,
-        parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
-        euids: [(20, 1000), (1, 1000)].into_iter().collect(),
-        argvs: [(1, session_argv("s_0123456789abcdef"))]
-            .into_iter()
-            .collect(),
-        unreadable_parent: vec![],
-        unreadable_euid: vec![],
-        unreadable_argv: vec![],
-        argv_read: std::cell::Cell::new(0),
-    };
-    let unreadable = OwnerScript {
-        unreadable_euid: vec![20],
-        ..base
-    };
-    // Cannot use `base` after move; rebuild for each case below.
-    assert_eq!(
-        session_owners(10, &unreadable).unwrap_err(),
-        support::peer::IncompleteWalk { pid: 20 }
-    );
-    let unreadable = OwnerScript {
-        current: 1000,
-        parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
-        euids: [(20, 1000), (1, 1000)].into_iter().collect(),
-        argvs: [(1, session_argv("s_0123456789abcdef"))]
-            .into_iter()
-            .collect(),
-        unreadable_parent: vec![],
-        unreadable_euid: vec![],
-        unreadable_argv: vec![20],
-        argv_read: std::cell::Cell::new(0),
-    };
-    assert_eq!(
-        session_owners(10, &unreadable).unwrap_err(),
-        support::peer::IncompleteWalk { pid: 20 }
-    );
-}
-
 /// Tests for the hub side of the session-socket refusals: the caller
 /// attribution, the three refusals, the direct-parent exception and the
 /// incomplete-walk failure, on published relays and on the no-relay
@@ -3745,15 +3610,39 @@ mod session_refusal_tests {
 
     use serde_json::{Value, json};
 
-    use super::{Attribution, OwnerScript, Temp, attribute_peer};
+    use super::{Attribution, PeerScript, Temp, attribute_peer};
     use crate::fake::FakeStarter;
     use crate::relay::{Kept, Relay, Replayed};
 
     const PEER: u32 = 555;
     const TARGET: u32 = 777;
     const UNREADABLE: u32 = 999;
+    const CALLER_HOST: u32 = 444;
+    const SHARED_HOST: u32 = 446;
     const OWNED: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_fedcba9876543210";
+
+    /// A session-hosting argument vector with no session id: the argv-only
+    /// predicate recognizes the executable and subcommand alone.
+    fn host_argv() -> Vec<Vec<u8>> {
+        ["/path/to/fiber", "session"]
+            .iter()
+            .map(|word| word.as_bytes().to_vec())
+            .collect()
+    }
+
+    /// The exact refusal sentences (`docs/permissions.md`, "Sessions on the
+    /// sockets"): no caller session id is ever named.
+    const APPROVAL_REFUSAL: &str =
+        "Only a person answers an approval. This connection comes from inside a session.";
+    const PAIRING_REFUSAL: &str =
+        "A connection from inside a session cannot ask for a pairing code.";
+
+    fn session_command_refusal(command: &str, target: &str) -> String {
+        format!(
+            "A connection from inside a session cannot send `{command}` to session `{target}`. A session messages its delegates with delegate_message."
+        )
+    }
 
     /// Scripted kernel reads: the hub's test seam answers from these
     /// tables, and a missing entry reads as unreadable.
@@ -3841,7 +3730,7 @@ mod session_refusal_tests {
         fn push_entry(
             &self,
             session: &str,
-            session_pid: Option<u32>,
+            target: crate::relay::RelayTarget,
         ) -> (UnixStream, std::sync::mpsc::Sender<()>) {
             let (writer, peer) = UnixStream::pair().unwrap();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -3856,7 +3745,7 @@ mod session_refusal_tests {
                 replayed: Replayed::default(),
                 thread: Some(thread),
                 retiring: None,
-                session_pid,
+                target,
             });
             peer.set_read_timeout(Some(super::DEADLINE)).unwrap();
             (peer, tx)
@@ -3909,10 +3798,10 @@ mod session_refusal_tests {
         json!({"request_id": request, "labels": ["a"]})
     }
 
-    fn owned_owners(session: &str) -> Attribution {
+    fn session_caller(pids: &[u32]) -> Attribution {
         Attribution::Local {
             peer_pid: PEER,
-            owners: vec![contract::SessionId(session.to_owned())],
+            session_process_pids: pids.to_vec(),
         }
     }
 
@@ -3936,32 +3825,32 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn approval_reply_from_an_owned_peer_is_refused() {
+    fn approval_reply_from_a_session_caller_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OWNED,
             reply_with("c_1", approval_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[CALLER_HOST]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         assert_eq!(line["payload"]["command_id"], "c_1");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(message, APPROVAL_REFUSAL, "{message}");
     }
 
     #[test]
-    fn other_answers_from_an_owned_peer_are_forwarded() {
+    fn other_answers_from_a_session_caller_are_forwarded() {
         let mut rig = Rig::new(plain_target());
-        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OTHER,
             reply_with("c_1", labels_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[CALLER_HOST]),
         );
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
@@ -3975,8 +3864,8 @@ mod session_refusal_tests {
     #[test]
     fn steer_to_an_unrelated_session_is_allowed() {
         let mut rig = Rig::new(plain_target());
-        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
             .read_line(&mut forwarded)
@@ -3986,131 +3875,151 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn steer_to_the_callers_own_session_is_refused() {
+    fn steer_to_a_target_on_the_caller_walk_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
-        rig.relay("c_1", OWNED, steer("c_1"), &owned_owners(OWNED));
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, steer("c_1"), &session_caller(&[TARGET]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(
+            message,
+            session_command_refusal("steer", OWNED),
+            "{message}"
+        );
     }
 
     #[test]
-    fn prompt_to_the_callers_own_session_is_refused() {
+    fn prompt_to_a_target_on_the_caller_walk_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
-        rig.relay("c_1", OWNED, prompt("c_1"), &owned_owners(OWNED));
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, prompt("c_1"), &session_caller(&[TARGET]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(
+            message,
+            session_command_refusal("prompt", OWNED),
+            "{message}"
+        );
     }
 
     #[test]
-    fn a_question_reply_to_the_callers_own_session_is_refused() {
+    fn a_question_reply_to_a_target_on_the_caller_walk_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OWNED,
             reply_with("c_1", labels_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[TARGET]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(
+            message,
+            session_command_refusal("reply", OWNED),
+            "{message}"
+        );
     }
 
     #[test]
     fn an_approval_reply_to_an_unrelated_session_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OTHER,
             reply_with("c_1", approval_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[CALLER_HOST]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(message, APPROVAL_REFUSAL, "{message}");
     }
 
     #[test]
-    fn steer_to_a_delegate_below_the_caller_is_refused() {
+    fn steer_sharing_a_session_process_with_the_target_is_refused() {
         let script = Script {
             current: 1000,
-            parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
-            euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(
-                1,
-                vec![
-                    b"/path/to/fiber".to_vec(),
-                    b"session".to_vec(),
-                    format!("--id={OWNED}").into_bytes(),
-                ],
-            )]
+            parents: [(TARGET, SHARED_HOST), (SHARED_HOST, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            euids: [(TARGET, 1000), (SHARED_HOST, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (SHARED_HOST, host_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
             .into_iter()
             .collect(),
             ..Default::default()
         };
         let mut rig = Rig::new(script);
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[SHARED_HOST]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
-        assert!(message.contains(OTHER), "{message}");
+        assert_eq!(
+            message,
+            session_command_refusal("steer", OTHER),
+            "{message}"
+        );
     }
 
     #[test]
-    fn a_question_reply_to_a_delegate_below_the_caller_is_refused() {
+    fn a_question_reply_sharing_a_session_process_with_the_target_is_refused() {
         let script = Script {
             current: 1000,
-            parents: [(TARGET, 1), (1, 0)].into_iter().collect(),
-            euids: [(TARGET, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(
-                1,
-                vec![
-                    b"/path/to/fiber".to_vec(),
-                    b"session".to_vec(),
-                    format!("--id={OWNED}").into_bytes(),
-                ],
-            )]
+            parents: [(TARGET, SHARED_HOST), (SHARED_HOST, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            euids: [(TARGET, 1000), (SHARED_HOST, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (SHARED_HOST, host_argv()),
+                (TARGET, vec![b"/sbin/init".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
             .into_iter()
             .collect(),
             ..Default::default()
         };
         let mut rig = Rig::new(script);
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OTHER,
             reply_with("c_1", labels_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[SHARED_HOST]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
-        assert!(message.contains(OTHER), "{message}");
+        assert_eq!(
+            message,
+            session_command_refusal("reply", OTHER),
+            "{message}"
+        );
     }
 
     #[test]
-    fn a_message_to_the_callers_own_session_is_forwarded() {
+    fn a_message_to_a_target_on_the_caller_walk_is_forwarded() {
         let mut rig = Rig::new(plain_target());
-        let (peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
-        rig.relay("c_1", OWNED, message("c_1"), &owned_owners(OWNED));
+        let (peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, message("c_1"), &session_caller(&[TARGET]));
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
             .read_line(&mut forwarded)
@@ -4126,7 +4035,7 @@ mod session_refusal_tests {
             "c_1",
             "s_aaaaaaaaaaaaaaaa",
             full_subscribe("c_1"),
-            &owned_owners(OWNED),
+            &session_caller(&[CALLER_HOST]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
@@ -4141,12 +4050,17 @@ mod session_refusal_tests {
             euids: [(TARGET, 1000), (PEER, 1000), (1, 1000)]
                 .into_iter()
                 .collect(),
-            argvs: HashMap::new(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let mut rig = Rig::new(script);
-        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
             .read_line(&mut forwarded)
@@ -4159,13 +4073,20 @@ mod session_refusal_tests {
     fn an_incomplete_caller_with_the_parent_exception_still_reaches() {
         let script = Script {
             current: 1000,
-            parents: [(TARGET, PEER)].into_iter().collect(),
-            euids: HashMap::new(),
-            argvs: HashMap::new(),
+            parents: [(TARGET, PEER), (PEER, 1), (1, 0)].into_iter().collect(),
+            euids: [(TARGET, 1000), (PEER, 1000), (1, 1000)]
+                .into_iter()
+                .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let mut rig = Rig::new(script);
-        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
@@ -4178,7 +4099,7 @@ mod session_refusal_tests {
     #[test]
     fn an_incomplete_caller_without_the_exception_names_its_pid() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay("c_1", OTHER, steer("c_1"), &incomplete());
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
@@ -4198,8 +4119,8 @@ mod session_refusal_tests {
             ..Default::default()
         };
         let mut rig = Rig::new(script);
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[CALLER_HOST]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
@@ -4210,7 +4131,7 @@ mod session_refusal_tests {
     #[test]
     fn remote_commands_route_unchanged() {
         let mut rig = Rig::new(plain_target());
-        let (peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay("c_1", OTHER, steer("c_1"), &Attribution::Remote);
         let mut forwarded = String::new();
         std::io::BufReader::new(peer)
@@ -4223,7 +4144,7 @@ mod session_refusal_tests {
     #[test]
     fn approval_reply_on_a_failed_credential_is_refused() {
         let mut rig = Rig::new(plain_target());
-        let (_peer, _tx) = rig.push_entry(OWNED, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
         let attribution = Attribution::Incomplete {
             peer_pid: None,
             pid: None,
@@ -4253,7 +4174,7 @@ mod session_refusal_tests {
         (client, temp)
     }
 
-    fn owned_walk() -> Script {
+    fn session_walk() -> Script {
         let own = std::process::id();
         Script {
             current: 1000,
@@ -4285,19 +4206,19 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn pairing_code_from_an_owned_peer_is_refused() {
-        let (mut client, _temp) = pairing_client(owned_walk());
+    fn pairing_code_from_a_session_caller_is_refused() {
+        let (mut client, _temp) = pairing_client(session_walk());
         client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
         let line = client.next("the refusal");
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
         assert_eq!(line["payload"]["command_id"], "c_p");
         let message = line["payload"]["message"].as_str().unwrap();
-        assert!(message.contains(OWNED), "{message}");
+        assert_eq!(message, PAIRING_REFUSAL, "{message}");
     }
 
     #[test]
-    fn pairing_code_from_an_unowned_peer_is_minted() {
+    fn pairing_code_from_a_caller_passing_no_session_process_is_minted() {
         let (mut client, _temp) = pairing_client(empty_walk());
         client.send(&json!({"id": "c_p", "command": "pairing_code", "args": {"device": "probe"}}));
         let line = client.next("the mint");
@@ -4306,7 +4227,7 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn pairing_code_with_an_unreadable_owner_fails_closed() {
+    fn pairing_code_with_an_unreadable_caller_walk_fails_closed() {
         let own = std::process::id();
         let script = Script {
             current: 1000,
@@ -4335,7 +4256,7 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn a_first_command_from_an_owned_peer_is_refused_before_it_publishes() {
+    fn a_first_command_from_a_session_caller_is_refused_before_it_publishes() {
         let own = std::process::id();
         let script = Script {
             current: 1000,
@@ -4355,13 +4276,13 @@ mod session_refusal_tests {
         };
         let (mut rig, listener) = first_command_rig(script, OTHER);
         // The opener's peer is this test process, whose walk passes the
-        // owned session above it; the target set holds the routed session
-        // itself, which the caller owns.
+        // session host above it; the target's own walk shares that host
+        // with the caller's, so the command is refused.
         let accepted = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             stream
         });
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[TARGET]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected");
         assert_eq!(line["payload"]["code"], "from_session");
@@ -4399,7 +4320,12 @@ mod session_refusal_tests {
         assert_eq!(held.entries.len(), 1);
         let entry = held.entries.first().unwrap();
         assert_eq!(entry.session, OTHER);
-        assert_eq!(entry.session_pid, Some(std::process::id()));
+        assert_eq!(
+            entry.target,
+            crate::relay::RelayTarget::Live {
+                pid: std::process::id()
+            }
+        );
     }
 
     fn ask_argv() -> Vec<Vec<u8>> {
@@ -4417,9 +4343,9 @@ mod session_refusal_tests {
     }
 
     /// The caller walk with a session-hosting `ask` above the peer: the
-    /// argv-only predicate owns the peer without any session id.
-    fn ask_walk() -> OwnerScript {
-        OwnerScript {
+    /// shared predicate marks it without any session id.
+    fn ask_walk() -> PeerScript {
+        PeerScript {
             current: 1000,
             parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
             euids: [(20, 1000), (1, 1000)].into_iter().collect(),
@@ -4434,23 +4360,31 @@ mod session_refusal_tests {
     }
 
     #[test]
-    fn ask_argv_on_the_caller_walk_makes_the_peer_owned() {
+    fn ask_argv_on_the_caller_walk_marks_the_session_process_pid() {
         let attribution = attribute_peer(Ok(10), &ask_walk());
-        let Attribution::Local { owners, .. } = attribution else {
-            panic!("an ask descendant is a local owned peer");
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an ask descendant is a local session-caller peer");
         };
-        assert!(!owners.is_empty(), "an ask argv owns the peer");
+        assert_eq!(session_process_pids, [20]);
     }
 
     #[test]
-    fn extension_case_argv_on_the_caller_walk_makes_the_peer_owned() {
+    fn extension_case_argv_on_the_caller_walk_marks_the_session_process_pid() {
         let mut walk = ask_walk();
         walk.argvs.insert(20, extension_case_argv());
         let attribution = attribute_peer(Ok(10), &walk);
-        let Attribution::Local { owners, .. } = attribution else {
-            panic!("an extension-case descendant is a local owned peer");
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an extension-case descendant is a local session-caller peer");
         };
-        assert!(!owners.is_empty(), "an extension-case argv owns the peer");
+        assert_eq!(session_process_pids, [20]);
     }
 
     /// The target walk with a session-hosting `ask` above the target: the
@@ -4477,26 +4411,36 @@ mod session_refusal_tests {
     #[test]
     fn steer_refused_when_the_target_walk_passes_an_ask_host() {
         let mut rig = Rig::new(ask_target());
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
-        rig.relay("c_1", OTHER, steer("c_1"), &owned_owners(OWNED));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OTHER, steer("c_1"), &session_caller(&[440]));
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected", "{line}");
         assert_eq!(line["payload"]["code"], "from_session", "{line}");
+        assert_eq!(
+            line["payload"]["message"],
+            session_command_refusal("steer", OTHER),
+            "{line}"
+        );
     }
 
     #[test]
     fn question_reply_refused_when_the_target_walk_passes_an_ask_host() {
         let mut rig = Rig::new(ask_target());
-        let (_peer, _tx) = rig.push_entry(OTHER, Some(TARGET));
+        let (_peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
         rig.relay(
             "c_1",
             OTHER,
             reply_with("c_1", labels_args("r_1")),
-            &owned_owners(OWNED),
+            &session_caller(&[440]),
         );
         let line = rig.next_client_line();
         assert_eq!(line["kind"], "command_rejected", "{line}");
         assert_eq!(line["payload"]["code"], "from_session", "{line}");
+        assert_eq!(
+            line["payload"]["message"],
+            session_command_refusal("reply", OTHER),
+            "{line}"
+        );
     }
 
     #[test]
@@ -4512,9 +4456,10 @@ mod session_refusal_tests {
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let mut script = Script {
             current: 1000,
-            parents: [(STALE_PID, PEER), (FRESH_PID, 1), (PEER, 1), (1, 0)]
-                .into_iter()
-                .collect(),
+            // The fresh target's parent is unreadable, so its check fails
+            // closed; the stale target's parent stays readable for the
+            // direct-parent exception.
+            parents: [(STALE_PID, PEER), (PEER, 1), (1, 0)].into_iter().collect(),
             euids: [
                 (STALE_PID, 1000),
                 (FRESH_PID, 1000),
@@ -4523,12 +4468,18 @@ mod session_refusal_tests {
             ]
             .into_iter()
             .collect(),
-            argvs: HashMap::new(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         script.block_first_parent = Some((entered_tx, std::sync::Mutex::new(release_rx)));
         let mut rig = Rig::new(script);
-        let (mut peer_old, _keep_old) = rig.push_entry(OTHER, Some(STALE_PID));
+        let (mut peer_old, _keep_old) =
+            rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: STALE_PID });
         peer_old.set_nonblocking(true).unwrap();
         let hub = std::sync::Arc::clone(&rig.hub);
         let writer = std::sync::Arc::clone(&rig.writer);
@@ -4541,7 +4492,7 @@ mod session_refusal_tests {
                 &hub,
                 &writer,
                 &relays,
-                &owned_owners(OWNED),
+                &session_caller(&[CALLER_HOST]),
             );
         });
         // The route parks in the stale target's parent read; replace the
@@ -4567,7 +4518,7 @@ mod session_refusal_tests {
                 replayed: Replayed::default(),
                 thread: old.thread.take(),
                 retiring: None,
-                session_pid: Some(FRESH_PID),
+                target: crate::relay::RelayTarget::Live { pid: FRESH_PID },
             });
             (old, peer)
         };

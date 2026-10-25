@@ -219,8 +219,8 @@ mod refusal_tests {
     use fakes::Deadline;
 
     const PEER: u32 = 555;
+    const HOST: u32 = 440;
     const UNREADABLE: u32 = 999;
-    const FAKE: &str = "s_aaaaaaaaaaaaaaaa";
 
     /// Scripted kernel reads: the refusal paths answer from these tables,
     /// and a missing entry reads as unreadable.
@@ -274,10 +274,55 @@ mod refusal_tests {
         }
     }
 
-    fn owned(peer: u32, id: SessionId) -> crate::client::Attribution {
+    /// The target's walk with a session host above this test process: the
+    /// target shares that session process with a caller below it.
+    fn shared_target() -> Script {
+        let own = std::process::id();
+        Script {
+            current: 1000,
+            parents: [(own, HOST), (HOST, 1), (1, 0)].into_iter().collect(),
+            euids: [(HOST, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [
+                (
+                    HOST,
+                    [
+                        "/path/to/fiber",
+                        "session",
+                        "--id=s_0123456789abcdef",
+                        "--workspace=/w",
+                    ]
+                    .iter()
+                    .map(|word| word.as_bytes().to_vec())
+                    .collect(),
+                ),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    /// The target's readable walk with the peer as its kernel parent: the
+    /// direct-parent exception admits every command but an approval answer.
+    fn parent_target() -> Script {
+        let own = std::process::id();
+        Script {
+            current: 1000,
+            parents: [(own, PEER), (PEER, 1), (1, 0)].into_iter().collect(),
+            euids: [(PEER, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    fn local(peer: u32, matches: &[u32]) -> crate::client::Attribution {
         crate::client::Attribution::Local {
             peer_pid: peer,
-            owners: vec![id],
+            session_process_pids: matches.to_vec(),
         }
     }
 
@@ -361,19 +406,23 @@ mod refusal_tests {
     }
 
     #[test]
-    fn an_approval_answer_from_an_owned_peer_is_refused_on_an_unrelated_session() {
+    fn an_approval_answer_from_a_session_caller_is_refused_on_an_unrelated_session() {
         reset();
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
         scripted(&gate, plain_target());
-        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, approval_answered("c_1"), "reply");
         let answer = Deadline::after(super::support::DEADLINE)
             .recv(&rx)
             .expect("the refusal is answered");
         let rejection = rejected(answer);
         assert_eq!(rejection.code, ErrorCode::FromSession);
-        assert!(rejection.message.contains(FAKE), "{}", rejection.message);
+        assert!(
+            rejection.message.contains("inside a session"),
+            "{}",
+            rejection.message
+        );
         super::support::close_within(opened.session, opened.log);
     }
 
@@ -383,7 +432,7 @@ mod refusal_tests {
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
         scripted(&gate, plain_target());
-        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, question_answered("c_1"), "reply");
         // The refusal check passed: without a running loop the idle inbox
         // ends delivery `Closing`, never `from_session`.
@@ -396,13 +445,13 @@ mod refusal_tests {
     }
 
     #[test]
-    fn a_question_answer_to_the_own_session_is_refused() {
+    fn a_question_answer_sharing_a_session_process_is_refused() {
         reset();
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
-        scripted(&gate, plain_target());
+        scripted(&gate, shared_target());
         let target = gate.session_id.clone();
-        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, question_answered("c_1"), "reply");
         let answer = Deadline::after(super::support::DEADLINE)
             .recv(&rx)
@@ -422,9 +471,9 @@ mod refusal_tests {
         reset();
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
-        scripted(&gate, plain_target());
+        scripted(&gate, shared_target());
         let target = gate.session_id.clone();
-        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, messaged("c_1", &target), "message");
         // A message is never refused: without a running loop the idle
         // inbox ends delivery `Closing`, never `from_session`.
@@ -469,7 +518,7 @@ mod refusal_tests {
         let gate = Arc::clone(&opened.session.gate);
         scripted(&gate, Script::default());
         let target = gate.session_id.clone();
-        let (mut conn, rx) = attributed(&gate, owned(PEER, SessionId(FAKE.into())));
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, steered("c_1"), "steer");
         let answer = Deadline::after(super::support::DEADLINE)
             .recv(&rx)
@@ -489,14 +538,7 @@ mod refusal_tests {
         reset();
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
-        let own = std::process::id();
-        scripted(
-            &gate,
-            Script {
-                parents: [(own, PEER)].into_iter().collect(),
-                ..Default::default()
-            },
-        );
+        scripted(&gate, parent_target());
         let attribution = crate::client::Attribution::Incomplete {
             peer_pid: Some(PEER),
             pid: Some(UNREADABLE),
@@ -519,16 +561,8 @@ mod refusal_tests {
         reset();
         let opened = super::support::Opened::open(Vec::new());
         let gate = Arc::clone(&opened.session.gate);
-        let own = std::process::id();
-        scripted(
-            &gate,
-            Script {
-                parents: [(own, PEER)].into_iter().collect(),
-                ..Default::default()
-            },
-        );
-        let target = gate.session_id.clone();
-        let (mut conn, rx) = attributed(&gate, owned(PEER, target.clone()));
+        scripted(&gate, parent_target());
+        let (mut conn, rx) = attributed(&gate, local(PEER, &[HOST]));
         crate::client::dispatch(&mut conn, approval_answered("c_1"), "reply");
         let answer = Deadline::after(super::support::DEADLINE)
             .recv(&rx)
@@ -536,7 +570,7 @@ mod refusal_tests {
         let rejection = rejected(answer);
         assert_eq!(rejection.code, ErrorCode::FromSession);
         assert!(
-            rejection.message.contains(&target.0),
+            rejection.message.contains("inside a session"),
             "{}",
             rejection.message
         );

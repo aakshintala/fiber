@@ -162,7 +162,7 @@ pub(crate) fn serve_connection(
     let Some(direct) = stream.get_ref().try_clone().ok() else {
         return;
     };
-    let attribution = attribute_peer(peer, &support::peer::KernelProcessRead);
+    let attribution = attribute_peer(peer, read_for(&gate).as_ref());
     let mut conn = Conn {
         id,
         gate,
@@ -942,48 +942,22 @@ pub(crate) fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResul
     );
 }
 
-/// The session id a kernel argument vector belongs to: the executable is
-/// dropped, the next word is exactly `session`, and one later word is
-/// exactly `--id=s_...` with a valid session id. Anything else names no
-/// session, so a shell's words only add refusals by matching this shape.
-/// Local to this refusal boundary; `support::peer` stays generic.
-pub(crate) fn session_argv_id(argv: &[Vec<u8>]) -> Option<contract::SessionId> {
-    let words = argv.get(1..)?;
-    let (command, flags) = words.split_first()?;
-    if command.as_slice() != b"session" {
-        return None;
-    }
-    flags.iter().find_map(|flag| {
-        let id = flag.strip_prefix(b"--id=")?;
-        let id = std::str::from_utf8(id).ok()?;
-        valid_session_id(id).then(|| contract::SessionId(id.to_owned()))
-    })
-}
-
-/// Whether `id` is a session id the hub mints: `s_` plus 16 lowercase hex
-/// digits. Anything else names no session.
-fn valid_session_id(id: &str) -> bool {
-    let hex = id.strip_prefix("s_").unwrap_or("");
-    hex.len() == 16
-        && hex
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
 /// What a socket connection is, for the session-socket refusals
 /// (`docs/permissions.md`, "Sessions on the sockets"): a local connection
-/// carries the kernel peer pid and every session id on its walk, and a
-/// local connection whose peer credential or walk could not be read carries
-/// what is known. An incomplete walk keeps a known peer pid so the
+/// carries the kernel peer pid and every session-process pid on its walk,
+/// and a local connection whose peer credential or walk could not be read
+/// carries what is known. An incomplete walk keeps a known peer pid so the
 /// direct-parent exception can still be checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Attribution {
-    /// A local connection with its kernel peer pid and session owners.
+    /// A local connection with its kernel peer pid and matching
+    /// session-process pids.
     Local {
         /// The kernel-reported peer pid.
         peer_pid: u32,
-        /// Every session id on the peer's strict-ancestor walk.
-        owners: Vec<contract::SessionId>,
+        /// Every session-process pid on the peer's strict-ancestor walk,
+        /// nearest first.
+        session_process_pids: Vec<u32>,
     },
     /// A local connection whose peer credential or walk could not be
     /// read, failing closed.
@@ -1014,7 +988,8 @@ impl Attribution {
 pub(crate) enum FromSessionRefusal<'a> {
     /// An approval answer.
     Approval,
-    /// `prompt`, `steer` or `reply` to the caller's own session or delegate.
+    /// `prompt`, `steer` or `reply` to a session on the caller's walk or
+    /// sharing a session process with it.
     SessionCommand {
         /// The refused wire command.
         command: &'a str,
@@ -1033,43 +1008,50 @@ impl FromSessionRefusal<'_> {
     }
 }
 
+/// The shared session-host predicate as a walk visit: every match is
+/// collected, nearest first.
+fn is_session_host(argv: &[Vec<u8>]) -> support::peer::Visit {
+    if contract::session_process::is_session_process(argv) {
+        support::peer::Visit::Match
+    } else {
+        support::peer::Visit::Skip
+    }
+}
+
 /// The `from_session` message for a refused command: the exact sentence for
-/// the refusal class when the caller's walk names a session, otherwise the
-/// unreadable pid, otherwise the preserved peer-credential error. The owner
-/// is the nearest session process on the walk.
+/// the refusal class when the caller's walk passes a session process, the
+/// unreadable pid on an incomplete caller walk, otherwise the preserved
+/// peer-credential error. No session id of the caller's is ever named:
+/// which session it is, Fiber reads from the process tree, never from the
+/// arguments.
 pub(crate) fn from_session_message(
     attribution: &Attribution,
     refusal: FromSessionRefusal<'_>,
 ) -> String {
-    let owner = match attribution {
-        Attribution::Local { owners, .. } => owners.first().map(|owner| owner.0.as_str()),
-        Attribution::Incomplete { .. } => None,
-    };
-    if let Some(owner) = owner {
-        return match refusal {
-            FromSessionRefusal::Approval => format!(
-                "Only a person answers an approval. This connection comes from inside session `{owner}`."
-            ),
+    match attribution {
+        Attribution::Local { .. } => match refusal {
+            FromSessionRefusal::Approval => {
+                "Only a person answers an approval. This connection comes from inside a session."
+                    .to_owned()
+            }
             FromSessionRefusal::SessionCommand { command, target } => format!(
-                "A connection from inside session `{owner}` cannot send `{command}` to session `{}`, which is that session or one of its delegates. A session messages its delegates with `delegate_message`.",
+                "A connection from inside a session cannot send `{command}` to session `{}`. A session messages its delegates with delegate_message.",
                 target.0
             ),
-        };
-    }
-    let command = refusal.command();
-    match attribution {
-        Attribution::Incomplete { pid: Some(pid), .. } => format!(
-            "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
-        ),
-        Attribution::Incomplete { peer_error, .. } => format!(
-            "This connection's process could not be identified ({}), so `{command}` is refused.",
-            peer_error.as_deref().unwrap_or("unknown error")
-        ),
-        // No owner to name: the refusal paths never send an unowned local
-        // connection here, so this falls back to the unreadable shape.
-        Attribution::Local { .. } => format!(
-            "This connection's process could not be identified (unknown error), so `{command}` is refused."
-        ),
+        },
+        Attribution::Incomplete { pid: Some(pid), .. } => {
+            let command = refusal.command();
+            format!(
+                "The process walk from this connection is incomplete at unreadable pid `{pid}`, so `{command}` is refused."
+            )
+        }
+        Attribution::Incomplete { peer_error, .. } => {
+            let command = refusal.command();
+            format!(
+                "This connection's process could not be identified ({}), so `{command}` is refused.",
+                peer_error.as_deref().unwrap_or("unknown error")
+            )
+        }
     }
 }
 
@@ -1080,34 +1062,6 @@ pub(crate) fn unreadable_target_message(target: &contract::SessionId, command: &
         "Session `{}`'s process could not be read, so `{command}` is refused.",
         target.0
     )
-}
-
-/// Every session id on the strict ancestors of `peer_pid`: the caller's
-/// own effective uid is read first, and argument vectors only for
-/// ancestors sharing it. A foreign-owned ancestor contributes nothing and
-/// its arguments are never read; an unreadable owner, parent, or
-/// same-owner argument vector names its pid.
-pub(crate) fn session_owners(
-    peer_pid: u32,
-    read: &dyn support::peer::ProcessRead,
-) -> Result<Vec<contract::SessionId>, support::peer::IncompleteWalk> {
-    use support::peer::IncompleteWalk;
-    let current = read
-        .current_euid()
-        .map_err(|_| IncompleteWalk { pid: peer_pid })?;
-    let mut owners = Vec::new();
-    for ancestor in support::peer::ancestors(peer_pid, read)? {
-        if ancestor.euid != current {
-            continue;
-        }
-        let argv = read
-            .argv(ancestor.pid)
-            .map_err(|_| IncompleteWalk { pid: ancestor.pid })?;
-        if let Some(id) = session_argv_id(&argv) {
-            owners.push(id);
-        }
-    }
-    Ok(owners)
 }
 
 /// A refused socket command: the `from_session` code with its sentence.
@@ -1127,8 +1081,10 @@ pub(crate) fn read_for(_gate: &Gate) -> Arc<dyn support::peer::ProcessRead + Sen
 }
 
 /// The attribution of one accepted local connection: the kernel peer pid
-/// first, then every session id on its walk. A failed peer credential or
-/// walk reads as [`Attribution::Incomplete`], never as remote.
+/// first, then every session-process pid on its walk. A failed peer
+/// credential or walk reads as [`Attribution::Incomplete`], never as
+/// remote. The accepted socket peer's own arguments are never read: only
+/// strict ancestors are walked.
 pub(crate) fn attribute_peer(
     peer: Result<u32, support::peer::PeerCredentialError>,
     read: &dyn support::peer::ProcessRead,
@@ -1139,8 +1095,11 @@ pub(crate) fn attribute_peer(
             pid: None,
             peer_error: Some(error.to_string()),
         },
-        Ok(peer_pid) => match session_owners(peer_pid, read) {
-            Ok(owners) => Attribution::Local { peer_pid, owners },
+        Ok(peer_pid) => match support::peer::walk_ancestors(peer_pid, read, is_session_host) {
+            Ok(session_process_pids) => Attribution::Local {
+                peer_pid,
+                session_process_pids,
+            },
             Err(incomplete) => Attribution::Incomplete {
                 peer_pid: Some(peer_pid),
                 pid: Some(incomplete.pid),
@@ -1165,12 +1124,14 @@ fn is_approval_reply(command: &Command) -> bool {
 
 /// The `from_session` refusal for one socket command, if any
 /// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
-/// an approval answer from an owned or incomplete local connection, with
-/// no exception. Refusal 2 rejects `prompt`, `steer` and every `reply`
-/// when the caller's owners meet this session or its strict ancestors,
-/// unless the caller is this session's current kernel parent. A `message`
+/// an approval answer from a local connection whose walk passes a session
+/// process, or whose walk could not be read, with no exception. Refusal 2
+/// rejects `prompt`, `steer` and every `reply` when the target pid is on
+/// the caller's walk, or when a session-process pid from this session's
+/// parent walk is also on the caller's walk, unless the caller is this
+/// session's current kernel parent with a readable ancestry. A `message`
 /// is a session message, never a person's words, so it is never refused.
-/// Incomplete walks fail closed, naming the unreadable pid.
+/// An unreadable target pid, parent, or walk fails closed.
 pub(crate) fn session_command_refusal(
     attribution: &Attribution,
     command: &Command,
@@ -1178,13 +1139,20 @@ pub(crate) fn session_command_refusal(
     target_pid: u32,
     read: &dyn support::peer::ProcessRead,
 ) -> Option<Refused> {
-    let owned = match attribution {
-        Attribution::Local { owners, .. } => !owners.is_empty(),
-        Attribution::Incomplete { .. } => true,
+    let caller_matches: &[u32] = match attribution {
+        Attribution::Local {
+            session_process_pids,
+            ..
+        } => {
+            if session_process_pids.is_empty() {
+                return None;
+            }
+            session_process_pids
+        }
+        // An incomplete caller walk fails closed: only the direct-parent
+        // exception below still lets it through.
+        Attribution::Incomplete { .. } => &[],
     };
-    if !owned {
-        return None;
-    }
     if is_approval_reply(command) {
         return Some(Refused {
             code: ErrorCode::FromSession,
@@ -1230,11 +1198,31 @@ pub(crate) fn session_command_refusal(
         command: command_name,
         target,
     };
-    // The direct-parent exception first: the delegate's own client still
-    // reaches it, even on an incomplete caller walk.
-    if let Some(peer) = attribution.peer_pid()
-        && read.parent(target_pid).is_ok_and(|parent| parent == peer)
-    {
+    // The target's parent decides the direct-parent exception, and the
+    // parent walk decides the intersection: either unreadable fails the
+    // command closed. The target here is this session's own live process.
+    let parent = match read.parent(target_pid) {
+        Ok(parent) => parent,
+        Err(_) => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command_name),
+            });
+        }
+    };
+    let target_matches = match support::peer::walk_ancestors(target_pid, read, is_session_host) {
+        Ok(matches) => matches,
+        Err(_) => {
+            return Some(Refused {
+                code: ErrorCode::FromSession,
+                message: unreadable_target_message(target, command_name),
+            });
+        }
+    };
+    // The direct-parent exception: the target's own parent still reaches
+    // it, whatever the peer's arguments say, but never on an unreadable
+    // target ancestry.
+    if Some(parent) == attribution.peer_pid() {
         return None;
     }
     match attribution {
@@ -1242,25 +1230,12 @@ pub(crate) fn session_command_refusal(
             code: ErrorCode::FromSession,
             message: from_session_message(attribution, refusal()),
         }),
-        Attribution::Local { owners, .. } => {
-            // This session itself needs no walk.
-            if owners.iter().any(|owner| owner == target) {
-                return Some(Refused {
-                    code: ErrorCode::FromSession,
-                    message: from_session_message(attribution, refusal()),
-                });
-            }
-            let mut target_set = vec![target.clone()];
-            match session_owners(target_pid, read) {
-                Ok(ancestors) => target_set.extend(ancestors),
-                Err(_) => {
-                    return Some(Refused {
-                        code: ErrorCode::FromSession,
-                        message: unreadable_target_message(target, command_name),
-                    });
-                }
-            }
-            if owners.iter().any(|owner| target_set.contains(owner)) {
+        Attribution::Local { .. } => {
+            if caller_matches.contains(&target_pid)
+                || target_matches
+                    .iter()
+                    .any(|pid| caller_matches.contains(pid))
+            {
                 Some(Refused {
                     code: ErrorCode::FromSession,
                     message: from_session_message(attribution, refusal()),

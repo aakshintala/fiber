@@ -758,9 +758,9 @@ fn until_carries_the_shared_must_succeed_bound() {
     );
 }
 
-/// Tests for the session-socket attribution boundary: the exact session
-/// argv shape, foreign-owner skipping without argument reads, and the
-/// unreadable pid in an incomplete walk.
+/// Tests for the session-socket attribution boundary: the session-process
+/// pids on the peer walk, foreign-owner skipping without argument reads,
+/// and the unreadable pid in an incomplete walk.
 mod attribution_tests {
     #![allow(
         clippy::unwrap_used,
@@ -772,8 +772,8 @@ mod attribution_tests {
     use std::collections::HashMap;
 
     use super::super::{
-        Attribution, FromSessionRefusal, attribute_peer, from_session_message, session_argv_id,
-        session_owners, unreadable_target_message,
+        Attribution, FromSessionRefusal, attribute_peer, from_session_message,
+        unreadable_target_message,
     };
 
     fn ask_argv() -> Vec<Vec<u8>> {
@@ -790,10 +790,10 @@ mod attribution_tests {
             .collect()
     }
 
-    /// An `ask` or `extension-case` above the peer owns it without any
-    /// session id: the argv-only predicate recognizes the session host.
-    fn host_walk(argv: Vec<Vec<u8>>) -> OwnerScript {
-        OwnerScript {
+    /// An `ask` or `extension-case` above the peer marks it without any
+    /// session id: the shared predicate recognizes the session host.
+    fn host_walk(argv: Vec<Vec<u8>>) -> PeerScript {
+        PeerScript {
             current: 1000,
             parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
             euids: [(20, 1000), (1, 1000)].into_iter().collect(),
@@ -807,24 +807,32 @@ mod attribution_tests {
     }
 
     #[test]
-    fn ask_argv_on_the_caller_walk_makes_the_peer_owned() {
+    fn ask_argv_on_the_caller_walk_marks_the_session_process_pid() {
         let attribution = attribute_peer(Ok(10), &host_walk(ask_argv()));
-        let Attribution::Local { owners, .. } = attribution else {
-            panic!("an ask descendant is a local owned peer");
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an ask descendant is a local session-caller peer");
         };
-        assert!(!owners.is_empty(), "an ask argv owns the peer");
+        assert_eq!(session_process_pids, [20]);
     }
 
     #[test]
-    fn extension_case_argv_on_the_caller_walk_makes_the_peer_owned() {
+    fn extension_case_argv_on_the_caller_walk_marks_the_session_process_pid() {
         let attribution = attribute_peer(Ok(10), &host_walk(extension_case_argv()));
-        let Attribution::Local { owners, .. } = attribution else {
-            panic!("an extension-case descendant is a local owned peer");
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribution
+        else {
+            panic!("an extension-case descendant is a local session-caller peer");
         };
-        assert!(!owners.is_empty(), "an extension-case argv owns the peer");
+        assert_eq!(session_process_pids, [20]);
     }
 
-    struct OwnerScript {
+    struct PeerScript {
         current: u32,
         parents: HashMap<u32, u32>,
         euids: HashMap<u32, u32>,
@@ -834,7 +842,7 @@ mod attribution_tests {
         argv_read: std::cell::Cell<usize>,
     }
 
-    impl support::peer::ProcessRead for OwnerScript {
+    impl support::peer::ProcessRead for PeerScript {
         fn current_euid(&self) -> Result<u32, support::peer::ReadError> {
             Ok(self.current)
         }
@@ -884,68 +892,9 @@ mod attribution_tests {
     }
 
     #[test]
-    fn session_argv_id_matches_only_the_session_shape() {
+    fn the_walk_collects_session_hosts_nearest_first() {
         let id = "s_0123456789abcdef";
-        assert_eq!(
-            session_argv_id(&session_argv(id)),
-            Some(contract::SessionId(id.to_owned()))
-        );
-        let mut reordered = session_argv(id);
-        reordered.swap(2, 3);
-        assert_eq!(
-            session_argv_id(&reordered),
-            Some(contract::SessionId(id.to_owned()))
-        );
-        for argv in [
-            vec![],
-            vec![b"fiber".to_vec()],
-            vec![b"fiber".to_vec(), b"ask".to_vec()],
-            vec![b"fiber".to_vec(), b"session".to_vec()],
-            vec![
-                b"fiber".to_vec(),
-                b"sessionx".to_vec(),
-                b"--id=s_0123456789abcdef".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"session".to_vec(),
-                b"--idx=s_0123456789abcdef".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"session".to_vec(),
-                b"--id=s_SHORT".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"session".to_vec(),
-                b"--id=s_0123456789abcde".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"session".to_vec(),
-                b"--id=s_0123456789abcdef0".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"session".to_vec(),
-                b"--id=s_0123456789ABCDEF".to_vec(),
-            ],
-            vec![
-                b"fiber".to_vec(),
-                b"sh".to_vec(),
-                b"-c".to_vec(),
-                b"session --id=s_0123456789abcdef".to_vec(),
-            ],
-        ] {
-            assert_eq!(session_argv_id(&argv), None, "{argv:?}");
-        }
-    }
-
-    #[test]
-    fn session_owners_skips_foreign_argv_and_names_unreadable_pids() {
-        let id = "s_0123456789abcdef";
-        let read = OwnerScript {
+        let read = PeerScript {
             current: 1000,
             parents: [(10, 20), (20, 30), (30, 1), (1, 0)].into_iter().collect(),
             euids: [(20, 1000), (30, 2000), (1, 1000)].into_iter().collect(),
@@ -956,15 +905,23 @@ mod attribution_tests {
             unreadable_argv: vec![],
             argv_read: std::cell::Cell::new(0),
         };
-        assert_eq!(
-            session_owners(10, &read).unwrap(),
-            [
-                contract::SessionId(id.to_owned()),
-                contract::SessionId(id.to_owned())
-            ]
-        );
+        let Attribution::Local {
+            session_process_pids,
+            ..
+        } = attribute_peer(Ok(10), &read)
+        else {
+            panic!("a session descendant is a local session-caller peer");
+        };
+        // Pid 30 shares no owner with the caller, so its arguments are
+        // never read even though they name a session.
+        assert_eq!(session_process_pids, [20, 1]);
         assert_eq!(read.argv_read.get(), 2);
-        let unreadable = OwnerScript {
+    }
+
+    #[test]
+    fn an_unreadable_caller_walk_keeps_the_unreadable_pid() {
+        let id = "s_0123456789abcdef";
+        let unreadable = PeerScript {
             current: 1000,
             parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
             euids: [(20, 1000), (1, 1000)].into_iter().collect(),
@@ -974,10 +931,14 @@ mod attribution_tests {
             argv_read: std::cell::Cell::new(0),
         };
         assert_eq!(
-            session_owners(10, &unreadable).unwrap_err(),
-            support::peer::IncompleteWalk { pid: 20 }
+            attribute_peer(Ok(10), &unreadable),
+            Attribution::Incomplete {
+                peer_pid: Some(10),
+                pid: Some(20),
+                peer_error: None,
+            }
         );
-        let unreadable = OwnerScript {
+        let unreadable = PeerScript {
             current: 1000,
             parents: [(10, 20), (20, 1), (1, 0)].into_iter().collect(),
             euids: [(20, 1000), (1, 1000)].into_iter().collect(),
@@ -987,30 +948,40 @@ mod attribution_tests {
             argv_read: std::cell::Cell::new(0),
         };
         assert_eq!(
-            session_owners(10, &unreadable).unwrap_err(),
-            support::peer::IncompleteWalk { pid: 20 }
+            attribute_peer(Ok(10), &unreadable),
+            Attribution::Incomplete {
+                peer_pid: Some(10),
+                pid: Some(20),
+                peer_error: None,
+            }
         );
     }
 
     #[test]
-    fn refusal_messages_name_the_owner_target_pid_and_peer_error() {
-        let owner = contract::SessionId("s_0123456789abcdef".to_owned());
+    fn refusal_messages_name_the_target_pid_and_peer_error() {
         let target = contract::SessionId("s_fedcba9876543210".to_owned());
-        let owned = Attribution::Local {
+        let local = Attribution::Local {
             peer_pid: 555,
-            owners: vec![owner.clone()],
+            session_process_pids: vec![20],
         };
-        let approval = from_session_message(&owned, FromSessionRefusal::Approval);
-        assert!(approval.contains("s_0123456789abcdef"), "{approval}");
+        let approval = from_session_message(&local, FromSessionRefusal::Approval);
+        assert!(approval.contains("inside a session"), "{approval}");
+        assert!(
+            !approval.contains("s_0123456789abcdef"),
+            "no caller session is named: {approval}"
+        );
         let command = from_session_message(
-            &owned,
+            &local,
             FromSessionRefusal::SessionCommand {
                 command: "steer",
                 target: &target,
             },
         );
-        assert!(command.contains("s_0123456789abcdef"), "{command}");
         assert!(command.contains("s_fedcba9876543210"), "{command}");
+        assert!(
+            !command.contains("s_0123456789abcdef"),
+            "no caller session is named: {command}"
+        );
         let incomplete = Attribution::Incomplete {
             peer_pid: Some(555),
             pid: Some(999),
@@ -1051,6 +1022,7 @@ mod refusal_tests {
 
     const PEER: u32 = 555;
     const TARGET_PID: u32 = 777;
+    const HOST: u32 = 440;
     const UNREADABLE: u32 = 999;
     const OWNED: &str = "s_0123456789abcdef";
     const OTHER: &str = "s_fedcba9876543210";
@@ -1140,10 +1112,43 @@ mod refusal_tests {
         }
     }
 
-    fn owned(peer: u32, id: &str) -> Attribution {
+    /// The target's walk with a session host above it: the target shares a
+    /// session process with a caller below that host.
+    fn host_target(argv: Vec<Vec<u8>>) -> Script {
+        Script {
+            current: 1000,
+            parents: [(TARGET_PID, HOST), (HOST, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            euids: [(HOST, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [(HOST, argv), (1, vec![b"/sbin/init".to_vec()])]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// The target's readable walk with the peer as its kernel parent: the
+    /// direct-parent exception admits every command but an approval answer.
+    fn parent_target() -> Script {
+        Script {
+            current: 1000,
+            parents: [(TARGET_PID, PEER), (PEER, 1), (1, 0)]
+                .into_iter()
+                .collect(),
+            euids: [(PEER, 1000), (1, 1000)].into_iter().collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (1, vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    fn local(peer: u32, matches: &[u32]) -> Attribution {
         Attribution::Local {
             peer_pid: peer,
-            owners: vec![SessionId(id.to_owned())],
+            session_process_pids: matches.to_vec(),
         }
     }
 
@@ -1212,13 +1217,17 @@ mod refusal_tests {
     }
 
     #[test]
-    fn an_approval_reply_from_an_owned_peer_is_refused_on_any_session() {
+    fn an_approval_reply_from_a_session_caller_is_refused_on_any_session() {
         let script = plain_target();
         for target in [owned_id(), other_id()] {
-            let refused = refused(&owned(PEER, OWNED), &approval_reply(), &target, &script)
+            let refused = refused(&local(PEER, &[HOST]), &approval_reply(), &target, &script)
                 .expect("an approval answer is refused");
             assert_eq!(refused.code, contract::ErrorCode::FromSession);
-            assert!(refused.message.contains(OWNED), "{}", refused.message);
+            assert!(
+                refused.message.contains("inside a session"),
+                "{}",
+                refused.message
+            );
         }
     }
 
@@ -1226,40 +1235,40 @@ mod refusal_tests {
     fn an_approval_reply_has_no_parent_exception() {
         // The peer is the target's kernel parent, which exempts refusal 2:
         // refusal 1 still fires.
-        let script = Script {
-            parents: [(TARGET_PID, PEER)].into_iter().collect(),
-            ..Default::default()
-        };
-        let refused = refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
-            .expect("an approval answer is refused without exception");
+        let script = parent_target();
+        let refused = refused(
+            &local(PEER, &[HOST]),
+            &approval_reply(),
+            &other_id(),
+            &script,
+        )
+        .expect("an approval answer is refused without exception");
         assert_eq!(refused.code, contract::ErrorCode::FromSession);
-        assert!(refused.message.contains(OWNED), "{}", refused.message);
+        assert!(
+            refused.message.contains("inside a session"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
-    fn a_question_reply_to_the_callers_own_session_is_refused() {
-        let script = plain_target();
+    fn a_question_reply_sharing_a_session_process_is_refused() {
+        let script = host_target(session_argv(OWNED));
         for command in [question_reply(), labels_reply()] {
-            let refused = refused(&owned(PEER, OWNED), &command, &owned_id(), &script)
-                .expect("a question answer to the own session is refused");
+            let refused = refused(&local(PEER, &[HOST]), &command, &other_id(), &script)
+                .expect("a question answer sharing a session process is refused");
             assert_eq!(refused.code, contract::ErrorCode::FromSession);
-            assert!(refused.message.contains(OWNED), "{}", refused.message);
+            assert!(refused.message.contains(OTHER), "{}", refused.message);
         }
     }
 
     #[test]
-    fn prompt_and_steer_to_a_delegate_are_refused() {
-        let script = Script {
-            current: 1000,
-            parents: [(TARGET_PID, 1), (1, 0)].into_iter().collect(),
-            euids: [(TARGET_PID, 1000), (1, 1000)].into_iter().collect(),
-            argvs: [(1, session_argv(OWNED))].into_iter().collect(),
-        };
+    fn prompt_and_steer_sharing_a_session_process_are_refused() {
+        let script = host_target(session_argv(OWNED));
         for command in [prompt(), steer(), labels_reply()] {
-            let refused = refused(&owned(PEER, OWNED), &command, &other_id(), &script)
-                .expect("a command to a delegate is refused");
+            let refused = refused(&local(PEER, &[HOST]), &command, &other_id(), &script)
+                .expect("a command sharing a session process is refused");
             assert_eq!(refused.code, contract::ErrorCode::FromSession);
-            assert!(refused.message.contains(OWNED), "{}", refused.message);
             assert!(refused.message.contains(OTHER), "{}", refused.message);
         }
     }
@@ -1278,94 +1287,87 @@ mod refusal_tests {
         ];
         for command in unrelated {
             assert!(
-                refused(&owned(PEER, OWNED), &command, &other_id(), &script).is_none(),
+                refused(&local(PEER, &[HOST]), &command, &other_id(), &script).is_none(),
                 "an unrelated session stays reachable"
             );
         }
-        let unrelated_approval =
-            refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
-                .expect("an approval answer is refused on an unrelated session");
+        let unrelated_approval = refused(
+            &local(PEER, &[HOST]),
+            &approval_reply(),
+            &other_id(),
+            &script,
+        )
+        .expect("an approval answer is refused on an unrelated session");
         assert_eq!(unrelated_approval.code, contract::ErrorCode::FromSession);
-        let unowned = Attribution::Local {
-            peer_pid: PEER,
-            owners: vec![],
-        };
+        let unowned = local(PEER, &[]);
+        let shared = host_target(session_argv(OWNED));
         for command in [prompt(), steer(), approval_reply(), message()] {
             assert!(
-                refused(&unowned, &command, &owned_id(), &script).is_none(),
-                "an unowned connection is never refused"
+                refused(&unowned, &command, &owned_id(), &shared).is_none(),
+                "a connection passing no session process is never refused"
             );
         }
         assert!(
-            refused(&owned(PEER, OWNED), &message(), &owned_id(), &script).is_none(),
+            refused(&local(PEER, &[HOST]), &message(), &owned_id(), &script).is_none(),
             "a message is never refused"
         );
     }
 
-    /// The target walk with a session-hosting `ask` above the target: the
-    /// target shares a session process with a caller below that host.
-    fn ask_target() -> Script {
-        const ASK: u32 = 440;
-        Script {
-            current: 1000,
-            parents: [(TARGET_PID, ASK), (ASK, 1), (1, 0)].into_iter().collect(),
-            euids: [(TARGET_PID, 1000), (ASK, 1000), (1, 1000)]
-                .into_iter()
-                .collect(),
-            argvs: [
-                (ASK, ask_argv()),
-                (TARGET_PID, vec![b"/sbin/init".to_vec()]),
-                (1, vec![b"/sbin/init".to_vec()]),
-            ]
-            .into_iter()
-            .collect(),
+    #[test]
+    fn steer_refused_when_the_target_walk_passes_an_ask_host() {
+        for argv in [ask_argv(), extension_case_argv()] {
+            let script = host_target(argv);
+            let refused = refused(&local(PEER, &[HOST]), &steer(), &other_id(), &script)
+                .expect("a steer to a target below an ask host is refused");
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
         }
     }
 
     #[test]
-    fn steer_refused_when_the_target_walk_passes_an_ask_host() {
-        let script = ask_target();
-        let refused = refused(&owned(PEER, OWNED), &steer(), &other_id(), &script)
-            .expect("a steer to a target below an ask host is refused");
-        assert_eq!(refused.code, contract::ErrorCode::FromSession);
-    }
-
-    #[test]
     fn question_reply_refused_when_the_target_walk_passes_an_ask_host() {
-        let script = ask_target();
-        let refused = refused(&owned(PEER, OWNED), &question_reply(), &other_id(), &script)
+        for argv in [ask_argv(), extension_case_argv()] {
+            let script = host_target(argv);
+            let refused = refused(
+                &local(PEER, &[HOST]),
+                &question_reply(),
+                &other_id(),
+                &script,
+            )
             .expect("a reply to a target below an ask host is refused");
-        assert_eq!(refused.code, contract::ErrorCode::FromSession);
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
+        }
     }
 
     #[test]
     fn other_commands_are_never_refused() {
         use contract::commands::{SubscribeArgs, SubscribeLevel};
-        let script = plain_target();
+        let script = host_target(session_argv(OWNED));
         let subscribe = Command::Subscribe(SubscribeArgs {
             level: SubscribeLevel::Full,
             credential: None,
         });
         assert!(
-            refused(&owned(PEER, OWNED), &subscribe, &owned_id(), &script).is_none(),
+            refused(&local(PEER, &[HOST]), &subscribe, &owned_id(), &script).is_none(),
             "subscribe is never refused"
         );
     }
 
     #[test]
     fn the_direct_parent_reaches_its_session_but_never_an_approval() {
-        let script = Script {
-            parents: [(TARGET_PID, PEER)].into_iter().collect(),
-            ..Default::default()
-        };
+        let script = parent_target();
         for command in [prompt(), steer(), question_reply(), labels_reply()] {
             assert!(
-                refused(&owned(PEER, OWNED), &command, &other_id(), &script).is_none(),
+                refused(&local(PEER, &[HOST]), &command, &other_id(), &script).is_none(),
                 "the delegate's own client reaches it"
             );
         }
-        let refused = refused(&owned(PEER, OWNED), &approval_reply(), &other_id(), &script)
-            .expect("an approval answer has no parent exception");
+        let refused = refused(
+            &local(PEER, &[HOST]),
+            &approval_reply(),
+            &other_id(),
+            &script,
+        )
+        .expect("an approval answer has no parent exception");
         assert_eq!(refused.code, contract::ErrorCode::FromSession);
     }
 
@@ -1389,10 +1391,7 @@ mod refusal_tests {
 
     #[test]
     fn an_incomplete_caller_with_the_parent_exception_still_reaches() {
-        let script = Script {
-            parents: [(TARGET_PID, PEER)].into_iter().collect(),
-            ..Default::default()
-        };
+        let script = parent_target();
         assert!(
             refused(
                 &incomplete(Some(PEER), Some(UNREADABLE)),
@@ -1426,7 +1425,7 @@ mod refusal_tests {
     #[test]
     fn an_unreadable_target_names_the_target_session() {
         let script = Script::default();
-        let refused = refused(&owned(PEER, OWNED), &steer(), &other_id(), &script)
+        let refused = refused(&local(PEER, &[HOST]), &steer(), &other_id(), &script)
             .expect("an unreadable target fails closed");
         assert_eq!(refused.code, contract::ErrorCode::FromSession);
         assert!(refused.message.contains(OTHER), "{}", refused.message);

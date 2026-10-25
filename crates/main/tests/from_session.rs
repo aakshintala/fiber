@@ -384,6 +384,61 @@ fn probe_answer_full(
     serde_json::from_str(printed).unwrap()
 }
 
+/// Runs the probe as a direct child of the test, with `program` and `args`
+/// naming the whole command line: the child runs in its own process group,
+/// and its first `{` line is the command's answer. A hang kills the whole
+/// group at the one deadline instead of hanging the test. Unlike the
+/// session-shell probes, this child's only session-shaped ancestor is the
+/// fake `fiber` the arguments name, so it isolates what the fake adds.
+/// `program` is an absolute path, so no PATH lookup is involved.
+fn run_probe_direct(setup: &Setup, program: &std::path::Path, args: &[&str]) -> Value {
+    use std::io::BufRead as _;
+    use std::os::unix::process::CommandExt as _;
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(setup.workspace())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            match tx.send(line.unwrap_or_default()) {
+                Ok(()) => {}
+                Err(mpsc::SendError(_)) => break,
+            }
+        }
+    });
+    let deadline = setup.deadline;
+    let printed = loop {
+        match deadline.recv(&lines) {
+            Ok(line) => {
+                let trimmed = line.trim().to_owned();
+                if trimmed.starts_with('{') {
+                    break trimmed;
+                }
+            }
+            Err(_) => {
+                match fakes::kill_group(group, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
+                let _reaped = child.wait();
+                panic!("waited until the deadline for the direct probe to answer");
+            }
+        }
+    };
+    match fakes::kill_group(group, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    let _reaped = child.wait();
+    serde_json::from_str(&printed).unwrap()
+}
+
 /// The probe subscribes to `target` while running in `session`'s shell.
 fn probe_answer_to(
     client: &Socket,
@@ -1020,9 +1075,9 @@ fn nested_delegate_message_accepted_while_shell_steers_refused() {
     guard.wait_gone();
 }
 
-/// A fake session-command ancestor adds refusals: the probe runs under
-/// `sh session --id=<fake>`, so steering the fake id is refused while an
-/// unrelated session stays allowed.
+/// A fake session-process ancestor adds refusals: the probe runs under a
+/// fake `fiber session --id=<fake>` on the PATH, so steering the fake id
+/// is refused while an unrelated session stays allowed.
 #[test]
 fn fake_session_argv_ancestor_adds_refusal() {
     let setup = Setup::new();
@@ -1039,23 +1094,36 @@ fn fake_session_argv_ancestor_adds_refusal() {
     let second = start_session(&client, &workspace, "second");
     subscribe(&client, &second);
     let fake = "s_abcdef0123456789";
+    // A fake `fiber` executable: a symlink to the shell, so the kernel
+    // runs the shell with argv[0] naming `fiber`. The shell then runs the
+    // `session` script in the same process, keeping the session-shaped
+    // argument vector the predicate recognizes. A shebang script would not
+    // do: its argv[0] names the interpreter, never `fiber`.
+    std::os::unix::fs::symlink("/bin/sh", setup.workspace().join("fiber")).unwrap();
     fs::write(setup.workspace().join("session"), "shift\n\"$@\" & wait\n").unwrap();
-    let runner = format!(
-        "PATH=\"{}:$PATH\" xargs sh session --id={fake} python3 {probe} {hub_socket} < /dev/null",
-        setup.workspace().to_string_lossy(),
-    );
-    let answer = probe_answer_full(
-        &client,
-        &first,
-        fake,
-        &runner,
-        true,
-        &json!({
-            "id": "c_probe_fake",
-            "session_id": fake,
-            "command": "steer",
-            "args": {"content": [{"type": "text", "text": "from the fake"}]},
-        }),
+    // A pairing code needs no session target: refusal 3 fires on any
+    // session-shaped ancestor, so the fake alone refuses it. The probe is a
+    // direct child of the test, so the fake is its only session ancestor.
+    let id_flag = format!("--id={fake}");
+    let pairing = json!({
+        "id": "c_probe_fake",
+        "command": "pairing_code",
+        "args": {"device": "probe"},
+    })
+    .to_string();
+    let answer = run_probe_direct(
+        &setup,
+        &setup.workspace().join("fiber"),
+        &[
+            "session",
+            &id_flag,
+            "python3",
+            &probe,
+            &hub_socket,
+            &second,
+            "-",
+            &pairing,
+        ],
     );
     assert_eq!(answer["kind"], "command_rejected", "{answer}");
     assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
@@ -1063,7 +1131,7 @@ fn fake_session_argv_ancestor_adds_refusal() {
         answer["payload"]["message"]
             .as_str()
             .unwrap()
-            .contains(fake),
+            .contains("pairing code"),
         "{answer}"
     );
     let answer = probe_answer_to(
