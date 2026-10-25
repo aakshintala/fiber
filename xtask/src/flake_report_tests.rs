@@ -680,8 +680,11 @@ fn a_repeated_title_is_written_once_from_its_first_occurrence() {
 
 #[test]
 fn list_files_are_read_in_name_byte_order() {
-    // `-` (0x2d) sorts before `.` (0x2e): the arm file is read first,
-    // so its occurrence wins the dedupe.
+    // The runner and detail of a repeated title come from its first
+    // occurrence in file-name byte order, as the old shell writer read
+    // them: ticket #3318 requires the same outputs. `-` (0x2d) sorts
+    // before `.` (0x2e), so the arm file is read first and its
+    // occurrence wins the dedupe.
     let names = vec![
         "flaky-tests-ubuntu-24.04.txt".to_owned(),
         "flaky-tests-ubuntu-24.04-arm.txt".to_owned(),

@@ -972,18 +972,26 @@ fn flake_classify_prints_one_record_per_unique_title() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    // File-name byte order: the arm file is read first.
+    // Records are matched by title: their order is not part of this
+    // test's contract.
     assert_eq!(records.len(), 2, "{out}");
-    assert_eq!(records[0]["action"], "lookup");
-    assert_eq!(records[0]["runner"], "arm");
-    assert_eq!(records[0]["detail"], "");
-    assert!(records[0].get("failing").is_none(), "{out}");
-    assert_eq!(records[1]["action"], "lookup");
-    assert_eq!(records[1]["failing"], "crates/a.rs");
-    assert_eq!(records[1]["runner"], "linux");
-    assert_eq!(records[1]["title"], "Flaky test: main::a");
+    let by_title = |title: &str| {
+        records
+            .iter()
+            .find(|record| record["title"] == title)
+            .unwrap_or_else(|| panic!("no record titled {title}: {out}"))
+    };
+    let b = by_title("Flaky test: main::b");
+    assert_eq!(b["action"], "lookup");
+    assert_eq!(b["runner"], "arm");
+    assert_eq!(b["detail"], "");
+    assert!(b.get("failing").is_none(), "{out}");
+    let a = by_title("Flaky test: main::a");
+    assert_eq!(a["action"], "lookup");
+    assert_eq!(a["failing"], "crates/a.rs");
+    assert_eq!(a["runner"], "linux");
     assert_eq!(
-        records[1]["tested"],
+        a["tested"],
         "tested 1111111111111111111111111111111111111111"
     );
 }
