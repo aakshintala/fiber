@@ -418,6 +418,19 @@ impl Session {
         *lock(&self.gate.commands) = commands;
     }
 
+    /// A weak handle replacing the stored `commands` rows: the loop's
+    /// turn-start refresh calls it with the complete recomputed answer.
+    /// It holds the gate weakly and does nothing once the session closed.
+    pub fn commands_replacer(&self) -> Arc<dyn Fn(Vec<CommandInfo>) + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move |commands| {
+            let Some(gate) = gate.upgrade() else {
+                return;
+            };
+            *lock(&gate.commands) = commands;
+        })
+    }
+
     /// Every skill discovery read, switched-off and shadowed ones included
     /// and marked, which the `skills` driver command answers with
     /// verbatim (`docs/invocation.md`, "What each command does"). Set

@@ -2769,12 +2769,18 @@ fn the_raise_is_written_after_the_frame_draws() {
 
 /// What the scripted hub answers to the `full` raise.
 enum Full {
-    /// Accepts with the log's last seq, streams the log, then hangs up.
+    /// Accepts with the log's last seq, streams the log, serves the
+    /// replay's `commands` requests, then hangs up.
     Replay,
     /// Accepts with no result: no pass opens.
     Accepted,
     /// Reads the raise and hangs up without answering.
     Hung,
+    /// Accepts with no result, then serves a replay the test feeds
+    /// itself: every post-raise `commands` is read but not answered, so
+    /// the pass the test choreographs gains no input, and the hub hangs
+    /// up when the loop does.
+    ManualReplay,
 }
 
 /// What the scripted hub answers to a `history` read.
@@ -2804,6 +2810,7 @@ struct TailOpen {
     seen: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     tx: mpsc::Sender<Input>,
     rx: mpsc::Receiver<Input>,
+    hub_done: mpsc::Receiver<()>,
 }
 
 /// The doors' history window over `log`: the last 256 lines at or below
@@ -2880,11 +2887,21 @@ fn tail_open(
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
-    let want_full = matches!(full, Full::Replay | Full::Accepted | Full::Hung);
+    let want_full = matches!(
+        full,
+        Full::Replay | Full::Accepted | Full::Hung | Full::ManualReplay
+    );
     let want_drop = matches!(history, History::Drop);
     let (hub_done_tx, hub_done) = mpsc::channel();
     let (full_tx, full_seen) = mpsc::channel();
     let replay = matches!(full, Full::Replay);
+    let manual = matches!(full, Full::ManualReplay);
+    // Every replayed turn start sends `commands` again: the streamed
+    // replay's turn starts, which the hub serves before hanging up.
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
     std::thread::Builder::new()
         .name("tail-hub".to_owned())
         .spawn(move || {
@@ -2920,6 +2937,8 @@ fn tail_open(
                 value
             };
             let mut reads = 0usize;
+            let mut replaying = false;
+            let mut replay_commands = 0usize;
             while std::io::BufRead::read_line(&mut reader, &mut text).is_ok_and(|read| read > 0) {
                 let command: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
                 text.clear();
@@ -2930,7 +2949,21 @@ fn tail_open(
                 match command["command"].as_str() {
                     Some("feed") => write(hub_ack(&id, json!({}))),
                     Some("recent") => write(hub_ack(&id, json!({"sessions": []}))),
-                    Some("commands") => write(session_ack(&id, json!({"commands": []}))),
+                    Some("commands") => {
+                        if replaying && manual {
+                            // The test feeds the replay itself: the request
+                            // is recorded above, and no answer goes out, so
+                            // the choreographed pass gains no input.
+                        } else {
+                            write(session_ack(&id, json!({"commands": []})));
+                            if replaying {
+                                replay_commands += 1;
+                                if replay_commands >= replay_turns {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     Some("subscribe") if command["args"]["level"] == "full" => {
                         full_tx.send(()).unwrap_or(());
                         match full {
@@ -2944,18 +2977,38 @@ fn tail_open(
                                 for envelope in &log {
                                     write(serde_json::to_value(envelope).unwrap_or_default());
                                 }
+                                // The streamed replay's turn starts send
+                                // `commands` again: serve those, then hang
+                                // up, so no send lands on a dead hub.
+                                replaying = true;
                             }
                             Full::Accepted => {
                                 write(session_ack(&id, json!({})));
                             }
                             Full::Hung => {}
+                            Full::ManualReplay => {
+                                write(session_ack(&id, json!({})));
+                                // The test feeds the replay itself: read
+                                // its `commands`, answer none, and hang up
+                                // when the loop does.
+                                replaying = true;
+                            }
                         }
-                        break;
+                        if !replaying {
+                            break;
+                        }
                     }
                     Some("subscribe") => write(session_ack(&id, json!({}))),
                     Some("history") => {
                         for line in &extra {
                             write(line.clone());
+                        }
+                        if replaying && manual {
+                            // The test feeds the replay itself: an empty
+                            // window keeps the choreographed pass
+                            // single-sourced.
+                            write(session_ack(&id, json!({"lines": []})));
+                            continue;
                         }
                         reads += 1;
                         match &history {
@@ -3016,7 +3069,7 @@ fn tail_open(
     if want_drop {
         wait.recv_or_fail(&hub_done, "the hub to drop the stream");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
-    } else if !replay {
+    } else if !replay && !manual {
         wait.recv_or_fail(&hub_done, "the hub to hang up");
         wait.recv_or_fail(&reader_done, "the reader to reach EOF");
     }
@@ -3026,6 +3079,7 @@ fn tail_open(
         seen,
         tx,
         rx,
+        hub_done,
     }
 }
 
@@ -3266,7 +3320,15 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
             json!({"outcome": "completed"}),
         ),
     ];
-    let open = tail_open(log.clone(), Full::Accepted, History::Windows, Vec::new());
+    // The hub serves the replay the test feeds below: it reads every
+    // `commands` a replayed turn start sends but answers none, so the
+    // choreographed batches gain no input.
+    let open = tail_open(
+        log.clone(),
+        Full::ManualReplay,
+        History::Windows,
+        Vec::new(),
+    );
     let first = frames(&open)
         .pop()
         .unwrap_or_else(|| panic!("a preview frame"));
@@ -3289,9 +3351,10 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     let TailOpen {
         mut lp,
         events,
-        seen: _,
+        seen,
         tx,
         rx,
+        hub_done,
     } = open;
     let send = |input: Input| tx.send(input).unwrap_or_else(|error| panic!("{error}"));
     let send_lines = |lines: &[contract::Envelope]| {
@@ -3388,6 +3451,27 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
         whole.apply(envelope);
     }
     assert_eq!(lp.app.pages().index().total(), whole.index().total());
+    // Every replayed turn start sends `commands` again: one per log
+    // turn plus the live one, each read and none answered.
+    drop(lp);
+    Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count()
+        + 1;
+    let seen_commands: Vec<serde_json::Value> =
+        seen.lock().map(|held| held.clone()).unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed: Vec<&serde_json::Value> = seen_commands[full_at + 1..]
+        .iter()
+        .filter(|command| command["command"] == "commands")
+        .collect();
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
 }
 
 #[test]
@@ -3407,6 +3491,31 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
     assert_eq!(open.lp.app.pages().index().total(), whole.index().total());
     assert!(!open.lp.app.pass_open());
     assert_eq!(open.lp.app.take_raise(), None);
+    // Every replayed turn start sends `commands` again: the requests
+    // after the `full` subscribe match the log's turn starts one for one.
+    Deadline::after(DEADLINE).recv_or_fail(&open.hub_done, "the hub to hang up");
+    let replay_turns = log
+        .iter()
+        .filter(|envelope| envelope.kind == "turn_started")
+        .count();
+    let seen_commands: Vec<serde_json::Value> = open
+        .seen
+        .lock()
+        .map(|held| held.clone())
+        .unwrap_or_default();
+    let full_at = seen_commands
+        .iter()
+        .position(|command| command["command"] == "subscribe" && command["args"]["level"] == "full")
+        .expect("the full subscribe");
+    let replayed = &seen_commands[full_at + 1..];
+    // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
+    assert_eq!(replayed.len(), replay_turns, "{replayed:?}");
+    assert!(
+        replayed
+            .iter()
+            .all(|command| command["command"] == "commands"),
+        "{replayed:?}"
+    );
 }
 
 /// A log whose last 256 lines hold the second turn's start with about
