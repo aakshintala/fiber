@@ -324,6 +324,9 @@ impl Fixture {
 /// The text of a caught panic payload, or a fixed line when it is not a
 /// string: the wait's own message already names what expired, and the
 /// server dump below it shows what the fakes saw.
+// debt: one local helper in this module; upgrade trigger: a shared public
+// panic-payload formatter that can be reused without broadening this
+// ticket's fence.
 fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(text) = payload.downcast_ref::<&str>() {
         (*text).to_owned()
@@ -365,6 +368,8 @@ fn dump_fake_servers(root: &std::path::Path) -> String {
 /// One fake server's logs: its stderr, then every request line it read.
 /// A `fail-start` server exits before it reads, so its `requests.log`
 /// reads absent, which itself says the start never reached the loop.
+// debt: one per-server rendering helper; upgrade trigger: another caller or
+// evidence that inlining improves clarity.
 fn dump_fake_server(dir: &std::path::Path, name: &str) -> String {
     format!(
         "\nfake MCP server {name}:\n{stderr}{requests}",
@@ -2565,6 +2570,9 @@ fn a_prepare_timeout_dump_shows_each_fake_servers_stderr_and_requests_log() {
     assert!(!dump.contains("stray"), "skips a file: {dump}");
 }
 
+// debt: one small helper test for the three panic payload forms; upgrade
+// trigger: remove the helper or cover these forms through another focused
+// test.
 #[test]
 fn a_caught_panic_reports_its_text() {
     let str_payload: Box<dyn std::any::Any + Send> = Box::new("bang");
