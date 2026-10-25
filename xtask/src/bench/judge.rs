@@ -562,6 +562,39 @@ pub(super) const ROW_METRICS: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// Extra samples per side when a gated timing row breaches: 3 + 4 = 7 is
+/// odd, so the merged median is a real sample and a breach needs 4 of 7
+/// over. A deterministic slowdown puts all 7 over and still fails; a
+/// one-off load spike is outvoted by 4 clean extras. The CI remeasure run
+/// passes `--runs 4 --timing-runs 4`, which must match: `merge_remeasure`
+/// rejects an extra metric declaring any other count.
+pub(super) const REMEASURE_RUNS: usize = 4;
+
+/// Every harness timing workload (`crates/bench/examples/bench/main.rs`
+/// `timing_names`): the remeasure run skips all but the breached rows, so
+/// the skip list is these minus the breached rows, joined with `,`.
+pub(super) const TIMING_WORKLOADS: &[&str] = &[
+    "session start",
+    "terminal first frame",
+    "sessions list",
+    "terminal attach",
+    "paging",
+    "terminal wheel",
+    "session_list",
+];
+
+/// The `ROW_METRICS` row a breach of metric `id` remeasures, when
+/// remeasuring it can change the verdict: timing rows only, never
+/// `terminal attach` (it already takes 5 samples and nests samples by
+/// fixture) and never an id no row lists (such as `session_list_ms`, which
+/// the selector never skips).
+pub(super) fn remeasured_row(id: &str) -> Option<&'static str> {
+    ROW_METRICS
+        .iter()
+        .find(|(row, ids)| *row != "terminal attach" && ids.contains(&id))
+        .map(|(row, _)| *row)
+}
+
 /// The ten-turn pass's Budget cell, here and in `docs/performance.md`.
 pub(super) const TEN_TURNS_BUDGET: &str =
     "Session, memory kept after 10 busy turns, each followed by its handoff";
@@ -621,6 +654,7 @@ pub(super) fn ceiling(cell: &str) -> Result<Quantity, String> {
 }
 
 /// The base's state for the timing column.
+#[derive(Clone, Debug)]
 pub(super) enum Base {
     /// A push to `main`: no base column.
     None,
@@ -998,6 +1032,10 @@ pub(super) struct Line {
     pub(super) head: String,
     pub(super) base: String,
     pub(super) result: &'static str,
+    /// The `ROW_METRICS` row to remeasure when this line's gated timing
+    /// breached: set only in the scalar `Check::Timing` arm when
+    /// `timing_fails` holds, for a row other than `terminal attach`.
+    pub(super) breached_row: Option<&'static str>,
 }
 
 /// The head's results, the stored results when they parsed, and the commit
@@ -1033,6 +1071,7 @@ pub(super) fn judge(
         head: String::new(),
         base: String::new(),
         result: "pass",
+        breached_row: None,
     };
     // A pull request leaves an unselected timing row unmeasured on the
     // head as well as the base (`docs/ci.md`, "Selection"): its budgets
@@ -1281,14 +1320,18 @@ pub(super) fn judge(
                                 }
                                 _ => {
                                     let base_median = base_value.unwrap_or(0.0);
-                                    match timing_fails(head_value, base_median, ceiling, tolerance) {
-                                    Err(e) => failures.push(format!("{id}: {e}")),
-                                    Ok(true) => failures.push(format!(
+                                    match timing_fails(head_value, base_median, ceiling, tolerance)
+                                    {
+                                        Err(e) => failures.push(format!("{id}: {e}")),
+                                        Ok(true) => {
+                                            failures.push(format!(
                                         "{OVER}median {head_value:.1} ms of {id} is over {ceiling:.1} ms {} ceiling and over base {base_median:.1} ms by more than {tolerance}%",
                                         class_name(class)
-                                    )),
-                                    Ok(false) => {}
-                                }
+                                    ));
+                                            line.breached_row = remeasured_row(id);
+                                        }
+                                        Ok(false) => {}
+                                    }
                                 }
                             }
                         }
