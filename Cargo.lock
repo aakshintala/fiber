@@ -165,6 +165,7 @@ dependencies = [
  "log 0.0.0",
  "rustix",
  "serde_json",
+ "support",
  "tui",
 ]
 
