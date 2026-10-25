@@ -1165,6 +1165,10 @@ fn open_jobs_add_no_seed_text_however_many_cuts_they_cross() {
         for line in &stream.lines {
             pages.apply(line);
         }
+        // `docs/tui.md`, "History and paging": pages cut inside turns at
+        // `step_started`, about 64 lines each. The 64-line pad fills the
+        // open page to `PAGE_LINES` with nothing in flight, so each
+        // `turn_started` below closes exactly one page.
         assert_eq!(pages.residency.len(), cuts, "{cuts} cuts");
         for job in 0..5 {
             let held = held(&pages, &format!("open job {job}"));
@@ -3761,6 +3765,41 @@ fn stale_owed_names_an_uncounted_dropped_page() {
     assert!(pages.stale_owed(), "a dropped page waits to be counted");
     pages.residency.failed_mut().insert(0);
     assert!(!pages.stale_owed(), "a failed page is owed nothing");
+}
+
+/// The anchor lets go once no stale page is owed, and not before: a
+/// single call still returns the row either way.
+#[test]
+fn anchored_row_clears_only_once_no_page_is_stale() {
+    let lines = session(1, false);
+    let mut pages = Pages::new(80);
+    for line in &lines {
+        pages.apply(line);
+    }
+    let (session, seq, offset) = pages.row_seq(0).expect("the first row has a seq");
+    pages.hold_anchor(&session, seq, offset);
+    assert_eq!(
+        pages.anchored_row(),
+        Some(0),
+        "a single call returns the row"
+    );
+    assert_eq!(
+        pages.anchored_row(),
+        None,
+        "nothing stale is owed, so the anchor lets go"
+    );
+    pages.hold_anchor(&session, seq, offset);
+    pages.residency.stale_mut().insert(0);
+    assert_eq!(
+        pages.anchored_row(),
+        Some(0),
+        "a single call returns the row while a page is stale"
+    );
+    assert_eq!(
+        pages.anchored_row(),
+        Some(0),
+        "an owed stale page keeps the anchor"
+    );
 }
 
 /// A test renderer: one counted call per render, scripted lines, a

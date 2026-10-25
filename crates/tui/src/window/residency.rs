@@ -37,13 +37,13 @@ pub(crate) struct Residency {
 }
 
 impl Residency {
-    /// Appends `part` as a new closed page and marks it resident,
-    /// returning its index: what closing a page keeps.
-    pub(crate) fn push(&mut self, part: Part) -> usize {
+    /// Appends `part` as a new closed page and marks it resident: what
+    /// closing a page keeps. The caller reads the new page's index back
+    /// from [`Residency::len`] before pushing.
+    pub(crate) fn push(&mut self, part: Part) {
         let at = self.closed.len();
         self.closed.push(Some(part));
         self.resident_set.insert(at);
-        at
     }
 
     /// How many closed pages the conversation holds: the open page's
