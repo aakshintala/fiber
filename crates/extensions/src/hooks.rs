@@ -1671,9 +1671,29 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Err
     let Some(declared) = declared else {
         return Ok(HooksState::Ready);
     };
+    let source = format!("extensions.\"{name}\".settings");
     let Value::Object(entries) = declared else {
-        return Ok(HooksState::MissingBlocking { names: Vec::new() });
+        return Err(Error::Config(config::ConfigError::WrongType {
+            source_name: source,
+            key: "hooks".to_owned(),
+            expected: "an object of hooks, one entry per name".to_owned(),
+        }));
     };
+    // A non-object entry is a value of the wrong type: check every entry
+    // before any installed/missing decision, so key order cannot fail the
+    // guard open. Several malformed entries report the first in sorted key
+    // order.
+    let mut ordered: Vec<(&String, &Value)> = entries.iter().collect();
+    ordered.sort_by(|left, right| left.0.cmp(right.0));
+    for (entry_name, entry) in ordered {
+        if !entry.is_object() {
+            return Err(Error::Config(config::ConfigError::WrongType {
+                source_name: source,
+                key: format!("hooks.{entry_name}"),
+                expected: "an object".to_owned(),
+            }));
+        }
+    }
     let missing = || {
         let mut names: Vec<String> = entries
             .iter()
