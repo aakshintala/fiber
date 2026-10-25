@@ -1682,10 +1682,10 @@ pub fn hooks_state(config: &Config, loaded: &[String]) -> Result<HooksState, Err
     // A non-object entry is a value of the wrong type: check every entry
     // before any installed/missing decision, so key order cannot fail the
     // guard open. Several malformed entries report the first in sorted key
-    // order.
-    let mut ordered: Vec<(&String, &Value)> = entries.iter().collect();
-    ordered.sort_by(|left, right| left.0.cmp(right.0));
-    for (entry_name, entry) in ordered {
+    // order (`docs/extensions.md`, "Hooks declared in configuration"):
+    // `preserve_order` is never enabled (`docs/dependencies.md`), so `Map`
+    // iteration is already sorted and no extra sort is needed.
+    for (entry_name, entry) in &entries {
         if !entry.is_object() {
             return Err(Error::Config(config::ConfigError::WrongType {
                 source_name: source,
